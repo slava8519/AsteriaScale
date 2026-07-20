@@ -914,6 +914,23 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     cancellationToken);
             if (ranked.Abstained || ranked.SelectedGroupId is not { } groupId)
             {
+                // An exact Tatoeba sentence translation outranks a shrug: the
+                // user gets the whole line instead of unresolved candidates.
+                if (!string.IsNullOrWhiteSpace(lookup.ContextTranslation))
+                {
+                    ReportStatus(
+                        "Умный словарь: слово неоднозначно — показан точный перевод предложения");
+                    return new SmartHoverResult(
+                        recognized.Text,
+                        lookup.ContextTranslation,
+                        SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                        DictionaryFound: true,
+                        IsPhrase: true,
+                        lookup.Language,
+                        Confidence: null,
+                        UsedFullFallback: false);
+                }
+
                 ReportStatus(
                     "Умный словарь: контекста недостаточно — показаны безопасные словарные варианты");
                 return new SmartHoverResult(
@@ -968,6 +985,21 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     lookup.Language,
                     Confidence: null,
                     UsedFullFallback: true);
+            }
+
+            if (!string.IsNullOrWhiteSpace(lookup.ContextTranslation))
+            {
+                ReportStatus(
+                    "Умный словарь: модель недоступна — показан точный перевод предложения");
+                return new SmartHoverResult(
+                    recognized.Text,
+                    lookup.ContextTranslation,
+                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    DictionaryFound: true,
+                    IsPhrase: true,
+                    lookup.Language,
+                    Confidence: null,
+                    UsedFullFallback: false);
             }
 
             ReportStatus(

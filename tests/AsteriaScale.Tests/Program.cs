@@ -268,6 +268,15 @@ try
                colloquial.Translation.Contains("не", StringComparison.OrdinalIgnoreCase),
             "The visual-novel contractions dictionary was not loaded.");
 
+        const string niceToMeet = "\"Nice to meet you!\"";
+        DictionaryLookupResult greetingWord = await dictionary.LookupAsync(
+            niceToMeet,
+            "meet",
+            niceToMeet.IndexOf("meet", StringComparison.Ordinal));
+        Assert(greetingWord.Found &&
+               greetingWord.ContextTranslation.Contains("познаком", StringComparison.OrdinalIgnoreCase),
+            $"An exact Tatoeba sentence must accompany the hovered word: {greetingWord.ContextTranslation}");
+
         DictionaryLookupResult slangContraction = await dictionary.LookupAsync(
             "\"Whaddya say? How about it?\"", "Whaddya", 1);
         Assert(slangContraction.Found &&
