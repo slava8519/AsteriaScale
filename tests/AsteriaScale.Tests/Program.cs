@@ -400,11 +400,11 @@ try
             "The additional Japanese dialogue dictionary was not loaded.");
 
         long managedDictionaryBytes = GC.GetTotalMemory(true) - managedBefore;
-        Assert(managedDictionaryBytes < 256L * 1024 * 1024,
-            "Layered dictionaries exceeded the 256 MB managed-memory budget.");
         Console.WriteLine(
             $"    dictionary: {dictionary.EntryCount:N0} entries, {dictionary.SourceCount} sources, " +
             $"{managedDictionaryBytes / 1024d / 1024d:N1} MB managed, {loadTimer.ElapsedMilliseconds:N0} ms load");
+        Assert(managedDictionaryBytes < 256L * 1024 * 1024,
+            "Layered dictionaries exceeded the 256 MB managed-memory budget.");
 
         long managedBeforeSenses = GC.GetTotalMemory(true);
         Stopwatch senseLoadTimer = Stopwatch.StartNew();

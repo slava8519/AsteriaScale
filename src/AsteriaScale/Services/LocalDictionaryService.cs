@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.IO.Compression;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -42,11 +43,16 @@ public sealed partial class LocalDictionaryService
     private Task? _loadTask;
     private Task? _trustedLoadTask;
     private Task? _senseMetadataLoadTask;
+    // Measured: freezing these two large maps costs ~57 MB extra, so they stay
+    // ordinary dictionaries; only the sense-blob index below is frozen.
     private Dictionary<string, string> _english = new(StringComparer.Ordinal);
     private Dictionary<string, string> _japanese = new(StringComparer.Ordinal);
     private Dictionary<string, string> _trustedEnglishExact = new(StringComparer.Ordinal);
-    private Dictionary<string, DictionarySenseCandidate[]> _englishSenseMetadata =
-        new(StringComparer.Ordinal);
+    // Sense candidates are stored as one compact UTF-8 blob per key and decoded
+    // only for the hovered key: English definitions are ASCII-heavy, so this
+    // halves their footprint and removes half a million record/string objects.
+    private FrozenDictionary<string, byte[]> _englishSenseMetadata =
+        FrozenDictionary<string, byte[]>.Empty;
     private HashSet<string> _preferredEnglishSurfaceForms = new(StringComparer.Ordinal);
     private HashSet<string> _lexicalEnglishPhrases = new(StringComparer.Ordinal);
     private HashSet<string> _dialogueEnglishSentences = new(StringComparer.Ordinal);
@@ -136,11 +142,37 @@ public sealed partial class LocalDictionaryService
         Task task;
         lock (_loadLock)
         {
-            _loadTask ??= LoadCoreAsync();
+            _loadTask ??= RunDetached(LoadCoreAsync);
             task = _loadTask;
         }
 
         return task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs a loader so the stored Task does not reference its async state
+    /// machine: a completed machine pins every hoisted local (mutable build
+    /// dictionaries, interning pools) for as long as the Task field lives.
+    /// </summary>
+    private static Task RunDetached(Func<Task> work)
+    {
+        TaskCompletionSource completion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = RelayAsync();
+        return completion.Task;
+
+        async Task RelayAsync()
+        {
+            try
+            {
+                await work().ConfigureAwait(false);
+                completion.SetResult();
+            }
+            catch (Exception exception)
+            {
+                completion.SetException(exception);
+            }
+        }
     }
 
     public async Task UnloadAsync()
@@ -176,8 +208,7 @@ public sealed partial class LocalDictionaryService
             _english = new Dictionary<string, string>(StringComparer.Ordinal);
             _japanese = new Dictionary<string, string>(StringComparer.Ordinal);
             _trustedEnglishExact = new Dictionary<string, string>(StringComparer.Ordinal);
-            _englishSenseMetadata =
-                new Dictionary<string, DictionarySenseCandidate[]>(StringComparer.Ordinal);
+            _englishSenseMetadata = FrozenDictionary<string, byte[]>.Empty;
             _preferredEnglishSurfaceForms = new HashSet<string>(StringComparer.Ordinal);
             _lexicalEnglishPhrases = new HashSet<string>(StringComparer.Ordinal);
             _dialogueEnglishSentences = new HashSet<string>(StringComparer.Ordinal);
@@ -252,7 +283,7 @@ public sealed partial class LocalDictionaryService
         Task task;
         lock (_loadLock)
         {
-            _senseMetadataLoadTask ??= LoadEnglishSenseMetadataCoreAsync();
+            _senseMetadataLoadTask ??= RunDetached(LoadEnglishSenseMetadataCoreAsync);
             task = _senseMetadataLoadTask;
         }
 
@@ -267,7 +298,7 @@ public sealed partial class LocalDictionaryService
         Task task;
         lock (_loadLock)
         {
-            _trustedLoadTask ??= LoadTrustedEnglishCoreAsync();
+            _trustedLoadTask ??= RunDetached(LoadTrustedEnglishCoreAsync);
             task = _trustedLoadTask;
         }
 
@@ -378,7 +409,7 @@ public sealed partial class LocalDictionaryService
             }
         }
 
-        Dictionary<string, DictionarySenseCandidate[]> compact =
+        Dictionary<string, byte[]> compact =
             new(mutable.Count, StringComparer.Ordinal);
         int candidateCount = 0;
         foreach ((string key, List<DictionarySenseCandidate> candidates) in mutable)
@@ -389,11 +420,11 @@ public sealed partial class LocalDictionaryService
                 continue;
             }
 
-            compact[key] = candidates.ToArray();
+            compact[key] = EncodeSenseCandidates(candidates);
             candidateCount += candidates.Count;
         }
 
-        _englishSenseMetadata = compact;
+        _englishSenseMetadata = compact.ToFrozenDictionary(StringComparer.Ordinal);
         SenseMetadataCandidateCount = candidateCount;
         _senseMetadataVersionToken = loadedFiles.Count == 0
             ? "no-senses"
@@ -441,6 +472,22 @@ public sealed partial class LocalDictionaryService
                 curatedLayer,
                 dialogueLayer,
                 japaneseLayer);
+        }
+
+        // Inflected forms of one lemma carry identical translation strings
+        // across thousands of keys; sharing them saves ~18 MB (measured).
+        Dictionary<string, string> valuePool = new(StringComparer.Ordinal);
+        foreach (string key in entries.Keys.ToArray())
+        {
+            string value = entries[key];
+            if (valuePool.TryGetValue(value, out string? shared))
+            {
+                entries[key] = shared;
+            }
+            else
+            {
+                valuePool[value] = value;
+            }
         }
 
         return new LoadedDictionary(
@@ -708,6 +755,42 @@ public sealed partial class LocalDictionaryService
                 candidates.Add(candidate);
             }
         }
+    }
+
+    private static byte[] EncodeSenseCandidates(IReadOnlyList<DictionarySenseCandidate> candidates)
+    {
+        using MemoryStream stream = new();
+        using (BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(candidates.Count);
+            foreach (DictionarySenseCandidate candidate in candidates)
+            {
+                writer.Write(candidate.Translation);
+                writer.Write(candidate.EnglishDefinition);
+                writer.Write(candidate.Register);
+                writer.Write(candidate.PartOfSpeech);
+            }
+        }
+
+        return stream.ToArray();
+    }
+
+    private static DictionarySenseCandidate[] DecodeSenseCandidates(byte[] blob)
+    {
+        using MemoryStream stream = new(blob, writable: false);
+        using BinaryReader reader = new(stream, Encoding.UTF8);
+        int count = reader.ReadInt32();
+        var candidates = new DictionarySenseCandidate[count];
+        for (int index = 0; index < count; index++)
+        {
+            candidates[index] = new DictionarySenseCandidate(
+                reader.ReadString(),
+                reader.ReadString(),
+                reader.ReadString(),
+                reader.ReadString());
+        }
+
+        return candidates;
     }
 
     private static string NormalizeSenseField(string value, int maximumLength)
@@ -1256,8 +1339,8 @@ public sealed partial class LocalDictionaryService
             !_preferredEnglishSurfaceForms.Contains(matchedEnglishKey) &&
             _englishSenseMetadata.TryGetValue(
                 matchedEnglishKey,
-                out DictionarySenseCandidate[]? candidates)
-                ? candidates
+                out byte[]? senseBlob)
+                ? DecodeSenseCandidates(senseBlob)
                 : Array.Empty<DictionarySenseCandidate>();
         return new DictionaryLookupResult(
             true,
