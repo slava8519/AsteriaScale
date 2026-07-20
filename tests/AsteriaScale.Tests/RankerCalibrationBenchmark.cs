@@ -31,7 +31,8 @@ internal static class RankerCalibrationBenchmark
     public static async Task RunAsync(
         string benchmarkPath,
         string workerBaseDirectory,
-        GlossBertRankerProvider provider)
+        GlossBertRankerProvider provider,
+        string? dumpPath = null)
     {
         using JsonDocument document = JsonDocument.Parse(
             await File.ReadAllTextAsync(benchmarkPath));
@@ -156,9 +157,20 @@ internal static class RankerCalibrationBenchmark
         }
 
         Console.WriteLine();
+        int coveredCount = results.Count(result => result.ExpectedCovered);
         Console.WriteLine(
             $"  cases={cases.Length} ranked={results.Count} phrase-bypass={skippedPhrase} " +
             $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
+        Console.WriteLine(
+            $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
+        if (dumpPath is not null)
+        {
+            await File.WriteAllTextAsync(
+                dumpPath,
+                System.Text.Json.JsonSerializer.Serialize(
+                    results,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
         PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
         PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
         PrintBucket("all ranked", results);

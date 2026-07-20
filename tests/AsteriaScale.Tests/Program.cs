@@ -2038,11 +2038,17 @@ try
             string.Equals(args[rankerBenchmarkArgument + 3], "npu", StringComparison.OrdinalIgnoreCase)
                 ? GlossBertRankerProvider.Npu
                 : GlossBertRankerProvider.Cpu;
+        int dumpArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--dump", StringComparison.OrdinalIgnoreCase));
+        string? dumpPath = dumpArgument >= 0 && args.Length > dumpArgument + 1
+            ? args[dumpArgument + 1]
+            : null;
         await RunAsync($"GlossBERT calibration benchmark ({benchmarkProvider})", () =>
             RankerCalibrationBenchmark.RunAsync(
                 args[rankerBenchmarkArgument + 1],
                 args[rankerBenchmarkArgument + 2],
-                benchmarkProvider));
+                benchmarkProvider,
+                dumpPath));
     }
 
     if (args.Any(arg => string.Equals(arg, "--live", StringComparison.OrdinalIgnoreCase)))

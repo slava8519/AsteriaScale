@@ -202,9 +202,19 @@ def _kaikki_inflected_forms(item: dict) -> list[str]:
     return forms
 
 
-def parse_kaikki_english(path: Path) -> dict[str, list[str]]:
-    """Extract every EN→RU headword, inflected form, phrase and Russian gloss."""
+def parse_kaikki_english(
+    path: Path,
+) -> tuple[dict[str, list[str]], dict[str, dict[str, list[str]]]]:
+    """Extract every EN→RU headword, inflected form, phrase and Russian gloss.
+
+    Also returns the raw Russian glosses grouped by normalized key and POS so
+    the en-Wiktionary sense sidecar can borrow surfaces from this layer
+    (roadmap task #1).
+    """
     entries: dict[str, list[str]] = defaultdict(list)
+    glosses_by_key_pos: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     with path.open("rt", encoding="utf-8") as source:
         for line_number, line in enumerate(source, start=1):
             try:
@@ -223,18 +233,38 @@ def parse_kaikki_english(path: Path) -> dict[str, list[str]]:
             if not translations:
                 continue
 
+            part_of_speech = clean(item.get("pos")).casefold()
             keys = [item.get("word"), *_kaikki_inflected_forms(item)]
             for key in keys:
                 add(entries, key, translations, limit=None)
-    return entries
+                normalized_key = normalize_english(key)
+                if not normalized_key:
+                    continue
+                bucket = glosses_by_key_pos[normalized_key][part_of_speech]
+                known = {value.casefold() for value in bucket}
+                for translation in translations:
+                    if translation.casefold() not in known:
+                        bucket.append(translation)
+                        known.add(translation.casefold())
+    return entries, glosses_by_key_pos
 
 
 def parse_kaikki_enwiktionary_russian(
     path: Path,
-) -> tuple[dict[str, list[str]], dict[str, list[tuple[str, str, str, str]]]]:
-    """Extract Russian translation boxes plus their aligned English sense definitions."""
+) -> tuple[
+    dict[str, list[str]],
+    dict[str, list[tuple[str, str, str, str]]],
+    dict[str, list[tuple[str, str, str]]],
+]:
+    """Extract Russian translation boxes plus their aligned English sense definitions.
+
+    The third result lists senses that have a usable English gloss but no
+    Russian translation of their own: (definition, register, pos) per key.
+    They are candidates for enrichment from the ru-Wiktionary layer.
+    """
     entries: dict[str, list[str]] = defaultdict(list)
     sense_entries: dict[str, list[tuple[str, str, str, str]]] = defaultdict(list)
+    uncovered_senses: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     with path.open("rt", encoding="utf-8") as source:
         for line_number, line in enumerate(source, start=1):
             try:
@@ -287,6 +317,7 @@ def parse_kaikki_enwiktionary_russian(
                             (value, definition, register, part_of_speech)
                         )
 
+            item_uncovered: list[tuple[str, str, str]] = []
             for sense in source_senses:
                 fallback_definition = max(
                     (
@@ -297,11 +328,17 @@ def parse_kaikki_enwiktionary_russian(
                     key=len,
                     default="",
                 )
+                sense_register = _kaikki_style_prefix(sense)
+                aligned_before = len(aligned_translations)
                 collect_translations(
                     sense.get("translations", []),
-                    _kaikki_style_prefix(sense),
+                    sense_register,
                     fallback_definition,
                 )
+                if len(aligned_translations) == aligned_before and fallback_definition:
+                    item_uncovered.append(
+                        (fallback_definition, sense_register, part_of_speech)
+                    )
 
             style_prefixes = [
                 prefix
@@ -313,7 +350,9 @@ def parse_kaikki_enwiktionary_russian(
                 " ".join(dict.fromkeys(style_prefixes)),
             )
 
-            if not translations:
+            # Items without any Russian translation still matter: their
+            # uncovered senses are enrichment candidates (roadmap task #1).
+            if not translations and not item_uncovered:
                 continue
 
             keys = [item.get("word"), *_kaikki_inflected_forms(item)]
@@ -337,7 +376,106 @@ def parse_kaikki_enwiktionary_russian(
                     if normalized_aligned not in known_senses:
                         sense_entries[normalized_key].append(aligned)
                         known_senses.add(normalized_aligned)
-    return entries, sense_entries
+                known_uncovered = set(uncovered_senses[normalized_key])
+                for entry in item_uncovered:
+                    if entry not in known_uncovered:
+                        uncovered_senses[normalized_key].append(entry)
+                        known_uncovered.add(entry)
+    return entries, sense_entries, uncovered_senses
+
+
+def _split_ru_gloss(gloss: str) -> tuple[str, list[str]]:
+    """Split '[разг.] слово, синоним' into a register and short surface parts."""
+    register = ""
+    value = clean(gloss)
+    if value.startswith("["):
+        end = value.find("]")
+        if end > 0:
+            register = value[1:end].strip()
+            value = value[end + 1 :].strip()
+    parts = [clean_russian_translation(part) for part in value.split(",")]
+    return register, [part for part in parts if part and len(part.split()) <= 4]
+
+
+def _russian_stems_related(left: str, right: str) -> bool:
+    a = left.casefold().replace("ё", "е")
+    b = right.casefold().replace("ё", "е")
+    limit = min(len(a), len(b))
+    if limit < 4:
+        return a == b
+    prefix = 0
+    while prefix < limit and a[prefix] == b[prefix]:
+        prefix += 1
+    return prefix >= (4 if limit <= 5 else 5)
+
+
+def enrich_sense_entries(
+    sense_entries: dict[str, list[tuple[str, str, str, str]]],
+    uncovered_senses: dict[str, list[tuple[str, str, str]]],
+    ru_glosses_by_key_pos: dict[str, dict[str, list[str]]],
+) -> int:
+    """Borrow Russian surfaces from the ru-Wiktionary layer (roadmap task #1).
+
+    Two deliberately conservative moves:
+    1. An interjection sense with an empty translation box gains ru-Wiktionary
+       interjection glosses of the same headword (up to 4 surfaces).
+    2. A sense whose translation stem-matches one part of a comma-separated
+       ru-Wiktionary gloss gains that gloss's sibling synonyms (up to 2).
+    """
+    added = 0
+    for key, senses in uncovered_senses.items():
+        intj_glosses = ru_glosses_by_key_pos.get(key, {}).get("intj", [])
+        if not intj_glosses:
+            continue
+        rows = sense_entries[key]
+        known = {(row[0].casefold(), row[1].casefold()) for row in rows}
+        for definition, register, pos in senses:
+            if pos != "intj":
+                continue
+            appended = 0
+            for gloss in intj_glosses:
+                gloss_register, parts = _split_ru_gloss(gloss)
+                for part in parts:
+                    if appended >= 4:
+                        break
+                    marker = (part.casefold(), definition.casefold())
+                    if marker in known:
+                        continue
+                    rows.append((part, definition, register or gloss_register, pos))
+                    known.add(marker)
+                    appended += 1
+                    added += 1
+
+    for key, rows in sense_entries.items():
+        pos_glosses = ru_glosses_by_key_pos.get(key)
+        if not pos_glosses:
+            continue
+        gloss_parts = [
+            _split_ru_gloss(gloss)
+            for glosses in pos_glosses.values()
+            for gloss in glosses
+        ]
+        known = {(row[0].casefold(), row[1].casefold()) for row in rows}
+        for translation, definition, register, pos in list(rows):
+            siblings = 0
+            for _, parts in gloss_parts:
+                if siblings >= 2 or len(parts) < 2:
+                    continue
+                if not any(_russian_stems_related(part, translation) for part in parts):
+                    continue
+                for part in parts:
+                    if siblings >= 2:
+                        break
+                    if _russian_stems_related(part, translation):
+                        continue
+                    marker = (part.casefold(), definition.casefold())
+                    if marker in known:
+                        continue
+                    rows.append((part, definition, register, pos))
+                    known.add(marker)
+                    siblings += 1
+                    added += 1
+    return added
 
 
 def parse_kaikki_japanese(path: Path) -> dict[str, list[str]]:
@@ -546,8 +684,11 @@ def main() -> None:
         print(f"JMdict Japanese/Russian: {len(japanese):,} entries")
         generated = True
 
+    kaikki_english_glosses: dict[str, dict[str, list[str]]] = {}
     if args.kaikki_english:
-        kaikki_english = parse_kaikki_english(args.kaikki_english)
+        kaikki_english, kaikki_english_glosses = parse_kaikki_english(
+            args.kaikki_english
+        )
         write_dictionary(args.output / "eng-rus-wiktionary.tsv.gz", kaikki_english)
         print(
             "Kaikki/Russian Wiktionary English/Russian: "
@@ -556,11 +697,21 @@ def main() -> None:
         generated = True
 
     if args.kaikki_enwiktionary_russian:
-        kaikki_enwiktionary, kaikki_enwiktionary_senses = (
+        kaikki_enwiktionary, kaikki_enwiktionary_senses, kaikki_uncovered = (
             parse_kaikki_enwiktionary_russian(
             args.kaikki_enwiktionary_russian
             )
         )
+        if kaikki_english_glosses:
+            enriched = enrich_sense_entries(
+                kaikki_enwiktionary_senses,
+                kaikki_uncovered,
+                kaikki_english_glosses,
+            )
+            print(
+                "Sense sidecar enrichment from ru-Wiktionary: "
+                f"{enriched:,} borrowed surfaces"
+            )
         write_dictionary(
             args.output / "eng-rus-enwiktionary.tsv.gz",
             kaikki_enwiktionary,
