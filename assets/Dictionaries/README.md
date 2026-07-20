@@ -18,10 +18,13 @@ They are data files loaded independently by Asteria Scale's optional fast dictio
   remain available offline. The verified raw JSONL was 3,186,887,546 bytes with SHA-256
   `E491232E4AD314F825F025969AA1B1407A8B5FFA311711D49A83CC80E6204E71`.
 - `eng-rus-enwiktionary-senses.tsv.gz`: lazy smart-dictionary index aligned with the
-  preceding layer: 406,179 Russian translations paired with their full English sense
+  preceding layer: 455,814 Russian translations paired with their full English sense
   definition, register and part of speech. It is loaded only in Smart dictionary mode and
   lets the local ranker compare English context with English definitions without asking a
-  generative model to translate the whole sentence.
+  generative model to translate the whole sentence. 49,657 surfaces are borrowed from the
+  ru-Wiktionary layer: interjection senses with empty translation boxes gain matching
+  interjection glosses of the same headword, and senses whose translation stem-matches a
+  comma-separated ru-Wiktionary gloss gain that gloss's sibling synonyms.
 - `eng-rus-vn.tsv.gz`: curated visual-novel dialogue, contractions and chat abbreviations.
 - `eng-rus-dialogue.tsv.gz`: short English → Russian sentence pairs from Tatoeba.
 - `jpn-rus.tsv.gz`: Japanese → Russian entries extracted from the multilingual JMdict file.

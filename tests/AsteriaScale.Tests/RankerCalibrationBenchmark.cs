@@ -101,7 +101,7 @@ internal static class RankerCalibrationBenchmark
             HashSet<int> expectedGroupIds = [];
             foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
             {
-                if (NormalizeRussian(outcome.Translation) == expected)
+                if (RussianLabelsMatch(outcome.Translation, expected))
                 {
                     expectedGroupIds.Add(outcome.GroupId);
                 }
@@ -115,7 +115,7 @@ internal static class RankerCalibrationBenchmark
                 for (int index = 0; index < orderedSenses.Length; index++)
                 {
                     if (orderedSenses[index].Surfaces.Any(surface =>
-                            NormalizeRussian(surface.Translation) == expected))
+                            RussianLabelsMatch(surface.Translation, expected)))
                     {
                         expectedGroupIds.Add(plan.CandidateGroupIds[index]);
                     }
@@ -209,6 +209,40 @@ internal static class RankerCalibrationBenchmark
 
     private static string FormatCorrect(bool? correct) =>
         correct is null ? "unlabeled" : correct.Value ? "yes" : "NO";
+
+    /// <summary>
+    /// Inflection-tolerant label comparison for single words: the runtime
+    /// shows the dictionary lemma, so "серьёзный" correctly serves an
+    /// expected "серьёзным". Multi-word labels stay exact.
+    /// </summary>
+    private static bool RussianLabelsMatch(string candidate, string normalizedExpected)
+    {
+        string a = NormalizeRussian(candidate);
+        string b = normalizedExpected;
+        if (a == b)
+        {
+            return true;
+        }
+
+        if (a.Contains(' ') || b.Contains(' '))
+        {
+            return false;
+        }
+
+        int limit = Math.Min(a.Length, b.Length);
+        if (limit < 4 || Math.Abs(a.Length - b.Length) > 4)
+        {
+            return false;
+        }
+
+        int prefix = 0;
+        while (prefix < limit && a[prefix] == b[prefix])
+        {
+            prefix++;
+        }
+
+        return prefix >= (limit <= 5 ? 4 : 5);
+    }
 
     private static string NormalizeRussian(string value) =>
         string.Join(
