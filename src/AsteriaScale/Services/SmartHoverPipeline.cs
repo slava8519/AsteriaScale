@@ -1,0 +1,572 @@
+using AsteriaScale.Interop;
+using AsteriaScale.Models;
+
+namespace AsteriaScale.Services;
+
+internal sealed record SmartHoverResult(
+        string Source,
+        string Translation,
+        string Engine,
+        bool DictionaryFound,
+        bool IsPhrase,
+        string? Language,
+        double? Confidence,
+        bool UsedFullFallback,
+        SmartDictionaryCacheRequest? CacheRequest = null,
+        SmartDictionarySelection? CacheSelection = null);
+
+/// <summary>
+/// The Smart-dictionary hover pipeline: dictionary lookup with sense metadata,
+/// Tatoeba alignment, deterministic heuristics, result cache and the GlossBERT
+/// ranker transaction. Extracted verbatim from HoverTranslationService
+/// (roadmap task #5); the facade owns service lifetimes and overlays.
+/// </summary>
+internal sealed class SmartHoverPipeline : IDisposable
+{
+    private const string SmartRankingPipelineVersion = "smart-sense-v7-mwe-tatoeba";
+    private readonly AppSettings _settings;
+    private readonly LocalDictionaryService _dictionary;
+    private readonly GlossBertDictionarySelectorService _glossBertSelector;
+    private readonly SmartDictionaryResultCache _smartResultCache;
+    private readonly Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> _translateFallback;
+    private readonly Action<string> _reportStatus;
+    private readonly Action<string, NativeMethods.Point> _onDemandFallbackObserved;
+    private readonly SemaphoreSlim _smartBackendLock = new(1, 1);
+    private string? _activeSmartBackend;
+
+    public SmartHoverPipeline(
+        AppSettings settings,
+        LocalDictionaryService dictionary,
+        GlossBertDictionarySelectorService glossBertSelector,
+        SmartDictionaryResultCache smartResultCache,
+        Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> translateFallback,
+        Action<string> reportStatus,
+        Action<string, NativeMethods.Point> onDemandFallbackObserved)
+    {
+        _settings = settings;
+        _dictionary = dictionary;
+        _glossBertSelector = glossBertSelector;
+        _smartResultCache = smartResultCache;
+        _translateFallback = translateFallback;
+        _reportStatus = reportStatus;
+        _onDemandFallbackObserved = onDemandFallbackObserved;
+    }
+
+    public string? ActiveBackend => _activeSmartBackend;
+
+    public void ForgetBackend() => _activeSmartBackend = null;
+
+    public async Task UnloadRankerAsync()
+    {
+        await _smartBackendLock.WaitAsync();
+        try
+        {
+            await _glossBertSelector.UnloadAsync();
+            _activeSmartBackend = null;
+        }
+        finally
+        {
+            _smartBackendLock.Release();
+        }
+    }
+
+    private bool IsAutomaticFallback =>
+        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
+        SmartDictionaryFallbackModes.Automatic;
+
+    private bool IsOnDemandFallback =>
+        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
+        SmartDictionaryFallbackModes.OnDemand;
+
+    private Task<(string Source, string Translation, string Engine)> TranslateSmartFallbackAsync(
+        string source,
+        CancellationToken cancellationToken) =>
+        _translateFallback(source, cancellationToken);
+
+    private void ReportStatus(string status) => _reportStatus(status);
+
+    private static void LogError(Exception exception) =>
+        HoverTranslationService.LogError(exception);
+
+    public void Dispose() => _smartBackendLock.Dispose();
+
+    public async Task<SmartHoverResult> ResolveSmartHoverAsync(
+        HoverOcrResult recognized,
+        NativeMethods.Point cursor,
+        string smartBackend,
+        CancellationToken cancellationToken)
+    {
+        DictionaryLookupResult lookup = await _dictionary.LookupWithSenseMetadataAsync(
+            recognized.Text,
+            recognized.HoveredWord,
+            recognized.CharacterIndex,
+            cancellationToken);
+        if (IsOnDemandFallback)
+        {
+            _onDemandFallbackObserved(recognized.Text, cursor);
+        }
+
+        if (!lookup.Found)
+        {
+            if (IsAutomaticFallback)
+            {
+                (string fallbackSource, string fallbackTranslation, string fallbackEngine) =
+                    await TranslateSmartFallbackAsync(recognized.Text, cancellationToken);
+                return new SmartHoverResult(
+                    fallbackSource,
+                    fallbackTranslation,
+                    fallbackEngine,
+                    DictionaryFound: true,
+                    IsPhrase: false,
+                    Language: lookup.Language,
+                    Confidence: null,
+                    UsedFullFallback: true);
+            }
+
+            return new SmartHoverResult(
+                lookup.Source,
+                IsOnDemandFallback
+                    ? "Нет записи в локальном словаре. Alt+Shift+D — перевести реплику целиком."
+                    : lookup.Translation,
+                IsOnDemandFallback
+                    ? SmartEngineLabel(smartBackend)
+                    : LocalDictionaryService.EngineLabel,
+                DictionaryFound: false,
+                lookup.IsPhrase,
+                lookup.Language,
+                Confidence: null,
+                UsedFullFallback: false);
+        }
+
+        SmartDictionaryTargetSpan targetSpan = lookup.IsPhrase
+            ? new SmartDictionaryTargetSpan(lookup.Source, true)
+            : SmartDictionarySenseResolver.ResolveTargetSpan(
+                recognized.Text,
+                lookup.Source,
+                recognized.CharacterIndex);
+        string displaySource = targetSpan.Source;
+        bool displayIsPhrase = lookup.IsPhrase || targetSpan.IsPhrase;
+        bool englishWord =
+            !lookup.IsPhrase &&
+            string.Equals(lookup.Language, "EN", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(
+                ResolveSmartSourceLanguage(lookup.Language),
+                "English",
+                StringComparison.Ordinal);
+
+        // Curated/flat entries have no aligned English glosses, but the cheap
+        // context rules are still useful (for example teetering ... verge).
+        // Run them before falling back to a multi-chip dictionary card.
+        if (englishWord && lookup.SenseCandidates.Count == 0)
+        {
+            string[] flatTranslations =
+                NpuDictionarySelectorService.SplitMeanings(lookup.Translation);
+            SmartDictionaryHeuristicSelection? tatoebaSelection =
+                SmartDictionaryHeuristicRanker.TrySelectFromContextTranslation(
+                    lookup.ContextTranslation,
+                    flatTranslations);
+            if (tatoebaSelection is not null)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    tatoebaSelection.Translation,
+                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    tatoebaSelection.Confidence,
+                    UsedFullFallback: false);
+            }
+
+            SmartDictionaryHeuristicSelection? flatSelection =
+                SmartDictionaryHeuristicRanker.TrySelect(
+                    recognized.Text,
+                    lookup.Source,
+                    recognized.CharacterIndex,
+                    flatTranslations,
+                    "English");
+            if (flatSelection is not null)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    flatSelection.Translation,
+                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    flatSelection.Confidence,
+                    UsedFullFallback: false);
+            }
+        }
+
+        // GlossBERT is an English single-word sense disambiguator. Curated
+        // phrases already contain their intended translation and must never be
+        // broken into an artificial word-level ranking request.
+        bool rankableEnglishWord =
+            englishWord &&
+            lookup.SenseCandidates.Count > 0;
+        if (!rankableEnglishWord)
+        {
+            return LocalSmartResult(lookup, displaySource, displayIsPhrase);
+        }
+
+        try
+        {
+            SmartDictionarySenseInventory inventory =
+                SmartDictionarySenseResolver.GroupCandidates(
+                    recognized.Text,
+                    lookup.Source,
+                    recognized.CharacterIndex,
+                    lookup.SenseCandidates);
+            SmartDictionaryRankerPlan plan =
+                SmartDictionarySenseResolver.CreateRankerPlan(
+                    recognized.Text,
+                    lookup.Source,
+                    recognized.CharacterIndex,
+                    inventory.Groups);
+            if (plan.Outcomes.Count == 0)
+            {
+                return LocalSmartResult(lookup, displaySource, displayIsPhrase);
+            }
+
+            string[] visibleTranslations = plan.Outcomes
+                .OrderBy(outcome => outcome.GroupId)
+                .Select(outcome => outcome.Translation)
+                .ToArray();
+            SmartDictionaryHeuristicSelection? tatoebaSelection =
+                SmartDictionaryHeuristicRanker.TrySelectFromContextTranslation(
+                    lookup.ContextTranslation,
+                    visibleTranslations);
+            if (tatoebaSelection is not null)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    tatoebaSelection.Translation,
+                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    tatoebaSelection.Confidence,
+                    UsedFullFallback: false);
+            }
+
+            if (visibleTranslations.Length == 1)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    visibleTranslations[0],
+                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    Confidence: 1,
+                    UsedFullFallback: false);
+            }
+
+            SmartDictionaryHeuristicSelection? fastSelection =
+                SmartDictionaryHeuristicRanker.TrySelect(
+                    recognized.Text,
+                    lookup.Source,
+                    recognized.CharacterIndex,
+                    visibleTranslations,
+                    "English");
+            if (fastSelection is not null)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    fastSelection.Translation,
+                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    fastSelection.Confidence,
+                    UsedFullFallback: false);
+            }
+
+            SmartDictionaryCacheRequest cacheRequest = CreateSmartCacheRequest(
+                recognized.Text,
+                lookup.Source,
+                recognized.CharacterIndex,
+                visibleTranslations,
+                "English",
+                smartBackend);
+            SmartDictionarySelection? cachedSelection =
+                await TryGetSmartSelectionSafeAsync(cacheRequest, cancellationToken);
+            if (cachedSelection is not null)
+            {
+                return new SmartHoverResult(
+                    displaySource,
+                    cachedSelection.Translation,
+                    SmartDictionaryResultCache.EngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    cachedSelection.Confidence,
+                    UsedFullFallback: false);
+            }
+
+            // No intermediate candidate card: the overlay keeps its loading
+            // state until the ranker delivers the final verdict, so the card
+            // renders exactly once instead of flashing candidates first.
+            string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
+            await PrepareSmartBackendAsync(smartBackend, cancellationToken);
+            GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
+            GlossBertDictionarySelection ranked =
+                await _glossBertSelector.SelectAsync(
+                    recognized.Text,
+                    lookup.Source,
+                    recognized.CharacterIndex,
+                    plan.CandidateGlosses,
+                    plan.CandidateGroupIds,
+                    "English",
+                    provider,
+                    cancellationToken);
+            if (ranked.Abstained || ranked.SelectedGroupId is not { } groupId)
+            {
+                // An exact Tatoeba sentence translation outranks a shrug: the
+                // user gets the whole line instead of unresolved candidates.
+                if (!string.IsNullOrWhiteSpace(lookup.ContextTranslation))
+                {
+                    ReportStatus(
+                        "Умный словарь: слово неоднозначно — показан точный перевод предложения");
+                    return new SmartHoverResult(
+                        recognized.Text,
+                        lookup.ContextTranslation,
+                        SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                        DictionaryFound: true,
+                        IsPhrase: true,
+                        lookup.Language,
+                        Confidence: null,
+                        UsedFullFallback: false);
+                }
+
+                ReportStatus(
+                    "Умный словарь: контекста недостаточно — показаны безопасные словарные варианты");
+                return new SmartHoverResult(
+                    displaySource,
+                    visibleCandidates,
+                    SmartEngineLabel(smartBackend) + "  •  НЕ УВЕРЕН",
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    Confidence: null,
+                    UsedFullFallback: false);
+            }
+
+            SmartDictionaryRankerOutcome selectedOutcome = plan.Outcomes
+                .First(outcome => outcome.GroupId == groupId);
+            SmartDictionarySelection cacheSelection = new(
+                selectedOutcome.GroupId,
+                selectedOutcome.Translation,
+                ranked.Confidence ?? 0,
+                string.Empty);
+            return new SmartHoverResult(
+                displaySource,
+                selectedOutcome.Translation,
+                SmartEngineLabel(smartBackend),
+                DictionaryFound: true,
+                displayIsPhrase,
+                lookup.Language,
+                cacheSelection.Confidence,
+                UsedFullFallback: false,
+                cacheRequest,
+                cacheSelection);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+            if (IsAutomaticFallback)
+            {
+                ReportStatus(
+                    "Умный словарь: ранжирование недоступно, запущен разрешённый полный перевод");
+                (string fallbackSource, string fallbackTranslation, string fallbackEngine) =
+                    await TranslateSmartFallbackAsync(recognized.Text, cancellationToken);
+                return new SmartHoverResult(
+                    fallbackSource,
+                    fallbackTranslation,
+                    fallbackEngine,
+                    DictionaryFound: true,
+                    IsPhrase: false,
+                    lookup.Language,
+                    Confidence: null,
+                    UsedFullFallback: true);
+            }
+
+            if (!string.IsNullOrWhiteSpace(lookup.ContextTranslation))
+            {
+                ReportStatus(
+                    "Умный словарь: модель недоступна — показан точный перевод предложения");
+                return new SmartHoverResult(
+                    recognized.Text,
+                    lookup.ContextTranslation,
+                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    DictionaryFound: true,
+                    IsPhrase: true,
+                    lookup.Language,
+                    Confidence: null,
+                    UsedFullFallback: false);
+            }
+
+            ReportStatus(
+                "Умный словарь: модель недоступна — показаны локальные варианты без полного перевода");
+            return UnavailableSmartResult(
+                lookup,
+                smartBackend,
+                displaySource,
+                displayIsPhrase);
+        }
+    }
+
+    private static SmartHoverResult LocalSmartResult(
+        DictionaryLookupResult lookup,
+        string? source = null,
+        bool? isPhrase = null) =>
+        new(
+            source ?? lookup.Source,
+            lookup.Translation,
+            LocalDictionaryService.EngineLabel,
+            DictionaryFound: true,
+            isPhrase ?? lookup.IsPhrase,
+            lookup.Language,
+            Confidence: null,
+            UsedFullFallback: false);
+
+    private static SmartHoverResult UnavailableSmartResult(
+        DictionaryLookupResult lookup,
+        string smartBackend,
+        string? source = null,
+        bool? isPhrase = null) =>
+        new(
+            source ?? lookup.Source,
+            lookup.Translation,
+            SmartEngineLabel(smartBackend) + "  •  НЕДОСТУПЕН",
+            DictionaryFound: true,
+            isPhrase ?? lookup.IsPhrase,
+            lookup.Language,
+            Confidence: null,
+            UsedFullFallback: false);
+
+    private static string FormatVisibleOutcomes(IReadOnlyList<string> translations)
+    {
+        const int maximumVisibleOutcomes = 8;
+        const int maximumLength = 380;
+        string value = string.Join(
+            "; ",
+            translations
+                .Where(translation => !string.IsNullOrWhiteSpace(translation))
+                .Take(maximumVisibleOutcomes));
+        if (translations.Count > maximumVisibleOutcomes)
+        {
+            value += "; …";
+        }
+
+        return value.Length <= maximumLength
+            ? value
+            : value[..(maximumLength - 1)].TrimEnd() + "…";
+    }
+
+    private string ResolveSmartSourceLanguage(string? detectedLanguage)
+    {
+        string configured = SmartDictionarySourceLanguages.Normalize(
+            _settings.SmartDictionarySourceLanguage);
+        if (configured == SmartDictionarySourceLanguages.English)
+        {
+            return "English";
+        }
+
+        if (configured == SmartDictionarySourceLanguages.Japanese)
+        {
+            return "Japanese";
+        }
+
+        return string.Equals(detectedLanguage, "JA", StringComparison.OrdinalIgnoreCase)
+            ? "Japanese"
+            : "English";
+    }
+
+    private static GlossBertRankerProvider ResolveRankerProvider(string backend) =>
+        backend == SmartDictionaryBackends.Npu
+            ? GlossBertRankerProvider.Npu
+            : GlossBertRankerProvider.Cpu;
+
+    internal static string SmartEngineLabel(string backend) =>
+        GlossBertDictionarySelectorService.GetEngineLabel(
+            ResolveRankerProvider(backend));
+
+    private SmartDictionaryCacheRequest CreateSmartCacheRequest(
+        string context,
+        string target,
+        int characterIndex,
+        IReadOnlyList<string> candidates,
+        string sourceLanguage,
+        string backend)
+    {
+        GlossBertRankerProvider provider = ResolveRankerProvider(backend);
+        return new SmartDictionaryCacheRequest(
+            context,
+            target,
+            characterIndex,
+            candidates,
+            sourceLanguage,
+            backend,
+            GlossBertDictionarySelectorService.GetModelCacheId(provider),
+            _dictionary.VersionToken + "." + SmartRankingPipelineVersion);
+    }
+
+    private async Task<SmartDictionarySelection?> TryGetSmartSelectionSafeAsync(
+        SmartDictionaryCacheRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _smartResultCache.TryGetAsync(request, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+            return null;
+        }
+    }
+
+    public async Task StoreSmartSelectionSafeAsync(
+        SmartDictionaryCacheRequest request,
+        SmartDictionarySelection selection)
+    {
+        try
+        {
+            // The result is already on screen. Persisting it must neither delay the UI
+            // nor be discarded merely because the cursor moved a moment later.
+            await _smartResultCache.StoreAsync(request, selection, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+        }
+    }
+
+    public async Task PrepareSmartBackendAsync(string backend, CancellationToken cancellationToken)
+    {
+        await _smartBackendLock.WaitAsync(cancellationToken);
+        try
+        {
+            _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
+            await _glossBertSelector.WarmUpAsync(
+                ResolveRankerProvider(backend),
+                cancellationToken);
+            _activeSmartBackend = backend;
+        }
+        finally
+        {
+            _smartBackendLock.Release();
+        }
+    }
+
+}
