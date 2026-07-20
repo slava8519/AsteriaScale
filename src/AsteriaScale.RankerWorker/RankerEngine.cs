@@ -48,7 +48,13 @@ internal sealed class RankerEngine : IDisposable
         "/model/bert/Gather_1_kernel_time|Gather"
     ];
 
-    private const int PrefilterTopGroups = 8;
+    // Engage only on truly large inventories and keep half of them: probe
+    // measurements showed that k=8 can evict the correct sense of
+    // hyper-polysemous words ("set"), inflating the margin past the
+    // abstention threshold on a wrong answer, while pruning 13-16 groups by
+    // one or two only pays the encoder cost without a latency win.
+    private const int PrefilterTopGroups = 12;
+    private const int PrefilterEngageGroups = 16;
     private const string EmbeddingBundleDirectoryName = "GlossEmbeddings";
 
     private readonly WorkerOptions _options;
@@ -158,7 +164,7 @@ internal sealed class RankerEngine : IDisposable
         var fallback = (candidates, groupIds, "cross");
         try
         {
-            if (groupIds.Distinct().Count() <= PrefilterTopGroups)
+            if (groupIds.Distinct().Count() <= PrefilterEngageGroups)
             {
                 return fallback;
             }

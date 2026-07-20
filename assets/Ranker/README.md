@@ -75,3 +75,23 @@ The source artifacts are staged in
 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` and generative Qwen selectors were
 evaluated as earlier baselines and rejected for automatic sense selection.
 They are not part of the packaged 0.9 ranker.
+
+## Bi-encoder prefilter artifacts (roadmap #7)
+
+`Models/GlossEmbeddings` (not in git; regenerate with
+`tools/build-gloss-embeddings.py`):
+
+| Artifact | Bytes | SHA-256 |
+|---|---|---|
+| eng-senses.vec | 91,577,685 | 13C0FB6DB773D85F94E2C930E2C49C8BC022BD2003550413BCF1F963CC55C2D3 |
+| minilm-l6-v2.onnx | 90,405,214 | 6FD5D72FE4589F189F8EBC006442DBB529BB7CE38F8082112682524616046452 |
+| tokenizer.json | 466,247 | BE50C3628F2BF5BB5E3A7F17B1F74611B2561A3A27EEAB05E5AA30F411572037 |
+
+Encoder: sentence-transformers/all-MiniLM-L6-v2 @ c9745ed1 (Apache-2.0),
+225,217 int8 vectors (384-dim, per-vector scale), matched by FNV-1a hashes of
+normalized definitions. The prefilter engages only above 16 distinct outcome
+groups and keeps the top 12 with all their glosses (GroupIds preserved).
+Measured: decisions and margins are bit-identical to the pure cross path on
+the dev set and the hyper-polysemy probe; k=8 was rejected after it evicted
+the correct sense of "set" and turned a calibrated abstention into a wrong
+answer. Missing artifacts silently fall back to the pure cross pipeline.
