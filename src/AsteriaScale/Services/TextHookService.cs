@@ -96,6 +96,12 @@ public sealed class TextHookService : IAsyncDisposable
                 _cliInput = cli.StandardInput;
                 _cliInput.AutoFlush = true;
                 _cliInput.WriteLine($"attach -P{processId}");
+                string? hookCode = FindProfileFor(processId)?.TextHookCode;
+                if (!string.IsNullOrWhiteSpace(hookCode))
+                {
+                    _cliInput.WriteLine($"{hookCode.Trim()} -P{processId}");
+                }
+
                 _attachedProcessId = processId;
                 _readLoop = ReadLoopAsync(cli.StandardOutput);
                 _ = DrainAsync(cli.StandardError);
@@ -211,6 +217,55 @@ public sealed class TextHookService : IAsyncDisposable
         catch (Exception exception) when (exception is IOException or ObjectDisposedException)
         {
         }
+    }
+
+    /// <summary>
+    /// A profile explicitly controls hooking for its own game; applications
+    /// without a matching profile follow the global toggle alone.
+    /// </summary>
+    public bool IsProcessAllowed(int processId)
+    {
+        AutomationProfile? profile = FindProfileFor(processId);
+        return profile?.TextHookEnabled ?? true;
+    }
+
+    private AutomationProfile? FindProfileFor(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            string name = process.ProcessName;
+            return _settings.Profiles.FirstOrDefault(profile =>
+                !string.IsNullOrWhiteSpace(profile.ProcessName) &&
+                string.Equals(profile.ProcessName, name, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                          InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Probes standard install locations to prefill the UI path.</summary>
+    public static string? ProbeDefaultDirectory()
+    {
+        string?[] roots =
+        [
+            Environment.GetEnvironmentVariable("ProgramFiles"),
+            Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+        ];
+        return roots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .SelectMany(root => new[]
+            {
+                Path.Combine(root!, "Textractor"),
+                Path.Combine(root!, "Programs", "Textractor")
+            })
+            .FirstOrDefault(directory =>
+                File.Exists(Path.Combine(directory, "x86", "TextractorCLI.exe")) ||
+                File.Exists(Path.Combine(directory, "x64", "TextractorCLI.exe")) ||
+                File.Exists(Path.Combine(directory, "TextractorCLI.exe")));
     }
 
     /// <summary>

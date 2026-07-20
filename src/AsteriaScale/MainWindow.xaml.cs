@@ -98,6 +98,8 @@ public partial class MainWindow : Window
         AutomationCheckBox.IsChecked = _settings.AutomationEnabled;
         RunAtStartupCheckBox.IsChecked = _startup.IsEnabled();
         StartMinimizedCheckBox.IsChecked = _settings.StartMinimized;
+        TextHookCheckBox.IsChecked = _settings.TextHookEnabled;
+        TextractorPathBox.Text = _settings.TextractorDirectory;
         HoverTranslationCheckBox.IsChecked = _settings.HoverTranslationEnabled;
         TranslationModeComboBox.ItemsSource = TranslationModes;
         TranslationModeComboBox.SelectedItem = TranslationModes.First(option =>
@@ -612,6 +614,44 @@ public partial class MainWindow : Window
         {
             SetStatus("Автозапуск: " + ex.Message);
         }
+    }
+
+    private async void OnTextHookChanged(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+        {
+            return;
+        }
+
+        _settings.TextHookEnabled = TextHookCheckBox.IsChecked == true;
+        if (_settings.TextHookEnabled && string.IsNullOrWhiteSpace(TextractorPathBox.Text))
+        {
+            TextractorPathBox.Text = TextHookService.ProbeDefaultDirectory() ?? string.Empty;
+        }
+
+        _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        await PersistSettingsAsync();
+    }
+
+    private async void OnTextractorPathChanged(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+        {
+            return;
+        }
+
+        _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        await PersistSettingsAsync();
+    }
+
+    private async void OnProfileTextHookChanged(object sender, RoutedEventArgs e)
+    {
+        if (_initializing)
+        {
+            return;
+        }
+
+        await PersistSettingsAsync();
     }
 
     private async void OnStartMinimizedChanged(object sender, RoutedEventArgs e)

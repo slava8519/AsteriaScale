@@ -263,6 +263,8 @@
                                                     <ColumnDefinition Width="210" />
                                                     <ColumnDefinition Width="10" />
                                                     <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="10" />
+                                                    <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel>
                                                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
@@ -276,7 +278,12 @@
                                                           SelectedValuePath="Id"
                                                           SelectedValue="{Binding PresetId, Mode=OneWay}"
                                                           SelectionChanged="OnProfilePresetSelectionChanged" />
-                                                <Button Grid.Column="4" Content="Удалить" Padding="11,7"
+                                                <CheckBox Grid.Column="4" Content="Hook" VerticalAlignment="Center"
+                                                          ToolTip="Брать текст этой игры из Textractor (при включённом text-hook)"
+                                                          IsChecked="{Binding TextHookEnabled, Mode=TwoWay}"
+                                                          Checked="OnProfileTextHookChanged"
+                                                          Unchecked="OnProfileTextHookChanged" />
+                                                <Button Grid.Column="6" Content="Удалить" Padding="11,7"
                                                         VerticalAlignment="Center" Tag="{Binding}"
                                                         Click="OnRemoveProfileClick" />
                                             </Grid>
@@ -292,6 +299,8 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="14" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="10" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="10" />
                                 <RowDefinition Height="Auto" />
@@ -444,6 +453,26 @@
                                                FontSize="10" Margin="0,10,0,0" />
                                 </StackPanel>
                             </Border>
+
+                            <Grid Grid.Row="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="280" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <CheckBox x:Name="TextHookCheckBox" Content="Text-hook (Textractor)"
+                                              FontWeight="SemiBold"
+                                              Checked="OnTextHookChanged" Unchecked="OnTextHookChanged" />
+                                    <TextBlock Text="Текст совместимых игр — напрямую из процесса; иначе всегда OCR"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="10" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <TextBox x:Name="TextractorPathBox" Grid.Column="2" Height="34"
+                                         VerticalContentAlignment="Center"
+                                         ToolTip="Папка Textractor (содержит x86/x64 TextractorCLI.exe)"
+                                         LostFocus="OnTextractorPathChanged" />
+                            </Grid>
                         </Grid>
                     </Border>
 

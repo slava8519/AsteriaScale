@@ -137,6 +137,15 @@ public sealed class AutomationProfile : INotifyPropertyChanged
 
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = string.Empty;
+
+    // Per-profile text hook: on by default so profile games use the hook once
+    // the global toggle is enabled; non-profile apps follow the global toggle.
+    public bool TextHookEnabled { get; set; } = true;
+
+    // Optional Textractor hook code (H-code/R-code) for engines whose
+    // automatic hooks fail; sent to the CLI right after attach.
+    public string TextHookCode { get; set; } = string.Empty;
+
     public string ProcessName { get; set; } = string.Empty;
     public string ProcessPath { get; set; } = string.Empty;
     public string ClassName { get; set; } = string.Empty;

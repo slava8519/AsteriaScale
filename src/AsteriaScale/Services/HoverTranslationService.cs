@@ -553,7 +553,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
             if (window != nint.Zero)
             {
                 NativeMethods.GetWindowThreadProcessId(window, out uint processId);
-                if (processId != 0 && processId != Environment.ProcessId)
+                if (processId != 0 &&
+                    processId != Environment.ProcessId &&
+                    _textHook.IsProcessAllowed((int)processId))
                 {
                     _textHook.EnsureAttached((int)processId);
                 }

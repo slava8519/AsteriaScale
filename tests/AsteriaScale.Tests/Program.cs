@@ -1489,6 +1489,31 @@ try
             "Containment is the relevance guard: no match means OCR context stays.");
         Assert(hook.TryGetSentenceContaining("meet", DateTime.UtcNow.AddMinutes(5)) is null,
             "Stale hooked sentences must expire.");
+
+        int selfProcessId = Environment.ProcessId;
+        string selfProcessName = Process.GetCurrentProcess().ProcessName;
+        Assert(hook.IsProcessAllowed(selfProcessId),
+            "Without a matching profile the global toggle alone must govern hooking.");
+        AppSettings gatedSettings = new()
+        {
+            TextHookEnabled = true,
+            TextractorDirectory = tempRoot,
+            Profiles =
+            [
+                new AutomationProfile
+                {
+                    Name = "self",
+                    ProcessName = selfProcessName,
+                    TextHookEnabled = false
+                }
+            ]
+        };
+        await using TextHookService gatedHook = new(gatedSettings);
+        Assert(!gatedHook.IsProcessAllowed(selfProcessId),
+            "A profile with the hook flag off must exclude its game.");
+        gatedSettings.Profiles[0].TextHookEnabled = true;
+        Assert(gatedHook.IsProcessAllowed(selfProcessId),
+            "A profile with the hook flag on must allow its game.");
     });
 
     await RunAsync(
