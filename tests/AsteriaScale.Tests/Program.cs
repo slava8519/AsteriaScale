@@ -268,6 +268,24 @@ try
                colloquial.Translation.Contains("не", StringComparison.OrdinalIgnoreCase),
             "The visual-novel contractions dictionary was not loaded.");
 
+        DictionaryLookupResult slangContraction = await dictionary.LookupAsync(
+            "\"Whaddya say? How about it?\"", "Whaddya", 1);
+        Assert(slangContraction.Found &&
+               slangContraction.Translation.Contains("что", StringComparison.OrdinalIgnoreCase),
+            $"The slang contraction layer must cover 'whaddya': {slangContraction.Translation}");
+
+        // OCR homoglyph repair: a Cyrillic "а" inside Latin text must not
+        // break phrase lookup, and genuine Russian must stay untouched.
+        string repairedMixed = WindowsAiOcrService.RepairMixedScriptText(
+            "She said that happily, almost prancing аrоund.");
+        Assert(repairedMixed == "She said that happily, almost prancing around.",
+            $"Cyrillic homoglyphs inside Latin tokens were not repaired: {repairedMixed}");
+        Assert(WindowsAiOcrService.RepairMixedScriptText("Привет, мир! Hello world") ==
+               "Привет, мир! Hello world",
+            "Pure-script tokens must never be rewritten.");
+        Assert(WindowsAiOcrService.RepairMixedScriptText("Привeт") == "Привет",
+            "A Latin homoglyph inside a Russian token must be repaired toward Cyrillic.");
+
         DictionaryLookupResult beaming = await dictionary.LookupAsync(
             "A beaming, innocent smile appeared on her shining face.", "beaming", 4);
         Assert(beaming.Found &&

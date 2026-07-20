@@ -981,7 +981,8 @@ internal sealed class WindowsAiOcrService : IDisposable
             return string.Empty;
         }
 
-        string normalized = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        string normalized = RepairMixedScriptText(
+            string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)));
         return normalized.Length <= 420 ? normalized : normalized[..420];
     }
 
@@ -992,8 +993,88 @@ internal sealed class WindowsAiOcrService : IDisposable
             return string.Empty;
         }
 
-        string normalized = string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        string normalized = RepairMixedScriptText(
+            string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)));
         return normalized.Length <= maximumLength ? normalized : normalized[..maximumLength];
+    }
+
+    private static readonly Dictionary<char, char> CyrillicToLatinHomoglyphs = new()
+    {
+        ['а'] = 'a', ['е'] = 'e', ['о'] = 'o', ['р'] = 'p', ['с'] = 'c',
+        ['у'] = 'y', ['х'] = 'x', ['к'] = 'k', ['і'] = 'i', ['ѕ'] = 's',
+        ['А'] = 'A', ['В'] = 'B', ['Е'] = 'E', ['К'] = 'K', ['М'] = 'M',
+        ['Н'] = 'H', ['О'] = 'O', ['Р'] = 'P', ['С'] = 'C', ['Т'] = 'T',
+        ['У'] = 'Y', ['Х'] = 'X'
+    };
+
+    private static readonly Dictionary<char, char> LatinToCyrillicHomoglyphs = new()
+    {
+        ['a'] = 'а', ['e'] = 'е', ['o'] = 'о', ['p'] = 'р', ['c'] = 'с',
+        ['y'] = 'у', ['x'] = 'х', ['k'] = 'к',
+        ['A'] = 'А', ['B'] = 'В', ['E'] = 'Е', ['K'] = 'К', ['M'] = 'М',
+        ['H'] = 'Н', ['O'] = 'О', ['P'] = 'Р', ['C'] = 'С', ['T'] = 'Т',
+        ['X'] = 'Х'
+    };
+
+    /// <summary>
+    /// OCR on stylized fonts sometimes emits homoglyphs from the other script
+    /// ("prancing аround" with a Cyrillic а breaks every dictionary key).
+    /// Only tokens that mix Latin and Cyrillic are repaired, toward the
+    /// dominant script; pure-Latin and pure-Cyrillic tokens are never touched.
+    /// </summary>
+    internal static string RepairMixedScriptText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        char[] result = text.ToCharArray();
+        int index = 0;
+        while (index < result.Length)
+        {
+            if (!char.IsLetter(result[index]))
+            {
+                index++;
+                continue;
+            }
+
+            int start = index;
+            int latin = 0;
+            int cyrillic = 0;
+            while (index < result.Length && char.IsLetter(result[index]))
+            {
+                char character = result[index];
+                if (character is >= 'a' and <= 'z' or >= 'A' and <= 'Z')
+                {
+                    latin++;
+                }
+                else if (character is >= 'Ѐ' and <= 'ӿ')
+                {
+                    cyrillic++;
+                }
+
+                index++;
+            }
+
+            if (latin == 0 || cyrillic == 0)
+            {
+                continue;
+            }
+
+            Dictionary<char, char> map = latin >= cyrillic
+                ? CyrillicToLatinHomoglyphs
+                : LatinToCyrillicHomoglyphs;
+            for (int position = start; position < index; position++)
+            {
+                if (map.TryGetValue(result[position], out char repaired))
+                {
+                    result[position] = repaired;
+                }
+            }
+        }
+
+        return new string(result);
     }
 
     private static bool LooksTranslatable(string text) =>
