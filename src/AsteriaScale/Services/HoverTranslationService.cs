@@ -896,17 +896,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     UsedFullFallback: false);
             }
 
+            // No intermediate candidate card: the overlay keeps its loading
+            // state until the ranker delivers the final verdict, so the card
+            // renders exactly once instead of flashing candidates first.
             string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
-            ShowTranslation(
-                displaySource,
-                visibleCandidates,
-                SmartEngineLabel(smartBackend),
-                cursor,
-                dictionaryFound: true,
-                isPhrase: displayIsPhrase,
-                language: lookup.Language,
-                confidence: null);
-
             await PrepareSmartBackendAsync(smartBackend, cancellationToken);
             GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
             GlossBertDictionarySelection ranked =

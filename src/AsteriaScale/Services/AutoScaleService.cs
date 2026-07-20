@@ -1,4 +1,5 @@
 using System.Windows.Threading;
+using AsteriaScale.Interop;
 using AsteriaScale.Models;
 
 namespace AsteriaScale.Services;
@@ -39,6 +40,25 @@ public sealed class AutoScaleService : IDisposable
     {
         if (_busy)
         {
+            return;
+        }
+
+        // Swiping to the desktop (Win+D / show desktop) can leave Magpie
+        // scaling active with the system cursor hidden. Stopping scaling as
+        // soon as the desktop takes focus restores the cursor. This guard is
+        // independent of the automation toggle.
+        if (_engine.IsScaling && IsDesktopForeground())
+        {
+            _busy = true;
+            try
+            {
+                await _engine.StopScalingAsync();
+            }
+            finally
+            {
+                _busy = false;
+            }
+
             return;
         }
 
@@ -104,6 +124,18 @@ public sealed class AutoScaleService : IDisposable
     {
         _candidateHandle = nint.Zero;
         _candidateSince = default;
+    }
+
+    private static bool IsDesktopForeground()
+    {
+        nint foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == nint.Zero)
+        {
+            return false;
+        }
+
+        string className = NativeMethods.ReadClassName(foreground);
+        return className is "Progman" or "WorkerW";
     }
 
     public void Dispose()
