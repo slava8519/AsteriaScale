@@ -32,21 +32,21 @@ internal static class GlossBertDictionarySelectorServiceTests
         string json = JsonSerializer.Serialize(request, RankerProtocolV2.JsonOptions);
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement root = document.RootElement;
-        Check(root.GetProperty("version").GetString() == "2",
-            "Ranker request did not advertise protocol v2.");
+        Check(root.GetProperty("version").GetString() == RankerProtocolV2.Version,
+            "Ranker request did not advertise the current protocol version.");
         Check(root.GetProperty("candidateGroupIds")[1].GetInt32() == 29,
             "Stable candidate group ids were not serialized parallel to glosses.");
 
         RankerResponse? response = JsonSerializer.Deserialize<RankerResponse>(
             """
-            {"version":"2","requestId":"shape","ok":true,"index":null,
+            {"version":"3","requestId":"shape","ok":true,"index":null,
              "abstained":true,"margin":0.12,"score":1.4,"confidence":0.51,
-             "provider":"CPUExecutionProvider","device":"CPU",
+             "provider":"CPUExecutionProvider","device":"CPU","pipeline":"bi+cross",
              "modelVersion":"GlossBERT:0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a:qint8"}
             """,
             RankerProtocolV2.JsonOptions);
-        Check(response is { Abstained: true, Index: null, Margin: 0.12 },
-            "Ranker v2 abstention diagnostics did not deserialize.");
+        Check(response is { Abstained: true, Index: null, Margin: 0.12, Pipeline: "bi+cross" },
+            "Ranker v3 abstention diagnostics did not deserialize.");
     }
 
     private static void VerifyAcceptedStableGroupId()
@@ -167,6 +167,16 @@ internal static class GlossBertDictionarySelectorServiceTests
             GlossBertRankerProvider.Cpu,
             [1, 2],
             "A contradictory abstained response was accepted.");
+        ExpectProtocolViolation(
+            Success("id", GlossBertRankerProvider.Cpu) with
+            {
+                Pipeline = null,
+                Index = 1
+            },
+            "id",
+            GlossBertRankerProvider.Cpu,
+            [1, 2],
+            "A selection without a declared ranking pipeline was accepted.");
     }
 
     private static void VerifySingleFileCompanionDirectoryResolution(
@@ -265,7 +275,8 @@ internal static class GlossBertDictionarySelectorServiceTests
             ? GlossBertDictionarySelectorService.NpuExecutionProvider
             : GlossBertDictionarySelectorService.CpuExecutionProvider,
         Device = provider == GlossBertRankerProvider.Npu ? "NPU" : "CPU",
-        ModelVersion = GlossBertDictionarySelectorService.GetModelCacheId(provider)
+        ModelVersion = GlossBertDictionarySelectorService.GetModelCacheId(provider),
+        Pipeline = "cross"
     };
 
     private static void ExpectProtocolViolation(

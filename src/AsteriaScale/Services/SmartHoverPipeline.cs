@@ -23,7 +23,7 @@ internal sealed record SmartHoverResult(
 /// </summary>
 internal sealed class SmartHoverPipeline : IDisposable
 {
-    private const string SmartRankingPipelineVersion = "smart-sense-v7-mwe-tatoeba";
+    private const string SmartRankingPipelineVersion = "smart-sense-v8-bicross";
     private readonly AppSettings _settings;
     private readonly LocalDictionaryService _dictionary;
     private readonly GlossBertDictionarySelectorService _glossBertSelector;

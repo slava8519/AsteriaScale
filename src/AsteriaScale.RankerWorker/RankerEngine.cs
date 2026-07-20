@@ -48,10 +48,16 @@ internal sealed class RankerEngine : IDisposable
         "/model/bert/Gather_1_kernel_time|Gather"
     ];
 
+    private const int PrefilterTopGroups = 8;
+    private const string EmbeddingBundleDirectoryName = "GlossEmbeddings";
+
     private readonly WorkerOptions _options;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private InferenceSession? _session;
     private PairTokenizer? _tokenizer;
+    private GlossEmbeddingIndex? _embeddingIndex;
+    private ContextEncoder? _contextEncoder;
+    private bool _embeddingLoadAttempted;
     private RankerException? _initializationFailure;
     private bool _warmupCompleted;
     private bool _npuExecutionVerified;
@@ -115,8 +121,10 @@ internal sealed class RankerEngine : IDisposable
             request.Context!,
             request.Target!,
             request.CharacterIndex);
-        var scores = Score(markedContext, request.Target!, request.Candidates!);
-        var groupedScores = GroupScores(scores, request.CandidateGroupIds!);
+        var (candidates, candidateGroupIds, pipeline) =
+            ApplyBiEncoderPrefilter(request, markedContext);
+        var scores = Score(markedContext, request.Target!, candidates);
+        var groupedScores = GroupScores(scores, candidateGroupIds);
         var best = groupedScores[0];
         var margin = groupedScores.Count == 1
             ? 1.0
@@ -131,13 +139,134 @@ internal sealed class RankerEngine : IDisposable
             abstained,
             margin,
             best.Score,
-            best.Score);
+            best.Score,
+            pipeline);
+    }
+
+    /// <summary>
+    /// MiniLM prefilter for large sense inventories (roadmap task #7): rank
+    /// GROUPS by their best gloss/context cosine similarity and keep the top 8
+    /// groups with all their glosses, so GroupIds and group-margin semantics
+    /// survive unchanged. Fail-open everywhere: a missing index, an unknown
+    /// key or an unmatched gloss hash keeps the full candidate set.
+    /// </summary>
+    private (IReadOnlyList<string> Candidates, IReadOnlyList<int> GroupIds, string Pipeline)
+        ApplyBiEncoderPrefilter(RankerRequest request, string markedContext)
+    {
+        var candidates = request.Candidates!;
+        var groupIds = request.CandidateGroupIds!;
+        var fallback = (candidates, groupIds, "cross");
+        try
+        {
+            if (groupIds.Distinct().Count() <= PrefilterTopGroups)
+            {
+                return fallback;
+            }
+
+            EnsureEmbeddingPipelineLoaded();
+            if (_embeddingIndex is null || _contextEncoder is null)
+            {
+                return fallback;
+            }
+
+            var key = request.Target!.Trim().ToLowerInvariant();
+            if (!_embeddingIndex.TryReadVectors(key, out var vectors))
+            {
+                return fallback;
+            }
+
+            var byHash = vectors.ToLookup(vector => vector.GlossHash);
+            var query = _contextEncoder.Encode(markedContext);
+            var groupBest = new Dictionary<int, double>();
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                var hash = GlossEmbeddingIndex.HashNormalizedGloss(candidates[index]);
+                var matches = byHash[hash].ToArray();
+                var similarity = matches.Length == 0
+                    ? double.PositiveInfinity
+                    : matches.Max(vector =>
+                        GlossEmbeddingIndex.Similarity(query, vector));
+                groupBest[groupIds[index]] = Math.Max(
+                    groupBest.GetValueOrDefault(groupIds[index], double.NegativeInfinity),
+                    similarity);
+            }
+
+            var keptGroups = groupBest
+                .OrderByDescending(entry => entry.Value)
+                .Take(PrefilterTopGroups)
+                .Select(entry => entry.Key)
+                .ToHashSet();
+            var filteredCandidates = new List<string>(candidates.Count);
+            var filteredGroupIds = new List<int>(groupIds.Count);
+            for (var index = 0; index < candidates.Count; index++)
+            {
+                if (keptGroups.Contains(groupIds[index]))
+                {
+                    filteredCandidates.Add(candidates[index]);
+                    filteredGroupIds.Add(groupIds[index]);
+                }
+            }
+
+            return (filteredCandidates, filteredGroupIds, "bi+cross");
+        }
+        catch (Exception ex) when (ex is not RankerException)
+        {
+            Console.Error.WriteLine($"[ranker] bi-encoder prefilter disabled: {ex.Message}");
+            _embeddingIndex?.Dispose();
+            _contextEncoder?.Dispose();
+            _embeddingIndex = null;
+            _contextEncoder = null;
+            return fallback;
+        }
+    }
+
+    private void EnsureEmbeddingPipelineLoaded()
+    {
+        if (_embeddingLoadAttempted)
+        {
+            return;
+        }
+
+        _embeddingLoadAttempted = true;
+        var directory = Path.Combine(
+            _options.ModelDirectory,
+            EmbeddingBundleDirectoryName);
+        var indexPath = Path.Combine(directory, "eng-senses.vec");
+        var modelPath = Path.Combine(directory, "minilm-l6-v2.onnx");
+        var tokenizerPath = Path.Combine(directory, "tokenizer.json");
+        if (!File.Exists(indexPath) ||
+            !File.Exists(modelPath) ||
+            !File.Exists(tokenizerPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var index = new GlossEmbeddingIndex(indexPath);
+            _contextEncoder = new ContextEncoder(
+                modelPath,
+                tokenizerPath,
+                index.Dimensions);
+            _embeddingIndex = index;
+            Console.Error.WriteLine(
+                $"[ranker] bi-encoder prefilter ready: {index.KeyCount:N0} keys, " +
+                $"{index.ModelId}@{index.Revision[..8]}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ranker] bi-encoder prefilter unavailable: {ex.Message}");
+            _embeddingIndex = null;
+            _contextEncoder = null;
+        }
     }
 
     public void Dispose()
     {
         _session?.Dispose();
         _tokenizer?.Dispose();
+        _embeddingIndex?.Dispose();
+        _contextEncoder?.Dispose();
         _initializationLock.Dispose();
     }
 
@@ -1297,7 +1426,8 @@ internal sealed record RankerSelection(
     bool Abstained,
     double Margin,
     double Score,
-    double Confidence);
+    double Confidence,
+    string Pipeline = "cross");
 
 internal readonly record struct CandidateScore(int OriginalIndex, float Score);
 

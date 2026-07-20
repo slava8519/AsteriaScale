@@ -24,7 +24,8 @@ public sealed record GlossBertDictionarySelection(
     GlossBertRankerProvider RequestedProvider,
     string ExecutionProvider,
     string Device,
-    string ModelVersion)
+    string ModelVersion,
+    string Pipeline = "cross")
 {
     public int? SelectedGroupId => Index;
 }
@@ -570,6 +571,13 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 "A selection response must include margin, score and confidence diagnostics.");
         }
 
+        if (response.Pipeline is not ("cross" or "bi+cross"))
+        {
+            throw ProtocolError(
+                $"A selection response must declare its ranking pipeline; " +
+                $"received '{response.Pipeline ?? "<null>"}'.");
+        }
+
         if (response.Abstained)
         {
             if (response.Index is not null)
@@ -613,7 +621,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             requestedProvider,
             response.Provider!,
             response.Device!,
-            response.ModelVersion!);
+            response.ModelVersion!,
+            response.Pipeline ?? "cross");
     }
 
     private static void ValidateSelectionArguments(

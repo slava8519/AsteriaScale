@@ -53,6 +53,8 @@ internal static class RankerCalibrationBenchmark
             TimeSpan.FromMinutes(10));
 
         List<CaseResult> results = [];
+        List<(int Glosses, long Milliseconds)> selectLatencies = [];
+        Dictionary<string, int> pipelineCounts = new(StringComparer.Ordinal);
         int skippedNoInventory = 0;
         int skippedPhrase = 0;
         int autoResolved = 0;
@@ -122,6 +124,7 @@ internal static class RankerCalibrationBenchmark
                 }
             }
 
+            System.Diagnostics.Stopwatch selectTimer = System.Diagnostics.Stopwatch.StartNew();
             GlossBertDictionarySelection selection = await selector.SelectAsync(
                 benchmarkCase.Context,
                 lookup.Source,
@@ -130,6 +133,10 @@ internal static class RankerCalibrationBenchmark
                 plan.CandidateGroupIds,
                 "English",
                 provider);
+            selectTimer.Stop();
+            selectLatencies.Add((plan.CandidateGlosses.Count, selectTimer.ElapsedMilliseconds));
+            pipelineCounts[selection.Pipeline] =
+                pipelineCounts.GetValueOrDefault(selection.Pipeline) + 1;
             string selected = selection.SelectedGroupId is { } groupId
                 ? plan.Outcomes.First(outcome => outcome.GroupId == groupId).Translation
                 : "<abstained>";
@@ -163,6 +170,22 @@ internal static class RankerCalibrationBenchmark
             $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
         Console.WriteLine(
             $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
+        if (selectLatencies.Count > 0)
+        {
+            long[] ordered = selectLatencies.Select(entry => entry.Milliseconds)
+                .OrderBy(value => value)
+                .ToArray();
+            long[] large = selectLatencies.Where(entry => entry.Glosses > 12)
+                .Select(entry => entry.Milliseconds)
+                .OrderBy(value => value)
+                .ToArray();
+            Console.WriteLine(
+                $"  select latency: median={ordered[ordered.Length / 2]} ms" +
+                (large.Length > 0
+                    ? $", large-inventory (>12 glosses) median={large[large.Length / 2]} ms"
+                    : "") +
+                $"; pipelines: {string.Join(", ", pipelineCounts.Select(entry => $"{entry.Key}={entry.Value}"))}");
+        }
         if (dumpPath is not null)
         {
             await File.WriteAllTextAsync(

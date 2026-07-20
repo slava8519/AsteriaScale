@@ -9,7 +9,9 @@ namespace AsteriaScale.RankerProtocol;
 /// </summary>
 public static class RankerProtocolV2
 {
-    public const string Version = "2";
+    // v3: a select response must declare its ranking pipeline ("cross" or
+    // "bi+cross"), so the host can tell whether the bi-encoder prefilter ran.
+    public const string Version = "3";
     public const string Hello = "hello";
     public const string Warm = "warm";
     public const string Select = "select";
@@ -114,6 +116,13 @@ public sealed record RankerResponse
 
     [JsonPropertyName("modelVersion")]
     public string? ModelVersion { get; init; }
+
+    /// <summary>
+    /// Ranking pipeline used for a select response: "cross" (pure GlossBERT)
+    /// or "bi+cross" (MiniLM prefilter, then GlossBERT re-ranking).
+    /// </summary>
+    [JsonPropertyName("pipeline")]
+    public string? Pipeline { get; init; }
 
     [JsonPropertyName("errorCode")]
     public string? ErrorCode { get; init; }

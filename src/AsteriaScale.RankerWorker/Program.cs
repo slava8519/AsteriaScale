@@ -147,7 +147,8 @@ internal static class Program
                 Abstained = result.Abstained,
                 Margin = result.Margin,
                 Score = result.Score,
-                Confidence = result.Confidence
+                Confidence = result.Confidence,
+                Pipeline = result.Pipeline
             };
             await output.WriteLineAsync(
                 JsonSerializer.Serialize(response, RankerProtocolV2.JsonOptions));
@@ -199,7 +200,8 @@ internal static class Program
                     Abstained = result.Abstained,
                     Margin = result.Margin,
                     Score = result.Score,
-                    Confidence = result.Confidence
+                    Confidence = result.Confidence,
+                    Pipeline = result.Pipeline
                 }, false);
 
             case RankerProtocolV2.Shutdown:

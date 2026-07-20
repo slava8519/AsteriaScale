@@ -89,6 +89,35 @@ internal sealed class PairTokenizer : IDisposable
         return Math.Clamp(longest, 8, maximumSequenceLength);
     }
 
+    /// <summary>
+    /// Single-sequence encoding (CLS text SEP) for the bi-encoder: mirrors the
+    /// offline embedding tool, which encodes glosses without a pair layout.
+    /// </summary>
+    public EncodedBatch EncodeSingle(string text, int maximumSequenceLength)
+    {
+        var tokens = StripSingleSequenceSpecialTokens(_tokenizer.Encode(text));
+        var count = Math.Min(tokens.Count, maximumSequenceLength - 2);
+        var sequenceLength = count + 2;
+        var inputIds = new long[sequenceLength];
+        var attentionMask = new long[sequenceLength];
+        inputIds[0] = _classifierTokenId;
+        attentionMask[0] = 1;
+        for (var index = 0; index < count; index++)
+        {
+            inputIds[index + 1] = tokens[index];
+            attentionMask[index + 1] = 1;
+        }
+
+        inputIds[count + 1] = _separatorTokenId;
+        attentionMask[count + 1] = 1;
+        return new EncodedBatch(
+            inputIds,
+            attentionMask,
+            new long[sequenceLength],
+            1,
+            sequenceLength);
+    }
+
     public void Dispose() => _tokenizer.Dispose();
 
     private PairEncoding ComposePair(
