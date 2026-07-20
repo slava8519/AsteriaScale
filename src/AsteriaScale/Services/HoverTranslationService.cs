@@ -6,7 +6,6 @@ namespace AsteriaScale.Services;
 
 public sealed class HoverTranslationService : IAsyncDisposable
 {
-    private const long HoverRadiusSquared = 225;
     private readonly AppSettings _settings;
     private readonly WindowsAiOcrService _ocr = new();
     private readonly FoundryTranslationService _translator;
@@ -17,18 +16,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly ScreenTranslationOverlay _screenOverlay;
     private readonly GlobalHotkeyService _hotkeys;
     private readonly Dispatcher _dispatcher;
-    private readonly object _stateLock = new();
     private readonly object _lifecycleLock = new();
     private readonly SmartHoverPipeline _smartPipeline;
-    private System.Threading.Timer? _timer;
+    private readonly ScreenTranslationFlow _screenFlow;
+    private readonly HoverTracking _tracking;
     private Task _pendingUnload = Task.CompletedTask;
-    private CancellationTokenSource? _operationCancellation;
     private CancellationTokenSource? _screenIdleUnloadCancellation;
     private CancellationTokenSource? _smartFallbackUnloadCancellation;
-    private NativeMethods.Point _anchor;
-    private DateTime _stableSinceUtc;
-    private bool _hasAnchor;
-    private bool _processedAnchor;
     private bool _enabled;
     private int _processing;
     private string? _lastReportedStatus;
@@ -57,6 +51,19 @@ public sealed class HoverTranslationService : IAsyncDisposable
             ReportStatus,
             (text, cursor) => _lastSmartFallbackRequest =
                 new SmartFallbackRequest(text, cursor, DateTime.UtcNow));
+        _screenFlow = new ScreenTranslationFlow(
+            _ocr,
+            _translator,
+            _screenOverlay,
+            _dispatcher,
+            ReportStatus,
+            () => _enabled && IsScreenMode);
+        _tracking = new HoverTracking(
+            () => _enabled && !IsScreenMode,
+            EffectiveDelayMs,
+            HideOverlay,
+            () => Interlocked.CompareExchange(ref _processing, 1, 0) == 0,
+            (point, token) => _ = ProcessCursorAsync(point, token));
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -149,14 +156,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private void StartTimer() =>
-        _timer ??= new System.Threading.Timer(OnTimer, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(90));
+    private void StartTimer() => _tracking.Start();
 
-    private void StopTimer()
-    {
-        _timer?.Dispose();
-        _timer = null;
-    }
+    private void StopTimer() => _tracking.Stop();
 
     public void SetMode(string mode)
     {
@@ -311,65 +313,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private void OnTimer(object? state)
-    {
-        if (!_enabled || IsScreenMode || !VisibleCursorService.TryGetPosition(out NativeMethods.Point cursor))
-        {
-            return;
-        }
-
-        nint window = NativeMethods.WindowFromPoint(cursor);
-        if (window != nint.Zero)
-        {
-            NativeMethods.GetWindowThreadProcessId(window, out uint processId);
-            if (processId == Environment.ProcessId)
-            {
-                HideOverlay();
-                return;
-            }
-        }
-
-        bool hide = false;
-        NativeMethods.Point pointToProcess = default;
-        CancellationToken token = default;
-        bool shouldProcess = false;
-
-        lock (_stateLock)
-        {
-            if (!_hasAnchor || DistanceSquared(cursor, _anchor) > HoverRadiusSquared)
-            {
-                _anchor = cursor;
-                _hasAnchor = true;
-                _stableSinceUtc = DateTime.UtcNow;
-                _processedAnchor = false;
-                _operationCancellation?.Cancel();
-                _operationCancellation?.Dispose();
-                _operationCancellation = null;
-                hide = true;
-            }
-            else if (!_processedAnchor &&
-                     DateTime.UtcNow - _stableSinceUtc >= TimeSpan.FromMilliseconds(EffectiveDelayMs()) &&
-                     Interlocked.CompareExchange(ref _processing, 1, 0) == 0)
-            {
-                _processedAnchor = true;
-                _operationCancellation = new CancellationTokenSource();
-                token = _operationCancellation.Token;
-                pointToProcess = cursor;
-                shouldProcess = true;
-            }
-        }
-
-        if (hide)
-        {
-            HideOverlay();
-        }
-
-        if (shouldProcess)
-        {
-            _ = ProcessCursorAsync(pointToProcess, token);
-        }
-    }
-
     private void OnScreenTranslationPressed(object? sender, EventArgs e) => TranslateScreen();
 
     private void OnSmartFallbackPressed(object? sender, EventArgs e)
@@ -447,14 +390,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
 
         CancelScreenIdleUnload();
-        CancellationToken token;
-        lock (_stateLock)
-        {
-            _operationCancellation?.Cancel();
-            _operationCancellation?.Dispose();
-            _operationCancellation = new CancellationTokenSource();
-            token = _operationCancellation.Token;
-        }
+        CancellationToken token = _tracking.RestartOperation();
 
         if (Interlocked.CompareExchange(ref _processing, 1, 0) != 0)
         {
@@ -463,106 +399,24 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
 
         nint foregroundWindow = NativeMethods.GetForegroundWindow();
-        _ = Task.Run(() => ProcessScreenAsync(foregroundWindow, token), token);
+        _ = Task.Run(() => RunScreenFlowAsync(foregroundWindow, token), token);
     }
 
-    private async Task ProcessScreenAsync(nint foregroundWindow, CancellationToken cancellationToken)
+    private async Task RunScreenFlowAsync(nint foregroundWindow, CancellationToken cancellationToken)
     {
-        bool translatedSuccessfully = false;
+        bool translated = false;
         try
         {
-            await _dispatcher.InvokeAsync(_screenOverlay.HideOverlay, DispatcherPriority.Send, cancellationToken);
-            await Task.Delay(90, cancellationToken);
-            ReportStatus("Экранный перевод: распознаю все текстовые области…");
-            ScreenOcrResult recognized = await _ocr.RecognizeScreenAsync(foregroundWindow, cancellationToken);
-            if (!_enabled || !IsScreenMode)
-            {
-                return;
-            }
-
-            if (recognized.Blocks.Count == 0)
-            {
-                await ShowScreenMessageAsync(recognized.CaptureBounds, "Текст для перевода не найден", cancellationToken);
-                return;
-            }
-
-            await _dispatcher.InvokeAsync(
-                () => _screenOverlay.ShowLoading(
-                    recognized.CaptureBounds,
-                    $"Перевожу блоков: {recognized.Blocks.Count}…"),
-                DispatcherPriority.Normal,
-                cancellationToken);
-            ReportStatus($"Экранный перевод: перевожу {recognized.Blocks.Count} текстовых блоков локально…");
-
-            IReadOnlyList<string> translations = await _translator.TranslateManyToRussianAsync(
-                recognized.Blocks.Select(block => block.Text).ToArray(),
-                cancellationToken);
-            List<ScreenTranslationVisual> visuals = [];
-            for (int index = 0; index < recognized.Blocks.Count && index < translations.Count; index++)
-            {
-                string translation = translations[index].Trim();
-                ScreenOcrBlock source = recognized.Blocks[index];
-                if (translation.Length == 0 ||
-                    string.Equals(source.Text, translation, StringComparison.CurrentCultureIgnoreCase))
-                {
-                    continue;
-                }
-
-                visuals.Add(new ScreenTranslationVisual(source, translation));
-            }
-
-            if (!_enabled || !IsScreenMode)
-            {
-                return;
-            }
-
-            if (visuals.Count == 0)
-            {
-                await ShowScreenMessageAsync(
-                    recognized.CaptureBounds,
-                    "На экране уже русский текст или перевод не требуется",
-                    cancellationToken);
-                return;
-            }
-
-            await _dispatcher.InvokeAsync(
-                () => _screenOverlay.ShowTranslations(recognized.CaptureBounds, visuals),
-                DispatcherPriority.Normal,
-                cancellationToken);
-            translatedSuccessfully = true;
-            ReportStatus($"Экранный перевод: наложено реплик — {visuals.Count}; Alt+Shift+T обновит экран");
-        }
-        catch (OperationCanceledException)
-        {
-            HideScreenOverlay();
-        }
-        catch (Exception ex)
-        {
-            HideScreenOverlay();
-            LogError(ex);
-            ReportStatus("Экранный перевод: " + ex.Message);
+            translated = await _screenFlow.ProcessAsync(foregroundWindow, cancellationToken);
         }
         finally
         {
             Interlocked.Exchange(ref _processing, 0);
-            if (translatedSuccessfully && _enabled && IsScreenMode)
+            if (translated && _enabled && IsScreenMode)
             {
                 ScheduleScreenIdleUnload();
             }
         }
-    }
-
-    private async Task ShowScreenMessageAsync(
-        System.Drawing.Rectangle bounds,
-        string message,
-        CancellationToken cancellationToken)
-    {
-        await _dispatcher.InvokeAsync(
-            () => _screenOverlay.ShowMessage(bounds, message),
-            DispatcherPriority.Normal,
-            cancellationToken);
-        await Task.Delay(2400, cancellationToken);
-        HideScreenOverlay();
     }
 
     private async Task ProcessCursorAsync(NativeMethods.Point cursor, CancellationToken cancellationToken)
@@ -676,9 +530,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private bool CursorIsNear(NativeMethods.Point expected) =>
+    private static bool CursorIsNear(NativeMethods.Point expected) =>
         VisibleCursorService.TryGetPosition(out NativeMethods.Point current) &&
-        DistanceSquared(current, expected) <= HoverRadiusSquared;
+        HoverTracking.DistanceSquared(current, expected) <= HoverTracking.RadiusSquared;
 
     private int EffectiveDelayMs() => Math.Clamp(_settings.HoverTranslationDelayMs, 350, 1500);
 
@@ -718,24 +572,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _settings.SmartDictionarySourceLanguage) !=
         SmartDictionarySourceLanguages.Japanese;
 
-    private static long DistanceSquared(NativeMethods.Point left, NativeMethods.Point right)
-    {
-        long dx = left.X - right.X;
-        long dy = left.Y - right.Y;
-        return (dx * dx) + (dy * dy);
-    }
-
-    private void ResetTracking()
-    {
-        lock (_stateLock)
-        {
-            _hasAnchor = false;
-            _processedAnchor = false;
-            _operationCancellation?.Cancel();
-            _operationCancellation?.Dispose();
-            _operationCancellation = null;
-        }
-    }
+    private void ResetTracking() => _tracking.Reset();
 
     private void ShowLoading(string source, string engine, NativeMethods.Point cursor) =>
         _dispatcher.BeginInvoke(() => _overlay.ShowLoading(source, cursor, engine), DispatcherPriority.Normal);
