@@ -96,10 +96,9 @@ public sealed class TextHookService : IAsyncDisposable
                 _cliInput = cli.StandardInput;
                 _cliInput.AutoFlush = true;
                 _cliInput.WriteLine($"attach -P{processId}");
-                string? hookCode = FindProfileFor(processId)?.TextHookCode;
-                if (!string.IsNullOrWhiteSpace(hookCode))
+                foreach (string hookCode in ResolveHookCodes(processId))
                 {
-                    _cliInput.WriteLine($"{hookCode.Trim()} -P{processId}");
+                    _cliInput.WriteLine($"{hookCode} -P{processId}");
                 }
 
                 _attachedProcessId = processId;
@@ -244,6 +243,112 @@ public sealed class TextHookService : IAsyncDisposable
         {
             return null;
         }
+    }
+
+    private static readonly Lazy<ILookup<string, string>> KnownHookCodes =
+        new(LoadKnownHookCodes, isThreadSafe: true);
+
+    /// <summary>
+    /// Automatic H-code selection: a user-set profile code wins; otherwise all
+    /// database codes for this exe are applied. Sending several candidate
+    /// codes is safe by construction — a wrong code simply hooks nothing, and
+    /// noisy output never matches the hovered word.
+    /// </summary>
+    internal IReadOnlyList<string> ResolveHookCodes(int processId)
+    {
+        string? profileCode = FindProfileFor(processId)?.TextHookCode;
+        if (!string.IsNullOrWhiteSpace(profileCode))
+        {
+            return [profileCode.Trim()];
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return KnownHookCodes.Value[NormalizeExeKey(process.ProcessName)]
+                .Take(8)
+                .ToArray();
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                          InvalidOperationException)
+        {
+            return [];
+        }
+    }
+
+    private static ILookup<string, string> LoadKnownHookCodes()
+    {
+        List<(string Key, string Code)> rows = [];
+        string executableDirectory = Path.GetDirectoryName(Environment.ProcessPath)
+            ?? AppContext.BaseDirectory;
+        string[] files =
+        [
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AsteriaScale",
+                "TextHook",
+                "hook-codes.tsv"),
+            Path.Combine(executableDirectory, "TextHook", "hook-codes.tsv")
+        ];
+        foreach (string path in files)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    ParseHookCodeLines(File.ReadLines(path), rows);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or
+                                              UnauthorizedAccessException)
+            {
+                // The database is an optional aid; attach works without it.
+            }
+        }
+
+        return rows.ToLookup(
+            row => row.Key,
+            row => row.Code,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static void ParseHookCodeLines(
+        IEnumerable<string> lines,
+        List<(string Key, string Code)> rows)
+    {
+        foreach (string line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            string[] parts = line.Split('\t');
+            if (parts.Length < 2)
+            {
+                continue;
+            }
+
+            string key = NormalizeExeKey(parts[0]);
+            string code = parts[1].Trim();
+            if (key.Length == 0 ||
+                code.Length == 0 ||
+                !(code.StartsWith('H') || code.StartsWith('R') || code.StartsWith('/')))
+            {
+                continue;
+            }
+
+            if (!rows.Contains((key, code)))
+            {
+                rows.Add((key, code));
+            }
+        }
+    }
+
+    internal static string NormalizeExeKey(string value)
+    {
+        string key = value.Trim().ToLowerInvariant();
+        return key.EndsWith(".exe", StringComparison.Ordinal) ? key[..^4] : key;
     }
 
     /// <summary>Probes standard install locations to prefill the UI path.</summary>

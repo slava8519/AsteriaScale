@@ -1514,6 +1514,36 @@ try
         gatedSettings.Profiles[0].TextHookEnabled = true;
         Assert(gatedHook.IsProcessAllowed(selfProcessId),
             "A profile with the hook flag on must allow its game.");
+
+        List<(string Key, string Code)> hookRows = [];
+        TextHookService.ParseHookCodeLines(
+            [
+                "# comment",
+                "windrp\tHS932#-4@27A76:WindRP.exe\tWind ENG",
+                "windrp\tHB932#-4*0@27A76:WindRP.exe\tWind ENG alt",
+                "WINDRP.exe\tHS932#-4@27A76:WindRP.exe\tduplicate after normalization",
+                "broken line without tab",
+                "badcode\tnothook\tmust be skipped"
+            ],
+            hookRows);
+        Assert(hookRows.Count == 2 &&
+               hookRows.All(row => row.Key == "windrp"),
+            $"Hook-code parsing must normalize keys, dedupe and skip junk: {hookRows.Count}");
+
+        // Automatic selection: a user profile code always wins over the base.
+        gatedSettings.Profiles[0].TextHookCode = "HQ4@1234:self.exe";
+        Assert(gatedHook.ResolveHookCodes(selfProcessId) is ["HQ4@1234:self.exe"],
+            "The profile hook code must override the shipped database.");
+
+        string shippedDatabase = Path.Combine(
+            Path.GetDirectoryName(Environment.ProcessPath)!,
+            "TextHook",
+            "hook-codes.tsv");
+        List<(string Key, string Code)> shipped = [];
+        TextHookService.ParseHookCodeLines(File.ReadLines(shippedDatabase), shipped);
+        Assert(shipped.Count >= 40 &&
+               shipped.Count(row => row.Key == "ags") == 6,
+            $"The shipped hook-code base must load with multi-code exe support: {shipped.Count}");
     });
 
     await RunAsync(

@@ -1,0 +1,48 @@
+# Community-collected Textractor hook codes (H-codes).
+# Format: exe key (process name, case-insensitive, .exe optional) <TAB> hook code <TAB> game / note.
+# Keys that are game titles rather than exe names never match automatically and
+# serve as manual reference for the profile textHookCode field.
+# Wrong codes are harmless: a failed hook yields no text and OCR stays in charge.
+# Sources: github.com/Artikash/Textractor/discussions/943 (community collection).
+# A user override file may be placed at %LOCALAPPDATA%\AsteriaScale\TextHook\hook-codes.tsv.
+utawarerumono prelude to the fallen	HSN-1C@E0E68:Utawarerumono Prelude to the Fallen.exe	Utawarerumono: Prelude to the Fallen
+utawarerumono mask of deception	HS-10@B7217:Utawarerumono Mask of Deception.exe	Utawarerumono: Mask of Deception
+utawarerumono mask of truth	HSN-1C@FC5E7:Utawarerumono Mask of Truth.exe	Utawarerumono: Mask of Truth
+ststeady2	HQ4@1FE190:ststeady2.exe	Study § Steady 2
+game	HHN-C:-18@32F0F:game.exe	Memories Off -Innocent Fille-
+eroge	HSN-8@3B628:eroge.exe	Eroge! H mo Game mo Kaihatsu Zanmai
+gss	HSN-20@19F1E:gss.exe	Gore Screaming Show
+leyline 2	HV-1C@33603:LeyLine 2.exe	A Clockwork Ley-Line: Daybreak of Remnants Shadow
+leyline 2	HV4@0:kernel32.dll:lstrlenA	A Clockwork Ley-Line 2 (alternative)
+a clockwork ley-line: flowers falling in the morning mist	HV4@0:kernel32.dll:lstrlenA	Ley-Line 3 (reference)
+advhd	HW-10@9BD7:AdvHD.exe	Nightmare x Sisters
+toheart2	HS-4@EA6F2:TOHEART2.EXE	ToHeart 2 Xrated
+naisho no naisho!	HW-4@4148B3	Naisho no Naisho! (reference)
+siglusengine	HQ-C@1C11DE:SiglusEngine.exe	SiglusEngine games
+the princess the stray cat and matters of the heart	HQ-4@BD39:textrender.dll	Neko Para-team title (reference)
+the princess the stray cat and matters of the heart 2	HQ-4@BD39:textrender.dll	Sequel (reference)
+windrp	HS932#-4@27A76:WindRP.exe	Wind -A Breath of Heart- (ENG instant)
+windrp	HB932#-4*0@27A76:WindRP.exe	Wind -A Breath of Heart- (ENG non-instant)
+windrp	HS932#-4@27FF6:WindRP.exe	Wind -A Breath of Heart- (JPN instant)
+windrp	HBN932#-4*0@27FF6:WindRP.exe	Wind -A Breath of Heart- (JPN non-instant)
+hokensitub	HB932#-4*0@40327:HOKENSITUB.exe	Hokenshitsu no Tokubetsu Jugyou! Chiisana Yuutousei
+hokensitua	HB932#-4*0@40327:HOKENSITUA.exe	Hokenshitsu no Tokubetsu Jugyou! Namaiki Kinpatsu
+tokyonecro_en	HS65001#-C@8850:TokyoNecro_en.exe	Tokyo NECRO (ENG)
+souten	HS932#-10@2B8540:souten.exe	Shin Koihime Musou -Kakumei- Souten no Haou
+muvluv16	HQC@104160:muvluv16.exe	Muv-Luv
+toaru	HAN-4@7050A:toaru.exe	Toaru Ouhi no Neyagoto
+plastic memories	HS65001#4:-10@EDB0:Plastic Memories.exe	Plastic Memories (ENG PC)
+dt2_en	HSN65001#-4@907FC:DT2_en.exe	Dungeon Travelers 2 (ENG)
+noshoujo	HS-4@268E00:noshoujo.exe	noshoujo
+辻堂さんの純愛ロード	HSN-4@1CDED:辻堂さんの純愛ロード.exe	Tsujidou-san no Jun'ai Road (ENG)
+hiyaku	HQ-34@1B05130:hiyaku.exe	hiyaku
+maikoi	HV-1C@6EEC:maikoi.exe	Maigo to koi to kemonohito to
+gameassembly	HQ18@A00D70:GameAssembly.dll	Unity title (reference)
+sfa16	HBN8*0@35B50:sfa16.exe	Dark Blue
+ags	HB-4@C1B8:ags.exe	Inshoku Chikan Densha
+ags	HB-4@C078:ags.exe	Inbaku Kankin Choukyou
+ags	HB-4@C1E8:ags.exe	Injoku Inkou Kaihatsu
+ags	HB-4@C0B8:ags.exe	Inran Roshutsu Choukyou
+ags	HB-4@C1F8:ags.exe	Ingoku Koushuu Rinkan
+ags	HB-4@C098:ags.exe	Tokunou Nama Nakadashi
+ed8jp	HBN-20*0@300481:ed8jp.exe	Trails of Cold Steel (JP)
