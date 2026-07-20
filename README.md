@@ -118,6 +118,7 @@ Smoke-тесты проверяют каталог пресетов, round-trip 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — устройство: процессы, конвейер перевода, структура словарей и инварианты;
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — сборка, тесты, публикация, артефакты модели, регенерация словарей;
 - [docs/RESEARCH.md](docs/RESEARCH.md) — выбор моделей, калибровка воздержания, бенчмарки;
+- [docs/ROADMAP.md](docs/ROADMAP.md) — роадмап доработок с архитектурой каждой задачи;
 - [docs/PROMPTS.md](docs/PROMPTS.md) — готовые промты для ИИ-агентов;
 - [AGENTS.md](AGENTS.md) — правила для ИИ-агентов (Claude Code читает его через `CLAUDE.md`);
 - [assets/Dictionaries/README.md](assets/Dictionaries/README.md) и [assets/Ranker/README.md](assets/Ranker/README.md) — данные и регрессионные наборы.
