@@ -153,3 +153,15 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
   require an elevated Asteria.
 - Role: optional hover-context upgrade for compatible game engines; OCR
   remains the default and universal text source
+
+## ArtCNN (bundled Magpie effect)
+
+- Project: https://github.com/Artoriuz/ArtCNN
+- License: MIT (c) 2024 Joao Chrisostomo, Kacper Michajlow
+- Integration: the official MIT C4F16 weights, converted from the upstream
+  GLSL shader to MagpieFX with the community converter contributed in
+  Magpie PR #1415. Asteria copies the effect into the user's Magpie effects
+  directory on first scaling start; it runs inside Magpie (GPLv3, separate
+  process), never inside Asteria.
+- Note: the retrained Ani4Kv2 ArtCNN weights by Sirosky are CC BY-NC and
+  were deliberately NOT bundled.

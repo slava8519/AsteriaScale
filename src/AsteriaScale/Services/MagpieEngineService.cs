@@ -118,11 +118,51 @@ public sealed class MagpieEngineService : IAsyncDisposable
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
+            InstallBundledEffects();
             await EnsureReadyCoreAsync(preset, visualNovelFrameRateLimit, cancellationToken);
         }
         finally
         {
             _operationLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Copies effects shipped with Asteria (currently the MIT ArtCNN port)
+    /// into Magpie's effects directory. Idempotent by size; a read-only
+    /// install location fails soft with a status hint instead of blocking.
+    /// </summary>
+    private void InstallBundledEffects()
+    {
+        string bundledDirectory = Path.Combine(AppContext.BaseDirectory, "Effects");
+        string effectsDirectory = EffectsDirectory;
+        if (!IsAvailable ||
+            !Directory.Exists(bundledDirectory) ||
+            string.IsNullOrEmpty(effectsDirectory))
+        {
+            return;
+        }
+
+        foreach (string source in Directory.EnumerateFiles(bundledDirectory, "*.hlsl"))
+        {
+            string destination = Path.Combine(effectsDirectory, Path.GetFileName(source));
+            try
+            {
+                if (File.Exists(destination) &&
+                    new FileInfo(destination).Length == new FileInfo(source).Length)
+                {
+                    continue;
+                }
+
+                File.Copy(source, destination, overwrite: true);
+            }
+            catch (Exception exception) when (exception is IOException or
+                                              UnauthorizedAccessException)
+            {
+                StatusChanged?.Invoke(
+                    this,
+                    $"Не удалось установить эффект {Path.GetFileName(source)} в Magpie: {exception.Message}");
+            }
         }
     }
 
