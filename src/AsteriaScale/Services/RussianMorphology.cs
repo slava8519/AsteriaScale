@@ -19,6 +19,23 @@ internal static partial class RussianMorphology
 {
     public static (RussianPastForm Form, string Stem) DetectPastForm(string word)
     {
+        if (RussianMorphologyLexicon.TryGet(word, out RussianVerbFormInfo info))
+        {
+            RussianPastForm knownForm = info.Kind switch
+            {
+                RussianVerbFormKind.PastMasculine => RussianPastForm.Masculine,
+                RussianVerbFormKind.PastFeminine => RussianPastForm.Feminine,
+                RussianVerbFormKind.PastNeuter => RussianPastForm.Neuter,
+                RussianVerbFormKind.PastPlural => RussianPastForm.Plural,
+                _ => RussianPastForm.None
+            };
+            // The lemma is a paradigm-stable stem: suppletive forms such as
+            // "шёл/шла/шли" all group under "идти", which suffix stems cannot do.
+            return knownForm == RussianPastForm.None
+                ? (RussianPastForm.None, string.Empty)
+                : (knownForm, info.Lemma);
+        }
+
         if (word.EndsWith("лась", StringComparison.Ordinal) && word.Length > 5)
         {
             return (RussianPastForm.Feminine, word[..^4]);
@@ -60,14 +77,28 @@ internal static partial class RussianMorphology
     }
 
     public static bool IsInfinitive(string word) =>
-        word.EndsWith("ть", StringComparison.Ordinal) ||
-        word.EndsWith("ться", StringComparison.Ordinal) ||
-        word.EndsWith("ти", StringComparison.Ordinal) ||
-        word.EndsWith("чь", StringComparison.Ordinal);
+        RussianMorphologyLexicon.TryGet(word, out RussianVerbFormInfo info)
+            ? info.Kind == RussianVerbFormKind.Infinitive
+            : word.EndsWith("ть", StringComparison.Ordinal) ||
+              word.EndsWith("ться", StringComparison.Ordinal) ||
+              word.EndsWith("ти", StringComparison.Ordinal) ||
+              word.EndsWith("чь", StringComparison.Ordinal);
 
-    public static bool IsSemelfactiveInfinitive(string word) =>
-        word.EndsWith("нуть", StringComparison.Ordinal) ||
-        word.EndsWith("нуться", StringComparison.Ordinal);
+    // Historically a "-нуть" semelfactive test. With the OpenCorpora lexicon it
+    // reports the perfective infinitive, which is what aspect selection needs:
+    // "закрыть/закрывать" becomes a rankable pair, not only "-нуть" verbs.
+    public static bool IsSemelfactiveInfinitive(string word)
+    {
+        if (RussianMorphologyLexicon.TryGet(word, out RussianVerbFormInfo info) &&
+            info.Kind == RussianVerbFormKind.Infinitive &&
+            info.Aspect is RussianAspect.Perfective or RussianAspect.Imperfective)
+        {
+            return info.Aspect == RussianAspect.Perfective;
+        }
+
+        return word.EndsWith("нуть", StringComparison.Ordinal) ||
+               word.EndsWith("нуться", StringComparison.Ordinal);
+    }
 
     [GeneratedRegex(
         @"[\p{IsCyrillic}]+(?:-[\p{IsCyrillic}]+)*",

@@ -674,6 +674,29 @@ try
         Assert(presentNeed is { Translation: "толкать", Reason: "stable dictionary source order" },
             $"'need' must not be parsed as past tense selecting the semelfactive: {presentNeed}");
 
+        // Grammeme-based aspect: "закрыть/закрывать" is a rankable perfective
+        // pair even though neither verb ends in "-нуть".
+        SmartDictionarySenseGroup closeSense = new(
+            0,
+            "To shut something.",
+            "verb",
+            [
+                new SmartDictionarySenseSurface(0, "закрывать", ""),
+                new SmartDictionarySenseSurface(1, "закрыть", "")
+            ]);
+        SmartDictionarySurfaceSelection? closedOnce =
+            SmartDictionarySenseResolver.SelectSurfaceForm(
+                "He closed the window once.",
+                "closed",
+                3,
+                closeSense);
+        Assert(closedOnce is
+               {
+                   Translation: "закрыть",
+                   Reason: "single completed action aspect"
+               },
+            $"Grammeme aspect must prefer the perfective for a completed action: {closedOnce}");
+
         SmartDictionarySurfaceSelection? progressive =
             SmartDictionarySenseResolver.SelectSurfaceForm(
                 "He was sighing quietly.",
@@ -1147,6 +1170,26 @@ try
                 "English");
         Assert(infinitive is { Translation: "записывать", Confidence: >= 0.9 },
             $"An infinitive marker must select the verbal meaning: {infinitive}");
+
+        Assert(RussianMorphologyLexicon.EntryCount > 100_000,
+            "The OpenCorpora verb lexicon was not loaded from Morphology/ru-morph.tsv.gz.");
+
+        // Suppletive paradigm: suffix stems ("пошё"/"пош") cannot group these,
+        // the lexicon lemma ("пойти") can.
+        SmartDictionaryHeuristicSelection? suppletive =
+            SmartDictionaryHeuristicRanker.TrySelect(
+                "She went home quietly.",
+                "went",
+                4,
+                ["пошёл", "пошла", "пошли"],
+                "English");
+        Assert(suppletive is { Translation: "пошла", Confidence: >= 0.95 },
+            $"The suppletive past paradigm must agree with a feminine subject: {suppletive}");
+
+        // Outside the lexicon the suffix fallback still analyzes unknown verbs.
+        Assert(RussianMorphology.DetectPastForm("глокнула") ==
+               (RussianPastForm.Feminine, "глокну"),
+            "The suffix fallback must survive for words outside the lexicon.");
 
         SmartDictionaryHeuristicSelection? prepositionalTo =
             SmartDictionaryHeuristicRanker.TrySelect(

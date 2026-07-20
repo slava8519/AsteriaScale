@@ -68,6 +68,16 @@ Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRe
 
 Публикация чистит `dist/AsteriaScale`; запущенное из трея приложение держит EXE — закройте его перед сборкой.
 
+## Регенерация морфословаря
+
+`assets/Morphology/ru-morph.tsv.gz` (глагольные инфинитивы и прошедшее время
+OpenCorpora) собирается так:
+
+```powershell
+pip install pymorphy3 pymorphy3-dicts-ru
+python scripts/build-ru-morphology.py --output assets/Morphology/ru-morph.tsv.gz
+```
+
 ## Регенерация словарей
 
 Скачайте источники в `tools/dictionary-source` (ссылки в [assets/Dictionaries/README.md](../assets/Dictionaries/README.md)) и выполните команду из того же README. Критично: `normalize_english` в генераторе и `NormalizeEnglish`/`NormalizeEnglishSentenceKey` в `LocalDictionaryService` обязаны давать одинаковую каноническую форму ключей — при изменении одной стороны меняйте вторую и добавляйте тест в `LocalDictionaryNormalizationTests`.

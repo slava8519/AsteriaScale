@@ -32,6 +32,11 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest"
              ExcludeFromSingleFile="true" />
+    <Content Include="..\..\assets\Morphology\*.tsv.gz"
+             Link="Morphology\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" />
     <Content Include="..\..\assets\Dictionaries\README.md"
              Link="Dictionaries\README.md"
              CopyToOutputDirectory="PreserveNewest"

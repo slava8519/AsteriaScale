@@ -130,3 +130,14 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - Downloads: https://tatoeba.org/downloads
 - License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
 - Role: short dialogue and expression coverage for fast dictionary mode
+
+## OpenCorpora Russian morphological dictionary
+
+- Project: https://opencorpora.org/ (consumed via the pymorphy3-dicts-ru distribution)
+- License: Creative Commons Attribution-ShareAlike (CC BY-SA)
+- Changes: only verb infinitives and past-tense forms were exported; forms and
+  lemmas were casefolded with ё→е and packed into a deterministic gzip TSV
+  (`Morphology/ru-morph.tsv.gz`) by `scripts/build-ru-morphology.py`
+- Role: paradigm-accurate Russian verb morphology (past-tense agreement and
+  grammeme-based aspect) for the smart-dictionary surface selection, with the
+  original suffix heuristics as fallback for unknown words
