@@ -1401,6 +1401,56 @@ try
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));
 
+    await RunAsync("Ranker set schema", async () =>
+    {
+        string? repositoryRoot = AppContext.BaseDirectory;
+        while (repositoryRoot is not null &&
+               !File.Exists(Path.Combine(repositoryRoot, "AsteriaScale.slnx")))
+        {
+            repositoryRoot = Path.GetDirectoryName(repositoryRoot);
+        }
+
+        Assert(repositoryRoot is not null, "Repository root was not found above the test binary.");
+        LocalDictionaryService schemaDictionary = new();
+        await schemaDictionary.LoadAsync();
+        string rankerDirectory = Path.Combine(repositoryRoot!, "assets", "Ranker");
+        int validatedSets = 0;
+        foreach (string setPath in Directory.EnumerateFiles(rankerDirectory, "ranker-*.json"))
+        {
+            using System.Text.Json.JsonDocument set =
+                System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(setPath));
+            foreach (System.Text.Json.JsonElement benchmarkCase in
+                     set.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                string id = benchmarkCase.GetProperty("id").GetString()!;
+                string context = benchmarkCase.GetProperty("context").GetString()!;
+                string target = benchmarkCase.GetProperty("target").GetString()!;
+                Assert(context.Length > 0 && target.Length > 0, $"{id}: empty context or target.");
+                int anchor = 0;
+                if (benchmarkCase.TryGetProperty("characterIndex", out System.Text.Json.JsonElement indexElement))
+                {
+                    anchor = indexElement.GetInt32();
+                    Assert(anchor >= 0 &&
+                           anchor + target.Length <= context.Length &&
+                           context.Substring(anchor, target.Length) == target,
+                        $"{id}: characterIndex does not point at the target.");
+                }
+
+                // Multi-word targets legitimately resolve through phrase or
+                // dialogue layers and may be absent; single words must exist.
+                if (!target.Contains(' '))
+                {
+                    DictionaryLookupResult lookup = await schemaDictionary.LookupAsync(context, target, anchor);
+                    Assert(lookup.Found, $"{id}: target '{target}' is not covered by the dictionaries.");
+                }
+            }
+
+            validatedSets++;
+        }
+
+        Assert(validatedSets >= 4, "Expected the benchmark set and three holdout generations.");
+    });
+
     await RunAsync(
         "Persistent Smart dictionary LRU cache",
         () => SmartDictionaryResultCacheTests.RunAsync(tempRoot));

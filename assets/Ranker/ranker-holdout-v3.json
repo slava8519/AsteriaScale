@@ -1,0 +1,700 @@
+﻿{
+    "version":  3,
+    "name":  "Asteria Scale EN-RU sense-ranker blind holdout v3",
+    "cases":  [
+                  {
+                      "id":  "v3-pupil-eye",
+                      "context":  "Her pupil widened in the dark.",
+                      "target":  "pupil",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "зрачок",
+                                         "ученик",
+                                         "ученица",
+                                         "школьник"
+                                     ],
+                      "expectedTranslation":  "зрачок",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-pupil-student",
+                      "context":  "The pupil raised his hand to answer.",
+                      "target":  "pupil",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "зрачок",
+                                         "ученик",
+                                         "школьник",
+                                         "студент"
+                                     ],
+                      "expectedTranslation":  "ученик",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-trunk-tree",
+                      "context":  "Moss covered the old trunk near the gate.",
+                      "target":  "trunk",
+                      "characterIndex":  21,
+                      "candidates":  [
+                                         "ствол",
+                                         "багажник",
+                                         "хобот",
+                                         "сундук"
+                                     ],
+                      "expectedTranslation":  "ствол",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-trunk-elephant",
+                      "context":  "The elephant lifted its trunk and trumpeted.",
+                      "target":  "trunk",
+                      "characterIndex":  24,
+                      "candidates":  [
+                                         "ствол",
+                                         "багажник",
+                                         "хобот",
+                                         "сундук"
+                                     ],
+                      "expectedTranslation":  "хобот",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-cell-prison",
+                      "context":  "He spent the night in a cold cell.",
+                      "target":  "cell",
+                      "characterIndex":  29,
+                      "candidates":  [
+                                         "клетка",
+                                         "камера",
+                                         "ячейка",
+                                         "элемент"
+                                     ],
+                      "expectedTranslation":  "камера",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-cell-biology",
+                      "context":  "Each cell divides twice a day.",
+                      "target":  "cell",
+                      "characterIndex":  5,
+                      "candidates":  [
+                                         "клетка",
+                                         "камера",
+                                         "ячейка",
+                                         "элемент"
+                                     ],
+                      "expectedTranslation":  "клетка",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-temple-building",
+                      "context":  "Pilgrims gathered outside the ancient temple.",
+                      "target":  "temple",
+                      "characterIndex":  38,
+                      "candidates":  [
+                                         "храм",
+                                         "висок",
+                                         "святыня",
+                                         "собор"
+                                     ],
+                      "expectedTranslation":  "храм",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-temple-anatomy",
+                      "context":  "She pressed two fingers to her temple.",
+                      "target":  "temple",
+                      "characterIndex":  31,
+                      "candidates":  [
+                                         "храм",
+                                         "висок",
+                                         "лоб",
+                                         "щека"
+                                     ],
+                      "expectedTranslation":  "висок",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-iron-metal",
+                      "context":  "The gate was made of iron.",
+                      "target":  "iron",
+                      "characterIndex":  21,
+                      "candidates":  [
+                                         "железо",
+                                         "утюг",
+                                         "оковы",
+                                         "сталь"
+                                     ],
+                      "expectedTranslation":  "железо",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-iron-appliance",
+                      "context":  "The iron hissed on the damp shirt.",
+                      "target":  "iron",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "железо",
+                                         "утюг",
+                                         "гладить",
+                                         "печь"
+                                     ],
+                      "expectedTranslation":  "утюг",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-wave-sea",
+                      "context":  "A huge wave crashed over the pier.",
+                      "target":  "wave",
+                      "characterIndex":  7,
+                      "candidates":  [
+                                         "волна",
+                                         "взмах",
+                                         "махать",
+                                         "завивка"
+                                     ],
+                      "expectedTranslation":  "волна",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-ring-jewelry",
+                      "context":  "The ring slipped from her finger.",
+                      "target":  "ring",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "кольцо",
+                                         "звонок",
+                                         "ринг",
+                                         "круг"
+                                     ],
+                      "expectedTranslation":  "кольцо",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-bow-weapon",
+                      "context":  "He strung the bow and took aim.",
+                      "target":  "bow",
+                      "characterIndex":  14,
+                      "candidates":  [
+                                         "лук",
+                                         "поклон",
+                                         "бант",
+                                         "нос"
+                                     ],
+                      "expectedTranslation":  "лук",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-bow-gesture",
+                      "context":  "The actor finished with a deep bow.",
+                      "target":  "bow",
+                      "characterIndex":  31,
+                      "candidates":  [
+                                         "лук",
+                                         "поклон",
+                                         "бант",
+                                         "смычок"
+                                     ],
+                      "expectedTranslation":  "поклон",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "homonym-noun"
+                  },
+                  {
+                      "id":  "v3-head-anatomy",
+                      "context":  "She rested her head on the pillow.",
+                      "target":  "head",
+                      "characterIndex":  15,
+                      "candidates":  [
+                                         "голова",
+                                         "глава",
+                                         "руководитель",
+                                         "изголовье"
+                                     ],
+                      "expectedTranslation":  "голова",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-head-leader",
+                      "context":  "The head of the guild signed the order.",
+                      "target":  "head",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "голова",
+                                         "глава",
+                                         "начальник",
+                                         "вершина"
+                                     ],
+                      "expectedTranslation":  "глава",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-line-queue",
+                      "context":  "We waited in line for an hour.",
+                      "target":  "line",
+                      "characterIndex":  13,
+                      "candidates":  [
+                                         "очередь",
+                                         "линия",
+                                         "строка",
+                                         "верёвка"
+                                     ],
+                      "expectedTranslation":  "очередь",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-line-text",
+                      "context":  "He read the first line aloud twice.",
+                      "target":  "line",
+                      "characterIndex":  18,
+                      "candidates":  [
+                                         "очередь",
+                                         "линия",
+                                         "строка",
+                                         "реплика"
+                                     ],
+                      "expectedTranslation":  "строка",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-break-pause",
+                      "context":  "Let\u0027s take a short break before the next scene.",
+                      "target":  "break",
+                      "characterIndex":  19,
+                      "candidates":  [
+                                         "перерыв",
+                                         "разрыв",
+                                         "поломка",
+                                         "рассвет"
+                                     ],
+                      "expectedTranslation":  "перерыв",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-turn-queue",
+                      "context":  "It\u0027s your turn to choose the film.",
+                      "target":  "turn",
+                      "characterIndex":  10,
+                      "candidates":  [
+                                         "очередь",
+                                         "поворот",
+                                         "оборот",
+                                         "виток"
+                                     ],
+                      "expectedTranslation":  "очередь",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-call-phone",
+                      "context":  "I got a call from the clinic this morning.",
+                      "target":  "call",
+                      "characterIndex":  8,
+                      "candidates":  [
+                                         "звонок",
+                                         "зов",
+                                         "призыв",
+                                         "визит"
+                                     ],
+                      "expectedTranslation":  "звонок",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-table-data",
+                      "context":  "The results are shown in the table below.",
+                      "target":  "table",
+                      "characterIndex":  29,
+                      "candidates":  [
+                                         "таблица",
+                                         "стол",
+                                         "доска",
+                                         "плита"
+                                     ],
+                      "expectedTranslation":  "таблица",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-hand-worker",
+                      "context":  "The old hand knew every rope on the ship.",
+                      "target":  "hand",
+                      "characterIndex":  8,
+                      "candidates":  [
+                                         "рука",
+                                         "работник",
+                                         "стрелка",
+                                         "почерк"
+                                     ],
+                      "expectedTranslation":  "работник",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-pass-mountain",
+                      "context":  "The pass was blocked by snow until May.",
+                      "target":  "pass",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "перевал",
+                                         "пропуск",
+                                         "передача",
+                                         "проход"
+                                     ],
+                      "expectedTranslation":  "перевал",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "large-inventory"
+                  },
+                  {
+                      "id":  "v3-melted-heart",
+                      "context":  "Her anger melted when she saw the kitten.",
+                      "target":  "melted",
+                      "characterIndex":  10,
+                      "candidates":  [
+                                         "растаять",
+                                         "расплавиться",
+                                         "плавить",
+                                         "испариться"
+                                     ],
+                      "expectedTranslation":  "растаять",
+                      "partOfSpeech":  "verb",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-storm-applause",
+                      "context":  "A storm of applause met the final chord.",
+                      "target":  "storm",
+                      "characterIndex":  2,
+                      "candidates":  [
+                                         "буря",
+                                         "гроза",
+                                         "шторм",
+                                         "штурм"
+                                     ],
+                      "expectedTranslation":  "буря",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-shadow-doubt",
+                      "context":  "A shadow of doubt crossed his face.",
+                      "target":  "shadow",
+                      "characterIndex":  2,
+                      "candidates":  [
+                                         "тень",
+                                         "полумрак",
+                                         "призрак",
+                                         "силуэт"
+                                     ],
+                      "expectedTranslation":  "тень",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-flood-memories",
+                      "context":  "A flood of memories swept over her.",
+                      "target":  "flood",
+                      "characterIndex":  2,
+                      "candidates":  [
+                                         "поток",
+                                         "наводнение",
+                                         "потоп",
+                                         "разлив"
+                                     ],
+                      "expectedTranslation":  "поток",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-burned-shame",
+                      "context":  "His cheeks burned with shame.",
+                      "target":  "burned",
+                      "characterIndex":  11,
+                      "candidates":  [
+                                         "гореть",
+                                         "сжечь",
+                                         "обжечь",
+                                         "пылать"
+                                     ],
+                      "expectedTranslation":  "гореть",
+                      "partOfSpeech":  "verb",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-frozen-fear",
+                      "context":  "She stood frozen at the doorway.",
+                      "target":  "frozen",
+                      "characterIndex":  10,
+                      "candidates":  [
+                                         "застыть",
+                                         "замёрзнуть",
+                                         "заморозить",
+                                         "оледенеть"
+                                     ],
+                      "expectedTranslation":  "застыть",
+                      "partOfSpeech":  "verb",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-digest-news",
+                      "context":  "He needed a moment to digest the news.",
+                      "target":  "digest",
+                      "characterIndex":  22,
+                      "candidates":  [
+                                         "переварить",
+                                         "усвоить",
+                                         "обдумать",
+                                         "съесть"
+                                     ],
+                      "expectedTranslation":  "переварить",
+                      "partOfSpeech":  "verb",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-climbed-prices",
+                      "context":  "Prices climbed all winter.",
+                      "target":  "climbed",
+                      "characterIndex":  7,
+                      "candidates":  [
+                                         "подниматься",
+                                         "взбираться",
+                                         "лезть",
+                                         "карабкаться"
+                                     ],
+                      "expectedTranslation":  "подниматься",
+                      "partOfSpeech":  "verb",
+                      "senseClass":  "figurative"
+                  },
+                  {
+                      "id":  "v3-broke-money",
+                      "context":  "I can\u0027t come along, I\u0027m broke this month.",
+                      "target":  "broke",
+                      "characterIndex":  24,
+                      "candidates":  [
+                                         "без гроша",
+                                         "разорившийся",
+                                         "сломанный",
+                                         "разбитый"
+                                     ],
+                      "expectedTranslation":  "без гроша",
+                      "partOfSpeech":  "adj",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-chicken-coward",
+                      "context":  "Don\u0027t be a chicken, just ask her.",
+                      "target":  "chicken",
+                      "characterIndex":  11,
+                      "candidates":  [
+                                         "трус",
+                                         "курица",
+                                         "цыплёнок",
+                                         "птица"
+                                     ],
+                      "expectedTranslation":  "трус",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-nuts-crazy",
+                      "context":  "You\u0027re nuts if you believe that rumor.",
+                      "target":  "nuts",
+                      "characterIndex":  7,
+                      "candidates":  [
+                                         "сумасшедший",
+                                         "орехи",
+                                         "псих",
+                                         "чокнутый"
+                                     ],
+                      "expectedTranslation":  "сумасшедший",
+                      "partOfSpeech":  "adj",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-beat-tired",
+                      "context":  "After two shifts I was completely beat.",
+                      "target":  "beat",
+                      "characterIndex":  34,
+                      "candidates":  [
+                                         "измотанный",
+                                         "разбитый",
+                                         "удар",
+                                         "ритм"
+                                     ],
+                      "expectedTranslation":  "измотанный",
+                      "partOfSpeech":  "adj",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-buck-dollar",
+                      "context":  "It costs a buck at the corner store.",
+                      "target":  "buck",
+                      "characterIndex":  11,
+                      "candidates":  [
+                                         "доллар",
+                                         "самец",
+                                         "олень",
+                                         "козёл"
+                                     ],
+                      "expectedTranslation":  "доллар",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-dough-money",
+                      "context":  "He earned some serious dough last year.",
+                      "target":  "dough",
+                      "characterIndex":  23,
+                      "candidates":  [
+                                         "деньги",
+                                         "тесто",
+                                         "бабки",
+                                         "масса"
+                                     ],
+                      "expectedTranslation":  "деньги",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-grub-food",
+                      "context":  "The grub at that stall is amazing.",
+                      "target":  "grub",
+                      "characterIndex":  4,
+                      "candidates":  [
+                                         "еда",
+                                         "жратва",
+                                         "личинка",
+                                         "харчи"
+                                     ],
+                      "expectedTranslation":  "еда",
+                      "partOfSpeech":  "noun",
+                      "senseClass":  "colloquial"
+                  },
+                  {
+                      "id":  "v3-boy-surprise",
+                      "context":  "Boy, that exam was brutal.",
+                      "target":  "Boy",
+                      "characterIndex":  0,
+                      "candidates":  [
+                                         "ух ты",
+                                         "мальчик",
+                                         "парень",
+                                         "надо же"
+                                     ],
+                      "expectedTranslation":  "ух ты",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-dear-dismay",
+                      "context":  "Oh dear, the soup is ruined.",
+                      "target":  "dear",
+                      "characterIndex":  3,
+                      "candidates":  [
+                                         "боже",
+                                         "дорогой",
+                                         "милый",
+                                         "дорогая"
+                                     ],
+                      "expectedTranslation":  "боже",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-right-agreement",
+                      "context":  "Right, let\u0027s get started.",
+                      "target":  "Right",
+                      "characterIndex":  0,
+                      "candidates":  [
+                                         "ладно",
+                                         "правый",
+                                         "правильно",
+                                         "направо"
+                                     ],
+                      "expectedTranslation":  "ладно",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-now-soothing",
+                      "context":  "Now, now, there is no need to cry.",
+                      "target":  "Now",
+                      "characterIndex":  0,
+                      "candidates":  [
+                                         "ну-ну",
+                                         "сейчас",
+                                         "теперь",
+                                         "итак"
+                                     ],
+                      "expectedTranslation":  "ну-ну",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-say-attention",
+                      "context":  "Say, weren\u0027t you at the festival yesterday?",
+                      "target":  "Say",
+                      "characterIndex":  0,
+                      "candidates":  [
+                                         "слушай",
+                                         "сказать",
+                                         "говорить",
+                                         "кстати"
+                                     ],
+                      "expectedTranslation":  "слушай",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-shoot-annoyance",
+                      "context":  "Shoot, I left my umbrella on the train.",
+                      "target":  "Shoot",
+                      "characterIndex":  0,
+                      "candidates":  [
+                                         "чёрт",
+                                         "стрелять",
+                                         "побег",
+                                         "блин"
+                                     ],
+                      "expectedTranslation":  "чёрт",
+                      "partOfSpeech":  "intj",
+                      "senseClass":  "interjection"
+                  },
+                  {
+                      "id":  "v3-pretty-degree",
+                      "context":  "The test was pretty hard for a first try.",
+                      "target":  "pretty",
+                      "characterIndex":  13,
+                      "candidates":  [
+                                         "довольно",
+                                         "красивый",
+                                         "милый",
+                                         "весьма"
+                                     ],
+                      "expectedTranslation":  "довольно",
+                      "partOfSpeech":  "adv",
+                      "senseClass":  "colloquial"
+                  }
+              ],
+    "languagePair":  "en-ru",
+    "origin":  "Original sentences written for Asteria Scale from sense-class descriptions; no corpus text and no model-error logs were used.",
+    "frozen":  "Do not open while tuning models, thresholds, prompts or grouping. Record every opening in docs/RESEARCH.md.",
+    "license":  "CC0-1.0"
+}
