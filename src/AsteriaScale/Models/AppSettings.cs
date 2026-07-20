@@ -21,6 +21,14 @@ public sealed class AppSettings
     public string SmartDictionarySourceLanguage { get; set; } = SmartDictionarySourceLanguages.Auto;
     public string SmartDictionaryFallbackMode { get; set; } = SmartDictionaryFallbackModes.Never;
     public bool SmartDictionaryKeepWarm { get; set; } = true;
+
+    // Optional Textractor text hook (roadmap #4). Off by default: OCR stays
+    // the universal path; the hook only upgrades hover context for games it
+    // can attach to. TextractorDirectory points at a user-installed Textractor
+    // (the folder containing x86/x64 TextractorCLI.exe), like Magpie.
+    public bool TextHookEnabled { get; set; }
+
+    public string TextractorDirectory { get; set; } = string.Empty;
     public List<AutomationProfile> Profiles { get; set; } = [];
 }
 

@@ -62,6 +62,12 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern uint GetWindowThreadProcessId(nint hWnd, out uint processId);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWow64Process(
+        nint processHandle,
+        [MarshalAs(UnmanagedType.Bool)] out bool isWow64);
+
     [DllImport("user32.dll")]
     internal static extern nint GetForegroundWindow();
 

@@ -1467,6 +1467,30 @@ try
         return Task.CompletedTask;
     });
 
+    await RunAsync("Text hook sentence buffer", async () =>
+    {
+        AppSettings hookSettings = new() { TextHookEnabled = true, TextractorDirectory = tempRoot };
+        await using TextHookService hook = new(hookSettings);
+        Assert(hook.IsEnabled, "The hook option must honor settings.");
+        Assert(new TextHookService(new AppSettings()) is { IsEnabled: false },
+            "The hook must stay off by default so OCR remains the universal path.");
+
+        hook.IngestLine("Textractor: pipe connected");
+        hook.IngestLine("[FA0:2C64:0:0:0:GetGlyphOutlineW] Nice to meet you!");
+        hook.IngestLine("[FA0:2C64:0:0:0:GetGlyphOutlineW] Nice to meet you!");
+        hook.IngestLine("[1B2:2C64:0:0:0:TextOutA]   Она   улыбнулась и   кивнула. ");
+        Assert(hook.RecentSentenceCount == 2,
+            $"Diagnostics and consecutive duplicates must not enter the buffer: {hook.RecentSentenceCount}");
+        Assert(hook.TryGetSentenceContaining("meet") == "Nice to meet you!",
+            "A hooked sentence containing the hovered word must be returned.");
+        Assert(hook.TryGetSentenceContaining("улыбнулась") == "Она улыбнулась и кивнула.",
+            "Hook sentences must be whitespace-normalized.");
+        Assert(hook.TryGetSentenceContaining("absent") is null,
+            "Containment is the relevance guard: no match means OCR context stays.");
+        Assert(hook.TryGetSentenceContaining("meet", DateTime.UtcNow.AddMinutes(5)) is null,
+            "Stale hooked sentences must expire.");
+    });
+
     await RunAsync(
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));

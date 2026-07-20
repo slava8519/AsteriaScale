@@ -20,6 +20,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly SmartHoverPipeline _smartPipeline;
     private readonly ScreenTranslationFlow _screenFlow;
     private readonly HoverTracking _tracking;
+    private readonly TextHookService _textHook;
     private Task _pendingUnload = Task.CompletedTask;
     private CancellationTokenSource? _screenIdleUnloadCancellation;
     private CancellationTokenSource? _smartFallbackUnloadCancellation;
@@ -64,6 +65,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             HideOverlay,
             () => Interlocked.CompareExchange(ref _processing, 1, 0) == 0,
             (point, token) => _ = ProcessCursorAsync(point, token));
+        _textHook = new TextHookService(settings);
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -433,6 +435,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 return;
             }
 
+            recognized = UpgradeWithTextHook(recognized, cursor);
+
             string smartBackend = ResolveSmartBackend();
             string currentEngine = IsSmartMode
                 ? SmartHoverPipeline.SmartEngineLabel(smartBackend)
@@ -528,6 +532,51 @@ public sealed class HoverTranslationService : IAsyncDisposable
         {
             Interlocked.Exchange(ref _processing, 0);
         }
+    }
+
+    /// <summary>
+    /// Optional Textractor upgrade: the hovered word and its position stay
+    /// OCR-anchored, only the sentence context is replaced when a freshly
+    /// hooked sentence contains that word. Any failure keeps the OCR result,
+    /// so translation stays universal for arbitrary programs and documents.
+    /// </summary>
+    private HoverOcrResult UpgradeWithTextHook(HoverOcrResult recognized, NativeMethods.Point cursor)
+    {
+        if (!_textHook.IsEnabled)
+        {
+            return recognized;
+        }
+
+        try
+        {
+            nint window = NativeMethods.WindowFromPoint(cursor);
+            if (window != nint.Zero)
+            {
+                NativeMethods.GetWindowThreadProcessId(window, out uint processId);
+                if (processId != 0 && processId != Environment.ProcessId)
+                {
+                    _textHook.EnsureAttached((int)processId);
+                }
+            }
+
+            string? sentence = _textHook.TryGetSentenceContaining(recognized.HoveredWord);
+            if (sentence is not null)
+            {
+                int index = sentence.IndexOf(
+                    recognized.HoveredWord,
+                    StringComparison.OrdinalIgnoreCase);
+                if (index >= 0)
+                {
+                    return recognized with { Text = sentence, CharacterIndex = index };
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+        }
+
+        return recognized;
     }
 
     private static bool CursorIsNear(NativeMethods.Point expected) =>
@@ -754,6 +803,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _hotkeys.Dispose();
         });
         _ocr.Dispose();
+        await _textHook.DisposeAsync();
         await _translator.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();

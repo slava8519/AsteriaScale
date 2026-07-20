@@ -141,3 +141,15 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - Role: paradigm-accurate Russian verb morphology (past-tense agreement and
   grammeme-based aspect) for the smart-dictionary surface selection, with the
   original suffix heuristics as fallback for unknown words
+
+## Textractor (optional text hook)
+
+- Project: https://github.com/Artikash/Textractor
+- License: GPLv3
+- Integration: never linked or bundled; Asteria optionally launches a
+  user-installed TextractorCLI.exe as a separate process (the same isolation
+  model as Magpie) and reads its sentence stream. Text hooking injects into
+  the game process; antivirus software may flag it, and elevated games
+  require an elevated Asteria.
+- Role: optional hover-context upgrade for compatible game engines; OCR
+  remains the default and universal text source
