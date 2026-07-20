@@ -1,0 +1,81 @@
+# Разработка и сборка
+
+## Требования
+
+| Компонент | Версия | Обязательно |
+|---|---|---|
+| Windows 11 | build 26100+ (для NPU OCR) | да |
+| .NET SDK | 10.0 | да |
+| [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
+| Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
+| Foundry Local + Qwen 3.5 2B | 0.10.2+ | только для полного/экранного перевода |
+| AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
+| Python | 3.11+ | только для регенерации словарей |
+
+## Артефакты модели GlossBERT
+
+Файлы в `src/AsteriaScale.RankerWorker/Models/GlossBert` **не хранятся в git** (626 МБ, отдельные файлы превышают лимит GitHub 100 МБ). Перед сборкой поместите их туда вручную — из Git LFS, GitHub Release или экспортировав [kanishka/GlossBERT](https://huggingface.co/kanishka/GlossBERT) ревизии `0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a` в ONNX. Ожидаемые размеры и SHA-256 закреплены в [assets/Ranker/README.md](../assets/Ranker/README.md) и проверяются воркером при запуске: с несовпадающими файлами ранжировщик откажется работать.
+
+Раскладка:
+
+```text
+Models/GlossBert/tokenizer.json
+Models/GlossBert/Cpu/glossbert-fp32-dynamic.onnx
+Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx
+Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx_VITISAI.bin
+Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx.compatibility.txt
+```
+
+## Сборка и тесты
+
+```powershell
+dotnet build AsteriaScale.slnx -c Release
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build
+```
+
+Smoke-набор — консольная программа без тестового фреймворка: каждый тест — `await RunAsync("имя", ...)` c `Assert`. По умолчанию прогоняются все базовые тесты, включая короткий реальный жизненный цикл Magpie («Engine lifecycle»). Тестовые классы — `internal static class XxxTests` с `RunAsync(tempRoot)`; доступ к internal-членам приложения открыт через `InternalsVisibleTo("AsteriaScale.Tests")`.
+
+### Gated-режимы тестов (по аргументам CLI)
+
+| Аргумент | Что делает |
+|---|---|
+| `--live` | Живой апскейл Notepad через Magpie |
+| `--foundry-live` | Живой Qwen: перевод и выгрузка по простою |
+| `--smart-live` / `--smart-gpu-live` | Живой умный словарь end-to-end |
+| `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
+| `--screen-ocr-image <png>` | Диагностика экранного OCR |
+| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu]` | Бенчмарк GlossBERT через полный продакшн-конвейер |
+
+`workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev) и `ranker-holdout-v2.json` (замороженный — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
+
+## Публикация
+
+```powershell
+./scripts/build.cmd    # publish в dist/AsteriaScale + Ranker + подпись identity-пакета
+./scripts/install.cmd  # ярлык и автозапуск
+./scripts/run.cmd      # запуск без установки
+```
+
+`build.ps1` подписывает MSIX identity-пакет сертификатом `CN=Asteria Scale Local` из `Cert:\CurrentUser\My`. На новой машине создайте его один раз:
+
+```powershell
+New-SelfSignedCertificate -Type Custom -Subject "CN=Asteria Scale Local" `
+  -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
+  -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+```
+
+Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRecognizer` недоступен обычному Win32-процессу.
+
+Публикация чистит `dist/AsteriaScale`; запущенное из трея приложение держит EXE — закройте его перед сборкой.
+
+## Регенерация словарей
+
+Скачайте источники в `tools/dictionary-source` (ссылки в [assets/Dictionaries/README.md](../assets/Dictionaries/README.md)) и выполните команду из того же README. Критично: `normalize_english` в генераторе и `NormalizeEnglish`/`NormalizeEnglishSentenceKey` в `LocalDictionaryService` обязаны давать одинаковую каноническую форму ключей — при изменении одной стороны меняйте вторую и добавляйте тест в `LocalDictionaryNormalizationTests`.
+
+## Стиль кода
+
+- C# 13, file-scoped namespaces, `sealed` по умолчанию, records для DTO.
+- Комментарии — по-английски и только про «почему» (инвариант, который код не показывает), не про «что делает строка».
+- Строковые сравнения — явные: `StringComparer.Ordinal` для ключей, `OrdinalIgnoreCase` для путей/имён файлов.
+- Ошибки внешних подсистем не роняют hover-путь: словари, кэш и диагностика деградируют мягко (см. существующие catch-блоки — они узкие и мотивированные).
+- Новые зависимости NuGet — только при реальной необходимости; проект намеренно офлайн и локальный.

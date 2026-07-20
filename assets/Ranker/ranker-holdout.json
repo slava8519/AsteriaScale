@@ -1,0 +1,298 @@
+{
+  "name": "Asteria Scale EN-RU visual-novel dictionary reranker blind holdout",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original examples written for Asteria Scale; no corpus sentences were copied.",
+  "evaluationPolicy": "Do not use this file for prompt tuning or threshold calibration. Run it once after selecting a model on ranker-benchmark.json.",
+  "cases": [
+    {
+      "id": "vn-draw-curtains",
+      "context": "She drew the curtains before lighting the candles.",
+      "target": "drew",
+      "candidates": [
+        { "translation": "нарисовала", "definition": "made a picture with a pen or pencil" },
+        { "translation": "задёрнула", "definition": "pulled curtains across a window to close them" },
+        { "translation": "привлекла", "definition": "attracted attention or interest" },
+        { "translation": "вытащила", "definition": "removed an object from a container" }
+      ],
+      "expectedTranslation": "задёрнула"
+    },
+    {
+      "id": "vn-face-fell",
+      "context": "His face fell when he saw the empty platform.",
+      "target": "fell",
+      "candidates": [
+        { "translation": "упало", "definition": "moved downward under gravity" },
+        { "translation": "помрачнело", "definition": "suddenly showed disappointment or sadness" },
+        { "translation": "наступило", "definition": "began or arrived, as night or silence" },
+        { "translation": "досталось", "definition": "became someone's responsibility or share" }
+      ],
+      "expectedTranslation": "помрачнело"
+    },
+    {
+      "id": "vn-break-into-smile",
+      "context": "At last, she broke into a shy smile.",
+      "target": "broke into",
+      "candidates": [
+        { "translation": "ворвалась", "definition": "entered a place by force" },
+        { "translation": "взломала", "definition": "opened something illegally or by force" },
+        { "translation": "внезапно улыбнулась", "definition": "suddenly began to smile" },
+        { "translation": "разделила", "definition": "separated something into smaller pieces" }
+      ],
+      "expectedTranslation": "внезапно улыбнулась"
+    },
+    {
+      "id": "vn-make-out-voice",
+      "context": "Through the rain, I could barely make out her voice.",
+      "target": "make out",
+      "candidates": [
+        { "translation": "разобрать", "definition": "manage to hear or perceive something indistinctly" },
+        { "translation": "составить", "definition": "write or complete a document" },
+        { "translation": "целоваться", "definition": "kiss and embrace passionately" },
+        { "translation": "притвориться", "definition": "claim or pretend that something is true" }
+      ],
+      "expectedTranslation": "разобрать"
+    },
+    {
+      "id": "vn-carried-away",
+      "context": "Don't get carried away just because he praised you once.",
+      "target": "carried away",
+      "candidates": [
+        { "translation": "унесённой", "definition": "physically transported away from a place" },
+        { "translation": "слишком увлекаться", "definition": "become excessively excited or involved" },
+        { "translation": "поддержанной", "definition": "helped through a difficult situation" },
+        { "translation": "продолженной", "definition": "extended or maintained over time" }
+      ],
+      "expectedTranslation": "слишком увлекаться"
+    },
+    {
+      "id": "vn-brush-off-warning",
+      "context": "He brushed off my warning with an uneasy laugh.",
+      "target": "brushed off",
+      "candidates": [
+        { "translation": "стряхнул", "definition": "removed dust or dirt with a brush or hand" },
+        { "translation": "отмахнулся от", "definition": "dismissed something as unimportant" },
+        { "translation": "почистил", "definition": "cleaned a surface by brushing" },
+        { "translation": "случайно коснулся", "definition": "touched something lightly in passing" }
+      ],
+      "expectedTranslation": "отмахнулся от"
+    },
+    {
+      "id": "vn-door-gave-way",
+      "context": "The old door finally gave way beneath his shoulder.",
+      "target": "gave way",
+      "candidates": [
+        { "translation": "уступила дорогу", "definition": "allowed another person or vehicle to pass" },
+        { "translation": "поддалась", "definition": "collapsed or yielded under pressure" },
+        { "translation": "заменила", "definition": "was replaced by something else" },
+        { "translation": "выдала", "definition": "revealed or handed over something" }
+      ],
+      "expectedTranslation": "поддалась"
+    },
+    {
+      "id": "vn-cant-stand",
+      "context": "I can't stand the way he talks to you.",
+      "target": "stand",
+      "candidates": [
+        { "translation": "стоять", "definition": "be upright on one's feet" },
+        { "translation": "терпеть", "definition": "tolerate or endure someone or something" },
+        { "translation": "подставка", "definition": "a support on which an object is placed" },
+        { "translation": "выступать", "definition": "take a position or act publicly" }
+      ],
+      "expectedTranslation": "терпеть"
+    },
+    {
+      "id": "vn-flat-answer",
+      "context": "Her answer was flat, and she would not meet my eyes.",
+      "target": "flat",
+      "candidates": [
+        { "translation": "плоским", "definition": "having a level surface without curves" },
+        { "translation": "безжизненным", "definition": "lacking emotion, energy, or interest" },
+        { "translation": "точным", "definition": "exactly at a stated time or amount" },
+        { "translation": "разряженным", "definition": "having no electrical power remaining" }
+      ],
+      "expectedTranslation": "безжизненным"
+    },
+    {
+      "id": "vn-cold-look",
+      "context": "She gave me a cold look and turned away.",
+      "target": "cold",
+      "candidates": [
+        { "translation": "холодный", "definition": "having a low physical temperature" },
+        { "translation": "неприветливый", "definition": "showing no affection, kindness, or emotion" },
+        { "translation": "простудный", "definition": "related to the common cold illness" },
+        { "translation": "неподготовленный", "definition": "lacking advance preparation or knowledge" }
+      ],
+      "expectedTranslation": "неприветливый"
+    },
+    {
+      "id": "vn-close-room",
+      "context": "The little room felt close after the storm.",
+      "target": "close",
+      "candidates": [
+        { "translation": "близкой", "definition": "at a short distance" },
+        { "translation": "закрытой", "definition": "not open" },
+        { "translation": "душной", "definition": "uncomfortably warm with little fresh air" },
+        { "translation": "тесной дружбой", "definition": "having an intimate personal relationship" }
+      ],
+      "expectedTranslation": "душной"
+    },
+    {
+      "id": "vn-shot-glance",
+      "context": "She shot him a warning glance across the table.",
+      "target": "shot",
+      "candidates": [
+        { "translation": "выстрелила", "definition": "fired a gun or projectile" },
+        { "translation": "бросила", "definition": "directed a quick look at someone" },
+        { "translation": "сняла", "definition": "recorded a photograph or film" },
+        { "translation": "пронеслась", "definition": "moved very quickly in a direction" }
+      ],
+      "expectedTranslation": "бросила"
+    },
+    {
+      "id": "vn-cheap-trick",
+      "context": "Pretending to cry was a cheap trick, even for him.",
+      "target": "cheap",
+      "candidates": [
+        { "translation": "дешёвый", "definition": "low in monetary price" },
+        { "translation": "подлый", "definition": "dishonorable or contemptible" },
+        { "translation": "экономный", "definition": "costing little to operate or maintain" },
+        { "translation": "безвкусный", "definition": "showing poor taste or low quality" }
+      ],
+      "expectedTranslation": "подлый"
+    },
+    {
+      "id": "vn-moved-letter",
+      "context": "I was deeply moved by the letter she left behind.",
+      "target": "moved",
+      "candidates": [
+        { "translation": "перемещён", "definition": "changed physical position or location" },
+        { "translation": "растроган", "definition": "emotionally affected, especially with tenderness" },
+        { "translation": "внёс предложение", "definition": "formally proposed an action in a meeting" },
+        { "translation": "переехал", "definition": "changed one's place of residence" }
+      ],
+      "expectedTranslation": "растроган"
+    },
+    {
+      "id": "vn-voice-cracked",
+      "context": "His voice cracked when he tried to say goodbye.",
+      "target": "cracked",
+      "candidates": [
+        { "translation": "треснул", "definition": "developed a narrow break in a solid surface" },
+        { "translation": "сорвался", "definition": "suddenly broke or changed in pitch from emotion" },
+        { "translation": "разгадал", "definition": "solved a difficult problem or code" },
+        { "translation": "взломал", "definition": "bypassed a security system" }
+      ],
+      "expectedTranslation": "сорвался"
+    },
+    {
+      "id": "vn-took-it-badly",
+      "context": "She took the news badly, though she tried to hide it.",
+      "target": "took",
+      "candidates": [
+        { "translation": "взяла", "definition": "picked up or carried something" },
+        { "translation": "восприняла", "definition": "reacted to or interpreted information in a particular way" },
+        { "translation": "заняла", "definition": "required an amount of time or space" },
+        { "translation": "отвела", "definition": "led someone to another place" }
+      ],
+      "expectedTranslation": "восприняла"
+    },
+    {
+      "id": "vn-in-the-dark",
+      "context": "You kept me in the dark while everyone else knew.",
+      "target": "in the dark",
+      "candidates": [
+        { "translation": "в темноте", "definition": "in a place without light" },
+        { "translation": "в неведении", "definition": "without important knowledge or information" },
+        { "translation": "втайне", "definition": "secretly and away from observation" },
+        { "translation": "в мрачном настроении", "definition": "in a sad or pessimistic emotional state" }
+      ],
+      "expectedTranslation": "в неведении"
+    },
+    {
+      "id": "vn-call-it-a-day",
+      "context": "We're both exhausted, so let's call it a day.",
+      "target": "call it a day",
+      "candidates": [
+        { "translation": "назвать это днём", "definition": "give something the name day" },
+        { "translation": "на сегодня закончить", "definition": "stop working on something for the rest of the day" },
+        { "translation": "назначить дату", "definition": "choose a calendar day for an event" },
+        { "translation": "позвонить днём", "definition": "make a telephone call during daylight hours" }
+      ],
+      "expectedTranslation": "на сегодня закончить"
+    },
+    {
+      "id": "vn-slipped-mind",
+      "context": "I'm sorry; your birthday completely slipped my mind.",
+      "target": "slipped my mind",
+      "candidates": [
+        { "translation": "выскользнуло из головы", "definition": "was forgotten unintentionally" },
+        { "translation": "ускользнуло от понимания", "definition": "could not be understood" },
+        { "translation": "поскользнулось", "definition": "lost footing on a smooth surface" },
+        { "translation": "проговорился", "definition": "revealed a secret by mistake" }
+      ],
+      "expectedTranslation": "выскользнуло из головы"
+    },
+    {
+      "id": "vn-has-a-point",
+      "context": "Annoying as he is, he has a point about the locked gate.",
+      "target": "has a point",
+      "candidates": [
+        { "translation": "имеет точку", "definition": "possesses a small mark or exact location" },
+        { "translation": "в чём-то прав", "definition": "has a valid argument or reasonable idea" },
+        { "translation": "имеет остриё", "definition": "has a sharp end or tip" },
+        { "translation": "набрал очко", "definition": "has scored a unit in a game" }
+      ],
+      "expectedTranslation": "в чём-то прав"
+    },
+    {
+      "id": "vn-held-back-tears",
+      "context": "She held back her tears until the door closed.",
+      "target": "held back",
+      "candidates": [
+        { "translation": "удерживала позади", "definition": "kept someone or something physically behind" },
+        { "translation": "сдерживала", "definition": "restrained an emotion or reaction" },
+        { "translation": "скрыла сведения", "definition": "withheld information from someone" },
+        { "translation": "задержалась", "definition": "remained behind after others had left" }
+      ],
+      "expectedTranslation": "сдерживала"
+    },
+    {
+      "id": "vn-mean-it",
+      "context": "I won't leave you again. I mean it.",
+      "target": "mean",
+      "candidates": [
+        { "translation": "означаю", "definition": "have a particular definition or signify something" },
+        { "translation": "говорю серьёзно", "definition": "sincerely intend what one has just said" },
+        { "translation": "подлый", "definition": "unkind or cruel" },
+        { "translation": "среднее", "definition": "the arithmetic average of values" }
+      ],
+      "expectedTranslation": "говорю серьёзно"
+    },
+    {
+      "id": "vn-silence-stretched",
+      "context": "The silence stretched until I could no longer bear it.",
+      "target": "stretched",
+      "candidates": [
+        { "translation": "растянулась", "definition": "continued for what felt like a long time" },
+        { "translation": "потянулась", "definition": "extended one's body or limbs" },
+        { "translation": "натянулась", "definition": "became tight by being pulled" },
+        { "translation": "преувеличила", "definition": "extended an account beyond the truth" }
+      ],
+      "expectedTranslation": "растянулась"
+    },
+    {
+      "id": "vn-reach-her-eyes",
+      "context": "She smiled politely, but the smile never reached her eyes.",
+      "target": "reached her eyes",
+      "candidates": [
+        { "translation": "достигла её глаз", "definition": "physically arrived at the location of her eyes" },
+        { "translation": "была неискренней", "definition": "did not show genuine happiness or warmth" },
+        { "translation": "попалась ей на глаза", "definition": "became visible to her" },
+        { "translation": "растрогала её", "definition": "caused her to feel strong emotion" }
+      ],
+      "expectedTranslation": "была неискренней"
+    }
+  ]
+}

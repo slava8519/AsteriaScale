@@ -1,0 +1,361 @@
+{
+  "name": "Asteria Scale EN-RU dictionary reranker regression set",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original examples written for Asteria Scale; no corpus sentences were copied.",
+  "cases": [
+    {
+      "id": "bank-finance",
+      "context": "The bank froze his account before dawn.",
+      "target": "bank",
+      "characterIndex": 4,
+      "candidates": ["банк", "берег", "скамья", "запас"],
+      "expectedTranslation": "банк"
+    },
+    {
+      "id": "bank-river",
+      "context": "We sat on the bank and watched the moon ripple.",
+      "target": "bank",
+      "characterIndex": 14,
+      "candidates": ["банк", "берег", "ряд", "хранилище"],
+      "expectedTranslation": "берег"
+    },
+    {
+      "id": "bat-animal",
+      "context": "A bat fluttered out of the ruined chapel.",
+      "target": "bat",
+      "characterIndex": 2,
+      "candidates": ["бита", "хлопок", "летучая мышь", "дубинка"],
+      "expectedTranslation": "летучая мышь"
+    },
+    {
+      "id": "bat-sports",
+      "context": "He tightened his grip on the bat before the pitch.",
+      "target": "bat",
+      "characterIndex": 29,
+      "candidates": ["летучая мышь", "удар", "ракетка", "бита"],
+      "expectedTranslation": "бита"
+    },
+    {
+      "id": "crane-bird",
+      "context": "A crane stood motionless among the reeds.",
+      "target": "crane",
+      "characterIndex": 2,
+      "candidates": ["журавль", "кран", "цапля", "лебёдка"],
+      "expectedTranslation": "журавль"
+    },
+    {
+      "id": "crane-machine",
+      "context": "The crane lifted the steel frame above the street.",
+      "target": "crane",
+      "characterIndex": 4,
+      "candidates": ["журавль", "кран", "лебедь", "мачта"],
+      "expectedTranslation": "кран"
+    },
+    {
+      "id": "beam-structure",
+      "context": "Dust drifted down from the cracked wooden beam.",
+      "target": "beam",
+      "characterIndex": 42,
+      "candidates": ["луч", "сияние", "балка", "улыбка"],
+      "expectedTranslation": "балка"
+    },
+    {
+      "id": "beam-light",
+      "context": "A narrow beam of moonlight crossed her face.",
+      "target": "beam",
+      "characterIndex": 9,
+      "candidates": ["балка", "брус", "просвет", "луч"],
+      "expectedTranslation": "луч"
+    },
+    {
+      "id": "sigh-noun",
+      "context": "Her weary sigh was louder than any reply.",
+      "target": "sigh",
+      "characterIndex": 10,
+      "candidates": ["вздох", "вздыхать", "шёпот", "стон"],
+      "expectedTranslation": "вздох"
+    },
+    {
+      "id": "sigh-verb",
+      "context": "Don't sigh like that; I know I was wrong.",
+      "target": "sigh",
+      "characterIndex": 6,
+      "candidates": ["вздох", "вздыхать", "кашлять", "шептать"],
+      "expectedTranslation": "вздыхать"
+    },
+    {
+      "id": "teeter-physical",
+      "context": "The glass began to teeter at the edge of the table.",
+      "target": "teeter",
+      "characterIndex": 19,
+      "candidates": ["ускоряться", "крутиться", "шататься", "скользить"],
+      "expectedTranslation": "шататься"
+    },
+    {
+      "id": "teeter-figurative",
+      "context": "Without her support, the kingdom would teeter on the brink of revolt.",
+      "target": "teeter",
+      "characterIndex": 39,
+      "candidates": ["процветать", "объединиться", "отступить", "оказаться на грани"],
+      "expectedTranslation": "оказаться на грани"
+    },
+    {
+      "id": "spring-season",
+      "context": "By spring, the snow around the shrine had melted.",
+      "target": "spring",
+      "characterIndex": 3,
+      "candidates": ["весна", "пружина", "родник", "прыжок"],
+      "expectedTranslation": "весна"
+    },
+    {
+      "id": "spring-coil",
+      "context": "The tiny spring snapped inside the music box.",
+      "target": "spring",
+      "characterIndex": 9,
+      "candidates": ["весна", "пружина", "родник", "скачок"],
+      "expectedTranslation": "пружина"
+    },
+    {
+      "id": "light-noun",
+      "context": "Leave the light on until I return.",
+      "target": "light",
+      "characterIndex": 10,
+      "candidates": ["лёгкий", "зажигать", "свет", "светлый"],
+      "expectedTranslation": "свет"
+    },
+    {
+      "id": "light-adjective",
+      "context": "The suitcase was light enough for her to carry alone.",
+      "target": "light",
+      "characterIndex": 17,
+      "candidates": ["свет", "бледный", "огонь", "лёгкий"],
+      "expectedTranslation": "лёгкий"
+    },
+    {
+      "id": "record-noun",
+      "context": "The old record skipped at the same sad refrain.",
+      "target": "record",
+      "characterIndex": 8,
+      "candidates": ["пластинка", "записывать", "рекорд", "протокол"],
+      "expectedTranslation": "пластинка"
+    },
+    {
+      "id": "record-verb",
+      "context": "Please record his exact words in the journal.",
+      "target": "record",
+      "characterIndex": 7,
+      "candidates": ["пластинка", "записать", "достижение", "досье"],
+      "expectedTranslation": "записать"
+    },
+    {
+      "id": "bark-tree",
+      "context": "The bark of the ancient cedar was scarred by fire.",
+      "target": "bark",
+      "characterIndex": 4,
+      "candidates": ["лай", "лаять", "кора", "баркас"],
+      "expectedTranslation": "кора"
+    },
+    {
+      "id": "bark-dog",
+      "context": "One sharp bark from the courtyard woke everyone.",
+      "target": "bark",
+      "characterIndex": 10,
+      "candidates": ["кора", "ствол", "рычание", "лай"],
+      "expectedTranslation": "лай"
+    },
+    {
+      "id": "match-game",
+      "context": "The final match ended before the rain began.",
+      "target": "match",
+      "characterIndex": 10,
+      "candidates": ["матч", "спичка", "пара", "совпадение"],
+      "expectedTranslation": "матч"
+    },
+    {
+      "id": "match-fire",
+      "context": "She struck a match and held it near the letter.",
+      "target": "match",
+      "characterIndex": 13,
+      "candidates": ["матч", "спичка", "пара", "сравнение"],
+      "expectedTranslation": "спичка"
+    },
+    {
+      "id": "mean-cruel",
+      "context": "He sounds mean, but he always feeds the stray cats.",
+      "target": "mean",
+      "characterIndex": 10,
+      "candidates": ["средний", "означать", "злой", "намереваться"],
+      "expectedTranslation": "злой"
+    },
+    {
+      "id": "mean-intend",
+      "context": "I didn't mean to read your private note.",
+      "target": "mean",
+      "characterIndex": 9,
+      "candidates": ["подлый", "означать", "среднее", "намереваться"],
+      "expectedTranslation": "намереваться"
+    },
+    {
+      "id": "lie-falsehood",
+      "context": "That lie cost him the trust of the whole village.",
+      "target": "lie",
+      "characterIndex": 5,
+      "candidates": ["ложь", "лежать", "направление", "убежище"],
+      "expectedTranslation": "ложь"
+    },
+    {
+      "id": "lie-recline",
+      "context": "You should lie down before the dizziness returns.",
+      "target": "lie",
+      "characterIndex": 11,
+      "candidates": ["лгать", "лечь", "ложь", "таиться"],
+      "expectedTranslation": "лечь"
+    },
+    {
+      "id": "charge-fee",
+      "context": "The innkeeper added an extra charge for hot water.",
+      "target": "charge",
+      "characterIndex": 29,
+      "candidates": ["обвинение", "атака", "плата", "заряд"],
+      "expectedTranslation": "плата"
+    },
+    {
+      "id": "charge-accusation",
+      "context": "The charge against the captain was quietly withdrawn.",
+      "target": "charge",
+      "characterIndex": 4,
+      "candidates": ["плата", "атака", "обязанность", "обвинение"],
+      "expectedTranslation": "обвинение"
+    },
+    {
+      "id": "close-verb",
+      "context": "Please close the curtains before lighting the lamp.",
+      "target": "close",
+      "characterIndex": 7,
+      "candidates": ["закрыть", "близко", "тесный", "конец"],
+      "expectedTranslation": "закрыть"
+    },
+    {
+      "id": "close-near",
+      "context": "Stay close to me while we cross the crowd.",
+      "target": "close",
+      "characterIndex": 5,
+      "candidates": ["закрыть", "близко", "завершить", "душный"],
+      "expectedTranslation": "близко"
+    },
+    {
+      "id": "fair-just",
+      "context": "It was not fair to blame only the youngest servant.",
+      "target": "fair",
+      "characterIndex": 11,
+      "candidates": ["ярмарка", "светлый", "справедливый", "сносный"],
+      "expectedTranslation": "справедливый"
+    },
+    {
+      "id": "fair-festival",
+      "context": "They met again at the summer fair near the harbor.",
+      "target": "fair",
+      "characterIndex": 29,
+      "candidates": ["справедливый", "светлый", "погожий", "ярмарка"],
+      "expectedTranslation": "ярмарка"
+    },
+    {
+      "id": "left-direction",
+      "context": "The key is hidden in the left drawer.",
+      "target": "left",
+      "characterIndex": 25,
+      "candidates": ["левый", "ушёл", "оставил", "остался"],
+      "expectedTranslation": "левый"
+    },
+    {
+      "id": "left-departure",
+      "context": "She left without taking her umbrella.",
+      "target": "left",
+      "characterIndex": 4,
+      "candidates": ["левый", "ушла", "оставила", "осталось"],
+      "expectedTranslation": "ушла"
+    },
+    {
+      "id": "point-argument",
+      "context": "I understand your point, but I cannot agree.",
+      "target": "point",
+      "characterIndex": 18,
+      "candidates": ["остриё", "балл", "довод", "точка"],
+      "expectedTranslation": "довод"
+    },
+    {
+      "id": "point-tip",
+      "context": "The point of the needle glinted in the candlelight.",
+      "target": "point",
+      "characterIndex": 4,
+      "candidates": ["довод", "балл", "момент", "остриё"],
+      "expectedTranslation": "остриё"
+    },
+    {
+      "id": "vn-sideways-glance",
+      "context": "She gave him a sideways glance, then returned to her book.",
+      "target": "sideways",
+      "characterIndex": 15,
+      "candidates": ["искоса", "боком", "вбок", "сбоку"],
+      "expectedTranslation": "искоса"
+    },
+    {
+      "id": "vn-beaming-smile",
+      "context": "A beaming, innocent smile appeared on her face.",
+      "target": "beaming",
+      "characterIndex": 2,
+      "candidates": ["балочная", "сияющая", "строгая", "натянутая"],
+      "expectedTranslation": "сияющая"
+    },
+    {
+      "id": "vn-oh-well",
+      "context": "\"Oh well, I suppose we can try again tomorrow.\"",
+      "target": "Oh well",
+      "characterIndex": 1,
+      "candidates": ["о колодец", "очень хорошо", "ну что ж", "ах да"],
+      "expectedTranslation": "ну что ж"
+    },
+    {
+      "id": "vn-some-nerve",
+      "context": "\"You've got some nerve, showing up here after all that!\"",
+      "target": "some nerve",
+      "characterIndex": 12,
+      "candidates": ["немного нервов", "большая смелость", "какая выдержка", "ну и наглость"],
+      "expectedTranslation": "ну и наглость"
+    },
+    {
+      "id": "vn-faltered-voice",
+      "context": "Her voice faltered when she spoke his name.",
+      "target": "faltered",
+      "characterIndex": 10,
+      "candidates": ["дрогнул", "замедлился", "споткнулся", "исчез"],
+      "expectedTranslation": "дрогнул"
+    },
+    {
+      "id": "vn-expectant-hush",
+      "context": "The room fell into an expectant hush as the door opened.",
+      "target": "hush",
+      "characterIndex": 32,
+      "candidates": ["шорох", "тишина", "шёпот", "суматоха"],
+      "expectedTranslation": "тишина"
+    },
+    {
+      "id": "vn-wistful-smile",
+      "context": "A wistful smile touched her lips when the old melody began.",
+      "target": "wistful",
+      "characterIndex": 2,
+      "candidates": ["злой", "беззаботный", "задумчиво-грустный", "самодовольный"],
+      "expectedTranslation": "задумчиво-грустный"
+    },
+    {
+      "id": "vn-cut-it-out",
+      "context": "\"Cut it out,\" she whispered, trying not to laugh.",
+      "target": "Cut it out",
+      "characterIndex": 1,
+      "candidates": ["вырежи это", "выключи", "убирайся", "перестань"],
+      "expectedTranslation": "перестань"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package IgnorableNamespaces="uap uap10 rescap systemai"
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:systemai="http://schemas.microsoft.com/appx/manifest/systemai/windows10">
+  <Identity Name="AsteriaScale" Publisher="CN=Asteria Scale Local" Version="0.9.3.0" ProcessorArchitecture="neutral" />
+  <Properties>
+    <DisplayName>Asteria Scale</DisplayName>
+    <PublisherDisplayName>Asteria Scale Local</PublisherDisplayName>
+    <Logo>Assets\storelogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Resources>
+    <Resource Language="ru-ru" />
+  </Resources>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26226.0" />
+    <PackageDependency Name="Microsoft.WindowsAppRuntime.1.8"
+      Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+      MinVersion="8000.879.2017.0" />
+  </Dependencies>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
+    <systemai:Capability Name="systemAIModels" />
+  </Capabilities>
+  <Applications>
+    <Application Id="AsteriaScale" Executable="AsteriaScale.exe"
+      uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements AppListEntry="none" DisplayName="Asteria Scale"
+        Description="Local AI upscaling and on-screen translation"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
+  </Applications>
+</Package>

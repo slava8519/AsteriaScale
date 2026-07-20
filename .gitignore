@@ -1,0 +1,22 @@
+# Build output
+**/bin/
+**/obj/
+artifacts/
+dist/
+.vs/
+*.user
+*.suo
+
+# GlossBERT model artifacts: 626 MB, individual files exceed GitHub's 100 MB
+# limit. Distribute via Git LFS or GitHub Release assets; expected sizes and
+# SHA-256 hashes are pinned in assets/Ranker/README.md and RankerEngine.cs.
+src/AsteriaScale.RankerWorker/Models/GlossBert/Cpu/*.onnx
+src/AsteriaScale.RankerWorker/Models/GlossBert/Npu/*.onnx
+src/AsteriaScale.RankerWorker/Models/GlossBert/Npu/*.bin
+
+# Dictionary source dumps (downloaded separately, multi-GB)
+tools/dictionary-source/*.bz2
+tools/dictionary-source/*.jsonl
+tools/dictionary-source/*.tei
+tools/dictionary-source/JMdict.gz
+**/__pycache__/

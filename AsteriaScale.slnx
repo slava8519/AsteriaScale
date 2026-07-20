@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/AsteriaScale/AsteriaScale.csproj" />
+  <Project Path="src/AsteriaScale.RankerProtocol/AsteriaScale.RankerProtocol.csproj" />
+  <Project Path="src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj" />
+  <Project Path="tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj" />
+</Solution>

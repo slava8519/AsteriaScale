@@ -1,0 +1,923 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using AsteriaScale.RankerProtocol;
+
+namespace AsteriaScale.Services;
+
+public enum GlossBertRankerProvider
+{
+    Cpu,
+    Npu
+}
+
+/// <summary>
+/// A normal result may deliberately contain no index. That is a calibrated
+/// ranker abstention rather than a transport or model failure.
+/// </summary>
+public sealed record GlossBertDictionarySelection(
+    int? Index,
+    bool Abstained,
+    double? Margin,
+    double? Score,
+    double? Confidence,
+    GlossBertRankerProvider RequestedProvider,
+    string ExecutionProvider,
+    string Device,
+    string ModelVersion)
+{
+    public int? SelectedGroupId => Index;
+}
+
+public sealed class GlossBertRankerException : InvalidOperationException
+{
+    public GlossBertRankerException(string errorCode, string message)
+        : base(message)
+    {
+        ErrorCode = errorCode;
+    }
+
+    public GlossBertRankerException(string errorCode, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        ErrorCode = errorCode;
+    }
+
+    public string ErrorCode { get; }
+}
+
+/// <summary>
+/// Owns the isolated GlossBERT worker and serializes JSONL transactions.
+/// The worker provider is explicit: an NPU request can never fall back to CPU.
+/// </summary>
+public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
+{
+    public const string ExpectedModelVersionPrefix =
+        "GlossBERT:0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a";
+    public const string CpuModelCacheId =
+        ExpectedModelVersionPrefix + ":fp32-dynamic";
+    public const string NpuModelCacheId =
+        ExpectedModelVersionPrefix + ":vitis-epcontext-b4-s64";
+    public const string CpuExecutionProvider = "CPUExecutionProvider";
+    public const string NpuExecutionProvider = "VitisAIExecutionProvider";
+    public const string CpuEngineLabel = "NPU OCR  •  CPU-СМЫСЛ";
+    public const string NpuEngineLabel = "NPU OCR  •  NPU-СМЫСЛ";
+
+    private const int MaximumCandidates = 128;
+    private static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ShutdownResponseTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan ShutdownExitTimeout = TimeSpan.FromSeconds(5);
+
+    private readonly SemaphoreSlim _transactionLock = new(1, 1);
+    private readonly System.Threading.Timer _idleTimer;
+    private readonly string _workerExecutable;
+    private readonly string _modelDirectory;
+    private readonly TimeSpan _idleTimeout;
+    private Process? _worker;
+    private StreamWriter? _workerInput;
+    private StreamReader? _workerOutput;
+    private Task? _errorDrain;
+    private GlossBertRankerProvider? _activeProvider;
+    private string? _activeModelVersion;
+    private volatile bool _keepWarm = true;
+    private volatile bool _disposed;
+
+    public GlossBertDictionarySelectorService()
+        : this(
+            ResolveCompanionBaseDirectory(
+                Environment.ProcessPath,
+                AppContext.BaseDirectory),
+            DefaultIdleTimeout)
+    {
+    }
+
+    internal static string ResolveCompanionBaseDirectory(
+        string? processPath,
+        string appContextBaseDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(appContextBaseDirectory);
+
+        if (!string.IsNullOrWhiteSpace(processPath))
+        {
+            string? executableDirectory = Path.GetDirectoryName(processPath);
+            if (!string.IsNullOrWhiteSpace(executableDirectory))
+            {
+                return Path.GetFullPath(executableDirectory);
+            }
+        }
+
+        return Path.GetFullPath(appContextBaseDirectory);
+    }
+
+    internal GlossBertDictionarySelectorService(string baseDirectory, TimeSpan idleTimeout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+        if (idleTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(idleTimeout));
+        }
+
+        string rankerDirectory = Path.Combine(Path.GetFullPath(baseDirectory), "Ranker");
+        _workerExecutable = Path.Combine(
+            rankerDirectory,
+            "AsteriaScale.RankerWorker.exe");
+        _modelDirectory = Path.Combine(rankerDirectory, "Models");
+        _idleTimeout = idleTimeout;
+        _idleTimer = new System.Threading.Timer(
+            static state =>
+            {
+                var service = (GlossBertDictionarySelectorService)state!;
+                _ = service.UnloadAfterIdleAsync();
+            },
+            this,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
+    }
+
+    public bool IsWorkerRunning
+    {
+        get
+        {
+            Process? worker = _worker;
+            if (worker is null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return !worker.HasExited;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+    }
+
+    public GlossBertRankerProvider? ActiveProvider =>
+        IsWorkerRunning ? _activeProvider : null;
+
+    public string? ActiveModelVersion =>
+        IsWorkerRunning ? _activeModelVersion : null;
+
+    internal int? WorkerProcessId
+    {
+        get
+        {
+            Process? worker = _worker;
+            try
+            {
+                return worker is not null && !worker.HasExited ? worker.Id : null;
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+    }
+
+    public static string GetEngineLabel(GlossBertRankerProvider provider) =>
+        provider == GlossBertRankerProvider.Npu ? NpuEngineLabel : CpuEngineLabel;
+
+    public static string GetModelCacheId(GlossBertRankerProvider provider) =>
+        provider == GlossBertRankerProvider.Npu ? NpuModelCacheId : CpuModelCacheId;
+
+    public void ConfigureKeepWarm(bool keepWarm)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _keepWarm = keepWarm;
+        if (keepWarm)
+        {
+            DisableIdleTimer();
+        }
+        else
+        {
+            ScheduleIdleUnload();
+        }
+    }
+
+    public async Task WarmUpAsync(
+        GlossBertRankerProvider provider,
+        CancellationToken cancellationToken = default)
+    {
+        RankerRequest request = NewRequest(RankerProtocolV2.Warm);
+        _ = await SendAsync(request, provider, expectedGroupIds: null, cancellationToken);
+    }
+
+    public async Task<GlossBertDictionarySelection> SelectAsync(
+        string context,
+        string target,
+        int characterIndex,
+        IReadOnlyList<string> candidates,
+        IReadOnlyList<int> candidateGroupIds,
+        string sourceLanguage,
+        GlossBertRankerProvider provider,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateSelectionArguments(
+            context,
+            target,
+            characterIndex,
+            candidates,
+            candidateGroupIds,
+            sourceLanguage);
+
+        string[] normalizedCandidates = candidates
+            .Select(value => value.Trim())
+            .ToArray();
+        int[] stableGroupIds = candidateGroupIds.ToArray();
+        RankerRequest request = NewRequest(RankerProtocolV2.Select) with
+        {
+            Context = context.Trim(),
+            Target = target.Trim(),
+            CharacterIndex = characterIndex,
+            SourceLanguage = sourceLanguage.Trim(),
+            Candidates = normalizedCandidates,
+            CandidateGroupIds = stableGroupIds
+        };
+
+        RankerResponse response = await SendAsync(
+            request,
+            provider,
+            stableGroupIds,
+            cancellationToken);
+        return CreateSelection(response, provider, stableGroupIds);
+    }
+
+    public async Task UnloadAsync()
+    {
+        DisableIdleTimer();
+        await _transactionLock.WaitAsync();
+        try
+        {
+            await StopWorkerLockedAsync(attemptGracefulShutdown: true);
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
+    }
+
+    private async Task<RankerResponse> SendAsync(
+        RankerRequest request,
+        GlossBertRankerProvider provider,
+        IReadOnlyCollection<int>? expectedGroupIds,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ResetIdleTimerForActivity();
+
+        Task<RankerResponse> transaction = ExecuteTransactionAsync(
+            request,
+            provider,
+            expectedGroupIds,
+            cancellationToken);
+        try
+        {
+            RankerResponse response = await transaction.WaitAsync(cancellationToken);
+            ScheduleIdleUnload();
+            return response;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // If cancellation happens after the JSON line was written, the private
+            // transaction remains the sole stdout consumer and drains exactly one
+            // response before releasing the semaphore. The UI can return at once.
+            _ = ObserveAbandonedTransactionAsync(transaction);
+            throw;
+        }
+    }
+
+    private async Task<RankerResponse> ExecuteTransactionAsync(
+        RankerRequest request,
+        GlossBertRankerProvider provider,
+        IReadOnlyCollection<int>? expectedGroupIds,
+        CancellationToken startCancellationToken)
+    {
+        await _transactionLock.WaitAsync(startCancellationToken);
+        try
+        {
+            await EnsureWorkerLockedAsync(provider, startCancellationToken);
+            startCancellationToken.ThrowIfCancellationRequested();
+
+            // Deliberately non-cancellable from the write onward. Cancelling a
+            // ReadLine would leave this response queued for the next request.
+            await WriteRequestLockedAsync(request);
+            RankerResponse response = await ReadResponseLockedAsync();
+            ValidateResponse(
+                response,
+                request.RequestId,
+                provider,
+                expectedGroupIds,
+                requireSelection: string.Equals(
+                    request.Command,
+                    RankerProtocolV2.Select,
+                    StringComparison.Ordinal));
+            _activeModelVersion = response.ModelVersion;
+            return response;
+        }
+        catch (OperationCanceledException) when (startCancellationToken.IsCancellationRequested)
+        {
+            // No application request has entered the stream in this path.
+            throw;
+        }
+        catch
+        {
+            await StopWorkerLockedAsync(attemptGracefulShutdown: false);
+            throw;
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
+    }
+
+    private async Task EnsureWorkerLockedAsync(
+        GlossBertRankerProvider provider,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_worker is { HasExited: false } && _activeProvider == provider)
+        {
+            return;
+        }
+
+        if (_worker is not null)
+        {
+            await StopWorkerLockedAsync(attemptGracefulShutdown: true);
+        }
+
+        ValidateArtifactPaths();
+        ProcessStartInfo startInfo = new(_workerExecutable)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(false),
+            StandardOutputEncoding = new UTF8Encoding(false),
+            StandardErrorEncoding = new UTF8Encoding(false),
+            WorkingDirectory = Path.GetDirectoryName(_workerExecutable)!
+        };
+        startInfo.ArgumentList.Add("--provider");
+        startInfo.ArgumentList.Add(
+            provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
+        startInfo.ArgumentList.Add("--model-directory");
+        startInfo.ArgumentList.Add(_modelDirectory);
+
+        Process worker;
+        try
+        {
+            worker = Process.Start(startInfo)
+                     ?? throw new InvalidOperationException(
+                         "Process.Start returned no ranker process.");
+        }
+        catch (Exception ex)
+        {
+            throw new GlossBertRankerException(
+                "worker_start_failed",
+                $"Не удалось запустить изолированный GlossBERT worker: {ex.Message}",
+                ex);
+        }
+
+        _worker = worker;
+        _workerInput = worker.StandardInput;
+        _workerInput.AutoFlush = true;
+        _workerOutput = worker.StandardOutput;
+        _errorDrain = DrainErrorsAsync(worker.StandardError);
+        _activeProvider = provider;
+        _activeModelVersion = null;
+
+        try
+        {
+            RankerRequest hello = NewRequest(RankerProtocolV2.Hello);
+            await WriteRequestLockedAsync(hello);
+            RankerResponse response = await ReadResponseLockedAsync();
+            ValidateResponse(
+                response,
+                hello.RequestId,
+                provider,
+                expectedGroupIds: null,
+                requireSelection: false);
+            _activeModelVersion = response.ModelVersion;
+        }
+        catch
+        {
+            await StopWorkerLockedAsync(attemptGracefulShutdown: false);
+            throw;
+        }
+    }
+
+    private async Task WriteRequestLockedAsync(RankerRequest request)
+    {
+        if (_workerInput is null)
+        {
+            throw new GlossBertRankerException(
+                "worker_not_running",
+                "GlossBERT worker input is not available.");
+        }
+
+        string payload = JsonSerializer.Serialize(request, RankerProtocolV2.JsonOptions);
+        await _workerInput.WriteLineAsync(payload);
+        await _workerInput.FlushAsync();
+    }
+
+    private async Task<RankerResponse> ReadResponseLockedAsync()
+    {
+        if (_workerOutput is null)
+        {
+            throw new GlossBertRankerException(
+                "worker_not_running",
+                "GlossBERT worker output is not available.");
+        }
+
+        string? line = await _workerOutput.ReadLineAsync(CancellationToken.None);
+        if (line is null)
+        {
+            int? exitCode = _worker is { HasExited: true } worker
+                ? worker.ExitCode
+                : null;
+            string suffix = exitCode is null ? string.Empty : $" Код выхода: {exitCode}.";
+            throw new GlossBertRankerException(
+                "worker_eof",
+                "GlossBERT worker завершился, не вернув ответ." + suffix);
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<RankerResponse>(
+                       line.TrimStart('\uFEFF'),
+                       RankerProtocolV2.JsonOptions)
+                   ?? throw new JsonException("The response is null.");
+        }
+        catch (JsonException ex)
+        {
+            throw new GlossBertRankerException(
+                "invalid_worker_json",
+                "GlossBERT worker вернул некорректную строку JSON.",
+                ex);
+        }
+    }
+
+    private static void ValidateResponse(
+        RankerResponse response,
+        string expectedRequestId,
+        GlossBertRankerProvider requestedProvider,
+        IReadOnlyCollection<int>? expectedGroupIds,
+        bool requireSelection)
+    {
+        if (!string.Equals(
+                response.Version,
+                RankerProtocolV2.Version,
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Worker protocol '{response.Version}' does not match " +
+                $"'{RankerProtocolV2.Version}'.");
+        }
+
+        if (!string.Equals(
+                response.RequestId,
+                expectedRequestId,
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError("Worker response requestId does not match the request.");
+        }
+
+        string expectedExecutionProvider = requestedProvider == GlossBertRankerProvider.Npu
+            ? NpuExecutionProvider
+            : CpuExecutionProvider;
+        if (!string.Equals(
+                response.Provider,
+                expectedExecutionProvider,
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Requested {expectedExecutionProvider}, but worker reported " +
+                $"'{response.Provider ?? "<null>"}'. Provider fallback is forbidden.");
+        }
+
+        string expectedDevice = requestedProvider == GlossBertRankerProvider.Npu
+            ? "NPU"
+            : "CPU";
+        if (!string.Equals(response.Device, expectedDevice, StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Requested device {expectedDevice}, but worker reported " +
+                $"'{response.Device ?? "<null>"}'.");
+        }
+
+        if (string.IsNullOrWhiteSpace(response.ModelVersion) ||
+            !response.ModelVersion.StartsWith(
+                ExpectedModelVersionPrefix,
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Unexpected ranker model '{response.ModelVersion ?? "<null>"}'.");
+        }
+        if (requireSelection &&
+            !response.ModelVersion.StartsWith(
+                GetModelCacheId(requestedProvider),
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Ranker artifact '{response.ModelVersion}' does not match the " +
+                $"requested {requestedProvider} cache identity.");
+        }
+
+        ValidateFinite(response.Margin, "margin");
+        ValidateFinite(response.Score, "score");
+        ValidateFinite(response.Confidence, "confidence");
+        if (response.Confidence is < 0 or > 1)
+        {
+            throw ProtocolError("Worker confidence must be in the [0, 1] range.");
+        }
+
+        if (!response.Ok)
+        {
+            string errorCode = string.IsNullOrWhiteSpace(response.ErrorCode)
+                ? "worker_error"
+                : response.ErrorCode;
+            string message = string.IsNullOrWhiteSpace(response.Error)
+                ? "GlossBERT worker rejected the request."
+                : response.Error;
+            throw new GlossBertRankerException(errorCode, message);
+        }
+
+        if (!requireSelection)
+        {
+            if (response.Index is not null || response.Abstained)
+            {
+                throw ProtocolError(
+                    "A non-selection command returned selection fields.");
+            }
+
+            return;
+        }
+
+        if (expectedGroupIds is null || expectedGroupIds.Count == 0)
+        {
+            throw ProtocolError("Selection validation has no candidate group ids.");
+        }
+
+        if (response.Margin is null ||
+            response.Score is null ||
+            response.Confidence is null)
+        {
+            throw ProtocolError(
+                "A selection response must include margin, score and confidence diagnostics.");
+        }
+
+        if (response.Abstained)
+        {
+            if (response.Index is not null)
+            {
+                throw ProtocolError("An abstained response cannot contain an index.");
+            }
+
+            return;
+        }
+
+        if (response.Index is not { } selectedGroupId)
+        {
+            throw ProtocolError(
+                "A non-abstained response must contain a selected group id.");
+        }
+
+        if (!expectedGroupIds.Contains(selectedGroupId))
+        {
+            throw ProtocolError(
+                $"Worker selected unknown candidate group id {selectedGroupId}.");
+        }
+    }
+
+    private static GlossBertDictionarySelection CreateSelection(
+        RankerResponse response,
+        GlossBertRankerProvider requestedProvider,
+        IReadOnlyCollection<int> expectedGroupIds)
+    {
+        ValidateResponse(
+            response,
+            response.RequestId,
+            requestedProvider,
+            expectedGroupIds,
+            requireSelection: true);
+        return new GlossBertDictionarySelection(
+            response.Index,
+            response.Abstained,
+            response.Margin,
+            response.Score,
+            response.Confidence,
+            requestedProvider,
+            response.Provider!,
+            response.Device!,
+            response.ModelVersion!);
+    }
+
+    private static void ValidateSelectionArguments(
+        string context,
+        string target,
+        int characterIndex,
+        IReadOnlyList<string> candidates,
+        IReadOnlyList<int> candidateGroupIds,
+        string sourceLanguage)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceLanguage);
+        ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(candidateGroupIds);
+        if (characterIndex < 0 || characterIndex > context.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(characterIndex));
+        }
+
+        if (candidates.Count == 0 || candidates.Count > MaximumCandidates)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(candidates),
+                $"GlossBERT expects between 1 and {MaximumCandidates} candidates.");
+        }
+
+        if (candidates.Count != candidateGroupIds.Count)
+        {
+            throw new ArgumentException(
+                "candidateGroupIds must be parallel to candidates.",
+                nameof(candidateGroupIds));
+        }
+
+        if (candidates.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException(
+                "GlossBERT candidates cannot be empty.",
+                nameof(candidates));
+        }
+
+        if (candidateGroupIds.Any(groupId => groupId < 0))
+        {
+            throw new ArgumentException(
+                "Candidate group ids must be non-negative stable outcome ids.",
+                nameof(candidateGroupIds));
+        }
+    }
+
+    private void ValidateArtifactPaths()
+    {
+        if (!File.Exists(_workerExecutable))
+        {
+            throw new GlossBertRankerException(
+                "worker_missing",
+                $"Не найден GlossBERT worker: '{_workerExecutable}'.");
+        }
+
+        if (!Directory.Exists(_modelDirectory))
+        {
+            throw new GlossBertRankerException(
+                "model_directory_missing",
+                $"Не найден каталог модели GlossBERT: '{_modelDirectory}'.");
+        }
+    }
+
+    private async Task StopWorkerLockedAsync(bool attemptGracefulShutdown)
+    {
+        Process? worker = _worker;
+        StreamWriter? input = _workerInput;
+        StreamReader? output = _workerOutput;
+        Task? errorDrain = _errorDrain;
+        GlossBertRankerProvider? provider = _activeProvider;
+
+        _worker = null;
+        _workerInput = null;
+        _workerOutput = null;
+        _errorDrain = null;
+        _activeProvider = null;
+        _activeModelVersion = null;
+        if (worker is null)
+        {
+            input?.Dispose();
+            output?.Dispose();
+            return;
+        }
+
+        bool graceful = false;
+        if (attemptGracefulShutdown &&
+            provider is { } requestedProvider &&
+            !worker.HasExited &&
+            input is not null &&
+            output is not null)
+        {
+            try
+            {
+                RankerRequest shutdown = NewRequest(RankerProtocolV2.Shutdown);
+                string payload = JsonSerializer.Serialize(
+                    shutdown,
+                    RankerProtocolV2.JsonOptions);
+                await input.WriteLineAsync(payload);
+                await input.FlushAsync();
+
+                using CancellationTokenSource responseTimeout =
+                    new(ShutdownResponseTimeout);
+                string? line = await output
+                    .ReadLineAsync(CancellationToken.None)
+                    .AsTask()
+                    .WaitAsync(responseTimeout.Token);
+                RankerResponse response = JsonSerializer.Deserialize<RankerResponse>(
+                                              line ?? string.Empty,
+                                              RankerProtocolV2.JsonOptions)
+                                          ?? throw new JsonException(
+                                              "Empty shutdown response.");
+                ValidateResponse(
+                    response,
+                    shutdown.RequestId,
+                    requestedProvider,
+                    expectedGroupIds: null,
+                    requireSelection: false);
+
+                using CancellationTokenSource exitTimeout =
+                    new(ShutdownExitTimeout);
+                await worker.WaitForExitAsync(exitTimeout.Token);
+                graceful = true;
+            }
+            catch
+            {
+                // A malformed or timed-out shutdown is never trusted. The whole
+                // process tree is terminated below so model memory is reclaimed.
+            }
+        }
+
+        if (!graceful && !worker.HasExited)
+        {
+            try
+            {
+                worker.Kill(entireProcessTree: true);
+                using CancellationTokenSource killTimeout =
+                    new(ShutdownExitTimeout);
+                await worker.WaitForExitAsync(killTimeout.Token);
+            }
+            catch
+            {
+                // Best-effort cleanup during shutdown or transport recovery.
+            }
+        }
+
+        input?.Dispose();
+        output?.Dispose();
+        worker.Dispose();
+        if (errorDrain is not null)
+        {
+            try
+            {
+                await errorDrain.WaitAsync(ShutdownExitTimeout);
+            }
+            catch
+            {
+                // Native diagnostics cannot hold the app shutdown path.
+            }
+        }
+    }
+
+    private static async Task DrainErrorsAsync(StreamReader reader)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync() is not null)
+            {
+                // Vitis/ORT diagnostics are intentionally drained from a private
+                // pipe. They never share stdout with the JSONL protocol.
+            }
+        }
+        catch (ObjectDisposedException)
+        {
+            // Process cleanup owns the reader lifetime.
+        }
+    }
+
+    private async Task ObserveAbandonedTransactionAsync(
+        Task<RankerResponse> transaction)
+    {
+        try
+        {
+            await transaction;
+        }
+        catch
+        {
+            // ExecuteTransactionAsync already kills a failed worker. Observation
+            // here only prevents an unobserved background task exception.
+        }
+        finally
+        {
+            ScheduleIdleUnload();
+        }
+    }
+
+    private void ResetIdleTimerForActivity()
+    {
+        if (!_disposed && !_keepWarm)
+        {
+            DisableIdleTimer();
+        }
+    }
+
+    private void ScheduleIdleUnload()
+    {
+        if (_disposed || _keepWarm)
+        {
+            return;
+        }
+
+        try
+        {
+            _idleTimer.Change(_idleTimeout, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Dispose won the race with a completed transaction.
+        }
+    }
+
+    private void DisableIdleTimer()
+    {
+        try
+        {
+            _idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Idempotent shutdown.
+        }
+    }
+
+    private async Task UnloadAfterIdleAsync()
+    {
+        if (_disposed || _keepWarm)
+        {
+            return;
+        }
+
+        try
+        {
+            await UnloadAsync();
+        }
+        catch
+        {
+            // A future request can start a fresh isolated process.
+        }
+    }
+
+    private static RankerRequest NewRequest(string command) => new()
+    {
+        Command = command,
+        RequestId = Guid.NewGuid().ToString("N")
+    };
+
+    private static void ValidateFinite(double? value, string fieldName)
+    {
+        if (value is { } number && (double.IsNaN(number) || double.IsInfinity(number)))
+        {
+            throw ProtocolError($"Worker {fieldName} must be finite.");
+        }
+    }
+
+    private static GlossBertRankerException ProtocolError(string message) =>
+        new("protocol_violation", message);
+
+    internal static GlossBertDictionarySelection ValidateSelectionResponseForTests(
+        RankerResponse response,
+        string expectedRequestId,
+        GlossBertRankerProvider requestedProvider,
+        IReadOnlyCollection<int> expectedGroupIds)
+    {
+        ValidateResponse(
+            response,
+            expectedRequestId,
+            requestedProvider,
+            expectedGroupIds,
+            requireSelection: true);
+        return CreateSelection(response, requestedProvider, expectedGroupIds);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        DisableIdleTimer();
+        await _transactionLock.WaitAsync();
+        try
+        {
+            await StopWorkerLockedAsync(attemptGracefulShutdown: true);
+        }
+        finally
+        {
+            _transactionLock.Release();
+        }
+
+        _idleTimer.Dispose();
+        _transactionLock.Dispose();
+    }
+}

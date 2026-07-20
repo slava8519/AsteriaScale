@@ -1,0 +1,1 @@
+{"version":{"major":1},"base64Encoding":false,"backendCompatibility":{"vaip-pass_vaiml_partition":"version=0.0.0;device.device_name=AMD_AIE2PS_VAIML;device.overlay_type=4x4_VAIML_Overlay;device.device_type=IPU_STRIX;isa_version=0x01"}}

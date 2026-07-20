@@ -1,0 +1,940 @@
+{
+  "name": "Asteria Scale EN-RU visual-novel dictionary reranker blind holdout v2",
+  "version": 2,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Thirty original English visual-novel and dialogue examples written for Asteria Scale; no corpus sentences were copied.",
+  "evaluationPolicy": "Never use this file for model selection, prompt tuning, threshold calibration, or any other tuning. Run it exactly once, only after the artifact and abstention threshold are frozen.",
+  "cases": [
+    {
+      "id": "vn2-draft-manuscript",
+      "context": "Elena tucked the first draft of her confession beneath the atlas.",
+      "target": "draft",
+      "characterIndex": 23,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "сквозняк",
+          "definition": "a current of air moving through an enclosed place",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "призыв",
+          "definition": "compulsory selection for service in the armed forces",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "черновик",
+          "definition": "a preliminary version of a piece of writing",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "глоток",
+          "definition": "an amount of liquid taken into the mouth at one time",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "черновик"
+    },
+    {
+      "id": "vn2-seal-letter",
+      "context": "The seal on the duke's private letter had been split cleanly in two.",
+      "target": "seal",
+      "characterIndex": 4,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "печать",
+          "definition": "an impression in wax or another material used to authenticate a document",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "тюлень",
+          "definition": "a fish-eating marine mammal with flippers",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "уплотнение",
+          "definition": "a fitted material that prevents liquid or gas from escaping",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "официальное одобрение",
+          "definition": "an authoritative sign of approval or acceptance",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "печать"
+    },
+    {
+      "id": "vn2-key-music",
+      "context": "\"Try the lullaby in a lower key,\" Liora said from the piano bench.",
+      "target": "key",
+      "characterIndex": 28,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "ключ",
+          "definition": "a shaped metal tool used to operate a lock",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "клавиша",
+          "definition": "a part pressed by a finger to operate an instrument or keyboard",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "разгадка",
+          "definition": "a fact or idea that makes a problem understandable",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "тональность",
+          "definition": "the tonal center and scale in which music is composed or played",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "тональность"
+    },
+    {
+      "id": "vn2-note-message",
+      "context": "A note in Mira's narrow handwriting waited beneath my untouched tea.",
+      "target": "note",
+      "characterIndex": 2,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "нота",
+          "definition": "a single musical sound or its written symbol",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "записка",
+          "definition": "a short informal written message",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "банкнота",
+          "definition": "a piece of paper money issued by a bank",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "примечание",
+          "definition": "an explanatory or additional comment on a text",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "записка"
+    },
+    {
+      "id": "vn2-board-council",
+      "context": "\"The board will hear your claim at noon,\" the steward warned.",
+      "target": "board",
+      "characterIndex": 5,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "доска",
+          "definition": "a long flat piece of wood or another rigid material",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "питание",
+          "definition": "meals regularly provided in exchange for payment",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "игровое поле",
+          "definition": "the marked surface on which a tabletop game is played",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "правление",
+          "definition": "a group appointed to direct an organization",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "правление"
+    },
+    {
+      "id": "vn2-watch-timepiece",
+      "context": "His watch had stopped at twelve minutes past midnight.",
+      "target": "watch",
+      "characterIndex": 4,
+      "partOfSpeech": "noun",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "часы",
+          "definition": "a small timepiece worn or carried by a person",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "дежурство",
+          "definition": "a scheduled period of responsibility or duty",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "дозор",
+          "definition": "a person or group assigned to guard and observe",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "наблюдение",
+          "definition": "the act of looking carefully for a period of time",
+          "partOfSpeech": "noun"
+        }
+      ],
+      "expectedTranslation": "часы"
+    },
+    {
+      "id": "vn2-swallowed-insult",
+      "context": "Mara swallowed the insult and signed the treaty anyway.",
+      "target": "swallowed",
+      "characterIndex": 5,
+      "partOfSpeech": "verb",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "поверила",
+          "definition": "accepted an unlikely story or claim without question",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "стерпела",
+          "definition": "suppressed a reaction to an insult or other offense",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "проглотила",
+          "definition": "caused food or drink to pass down the throat",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "поглотила",
+          "definition": "surrounded, engulfed, or absorbed something completely",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "стерпела"
+    },
+    {
+      "id": "vn2-missed-hearing",
+      "context": "\"I missed your name when the orchestra started,\" Pavel admitted.",
+      "target": "missed",
+      "characterIndex": 3,
+      "partOfSpeech": "verb",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "скучал по",
+          "definition": "felt sadness because someone or something was absent",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "промахнулся",
+          "definition": "failed to hit an intended target",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "не расслышал",
+          "definition": "failed to hear words or sounds clearly enough",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "пропустил",
+          "definition": "failed to attend, notice, or take part in something",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "не расслышал"
+    },
+    {
+      "id": "vn2-framed-accusation",
+      "context": "\"They framed Soren with a brooch planted in his coat,\" I said.",
+      "target": "framed",
+      "characterIndex": 6,
+      "partOfSpeech": "verb",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "подставили",
+          "definition": "arranged false evidence so an innocent person appeared guilty",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "обрамили",
+          "definition": "placed a decorative or protective border around something",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "сформулировали",
+          "definition": "expressed an idea in a particular choice of words",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "выстроили кадр",
+          "definition": "composed a person or scene within a camera image",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "подставили"
+    },
+    {
+      "id": "vn2-weathered-hardship",
+      "context": "The sisters weathered the siege, yet a single apology divided them.",
+      "target": "weathered",
+      "characterIndex": 12,
+      "partOfSpeech": "verb",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "обветрились",
+          "definition": "became worn or rough through exposure to the elements",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "выдержали на воздухе",
+          "definition": "left a material outdoors so it would season or cure",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "обогнули с наветренной стороны",
+          "definition": "passed to the windward side of a place while sailing",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "пережили",
+          "definition": "endured a difficult period and came through it",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "пережили"
+    },
+    {
+      "id": "vn2-betrayed-revealed",
+      "context": "One glance at the packed suitcase betrayed his decision.",
+      "target": "betrayed",
+      "characterIndex": 34,
+      "partOfSpeech": "verb",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "предал",
+          "definition": "acted disloyally toward a person or cause",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "передал врагу",
+          "definition": "delivered a person or secret into an enemy's control",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "выдал",
+          "definition": "revealed a feeling or intention without meaning to",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "подвёл",
+          "definition": "failed someone who depended on a promise or ability",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "выдал"
+    },
+    {
+      "id": "vn2-caught-snagged",
+      "context": "A loose nail caught the ribbon at her shoulder.",
+      "target": "caught",
+      "characterIndex": 13,
+      "partOfSpeech": "verb",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "поймал",
+          "definition": "intercepted and captured a moving person or object",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "зацепил",
+          "definition": "snagged and held part of a garment or similar material",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "застал",
+          "definition": "discovered someone at a particular moment or activity",
+          "partOfSpeech": "verb"
+        },
+        {
+          "translation": "уловил",
+          "definition": "managed to perceive a faint sound, smell, or meaning",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "зацепил"
+    },
+    {
+      "id": "vn2-grave-expression",
+      "context": "Her expression turned grave when the nursery clock began to chime.",
+      "target": "grave",
+      "characterIndex": 22,
+      "partOfSpeech": "adj",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "степенным",
+          "definition": "dignified and restrained in manner",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "тяжёлым",
+          "definition": "extremely serious in consequence or danger",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "медленным и торжественным",
+          "definition": "very slow and solemn in musical performance",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "серьёзным",
+          "definition": "solemn and concerned in expression or tone",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "серьёзным"
+    },
+    {
+      "id": "vn2-raw-grief",
+      "context": "Her grief was still raw, so no one mentioned the empty room.",
+      "target": "raw",
+      "characterIndex": 20,
+      "partOfSpeech": "adj",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "свежим и болезненным",
+          "definition": "emotionally intense because there has been too little time to heal",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "сырым",
+          "definition": "not cooked or otherwise prepared by heat",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "необработанным",
+          "definition": "not yet processed, refined, or organized",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "неопытным",
+          "definition": "lacking experience or training",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "свежим и болезненным"
+    },
+    {
+      "id": "vn2-plain-obvious",
+      "context": "The answer was plain in the ink stains on his cuffs.",
+      "target": "plain",
+      "characterIndex": 15,
+      "partOfSpeech": "adj",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "простым",
+          "definition": "lacking decoration, ornament, or elaborate features",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "некрасивым",
+          "definition": "not physically attractive",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "очевидным",
+          "definition": "clear and easy to recognize or understand",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "однотонным",
+          "definition": "having no pattern or variation in color",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "очевидным"
+    },
+    {
+      "id": "vn2-faint-scent",
+      "context": "A faint trace of lavender clung to the borrowed cloak.",
+      "target": "faint",
+      "characterIndex": 2,
+      "partOfSpeech": "adj",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "тусклый",
+          "definition": "lacking brightness or strength of light",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "слабый",
+          "definition": "barely perceptible in smell, sound, or another sensation",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "предобморочный",
+          "definition": "feeling weak and close to losing consciousness",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "неясный",
+          "definition": "indistinct in outline, memory, or meaning",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "слабый"
+    },
+    {
+      "id": "vn2-sharp-tone",
+      "context": "\"Enough,\" she said in a sharp voice that stopped every whisper.",
+      "target": "sharp",
+      "characterIndex": 24,
+      "partOfSpeech": "adj",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "резким",
+          "definition": "harsh or abrupt in tone or manner",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "острым",
+          "definition": "having a fine edge or point capable of cutting",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "точным",
+          "definition": "precise and perceptive in thought or observation",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "элегантным",
+          "definition": "stylish, neat, and well presented",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "резким"
+    },
+    {
+      "id": "vn2-hollow-victory",
+      "context": "The applause made his victory feel hollow without Hana beside him.",
+      "target": "hollow",
+      "characterIndex": 35,
+      "partOfSpeech": "adj",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "полой",
+          "definition": "having an empty space inside",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "гулкой",
+          "definition": "producing a deep empty-sounding echo",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "запавшей",
+          "definition": "sunken inward, especially in the cheeks or eyes",
+          "partOfSpeech": "adj"
+        },
+        {
+          "translation": "пустой",
+          "definition": "lacking emotional value, sincerity, or satisfaction",
+          "partOfSpeech": "adj"
+        }
+      ],
+      "expectedTranslation": "пустой"
+    },
+    {
+      "id": "vn2-still-continuing",
+      "context": "\"I still have the ribbon you tied around the map,\" she admitted.",
+      "target": "still",
+      "characterIndex": 3,
+      "partOfSpeech": "adv",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "неподвижно",
+          "definition": "without moving",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "всё ещё",
+          "definition": "continuing up to and including the present time",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "всё же",
+          "definition": "despite a fact or situation already mentioned",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "тихо",
+          "definition": "without sound or noise",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "всё ещё"
+    },
+    {
+      "id": "vn2-rather-preference",
+      "context": "\"I'd rather hear the ugly truth from you than a pretty lie from him.\"",
+      "target": "rather",
+      "characterIndex": 5,
+      "partOfSpeech": "adv",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "довольно",
+          "definition": "to a moderately high degree",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "точнее",
+          "definition": "used to correct or refine wording just given",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "лучше",
+          "definition": "used to express preference for one action or outcome",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "скорее",
+          "definition": "more truly or appropriately described in a particular way",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "лучше"
+    },
+    {
+      "id": "vn2-hard-forcefully",
+      "context": "Rain struck hard against the glass as she read the verdict.",
+      "target": "hard",
+      "characterIndex": 12,
+      "partOfSpeech": "adv",
+      "senseClass": "literal",
+      "candidates": [
+        {
+          "translation": "усердно",
+          "definition": "with sustained effort or concentration",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "с трудом",
+          "definition": "with difficulty",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "сурово",
+          "definition": "in a severe or unsympathetic manner",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "сильно",
+          "definition": "with great physical force or intensity",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "сильно"
+    },
+    {
+      "id": "vn2-closely-attentively",
+      "context": "\"Listen closely: the second knock is always softer than the first.\"",
+      "target": "closely",
+      "characterIndex": 8,
+      "partOfSpeech": "adv",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "внимательно",
+          "definition": "with careful attention",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "близко",
+          "definition": "at a short physical distance",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "тесно",
+          "definition": "in an intimate relationship or strong collaboration",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "точно",
+          "definition": "with a strong resemblance between two things",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "внимательно"
+    },
+    {
+      "id": "vn2-otherwise-respects",
+      "context": "\"The cellar is damp but otherwise safe,\" Mara said.",
+      "target": "otherwise",
+      "characterIndex": 24,
+      "partOfSpeech": "adv",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "иначе",
+          "definition": "in a different manner",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "в противном случае",
+          "definition": "if circumstances or actions are different",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "в остальном",
+          "definition": "in all respects except the one already mentioned",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "или же",
+          "definition": "as an alternative choice or possibility",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "в остальном"
+    },
+    {
+      "id": "vn2-home-effect",
+      "context": "Her quiet accusation finally struck home when I saw the torn photograph.",
+      "target": "home",
+      "characterIndex": 36,
+      "partOfSpeech": "adv",
+      "senseClass": "figurative",
+      "candidates": [
+        {
+          "translation": "домой",
+          "definition": "toward or at one's residence",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "в самое сердце",
+          "definition": "so as to produce the full intended emotional effect",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "на родине",
+          "definition": "in one's native country or place of origin",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "до упора",
+          "definition": "fully into an intended physical position",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "в самое сердце"
+    },
+    {
+      "id": "vn2-honestly-exasperation",
+      "context": "\"Honestly! Must you challenge every stranger who laughs at that hat?\"",
+      "target": "Honestly",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "ну и ну",
+          "definition": "an exclamation of exasperation at someone's behavior",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "честно",
+          "definition": "in a truthful manner",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "откровенно",
+          "definition": "in a frank and direct manner",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "правда",
+          "definition": "really or genuinely, used to emphasize a statement",
+          "partOfSpeech": "adv"
+        }
+      ],
+      "expectedTranslation": "ну и ну"
+    },
+    {
+      "id": "vn2-goodness-surprise",
+      "context": "\"Goodness, you crossed the flooded bridge in those slippers?\"",
+      "target": "Goodness",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "доброта",
+          "definition": "the quality of being kind and considerate",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "благо",
+          "definition": "moral virtue or that which is beneficial",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "качество",
+          "definition": "the degree to which something is good or excellent",
+          "partOfSpeech": "noun"
+        },
+        {
+          "translation": "боже",
+          "definition": "an exclamation of surprise or alarm",
+          "partOfSpeech": "intj"
+        }
+      ],
+      "expectedTranslation": "боже"
+    },
+    {
+      "id": "vn2-bah-dismissal",
+      "context": "\"Bah, your ghost only knocks when the plumbing freezes.\"",
+      "target": "Bah",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "фу",
+          "definition": "an exclamation of disgust or revulsion",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "пф",
+          "definition": "an exclamation contemptuously dismissing a claim or idea",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "эх",
+          "definition": "an exclamation of regret or disappointment",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "ха",
+          "definition": "an exclamation of mocking amusement or disbelief",
+          "partOfSpeech": "intj"
+        }
+      ],
+      "expectedTranslation": "пф"
+    },
+    {
+      "id": "vn2-there-soothing",
+      "context": "\"There, the splinter is out; you can open your eyes now.\"",
+      "target": "There",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "там",
+          "definition": "in, at, or toward a particular place",
+          "partOfSpeech": "adv"
+        },
+        {
+          "translation": "вот",
+          "definition": "used to direct attention to a person or thing",
+          "partOfSpeech": "particle"
+        },
+        {
+          "translation": "ну вот",
+          "definition": "a soothing exclamation after a small task or discomfort is over",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "держи",
+          "definition": "an imperative uttered while handing something to someone",
+          "partOfSpeech": "verb"
+        }
+      ],
+      "expectedTranslation": "ну вот"
+    },
+    {
+      "id": "vn2-hey-protest",
+      "context": "\"Hey, that letter was addressed to me,\" Jun protested.",
+      "target": "Hey",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "привет",
+          "definition": "an informal greeting",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "ого",
+          "definition": "an exclamation of sudden surprise or admiration",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "послушай",
+          "definition": "an utterance introducing an insistent or serious remark",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "эй",
+          "definition": "an exclamation used to attract attention or voice a protest",
+          "partOfSpeech": "intj"
+        }
+      ],
+      "expectedTranslation": "эй"
+    },
+    {
+      "id": "vn2-phew-relief",
+      "context": "\"Phew, the footsteps passed our door,\" Nessa whispered.",
+      "target": "Phew",
+      "characterIndex": 1,
+      "partOfSpeech": "intj",
+      "senseClass": "dialogue",
+      "candidates": [
+        {
+          "translation": "фух",
+          "definition": "an exclamation of relief after danger or tension passes",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "фу",
+          "definition": "an exclamation of disgust",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "ах",
+          "definition": "an exclamation of sudden pain, surprise, or realization",
+          "partOfSpeech": "intj"
+        },
+        {
+          "translation": "ух",
+          "definition": "an exclamation accompanying effort or astonishment",
+          "partOfSpeech": "intj"
+        }
+      ],
+      "expectedTranslation": "фух"
+    }
+  ]
+}
