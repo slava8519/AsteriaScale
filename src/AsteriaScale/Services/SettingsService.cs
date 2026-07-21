@@ -76,7 +76,7 @@ public sealed class SettingsService
                 await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken);
             }
 
-            File.Move(temporaryPath, _settingsPath, true);
+            AtomicFile.Replace(temporaryPath, _settingsPath);
         }
         finally
         {

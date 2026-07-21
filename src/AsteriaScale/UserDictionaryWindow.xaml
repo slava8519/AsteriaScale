@@ -1,0 +1,147 @@
+<Window x:Class="AsteriaScale.UserDictionaryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Мой словарь и история"
+        Width="920" Height="700" MinWidth="720" MinHeight="520"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBackgroundBrush}">
+    <Grid Margin="20">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="18" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Личный словарь -->
+        <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                    <TextBlock Text="Мой словарь" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="Ваши записи имеют высший приоритет и переживают обновления."
+                               TextWrapping="Wrap" FontSize="11"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,0" />
+                </StackPanel>
+
+                <TextBox x:Name="SearchBox" Grid.Row="1" Height="32" Margin="0,0,0,10"
+                         VerticalContentAlignment="Center"
+                         ToolTip="Поиск по словам и переводам"
+                         TextChanged="OnSearchChanged" />
+
+                <ListBox x:Name="EntriesList" Grid.Row="2" Background="Transparent"
+                         BorderThickness="0" SelectionChanged="OnEntrySelected"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Key}" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding Translation}" FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="Удалить" Padding="9,5"
+                                        VerticalAlignment="Center" Tag="{Binding}"
+                                        Click="OnRemoveEntryClick" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Grid.Row="3" Margin="0,12,0,0">
+                    <TextBlock Text="Слово или фраза" FontSize="11"
+                               Foreground="{StaticResource SecondaryTextBrush}" />
+                    <TextBox x:Name="KeyBox" Height="32" Margin="0,3,0,8"
+                             VerticalContentAlignment="Center" />
+                    <TextBlock Text="Перевод" FontSize="11"
+                               Foreground="{StaticResource SecondaryTextBrush}" />
+                    <TextBox x:Name="TranslationBox" Height="32" Margin="0,3,0,10"
+                             VerticalContentAlignment="Center" />
+                    <Button Content="Сохранить в мой словарь" Height="34"
+                            Click="OnSaveEntryClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- История переводов -->
+        <Border Grid.Column="2" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                CornerRadius="12" Padding="16">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                    <TextBlock Text="История переводов" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="Последние 200 показанных переводов. «В словарь» переносит запись налево."
+                               TextWrapping="Wrap" FontSize="11"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,0" />
+                </StackPanel>
+
+                <ListBox x:Name="HistoryList" Grid.Row="1" Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="8" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding Source}" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Translation}" FontSize="11"
+                                               TextWrapping="Wrap"
+                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Content="В словарь" Padding="9,5"
+                                        VerticalAlignment="Center" Tag="{Binding}"
+                                        Click="OnPromoteHistoryClick" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="Экспорт для Anki" Height="34" Padding="14,0"
+                            Click="OnExportClick" />
+                    <Button Content="Очистить" Height="34" Padding="14,0" Margin="10,0,0,0"
+                            Click="OnClearHistoryClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <TextBlock x:Name="StatusText" Grid.Column="0" Grid.ColumnSpan="3"
+                   VerticalAlignment="Bottom" HorizontalAlignment="Left"
+                   Margin="4,0,0,-16" FontSize="11"
+                   Foreground="{StaticResource MintBrush}" />
+    </Grid>
+</Window>

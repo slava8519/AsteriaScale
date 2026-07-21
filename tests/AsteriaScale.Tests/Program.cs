@@ -1550,6 +1550,10 @@ try
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));
 
+    await RunAsync(
+        "User dictionary editor and translation history",
+        () => UserDictionaryAndHistoryTests.RunAsync(tempRoot));
+
     await RunAsync("Ranker set schema", async () =>
     {
         string? repositoryRoot = AppContext.BaseDirectory;

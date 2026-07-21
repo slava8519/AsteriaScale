@@ -1276,7 +1276,9 @@ public sealed partial class LocalDictionaryService
 
     // OCR regularly reads the typographic apostrophe, while dictionary keys use
     // the straight one; both must resolve to the same canonical key.
-    private static string NormalizeEnglish(string value) =>
+    // Internal so the user-dictionary editor writes byte-identical keys
+    // (invariant 1: one normalization for lookup and for storage).
+    internal static string NormalizeEnglish(string value) =>
         string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
             .Replace('’', '\'')
             .Trim(' ', '.', ',', '!', '?', ':', ';', '"', '“', '”', '(', ')', '[', ']')

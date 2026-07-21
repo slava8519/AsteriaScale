@@ -654,6 +654,18 @@ public partial class MainWindow : Window
         await PersistSettingsAsync();
     }
 
+    private void OnOpenUserDictionaryClick(object sender, RoutedEventArgs e)
+    {
+        UserDictionaryWindow window = new(
+            new UserDictionaryService(),
+            _hoverTranslation.History,
+            _hoverTranslation.ReloadDictionariesAsync)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
     private async void OnStartMinimizedChanged(object sender, RoutedEventArgs e)
     {
         if (_initializing)

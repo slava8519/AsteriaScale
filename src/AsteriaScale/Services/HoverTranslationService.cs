@@ -21,6 +21,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly ScreenTranslationFlow _screenFlow;
     private readonly HoverTracking _tracking;
     private readonly TextHookService _textHook;
+    private readonly TranslationHistoryService _history = new();
     private Task _pendingUnload = Task.CompletedTask;
     private CancellationTokenSource? _screenIdleUnloadCancellation;
     private CancellationTokenSource? _smartFallbackUnloadCancellation;
@@ -636,7 +637,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
         bool dictionaryFound,
         bool isPhrase,
         string? language,
-        double? confidence) =>
+        double? confidence)
+    {
+        if (dictionaryFound)
+        {
+            _history.Record(source, translation, engine);
+        }
+
         _dispatcher.BeginInvoke(
             () => _overlay.ShowTranslation(
                 source,
@@ -648,6 +655,30 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 language,
                 confidence),
             DispatcherPriority.Normal);
+    }
+
+    /// <summary>History of shown translations, for the review panel and export.</summary>
+    public TranslationHistoryService History => _history;
+
+    /// <summary>
+    /// Re-reads dictionaries after the user edited their own layer, then warms
+    /// them in the background so the next hover is not slowed down.
+    /// </summary>
+    public async Task ReloadDictionariesAsync()
+    {
+        await _dictionary.UnloadAsync();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _dictionary.LoadAsync();
+            }
+            catch (Exception exception)
+            {
+                LogError(exception);
+            }
+        });
+    }
 
     private async Task<(string Source, string Translation, string Engine)> TranslateSmartFallbackAsync(
         string source,
@@ -805,6 +836,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _hotkeys.Dispose();
         });
         _ocr.Dispose();
+        _history.Flush();
         await _textHook.DisposeAsync();
         await _translator.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
