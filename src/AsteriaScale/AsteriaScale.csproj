@@ -32,11 +32,6 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest"
              ExcludeFromSingleFile="true" />
-    <Content Include="..\..\assets\Effects\*.hlsl"
-             Link="Effects\%(Filename)%(Extension)"
-             CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest"
-             ExcludeFromSingleFile="true" />
     <Content Include="..\..\assets\TextHook\*.tsv"
              Link="TextHook\%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"

@@ -51,17 +51,6 @@ public static class PresetCatalog
                     new("FSR\\FSR_RCAS", Parameters: Params(("sharpness", 0.84f)))
                 ]),
             new(
-                "vn-artcnn",
-                "Visual Novel ArtCNN (эксперимент)",
-                "Официальные MIT-веса ArtCNN C4F16 для рисованного контента.",
-                "ArtCNN обучен на аниме-стилле и восстанавливает линии и градиенты иначе, чем CuNNy: попробуйте на сценах, где CuNNy перешарпливает фон. Затем FSR доводит кадр до экрана и RCAS возвращает контраст. Эффект устанавливается в Magpie автоматически при первом запуске масштабирования.",
-                "Экспериментальный: сравните с Balanced на вашей новелле",
-                [
-                    new("ArtCNN_C4F16"),
-                    new("FSR\\FSR_EASU", 1),
-                    new("FSR\\FSR_RCAS", Parameters: Params(("sharpness", 0.84f)))
-                ]),
-            new(
                 "vn-balanced",
                 "Visual Novel HQ",
                 "Чёткий текст и аккуратные линии без тяжёлого перешарпа.",
