@@ -111,6 +111,18 @@ internal static partial class EnglishContextLexicon
             "ran", "run", "running", "up", "walk", "walked", "walking", "way", "went"
         };
 
+    // Glossary scaffolds use the same low-information vocabulary as sense
+    // definition matching. Keeping it here avoids spending dictionary lookups
+    // on function words while still allowing an explicit user entry through.
+    public static readonly HashSet<string> DefinitionStopWords =
+        new(StringComparer.Ordinal)
+        {
+            "a", "an", "and", "are", "as", "at", "be", "been", "being", "by", "can",
+            "for", "from", "in", "is", "it", "its", "may", "of", "on", "one", "or",
+            "someone", "something", "that", "the", "thing", "things", "this", "to",
+            "used", "which", "who", "with"
+        };
+
     public static bool IsLikelyPastForm(string word) =>
         IrregularPastToLemma.ContainsKey(word) ||
         !NonPastEdForms.Contains(word) &&

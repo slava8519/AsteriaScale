@@ -48,7 +48,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _settings = settings;
         _ = isScaling; // Kept for source compatibility with existing callers.
         _dictionary = new LocalDictionaryService();
-        _translator = new FoundryTranslationService(_dictionary);
+        _translator = new FoundryTranslationService(
+            _dictionary,
+            useTranslationScaffold: true,
+            diagnosticSink: null,
+            neuralRanker: RankScaffoldSenseAsync);
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _overlay = new HoverTranslationOverlay();
         _screenOverlay = new ScreenTranslationOverlay();
@@ -886,8 +890,47 @@ public sealed class HoverTranslationService : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         CancelSmartFallbackUnload();
-        string translation = await _translator.TranslateToRussianAsync(source, cancellationToken);
+        string translation = await _translator.TranslateToRussianAsync(
+            source,
+            useNeuralRanker: true,
+            cancellationToken);
         return (source, translation, FoundryTranslationService.EngineLabel);
+    }
+
+    private async Task<SmartDictionaryRankerOutcome?> RankScaffoldSenseAsync(
+        TranslationScaffoldNeuralRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!SmartRankerApplicable)
+        {
+            return null;
+        }
+
+        GlossBertRankerProvider provider =
+            string.Equals(
+                ResolveSmartBackend(),
+                SmartDictionaryBackends.Npu,
+                StringComparison.Ordinal)
+                ? GlossBertRankerProvider.Npu
+                : GlossBertRankerProvider.Cpu;
+        GlossBertDictionarySelection ranked = await _glossBertSelector.SelectAsync(
+            request.Sentence,
+            request.Target,
+            request.CharacterIndex,
+            request.Plan.CandidateGlosses,
+            request.Plan.CandidateGroupIds,
+            "English",
+            provider,
+            cancellationToken);
+        if (ranked.Abstained || ranked.SelectedGroupId is not { } groupId)
+        {
+            return null;
+        }
+
+        // Selection acceptance remains exclusively the worker's frozen margin
+        // decision; no second confidence threshold is introduced here.
+        return request.Plan.Outcomes.FirstOrDefault(
+            outcome => outcome.GroupId == groupId);
     }
 
     private void HideOverlay()

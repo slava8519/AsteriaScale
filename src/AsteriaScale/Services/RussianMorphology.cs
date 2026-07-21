@@ -17,6 +17,71 @@ internal enum RussianPastForm
 /// </summary>
 internal static partial class RussianMorphology
 {
+    private static readonly string[] RussianAdjectiveEndings =
+    [
+        "ыми", "ими", "ого", "его", "ому", "ему", "ый", "ий", "ой", "ая",
+        "яя", "ое", "ее", "ые", "ие", "ым", "им", "ом", "ем", "ую", "юю",
+        "ых", "их"
+    ];
+
+    public static string RemoveStressMarks(string value) =>
+        value.Replace("\u0301", string.Empty, StringComparison.Ordinal)
+            .Replace("\u0341", string.Empty, StringComparison.Ordinal);
+
+    public static string NormalizeForStemComparison(string value) =>
+        RemoveStressMarks(value).ToLowerInvariant().Replace('ё', 'е');
+
+    public static int RussianTokenMatchScore(string expected, string actual)
+    {
+        expected = NormalizeForStemComparison(expected);
+        actual = NormalizeForStemComparison(actual);
+        if (expected.Length == 0 || actual.Length == 0)
+        {
+            return 0;
+        }
+
+        if (string.Equals(expected, actual, StringComparison.Ordinal))
+        {
+            return 3;
+        }
+
+        int shorterLength = Math.Min(expected.Length, actual.Length);
+        if (shorterLength < 4)
+        {
+            return 0;
+        }
+
+        int requiredPrefix = shorterLength <= 4 ? 4 : 5;
+        if (expected.AsSpan(0, requiredPrefix).SequenceEqual(actual.AsSpan(0, requiredPrefix)) &&
+            Math.Abs(expected.Length - actual.Length) <= 4)
+        {
+            return 2;
+        }
+
+        return TryGetAdjectiveStem(expected, out string expectedStem) &&
+               TryGetAdjectiveStem(actual, out string actualStem) &&
+               expectedStem.Length >= 4 &&
+               string.Equals(expectedStem, actualStem, StringComparison.Ordinal)
+            ? 2
+            : 0;
+    }
+
+    private static bool TryGetAdjectiveStem(string word, out string stem)
+    {
+        foreach (string ending in RussianAdjectiveEndings)
+        {
+            if (word.Length > ending.Length + 3 &&
+                word.EndsWith(ending, StringComparison.Ordinal))
+            {
+                stem = word[..^ending.Length];
+                return true;
+            }
+        }
+
+        stem = string.Empty;
+        return false;
+    }
+
     public static (RussianPastForm Form, string Stem) DetectPastForm(string word)
     {
         if (RussianMorphologyLexicon.TryGet(word, out RussianVerbFormInfo info))

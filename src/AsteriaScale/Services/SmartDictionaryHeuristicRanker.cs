@@ -299,32 +299,14 @@ internal static partial class SmartDictionaryHeuristicRanker
 
     private static string[] RussianContentTokens(string value) =>
         RussianTokenRegex()
-            .Matches(value)
-            .Select(match => match.Value.ToLowerInvariant().Replace('ё', 'е'))
+            .Matches(RussianMorphology.RemoveStressMarks(value))
+            .Select(match => RussianMorphology.NormalizeForStemComparison(match.Value))
             .Where(token => token.Length >= 3 && !RussianContextStopWords.Contains(token))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
-    private static int RussianTokenMatchScore(string candidate, string context)
-    {
-        if (candidate == context)
-        {
-            return 3;
-        }
-
-        int commonPrefix = 0;
-        int limit = Math.Min(candidate.Length, context.Length);
-        while (commonPrefix < limit && candidate[commonPrefix] == context[commonPrefix])
-        {
-            commonPrefix++;
-        }
-
-        int requiredPrefix = Math.Min(candidate.Length, context.Length) <= 4 ? 4 : 5;
-        return commonPrefix >= requiredPrefix &&
-               Math.Abs(candidate.Length - context.Length) <= 4
-            ? 2
-            : 0;
-    }
+    private static int RussianTokenMatchScore(string candidate, string context) =>
+        RussianMorphology.RussianTokenMatchScore(candidate, context);
 
     private static SmartDictionaryHeuristicSelection? SelectByPastAgreement(
         EnglishAnalysis english,

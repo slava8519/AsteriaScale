@@ -12,6 +12,19 @@ Directory.CreateDirectory(tempRoot);
 
 try
 {
+    if (args.Any(arg => string.Equals(arg, "--benchmark-only", StringComparison.OrdinalIgnoreCase)))
+    {
+        (string translationSet, string translationEngine, string? translationDump) =
+            ParseTranslationBenchmarkArguments(args);
+        await RunAsync($"Full translation benchmark ({translationEngine})", () =>
+            TranslationBenchmark.RunAsync(
+                translationSet,
+                translationEngine,
+                translationDump));
+        Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
+        return 0;
+    }
+
     await RunAsync("Preset catalog", () =>
     {
         Assert(PresetCatalog.All.Count >= 5, "Expected at least five presets.");
@@ -1173,6 +1186,12 @@ try
 
     await RunAsync("Foundry idle shutdown guard", () =>
     {
+        Assert(FoundryTranslationService.ModelId == "qwen3.5-2b-text-generic-cpu:1",
+            "The full translator must use the explicitly pinned CPU variant.");
+        Assert(FoundryTranslationService.SmartDictionaryEngineLabel.Contains(
+                "CPU-КОНТЕКСТ",
+                StringComparison.Ordinal),
+            "The smart fallback label must report the actual Qwen provider.");
         Assert(FoundryTranslationService.IsServerRunning("{\"running\":true,\"state\":\"ready\"}"),
             "A running Foundry server was not recognized.");
         Assert(!FoundryTranslationService.IsServerRunning("{\"running\":false,\"state\":\"not_running\"}"),
@@ -1240,6 +1259,122 @@ try
             "```json\n{\"translations\":[{\"id\":2,\"text\":\"Добрый вечер\"},{\"id\":5,\"text\":\"До встречи\"}]}\n```");
         Assert(translated.Count == 2 && translated[2] == "Добрый вечер" && translated[5] == "До встречи",
             "Structured screen translations were not parsed by id.");
+        AssertThrows<System.Text.Json.JsonException>(
+            () => FoundryTranslationService.ParseBatchResponse(
+                "{\"items\":[{\"id\":2,\"text\":\"Good evening\"}]}"),
+            "An echoed INPUT items array was accepted as translated output.");
+        AssertThrows<System.Text.Json.JsonException>(
+            () => FoundryTranslationService.ParseBatchResponse(
+                "{\"translations\":[{\"id\":2,\"text\":\"\"}]}"),
+            "An empty batch translation was accepted.");
+        return Task.CompletedTask;
+    });
+
+    await RunAsync("Translation scaffold prompt and fidelity guard", () =>
+    {
+        string emptyPrompt = FoundryTranslationService.BuildTranslationPrompt(
+            "Please wait.",
+            TranslationScaffold.Empty);
+        Assert(emptyPrompt ==
+               "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n" +
+               "Реплика: Please wait.",
+            $"The empty scaffold prompt changed unexpectedly: {emptyPrompt}");
+        Assert(!emptyPrompt.Contains("Обязательная терминология", StringComparison.Ordinal),
+            "An empty scaffold must omit the terminology section entirely.");
+
+        TranslationScaffold full = new(
+            [
+                new ScaffoldTerm("on the verge of", "на гра\u0301ни", 0.995),
+                new ScaffoldTerm("Yuki", "Юки", 1)
+            ],
+            ExactSentenceTranslation: null,
+            ProperNames: ["Yuki"]);
+        string fullPrompt = FoundryTranslationService.BuildTranslationPrompt(
+            "Yuki was on the verge of tears.",
+            full);
+        Assert(fullPrompt.Contains(
+                   "Обязательная терминология:\n- on the verge of → на грани\n- Yuki → Юки\n",
+                   StringComparison.Ordinal) &&
+               fullPrompt.EndsWith(
+                   "Реплика: Yuki was on the verge of tears.",
+                   StringComparison.Ordinal),
+            $"The full scaffold prompt does not match the roadmap template: {fullPrompt}");
+
+        string retryPrompt = FoundryTranslationService.BuildTranslationPrompt(
+            "Yuki was on the verge of tears.",
+            full,
+            [full.Terms[1]],
+            "Она была на грани слёз.");
+        Assert(retryPrompt.Contains(
+                   "В прошлом переводе термин «Yuki» передан неверно. Обязательно используй «Юки».",
+                   StringComparison.Ordinal) &&
+               retryPrompt.Contains("Переведи заново.", StringComparison.Ordinal) &&
+               retryPrompt.Contains("- Yuki → Юки", StringComparison.Ordinal) &&
+               !retryPrompt.Contains("Она была на грани", StringComparison.Ordinal),
+            "The single semantic retry did not reinforce the violated term.");
+
+        FoundryTranslationService.BatchItem[] batch =
+        [
+            new(3, "Yuki waited.", full, "cache-3"),
+            new(7, "Please wait.", TranslationScaffold.Empty, "cache-7")
+        ];
+        string batchPrompt = FoundryTranslationService.BuildBatchTranslationPrompt(batch);
+        Assert(batchPrompt.Contains(
+                   "\"id\":3,\"text\":\"Yuki waited.\",\"terminology\":[",
+                   StringComparison.Ordinal) &&
+               batchPrompt.Contains("\"source\":\"Yuki\",\"translation\":\"Юки\"",
+                   StringComparison.Ordinal) &&
+               batchPrompt.Contains("\"id\":7,\"text\":\"Please wait.\"}",
+                   StringComparison.Ordinal),
+            $"Batch terminology was not associated with its own id: {batchPrompt}");
+
+        Assert(SenseFidelityGuard.FindMissingTerms("Юки была на грани слёз.", full.Terms).Count == 0,
+            "Short names, stress marks and inflected glossary stems must validate.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Она выбрала лёгкое платье.",
+                [new ScaffoldTerm("light", "лёгкий", 1)]).Count == 0,
+            "Russian adjective endings must not trigger a false semantic retry.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Без Анны мы не начнём.",
+                [new ScaffoldTerm("Anna", "Анна", 1)]).Count == 0,
+            "A short proper name must tolerate Russian case inflection.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Я не видел кота.",
+                [new ScaffoldTerm("cat", "кот", 1)]).Count == 0,
+            "A three-letter noun must tolerate Russian case inflection.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Который из них?",
+                [new ScaffoldTerm("cat", "кот", 1)]).Count == 1,
+            "A short glossary word must not match inside a longer unrelated token.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Котёл уже кипит.",
+                [new ScaffoldTerm("cat", "кот", 1)]).Count == 1,
+            "A shared three-letter prefix alone must not satisfy a glossary term.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Высота пола изменилась.",
+                [new ScaffoldTerm("field", "поле", 1)]).Count == 1,
+            "Different short nominal paradigms must not be treated as one lexeme.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Совсем другой перевод.",
+                [new ScaffoldTerm("uncertain", "термин", 0.89)]).Count == 0,
+            "Terms below the frozen confidence floor must not trigger a retry.");
+        string cleanedEcho = FoundryTranslationService.CleanModelOutput(
+            "В прошлом переводе термин «ceremony» передан неверно. " +
+            "Обязательная терминология: - ceremony → церемония " +
+            "Реплика: Церемония начнётся ровно в полдень.");
+        Assert(cleanedEcho == "Церемония начнётся ровно в полдень.",
+            $"A retry prompt echo leaked into the visible translation: {cleanedEcho}");
+        string cleanedFullEcho = FoundryTranslationService.CleanModelOutput(
+            "В прошлом переводе термин «Yuki» передан неверно. " +
+            "Обязательная терминология: - Yuki → Юки " +
+            "Реплика: Yuki waited. Перевод: Юки ждала.",
+            "Yuki waited.");
+        Assert(cleanedFullEcho == "Юки ждала.",
+            $"An echoed source and output marker leaked into the visible translation: {cleanedFullEcho}");
+        Assert(FoundryTranslationService.CleanModelOutput(
+                   "Вот перевод:",
+                   "Here is the translation:") == "Вот перевод:",
+            "A legitimate translation containing an output-marker word was truncated.");
         return Task.CompletedTask;
     });
 
@@ -2365,23 +2500,13 @@ try
         string.Equals(arg, "--translation-benchmark", StringComparison.OrdinalIgnoreCase));
     if (translationBenchmarkArgument >= 0)
     {
-        Assert(args.Length > translationBenchmarkArgument + 1,
-            "Usage: --translation-benchmark <set.json> [engine] [--dump <file>]");
-        string translationSet = args[translationBenchmarkArgument + 1];
-        string translationEngine =
-            args.Length > translationBenchmarkArgument + 2 &&
-            !args[translationBenchmarkArgument + 2].StartsWith("--", StringComparison.Ordinal)
-                ? args[translationBenchmarkArgument + 2]
-                : "qwen";
-        int translationDumpArgument = Array.FindIndex(args, arg =>
-            string.Equals(arg, "--dump", StringComparison.OrdinalIgnoreCase));
+        (string translationSet, string translationEngine, string? translationDump) =
+            ParseTranslationBenchmarkArguments(args);
         await RunAsync($"Full translation benchmark ({translationEngine})", () =>
             TranslationBenchmark.RunAsync(
                 translationSet,
                 translationEngine,
-                translationDumpArgument >= 0 && args.Length > translationDumpArgument + 1
-                    ? args[translationDumpArgument + 1]
-                    : null));
+                translationDump));
     }
 
     int rankerBenchmarkArgument = Array.FindIndex(args, arg =>
@@ -2482,12 +2607,99 @@ async Task RunAsync(string name, Func<Task> test)
     Console.WriteLine("ok  " + name);
 }
 
+static (string SetPath, string Engine, string? DumpPath) ParseTranslationBenchmarkArguments(
+    string[] arguments)
+{
+    const string usage =
+        "Usage: --translation-benchmark <set.json> [engine] [--dump <file>] [--benchmark-only]";
+    int benchmarkArgument = -1;
+    for (int index = 0; index < arguments.Length; index++)
+    {
+        if (!string.Equals(
+                arguments[index],
+                "--translation-benchmark",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (benchmarkArgument >= 0)
+        {
+            throw new InvalidOperationException(
+                "--translation-benchmark may be specified only once. " + usage);
+        }
+
+        benchmarkArgument = index;
+    }
+
+    if (benchmarkArgument < 0 ||
+        benchmarkArgument + 1 >= arguments.Length ||
+        string.IsNullOrWhiteSpace(arguments[benchmarkArgument + 1]) ||
+        arguments[benchmarkArgument + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException(usage);
+    }
+
+    string setPath = arguments[benchmarkArgument + 1];
+    string engine =
+        benchmarkArgument + 2 < arguments.Length &&
+        !arguments[benchmarkArgument + 2].StartsWith("--", StringComparison.Ordinal)
+            ? arguments[benchmarkArgument + 2]
+            : "qwen";
+
+    int dumpArgument = -1;
+    for (int index = 0; index < arguments.Length; index++)
+    {
+        if (!string.Equals(arguments[index], "--dump", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (dumpArgument >= 0)
+        {
+            throw new InvalidOperationException("--dump may be specified only once. " + usage);
+        }
+
+        dumpArgument = index;
+    }
+
+    string? dumpPath = null;
+    if (dumpArgument >= 0)
+    {
+        if (dumpArgument + 1 >= arguments.Length ||
+            string.IsNullOrWhiteSpace(arguments[dumpArgument + 1]) ||
+            arguments[dumpArgument + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("--dump requires a file path. " + usage);
+        }
+
+        dumpPath = arguments[dumpArgument + 1];
+    }
+
+    return (setPath, engine, dumpPath);
+}
+
 static void Assert(bool condition, string message)
 {
     if (!condition)
     {
         throw new InvalidOperationException(message);
     }
+}
+
+static void AssertThrows<TException>(Action action, string message)
+    where TException : Exception
+{
+    try
+    {
+        action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
 }
 
 static bool IsProcessRunning(int processId)

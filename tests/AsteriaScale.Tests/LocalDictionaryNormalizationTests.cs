@@ -192,6 +192,244 @@ internal static class LocalDictionaryNormalizationTests
                   chunk.StartsWith("длинное-значение-", StringComparison.Ordinal) &&
                   chunk.EndsWith("-внутри", StringComparison.Ordinal)),
             $"A long meaning list must truncate at a boundary without partial candidates: {truncated.Translation}");
+
+        await VerifyTranslationScaffoldAsync(root);
+    }
+
+    private static async Task VerifyTranslationScaffoldAsync(string root)
+    {
+        string scaffoldRoot = Path.Combine(root, "translation-scaffold");
+        string bundled = Path.Combine(scaffoldRoot, "bundled");
+        string user = Path.Combine(scaffoldRoot, "user");
+        Directory.CreateDirectory(bundled);
+        Directory.CreateDirectory(user);
+
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            [
+                "on the verge of\tна грани",
+                "lantern\tфонарь",
+                "bank\tбанк; берег",
+                "lock\tзакрыть; закрывать",
+                "shrine\tрака",
+                "cipher\tшифр English",
+                "party\tпартия; вечеринка",
+                "alpha\tальфа",
+                "beta\tбета",
+                "gamma\tгамма",
+                "delta\tдельта",
+                "epsilon\tэпсилон",
+                "zeta\tдзета",
+                "eta\tэта",
+                "theta\tтета",
+                "iota\tйота",
+                "kappa\tкаппа",
+                "lambda\tлямбда",
+                "mu\tмю"
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-dialogue.tsv"),
+            [
+                "Alice stood on the verge of collapse\tАлиса стояла на грани краха",
+                "Alice lost the lantern\tОна потеряла фонарь",
+                "They waited by the gate\tОни танцевали у ворот",
+                "Abraham had eight children one of them was called Isaak\tУ Авраама было восемь детей; одного из них звали Исаак.",
+                "The event starts at 1 p.m.\tСобытие начинается в час дня.",
+                "The event starts at 9 p.m.\tСобытие начинается в девять вечера.",
+                "Alice stood on the verge of alpha alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\tАлиса стояла на грани: альфа бета гамма дельта эпсилон дзета эта тета йота каппа."
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-vn.tsv"),
+            [
+                "lantern\tфонарь",
+                "on the verge of\tна грани",
+                "party was a total blast\tвечеринка",
+                "alpha\tальфа",
+                "beta\tбета",
+                "gamma\tгамма",
+                "delta\tдельта",
+                "epsilon\tэпсилон",
+                "zeta\tдзета",
+                "eta\tэта",
+                "theta\tтета",
+                "iota\tйота",
+                "kappa\tкаппа",
+                "lambda\tлямбда",
+                "mu\tмю"
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-senses.tsv"),
+            [
+                "lantern\tфонарь\ta portable light protected by a case\tcommon\tnoun",
+                "bank\tбанк\ta financial institution\tcommon\tnoun",
+                "bank\tберег\tland alongside a river\tcommon\tnoun",
+                "lock\tзакрыть\tto make something closed\tcommon\tverb",
+                "lock\tзакрывать\tto make something closed repeatedly\tcommon\tverb"
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "jpn-rus.tsv"),
+            ["鳥\tптица"]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(user, "eng-rus-user.tsv"),
+            [
+                "Alice\tАлиса",
+                "wait\tожидать",
+                "do it\tсделать это"
+            ]);
+
+        LocalDictionaryService dictionary = new(bundled, user);
+        TranslationScaffoldBuilder builder = new(dictionary);
+
+        const string exactSource = "Alice stood on the verge of collapse.";
+        TranslationScaffold exact = await builder.BuildAsync(exactSource);
+        Check(exact.ExactSentenceTranslation == "Алиса стояла на грани краха",
+            $"An exact dialogue translation was not retained: {exact.ExactSentenceTranslation}");
+        Check(exact.Terms.Any(term =>
+                  term.Source == "on the verge of" &&
+                  term.Translation == "на грани" &&
+                  term.Confidence >= TranslationScaffoldBuilder.MinimumConfidence),
+            "The deterministic scaffold omitted a multi-word expression.");
+        Check(exact.Terms.Any(term =>
+                  term.Source == "Alice" && term.Translation == "Алиса") &&
+              exact.ProperNames.SequenceEqual(["Alice"], StringComparer.Ordinal),
+            "A capitalized user-dictionary key was not preserved as a proper name term.");
+
+        TranslationScaffold semicolonExact = await builder.BuildAsync(
+            "Abraham had eight children; one of them was called Isaak.");
+        Check(semicolonExact.ExactSentenceTranslation ==
+              "У Авраама было восемь детей; одного из них звали Исаак.",
+            $"An internal semicolon truncated an exact dialogue sentence: {semicolonExact.ExactSentenceTranslation}");
+
+        TranslationScaffold numericExact = await builder.BuildAsync(
+            "The event starts at 9 p.m.");
+        Check(numericExact.ExactSentenceTranslation is null,
+            "A digit-stripping dialogue-key collision was allowed to bypass the model.");
+
+        TranslationScaffold inflectedUser = await builder.BuildAsync(
+            "They waited by the gate.");
+        Check(inflectedUser.ExactSentenceTranslation is null &&
+              inflectedUser.Terms.Any(term =>
+                  term.Source == "waited" && term.Translation == "ожидать"),
+            "An inflected user lemma lost its provenance or was overridden by dialogue data.");
+
+        TranslationScaffold stopwordPhrase = await builder.BuildAsync("Please do it.");
+        Check(stopwordPhrase.Terms.Any(term =>
+                term.Source == "do it" && term.Translation == "сделать это"),
+            "A user phrase made entirely of stopwords was skipped before dictionary lookup.");
+
+        TranslationScaffold contextualParty = await builder.BuildAsync(
+            "That party was a total blast.");
+        Check(contextualParty.Terms.Any(term =>
+                term.Source == "party was a total blast" &&
+                term.Translation == "вечеринка"),
+            "A context-specific curated phrase did not enter the scaffold.");
+        TranslationScaffold politicalParty = await builder.BuildAsync(
+            "The political party won the election.");
+        Check(politicalParty.Terms.All(term => term.Translation != "вечеринка"),
+            "A context-specific party sense leaked into political context.");
+
+        TranslationScaffold uniqueSense = await builder.BuildAsync("The lantern glowed.");
+        Check(uniqueSense.Terms is [{ Source: "lantern", Translation: "фонарь" }],
+            "A trusted single deterministic sense did not enter the scaffold.");
+
+        TranslationScaffold unresolved = await builder.BuildAsync("I saw the bank.");
+        Check(unresolved.Terms.Count == 0,
+            "An unresolved multi-sense dictionary entry must be omitted.");
+
+        bool neuralCalled = false;
+        TranslationScaffoldBuilder neuralBuilder = new(
+            dictionary,
+            (request, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                neuralCalled = true;
+                Check(request.Plan.CandidateGroupIds.All(groupId =>
+                        request.Plan.Outcomes.Any(outcome => outcome.GroupId == groupId)),
+                    "Neural scaffold candidate GroupIds lost their outcome mapping.");
+                return Task.FromResult<SmartDictionaryRankerOutcome?>(
+                    request.Plan.Outcomes.Single(outcome => outcome.Translation == "берег"));
+            });
+        TranslationScaffold neural = await neuralBuilder.BuildAsync(
+            "I saw the bank.",
+            useNeuralRanker: true);
+        Check(neuralCalled && neural.Terms.Any(term =>
+                  term.Source == "bank" &&
+                  term.Translation == "берег" &&
+                  term.Confidence == TranslationScaffoldBuilder.MinimumConfidence),
+            "An accepted margin-only neural sense was not mapped into the scaffold.");
+
+        int failingNeuralCalls = 0;
+        TranslationScaffoldBuilder failingNeuralBuilder = new(
+            dictionary,
+            (_, _) =>
+            {
+                failingNeuralCalls++;
+                return Task.FromException<SmartDictionaryRankerOutcome?>(
+                    new InvalidOperationException("synthetic neural scaffold failure"));
+            });
+        TranslationScaffold neuralFailedOpen = await failingNeuralBuilder.BuildAsync(
+            "Alice stood on the verge of the bank and locked the gate.",
+            useNeuralRanker: true);
+        Check(failingNeuralCalls == 1 &&
+              neuralFailedOpen.Terms.Any(term => term.Source == "Alice") &&
+              neuralFailedOpen.Terms.Any(term => term.Source == "on the verge of") &&
+              neuralFailedOpen.Terms.All(term => term.Source is not "bank" and not "locked"),
+            "A neural failure retried within one sentence or discarded deterministic terms.");
+
+        TranslationScaffold lowConfidenceHeuristic = await builder.BuildAsync(
+            "He locked the door.");
+        Check(lowConfidenceHeuristic.Terms.All(term => term.Source != "locked"),
+            "A 0.90-0.94 hover heuristic became a mandatory model constraint.");
+
+        TranslationScaffold untrustedSingle = await builder.BuildAsync("A shrine stood there.");
+        Check(untrustedSingle.Terms.Count == 0,
+            "A lone broad-dictionary value must remain below the mandatory-confidence floor.");
+
+        TranslationScaffold unsafeRussian = await builder.BuildAsync("The cipher vanished.");
+        Check(unsafeRussian.Terms.Count == 0,
+            "A mixed English/Russian dictionary value entered a mandatory scaffold.");
+
+        TranslationScaffold conflictingDialogue =
+            await builder.BuildAsync("Alice lost the lantern.");
+        Check(conflictingDialogue.ExactSentenceTranslation is null &&
+              conflictingDialogue.Terms.Any(term => term.Source == "Alice"),
+            "A low-priority dialogue row overrode an authoritative user term.");
+
+        const string cappedSource =
+            "Alice stood on the verge of alpha alpha beta gamma delta epsilon zeta eta " +
+            "theta iota kappa lambda mu.";
+        TranslationScaffold capped = await builder.BuildAsync(cappedSource);
+        Check(capped.Terms.Count == TranslationScaffoldBuilder.MaximumTermCount,
+            $"The scaffold cap changed: {capped.Terms.Count}");
+        Check(capped.Terms[0].Source == "on the verge of" &&
+              capped.Terms[1].Source == "Alice",
+            "Scaffold priority must be MWE, then user proper names, then words.");
+        Check(capped.Terms.Select(term => LocalDictionaryService.NormalizeEnglish(term.Source))
+                  .Distinct(StringComparer.Ordinal).Count() == capped.Terms.Count &&
+              capped.Terms.Count(term => term.Source == "alpha") == 1,
+            "Repeated lookups were not deduplicated stably before applying the cap.");
+        Check(capped.ExactSentenceTranslation is null,
+            "Exact dialogue bypass ignored an authoritative term beyond the twelve-term prompt cap.");
+
+        string missingBundled = Path.Combine(scaffoldRoot, "missing-bundled");
+        string missingUser = Path.Combine(scaffoldRoot, "missing-user");
+        TranslationScaffoldBuilder failingBuilder = new(
+            new LocalDictionaryService(missingBundled, missingUser));
+        TranslationScaffold failedOpen = await failingBuilder.BuildAsync("A lantern glowed.");
+        Check(ReferenceEquals(failedOpen, TranslationScaffold.Empty),
+            "A dictionary failure did not degrade to the empty scaffold.");
+
+        using CancellationTokenSource canceled = new();
+        canceled.Cancel();
+        try
+        {
+            await builder.BuildAsync("A lantern glowed.", canceled.Token);
+            throw new InvalidOperationException("Scaffold cancellation was swallowed.");
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the sole exception that must leave the builder.
+        }
     }
 
     private static void VerifyGeneratorParityContract()

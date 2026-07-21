@@ -2,16 +2,26 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace AsteriaScale.Services;
 
 public sealed class FoundryTranslationService : IAsyncDisposable
 {
-    public const string ModelId = "qwen3.5-2b-text-generic-gpu:3";
+    public const string ModelId = "qwen3.5-2b-text-generic-cpu:1";
     public const string EngineLabel = "NPU OCR  •  QWEN LOCAL";
-    public const string SmartDictionaryEngineLabel = "NPU OCR  •  GPU-КОНТЕКСТ";
+    public const string SmartDictionaryEngineLabel = "NPU OCR  •  CPU-КОНТЕКСТ";
+
+    private static readonly JsonSerializerOptions BatchPromptJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     private readonly HttpClient _httpClient = new(new SocketsHttpHandler
     {
@@ -28,23 +38,56 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         new(StringComparer.Ordinal);
     private readonly LocalDictionaryService _dictionary;
     private readonly ResidualEnglishTranslationGuard _translationGuard;
+    private readonly TranslationScaffoldBuilder? _scaffoldBuilder;
+    private readonly Action<TranslationScaffoldDiagnostics>? _diagnosticSink;
     private readonly bool _ownsDictionary;
+    private readonly bool _useTranslationScaffold;
     private Uri? _endpoint;
     private string? _foundryPath;
 
     public FoundryTranslationService(LocalDictionaryService? dictionary = null)
+        : this(dictionary, useTranslationScaffold: true, diagnosticSink: null)
+    {
+    }
+
+    internal FoundryTranslationService(
+        LocalDictionaryService? dictionary,
+        bool useTranslationScaffold,
+        Action<TranslationScaffoldDiagnostics>? diagnosticSink = null,
+        TranslationScaffoldNeuralRanker? neuralRanker = null)
     {
         _dictionary = dictionary ?? new LocalDictionaryService();
         _ownsDictionary = dictionary is null;
+        _useTranslationScaffold = useTranslationScaffold;
+        _diagnosticSink = diagnosticSink;
         _translationGuard = new ResidualEnglishTranslationGuard(_dictionary);
+        _scaffoldBuilder = useTranslationScaffold
+            ? new TranslationScaffoldBuilder(_dictionary, neuralRanker)
+            : null;
     }
 
     public async Task WarmUpAsync(CancellationToken cancellationToken = default)
     {
+        if (_useTranslationScaffold)
+        {
+            await Task.WhenAll(
+                EnsureInitializedAsync(cancellationToken),
+                _dictionary.LoadSenseMetadataAsync(cancellationToken));
+            return;
+        }
+
         await EnsureInitializedAsync(cancellationToken);
     }
 
-    public async Task<string> TranslateToRussianAsync(string source, CancellationToken cancellationToken)
+    public Task<string> TranslateToRussianAsync(
+        string source,
+        CancellationToken cancellationToken) =>
+        TranslateToRussianAsync(source, useNeuralRanker: false, cancellationToken);
+
+    internal async Task<string> TranslateToRussianAsync(
+        string source,
+        bool useNeuralRanker,
+        CancellationToken cancellationToken)
     {
         source = Normalize(source);
         if (source.Length == 0 || IsPredominantlyCyrillic(source))
@@ -52,39 +95,43 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             return source;
         }
 
-        if (_cache.TryGetValue(source, out string? cached))
+        TranslationScaffold scaffold = await BuildScaffoldFailOpenAsync(
+            source,
+            useNeuralRanker,
+            cancellationToken);
+        string cacheKey = CreateTranslationCacheKey(source, scaffold);
+        if (_cache.TryGetValue(cacheKey, out string? cached))
         {
+            ReportCachedDiagnostics(source, scaffold, cached);
             return cached;
         }
 
+        if (!string.IsNullOrWhiteSpace(scaffold.ExactSentenceTranslation))
+        {
+            string exact = CleanTrustedExactOutput(scaffold.ExactSentenceTranslation);
+            IReadOnlyList<ScaffoldTerm> missing = FindMissingTermsFailOpen(exact, scaffold.Terms);
+            if (exact.Length > 0 && missing.Count == 0)
+            {
+                ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+                    exactSentenceUsed: true, initialViolationCount: 0,
+                    retryIssued: false, finalViolationCount: 0);
+                CacheTranslation(cacheKey, exact);
+                return exact;
+            }
+        }
+
         await EnsureInitializedAsync(cancellationToken);
-        string translation = string.Empty;
-        for (int attempt = 0; attempt < 3; attempt++)
+        PreparedTranslationResult result = await TranslatePreparedAsync(
+            source,
+            scaffold,
+            initialModelOutput: null,
+            cancellationToken);
+        if (result.Cacheable)
         {
-            try
-            {
-                translation = await RequestTranslationAsync(source, cancellationToken);
-                break;
-            }
-            catch (HttpRequestException) when (attempt < 2)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), cancellationToken);
-            }
+            CacheTranslation(cacheKey, result.Translation);
         }
 
-        translation = CleanModelOutput(translation);
-        translation = await ProtectTranslationAsync(source, translation, cancellationToken);
-        if (translation.Length > 0)
-        {
-            if (_cache.Count > 256)
-            {
-                _cache.Clear();
-            }
-
-            _cache[source] = translation;
-        }
-
-        return translation;
+        return result.Translation;
     }
 
     public async Task<SmartDictionarySelection> SelectDictionaryMeaningAsync(
@@ -161,13 +208,39 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             {
                 translations[index] = source;
             }
-            else if (_cache.TryGetValue(source, out string? cached))
-            {
-                translations[index] = cached;
-            }
             else
             {
-                pending.Add(new BatchItem(index, source));
+                TranslationScaffold scaffold = await BuildScaffoldFailOpenAsync(
+                    source,
+                    useNeuralRanker: false,
+                    cancellationToken);
+                string cacheKey = CreateTranslationCacheKey(source, scaffold);
+                if (_cache.TryGetValue(cacheKey, out string? cached))
+                {
+                    translations[index] = cached;
+                    ReportCachedDiagnostics(source, scaffold, cached);
+                }
+                else if (!string.IsNullOrWhiteSpace(scaffold.ExactSentenceTranslation))
+                {
+                    string exact = CleanTrustedExactOutput(scaffold.ExactSentenceTranslation);
+                    IReadOnlyList<ScaffoldTerm> missing = FindMissingTermsFailOpen(exact, scaffold.Terms);
+                    if (exact.Length > 0 && missing.Count == 0)
+                    {
+                        ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+                            exactSentenceUsed: true, initialViolationCount: 0,
+                            retryIssued: false, finalViolationCount: 0);
+                        translations[index] = exact;
+                        CacheTranslation(cacheKey, exact);
+                    }
+                    else
+                    {
+                        pending.Add(new BatchItem(index, source, scaffold, cacheKey));
+                    }
+                }
+                else
+                {
+                    pending.Add(new BatchItem(index, source, scaffold, cacheKey));
+                }
             }
         }
 
@@ -192,26 +265,20 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             foreach (BatchItem item in batch)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string value = translated.TryGetValue(item.Id, out string? batchValue)
-                    ? CleanModelOutput(batchValue)
-                    : string.Empty;
-                if (value.Length == 0)
+                string? initialModelOutput = translated.TryGetValue(item.Id, out string? batchValue)
+                    ? batchValue
+                    : null;
+                PreparedTranslationResult result = await TranslatePreparedAsync(
+                    item.Source,
+                    item.Scaffold,
+                    initialModelOutput,
+                    cancellationToken);
+                translations[item.Id] = result.Translation;
+                if (result.Cacheable)
                 {
-                    value = CleanModelOutput(await RequestTranslationAsync(item.Source, cancellationToken));
-                }
-
-                value = await ProtectTranslationAsync(item.Source, value, cancellationToken);
-                translations[item.Id] = value;
-                if (value.Length > 0)
-                {
-                    _cache[item.Source] = value;
+                    CacheTranslation(item.CacheKey, result.Translation);
                 }
             }
-        }
-
-        if (_cache.Count > 256)
-        {
-            _cache.Clear();
         }
 
         return translations;
@@ -349,40 +416,208 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         }
     }
 
-    private async Task<string> RequestTranslationAsync(string source, CancellationToken cancellationToken)
-    {
-        string prompt = "Translate the text between <text> tags into natural Russian. " +
-                        "Preserve its exact meaning, names, punctuation, emotion and level of politeness. " +
-                        "Do not answer or continue the text. Return only the Russian translation without quotes or notes.\n" +
-                        "<text>" + source + "</text>";
-        return await SendPromptAsync(prompt, 420, cancellationToken);
-    }
-
-    private async Task<IReadOnlyDictionary<int, string>> RequestBatchTranslationAsync(
-        IReadOnlyList<BatchItem> batch,
+    private async Task<PreparedTranslationResult> TranslatePreparedAsync(
+        string source,
+        TranslationScaffold scaffold,
+        string? initialModelOutput,
         CancellationToken cancellationToken)
     {
-        string input = JsonSerializer.Serialize(new
+        string firstRaw = initialModelOutput ??
+            await RequestSingleWithTransportRetriesAsync(
+                source,
+                scaffold,
+                violatedTerms: null,
+                previousTranslation: null,
+                cancellationToken);
+        string first = await CleanAndProtectAsync(source, firstRaw, cancellationToken);
+        IReadOnlyList<ScaffoldTerm> initialMissing = FindMissingTermsFailOpen(first, scaffold.Terms);
+        if (initialMissing.Count == 0)
         {
-            items = batch.Select(item => new { id = item.Id, text = item.Source })
-        });
-        string prompt =
-            "Translate every JSON item into natural Russian. Preserve names, meaning, punctuation, emotion and politeness. " +
-            "Do not merge, omit, answer or continue any item. Return JSON only in exactly this form: " +
-            "{\"translations\":[{\"id\":0,\"text\":\"Russian translation\"}]}. " +
-            "Keep each input id unchanged.\nINPUT:\n" + input;
+            ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+                exactSentenceUsed: false, initialViolationCount: 0,
+                retryIssued: false, finalViolationCount: 0);
+            return new PreparedTranslationResult(first, Cacheable: first.Length > 0);
+        }
+
+        string retry;
+        try
+        {
+            string retryRaw = await RequestSingleWithTransportRetriesAsync(
+                source,
+                scaffold,
+                initialMissing,
+                first,
+                cancellationToken);
+            retry = await CleanAndProtectAsync(source, retryRaw, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            HoverTranslationService.LogError(exception);
+            ReportDiagnostics(source, scaffold.Terms,
+                scaffold.Terms.Count - initialMissing.Count,
+                exactSentenceUsed: false,
+                initialViolationCount: initialMissing.Count,
+                retryIssued: true,
+                finalViolationCount: initialMissing.Count);
+            return new PreparedTranslationResult(first, Cacheable: false);
+        }
+
+        IReadOnlyList<ScaffoldTerm> finalMissing = FindMissingTermsFailOpen(retry, scaffold.Terms);
+        string selected = finalMissing.Count <= initialMissing.Count ? retry : first;
+        int selectedMissingCount = Math.Min(finalMissing.Count, initialMissing.Count);
+        ReportDiagnostics(source, scaffold.Terms,
+            scaffold.Terms.Count - selectedMissingCount,
+            exactSentenceUsed: false,
+            initialViolationCount: initialMissing.Count,
+            retryIssued: true,
+            finalViolationCount: selectedMissingCount);
+        if (selectedMissingCount > 0)
+        {
+            HoverTranslationService.LogError(new InvalidOperationException(
+                $"Qwen translation violated {selectedMissingCount} glossary term(s) after one retry. " +
+                $"Source: {source}"));
+        }
+
+        return new PreparedTranslationResult(
+            selected,
+            Cacheable: selected.Length > 0 && selectedMissingCount == 0);
+    }
+
+    private async Task<string> RequestSingleWithTransportRetriesAsync(
+        string source,
+        TranslationScaffold scaffold,
+        IReadOnlyList<ScaffoldTerm>? violatedTerms,
+        string? previousTranslation,
+        CancellationToken cancellationToken)
+    {
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                string response = await SendPromptAsync(prompt, 1400, cancellationToken);
-                return ParseBatchResponse(response);
+                string prompt = _useTranslationScaffold
+                    ? BuildTranslationPrompt(source, scaffold, violatedTerms, previousTranslation)
+                    : BuildLegacyTranslationPrompt(source);
+                return await SendPromptAsync(prompt, 420, cancellationToken);
             }
             catch (HttpRequestException) when (attempt < 2)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), cancellationToken);
             }
         }
+    }
+
+    internal static string BuildTranslationPrompt(
+        string source,
+        TranslationScaffold scaffold,
+        IReadOnlyList<ScaffoldTerm>? violatedTerms = null,
+        string? previousTranslation = null)
+    {
+        ArgumentNullException.ThrowIfNull(scaffold);
+        _ = previousTranslation; // Echoing the failed text anchors small models on the same mistake.
+        StringBuilder prompt = new(
+            "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n");
+        if (violatedTerms is { Count: > 0 })
+        {
+            foreach (ScaffoldTerm term in violatedTerms)
+            {
+                prompt.Append("В прошлом переводе термин «")
+                    .Append(NormalizePromptLine(term.Source))
+                    .Append("» передан неверно. Обязательно используй «")
+                    .Append(NormalizePromptLine(term.Translation))
+                    .Append("».\n");
+            }
+
+            prompt.Append(
+                "Переведи заново. Не заменяй обязательные русские слова синонимами " +
+                "и не меняй их написание; разрешено только грамматическое склонение.\n");
+        }
+
+        if (scaffold.Terms.Count > 0)
+        {
+            prompt.Append("Обязательная терминология:\n");
+            foreach (ScaffoldTerm term in scaffold.Terms)
+            {
+                prompt.Append("- ")
+                    .Append(NormalizePromptLine(term.Source))
+                    .Append(" → ")
+                    .Append(NormalizePromptLine(term.Translation))
+                    .Append('\n');
+            }
+        }
+
+        prompt.Append("Реплика: ").Append(NormalizePromptLine(source));
+        return prompt.ToString();
+    }
+
+    private async Task<IReadOnlyDictionary<int, string>> RequestBatchTranslationAsync(
+        IReadOnlyList<BatchItem> batch,
+        CancellationToken cancellationToken)
+    {
+        string prompt = _useTranslationScaffold
+            ? BuildBatchTranslationPrompt(batch)
+            : BuildLegacyBatchTranslationPrompt(batch);
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                string response = await SendPromptAsync(prompt, 1400, cancellationToken);
+                IReadOnlyDictionary<int, string> parsed = ParseBatchResponse(response);
+                if (parsed.Count != batch.Count ||
+                    batch.Any(item => !parsed.ContainsKey(item.Id)))
+                {
+                    throw new JsonException(
+                        "The translation model did not return exactly the requested ids.");
+                }
+
+                return parsed;
+            }
+            catch (HttpRequestException) when (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(300 * (attempt + 1)), cancellationToken);
+            }
+        }
+    }
+
+    internal static string BuildBatchTranslationPrompt(IReadOnlyList<BatchItem> batch)
+    {
+        BatchPromptInput input = new(batch.Select(item => new BatchPromptItem(
+            item.Id,
+            item.Source,
+            item.Scaffold.Terms.Count == 0
+                ? null
+                : item.Scaffold.Terms.Select(term => new BatchPromptTerm(
+                    NormalizePromptLine(term.Source),
+                    NormalizePromptLine(term.Translation))).ToArray())).ToArray());
+        string json = JsonSerializer.Serialize(input, BatchPromptJsonOptions);
+        return
+            "Переведи каждую реплику из JSON на естественный русский. Только перевод, без пояснений. " +
+            "Поле terminology содержит обязательные термины только для реплики с тем же id. " +
+            "Не объединяй и не пропускай реплики. Верни только JSON строго в форме: " +
+            "{\"translations\":[{\"id\":0,\"text\":\"русский перевод\"}]}. " +
+            "Сохрани каждый id.\nINPUT:\n" + json;
+    }
+
+    private static string BuildLegacyTranslationPrompt(string source) =>
+        "Translate the text between <text> tags into natural Russian. " +
+        "Preserve its exact meaning, names, punctuation, emotion and level of politeness. " +
+        "Do not answer or continue the text. Return only the Russian translation without quotes or notes.\n" +
+        "<text>" + source + "</text>";
+
+    private static string BuildLegacyBatchTranslationPrompt(IReadOnlyList<BatchItem> batch)
+    {
+        string input = JsonSerializer.Serialize(new
+        {
+            items = batch.Select(item => new { id = item.Id, text = item.Source })
+        });
+        return
+            "Translate every JSON item into natural Russian. Preserve names, meaning, punctuation, emotion and politeness. " +
+            "Do not merge, omit, answer or continue any item. Return JSON only in exactly this form: " +
+            "{\"translations\":[{\"id\":0,\"text\":\"Russian translation\"}]}. " +
+            "Keep each input id unchanged.\nINPUT:\n" + input;
     }
 
     private async Task<string> SendPromptAsync(
@@ -439,10 +674,9 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
         JsonNode root = JsonNode.Parse(cleaned)
             ?? throw new JsonException("The translation model returned empty JSON.");
-        JsonArray? values = root as JsonArray ?? root["translations"] as JsonArray ?? root["items"] as JsonArray;
-        if (values is null)
+        if (root is not JsonObject rootObject || rootObject["translations"] is not JsonArray values)
         {
-            throw new JsonException("The translation model returned no translation array.");
+            throw new JsonException("The translation model returned no valid translations array.");
         }
 
         Dictionary<int, string> result = [];
@@ -450,14 +684,38 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         {
             if (node is not JsonObject item)
             {
-                continue;
+                throw new JsonException("The translation model returned a malformed translation entry.");
             }
 
-            int? id = item["id"]?.GetValue<int>();
-            string? text = item["text"]?.GetValue<string>() ?? item["translation"]?.GetValue<string>();
-            if (id is not null && !string.IsNullOrWhiteSpace(text))
+            if (item["id"] is not JsonValue idNode || !idNode.TryGetValue(out int id))
             {
-                result[id.Value] = text;
+                throw new JsonException("The translation model returned an invalid translation id.");
+            }
+
+            string? text = null;
+            if (item["text"] is JsonValue textNode &&
+                textNode.TryGetValue(out string? textValue) &&
+                !string.IsNullOrWhiteSpace(textValue))
+            {
+                text = textValue;
+            }
+
+            if (text is null &&
+                item["translation"] is JsonValue translationNode &&
+                translationNode.TryGetValue(out string? translationValue) &&
+                !string.IsNullOrWhiteSpace(translationValue))
+            {
+                text = translationValue;
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                throw new JsonException("The translation model returned an empty translation.");
+            }
+
+            if (!result.TryAdd(id, text))
+            {
+                throw new JsonException("The translation model returned a duplicate translation id.");
             }
         }
 
@@ -470,7 +728,8 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         int characters = 0;
         foreach (BatchItem item in items)
         {
-            if (current.Count > 0 && (current.Count >= 8 || characters + item.Source.Length > 2600))
+            if (current.Count > 0 &&
+                (current.Count >= 8 || characters + item.EstimatedPromptLength > 2600))
             {
                 yield return current.ToArray();
                 current.Clear();
@@ -478,7 +737,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             }
 
             current.Add(item);
-            characters += item.Source.Length;
+            characters += item.EstimatedPromptLength;
         }
 
         if (current.Count > 0)
@@ -486,6 +745,148 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             yield return current.ToArray();
         }
     }
+
+    private async Task<TranslationScaffold> BuildScaffoldFailOpenAsync(
+        string source,
+        bool useNeuralRanker,
+        CancellationToken cancellationToken)
+    {
+        if (_scaffoldBuilder is null)
+        {
+            return TranslationScaffold.Empty;
+        }
+
+        try
+        {
+            return await _scaffoldBuilder.BuildAsync(
+                source,
+                useNeuralRanker,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            HoverTranslationService.LogError(exception);
+            return TranslationScaffold.Empty;
+        }
+    }
+
+    private static IReadOnlyList<ScaffoldTerm> FindMissingTermsFailOpen(
+        string translation,
+        IReadOnlyList<ScaffoldTerm> terms)
+    {
+        try
+        {
+            return SenseFidelityGuard.FindMissingTerms(translation, terms);
+        }
+        catch (Exception exception)
+        {
+            HoverTranslationService.LogError(exception);
+            return [];
+        }
+    }
+
+    private async Task<string> CleanAndProtectAsync(
+        string source,
+        string modelOutput,
+        CancellationToken cancellationToken)
+    {
+        string cleaned = CleanModelOutput(modelOutput, source);
+        return await ProtectTranslationAsync(source, cleaned, cancellationToken);
+    }
+
+    private string CreateTranslationCacheKey(string source, TranslationScaffold scaffold)
+    {
+        if (!_useTranslationScaffold)
+        {
+            return "qwen\u001f" + source;
+        }
+
+        StringBuilder key = new("qwen-scaffold\u001f");
+        key.Append(_dictionary.VersionToken).Append('\u001f').Append(source);
+        foreach (ScaffoldTerm term in scaffold.Terms)
+        {
+            key.Append('\u001e')
+                .Append(term.Source)
+                .Append('\u001d')
+                .Append(term.Translation)
+                .Append('\u001d')
+                .Append(term.Confidence.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        key.Append('\u001f').Append(scaffold.ExactSentenceTranslation);
+        return key.ToString();
+    }
+
+    private void CacheTranslation(string cacheKey, string translation)
+    {
+        if (translation.Length == 0)
+        {
+            return;
+        }
+
+        if (_cache.Count > 256)
+        {
+            _cache.Clear();
+        }
+
+        _cache[cacheKey] = translation;
+    }
+
+    private void ReportDiagnostics(
+        string source,
+        IReadOnlyList<ScaffoldTerm> terms,
+        int satisfiedTermCount,
+        bool exactSentenceUsed,
+        int initialViolationCount,
+        bool retryIssued,
+        int finalViolationCount)
+    {
+        if (!_useTranslationScaffold || _diagnosticSink is null)
+        {
+            return;
+        }
+
+        try
+        {
+            int termCount = terms.Count;
+            _diagnosticSink(new TranslationScaffoldDiagnostics(
+                source,
+                termCount,
+                Math.Clamp(satisfiedTermCount, 0, termCount),
+                exactSentenceUsed,
+                initialViolationCount,
+                retryIssued,
+                finalViolationCount,
+                terms.ToArray()));
+        }
+        catch
+        {
+            // Benchmark diagnostics must not interfere with translation.
+        }
+    }
+
+    private void ReportCachedDiagnostics(
+        string source,
+        TranslationScaffold scaffold,
+        string cached)
+    {
+        bool exactSentenceUsed =
+            !string.IsNullOrWhiteSpace(scaffold.ExactSentenceTranslation) &&
+            string.Equals(
+                cached,
+                CleanTrustedExactOutput(scaffold.ExactSentenceTranslation),
+                StringComparison.Ordinal);
+        ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+            exactSentenceUsed, initialViolationCount: 0,
+            retryIssued: false, finalViolationCount: 0);
+    }
+
+    private static string NormalizePromptLine(string value) =>
+        Normalize(RussianMorphology.RemoveStressMarks(value));
 
     private async Task<string> RunCliAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
     {
@@ -640,17 +1041,51 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         return letters > 0 && cyrillic >= Math.Ceiling(letters * 0.7);
     }
 
-    private static string CleanModelOutput(string value)
+    internal static string CleanModelOutput(string value, string? source = null)
     {
         string cleaned = Normalize(value).Trim('"', '\'', '«', '»');
+        bool containsPromptEcho =
+            cleaned.Contains("Обязательная терминология:", StringComparison.OrdinalIgnoreCase) ||
+            cleaned.Contains("В прошлом переводе термин", StringComparison.OrdinalIgnoreCase);
+        int translationMarker = cleaned.LastIndexOf(
+            "Перевод:",
+            StringComparison.OrdinalIgnoreCase);
+        if (translationMarker == 0 || translationMarker > 0 && containsPromptEcho)
+        {
+            string afterMarker = cleaned[(translationMarker + "Перевод:".Length)..].Trim();
+            if (afterMarker.Length > 0)
+            {
+                cleaned = afterMarker;
+            }
+        }
+        else
+        {
+            int echoedReply = cleaned.LastIndexOf("Реплика:", StringComparison.OrdinalIgnoreCase);
+            if (echoedReply >= 0 && containsPromptEcho)
+            {
+                cleaned = cleaned[(echoedReply + "Реплика:".Length)..].Trim();
+                string normalizedSource = Normalize(source ?? string.Empty);
+                if (normalizedSource.Length > 0 &&
+                    cleaned.StartsWith(normalizedSource, StringComparison.Ordinal) &&
+                    (cleaned.Length == normalizedSource.Length ||
+                     char.IsWhiteSpace(cleaned[normalizedSource.Length])))
+                {
+                    cleaned = cleaned[normalizedSource.Length..].Trim();
+                }
+            }
+        }
+
         const string prefix = "Перевод:";
         if (cleaned.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
             cleaned = cleaned[prefix.Length..].Trim();
         }
 
-        return cleaned;
+        return cleaned.Trim('"', '\'', '«', '»');
     }
+
+    private static string CleanTrustedExactOutput(string value) =>
+        Normalize(value).Trim('"', '\'', '«', '»');
 
     public async ValueTask DisposeAsync()
     {
@@ -664,5 +1099,29 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         _initializeLock.Dispose();
     }
 
-    private sealed record BatchItem(int Id, string Source);
+    private sealed record PreparedTranslationResult(string Translation, bool Cacheable);
+
+    internal sealed record BatchItem(
+        int Id,
+        string Source,
+        TranslationScaffold Scaffold,
+        string CacheKey)
+    {
+        public int EstimatedPromptLength => Source.Length + Scaffold.Terms.Sum(term =>
+            term.Source.Length + term.Translation.Length + 12);
+    }
+
+    private sealed record BatchPromptInput(
+        [property: JsonPropertyName("items")] IReadOnlyList<BatchPromptItem> Items);
+
+    private sealed record BatchPromptItem(
+        [property: JsonPropertyName("id")] int Id,
+        [property: JsonPropertyName("text")] string Text,
+        [property: JsonPropertyName("terminology")]
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        IReadOnlyList<BatchPromptTerm>? Terminology);
+
+    private sealed record BatchPromptTerm(
+        [property: JsonPropertyName("source")] string Source,
+        [property: JsonPropertyName("translation")] string Translation);
 }

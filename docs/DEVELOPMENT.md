@@ -8,7 +8,7 @@
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
-| Foundry Local + Qwen 3.5 2B | 0.10.2+ | только для полного/экранного перевода |
+| Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | только для полного/экранного перевода |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
 | Python | 3.11+ | только для регенерации словарей |
 
@@ -45,14 +45,22 @@ Smoke-набор — консольная программа без тестов
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--screen-ocr-image <png>` | Диагностика экранного OCR |
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu]` | Бенчмарк GlossBERT через полный продакшн-конвейер |
-| `--translation-benchmark <set.json> [engine] [--dump <file>]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность. Требует живой Foundry Local |
+| `--translation-benchmark <set.json> [qwen\|qwen-scaffold] [--dump <file>] [--benchmark-only]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность и scaffold-диагностика. Требует живой Foundry Local; `--benchmark-only` не запускает default smoke/Magpie |
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev) и `ranker-holdout-v2.json` (замороженный — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
 Команда завершается с ошибкой при отсутствии ранжируемых/размеченных решений или при точности принятых решений ниже `90 %`; это CI-gate результата, не дополнительный критерий воздержания модели.
 
-Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 случая) и `translation-holdout-v1.json` (замороженный, 30 случаев — правило то же). Смоук-тест «Benchmark set schema» читает и проверяет только dev-наборы `ranker-benchmark.json` и `translation-benchmark.json`: default smoke никогда не открывает frozen holdout. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
+Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 реплики) и `translation-holdout-v1.json` (замороженный, 30 реплик — правило то же). В dev-наборе 61 **term anchor**, а не 61 случай: chrF считается на всех 64 репликах, включая 15 реплик без терминологического якоря. Смоук-тест «Benchmark set schema» читает и проверяет только dev-наборы `ranker-benchmark.json` и `translation-benchmark.json`: default smoke никогда не открывает frozen holdout. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
 
-`--translation-benchmark` всегда падает на пустом наборе или пустом ответе. После получения воспроизводимой baseline можно включить quality gates переменными окружения `ASTERIA_TRANSLATION_MIN_CHRF`, `ASTERIA_TRANSLATION_MIN_ANCHOR_RATE` и `ASTERIA_TRANSLATION_MAX_RESIDUAL_ENGLISH`; значения задаются от `0` до `1` с точкой. По умолчанию числовые пороги отключены, поскольку baseline Foundry Local ещё не зафиксирована в `RESEARCH.md`.
+`--translation-benchmark` всегда падает на пустом наборе или пустом ответе. Dump записывается до quality gates и содержит SHA-256 набора, точные engine/model/runtime, общие и per-language агрегаты. Эталонный dev-прогон:
+
+```powershell
+foundry model download qwen3.5-2b-text-generic-cpu:1
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build -- --translation-benchmark assets/Translation/translation-benchmark.json qwen --dump artifacts/translation-qwen-cpu-baseline.json --benchmark-only
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build -- --translation-benchmark assets/Translation/translation-benchmark.json qwen-scaffold --dump artifacts/translation-qwen-scaffold.json --benchmark-only
+```
+
+`qwen` сохраняет исходный prompt без каркаса; `qwen-scaffold` включает production-построитель, exact-sentence bypass, fidelity retry и диагностические поля dump schema v2. Оба A/B-движка детерминированы относительно словарей и не запускают GlossBERT: neural-каркас разрешён только для одиночного полного fallback из режима «Умный словарь». Benchmark создаёт пустой временный user-словарь, поэтому личные термины разработчика не влияют на A/B. Quality gates включаются переменными окружения `ASTERIA_TRANSLATION_MIN_CHRF`, `ASTERIA_TRANSLATION_MIN_ANCHOR_RATE` и `ASTERIA_TRANSLATION_MAX_RESIDUAL_ENGLISH`; значения задаются от `0` до `1` с точкой. Для текущего CPU-baseline контрольные пороги — `0.50`, `0.85` и `0.01` соответственно. По умолчанию они остаются отключёнными, чтобы default smoke не требовал живую модель.
 
 ## Публикация
 

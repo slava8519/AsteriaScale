@@ -17,6 +17,7 @@ public sealed record DictionaryLookupResult(
     public IReadOnlyList<DictionarySenseCandidate> SenseCandidates { get; init; } =
         Array.Empty<DictionarySenseCandidate>();
     public string ContextTranslation { get; init; } = string.Empty;
+    internal string MatchedEnglishKey { get; init; } = string.Empty;
 }
 
 public sealed record DictionarySenseCandidate(
@@ -53,6 +54,7 @@ public sealed partial class LocalDictionaryService
     // halves their footprint and removes half a million record/string objects.
     private FrozenDictionary<string, byte[]> _englishSenseMetadata =
         FrozenDictionary<string, byte[]>.Empty;
+    private HashSet<string> _userEnglishKeys = new(StringComparer.Ordinal);
     private HashSet<string> _preferredEnglishSurfaceForms = new(StringComparer.Ordinal);
     private HashSet<string> _lexicalEnglishPhrases = new(StringComparer.Ordinal);
     private Dictionary<string, string> _dialogueEnglishTranslations = new(StringComparer.Ordinal);
@@ -212,6 +214,7 @@ public sealed partial class LocalDictionaryService
             _japanese = new Dictionary<string, string>(StringComparer.Ordinal);
             _trustedEnglishExact = new Dictionary<string, string>(StringComparer.Ordinal);
             _englishSenseMetadata = FrozenDictionary<string, byte[]>.Empty;
+            _userEnglishKeys = new HashSet<string>(StringComparer.Ordinal);
             _preferredEnglishSurfaceForms = new HashSet<string>(StringComparer.Ordinal);
             _lexicalEnglishPhrases = new HashSet<string>(StringComparer.Ordinal);
             _dialogueEnglishTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -313,6 +316,25 @@ public sealed partial class LocalDictionaryService
             : null;
     }
 
+    internal async Task<string?> LookupExactEnglishDialogueAsync(
+        string sentence,
+        CancellationToken cancellationToken = default)
+    {
+        await LoadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        string key = NormalizeEnglishSentenceKey(sentence);
+        return key.Length > 0 &&
+               _dialogueEnglishTranslations.TryGetValue(key, out string? translation)
+            ? Limit(translation)
+            : null;
+    }
+
+    internal bool IsUserEnglishKey(string source) =>
+        _userEnglishKeys.Contains(NormalizeEnglish(source));
+
+    internal bool IsPreferredEnglishKey(string source) =>
+        _preferredEnglishSurfaceForms.Contains(NormalizeEnglish(source));
+
     private async Task LoadCoreAsync()
     {
         (string bundledDirectory, string userDirectory) = ResolveDictionaryDirectories();
@@ -331,6 +353,7 @@ public sealed partial class LocalDictionaryService
         LoadedDictionary japanese = await japaneseTask;
         _english = english.Entries;
         _japanese = japanese.Entries;
+        _userEnglishKeys = english.UserKeys;
         _preferredEnglishSurfaceForms = english.PreferredSurfaceForms;
         _lexicalEnglishPhrases = english.LexicalPhrases;
         _dialogueEnglishTranslations = english.DialogueTranslations;
@@ -498,6 +521,7 @@ public sealed partial class LocalDictionaryService
         return new LoadedDictionary(
             entries,
             files.Count,
+            userKeys,
             preferredSurfaceForms,
             lexicalPhrases,
             dialogueTranslations,
@@ -1479,7 +1503,8 @@ public sealed partial class LocalDictionaryService
             language)
         {
             SenseCandidates = senses,
-            ContextTranslation = contextTranslation ?? string.Empty
+            ContextTranslation = contextTranslation ?? string.Empty,
+            MatchedEnglishKey = matchedEnglishKey ?? string.Empty
         };
     }
 
@@ -1511,6 +1536,7 @@ public sealed partial class LocalDictionaryService
     private sealed record LoadedDictionary(
         Dictionary<string, string> Entries,
         int SourceCount,
+        HashSet<string> UserKeys,
         HashSet<string> PreferredSurfaceForms,
         HashSet<string> LexicalPhrases,
         Dictionary<string, string> DialogueTranslations,
