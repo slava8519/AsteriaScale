@@ -1,0 +1,750 @@
+{
+  "name": "Asteria Scale EN-RU full-translation dev set",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original visual-novel style lines written for Asteria Scale; no corpus sentences were copied.",
+  "cases": [
+    {
+      "id": "dev-greeting-1",
+      "source": "Nice to meet you! I hope we get along.",
+      "sourceLanguage": "en",
+      "reference": "Приятно познакомиться! Надеюсь, мы поладим.",
+      "termAnchors": [
+        {
+          "en": "meet",
+          "ru": "познаком"
+        }
+      ]
+    },
+    {
+      "id": "dev-greeting-2",
+      "source": "Good morning. Did you sleep well?",
+      "sourceLanguage": "en",
+      "reference": "Доброе утро. Хорошо спалось?",
+      "termAnchors": [
+        {
+          "en": "morning",
+          "ru": "утро"
+        },
+        {
+          "en": "sleep",
+          "ru": "спа"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-1",
+      "source": "I left my umbrella on the train again.",
+      "sourceLanguage": "en",
+      "reference": "Я снова забыл зонт в поезде.",
+      "termAnchors": [
+        {
+          "en": "umbrella",
+          "ru": "зонт"
+        },
+        {
+          "en": "train",
+          "ru": "поезд"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-2",
+      "source": "The library closes at six on weekdays.",
+      "sourceLanguage": "en",
+      "reference": "Библиотека закрывается в шесть по будням.",
+      "termAnchors": [
+        {
+          "en": "library",
+          "ru": "библиотек"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-3",
+      "source": "She handed me a cup of tea without a word.",
+      "sourceLanguage": "en",
+      "reference": "Она молча протянула мне чашку чая.",
+      "termAnchors": [
+        {
+          "en": "tea",
+          "ru": "ча"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-4",
+      "source": "We waited in line for almost an hour.",
+      "sourceLanguage": "en",
+      "reference": "Мы простояли в очереди почти час.",
+      "termAnchors": [
+        {
+          "en": "line",
+          "ru": "очеред"
+        },
+        {
+          "en": "hour",
+          "ru": "час"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-5",
+      "source": "There is a small shrine behind the school.",
+      "sourceLanguage": "en",
+      "reference": "За школой есть маленькое святилище.",
+      "termAnchors": [
+        {
+          "en": "school",
+          "ru": "школ"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-6",
+      "source": "He locked the door and turned off the lights.",
+      "sourceLanguage": "en",
+      "reference": "Он запер дверь и выключил свет.",
+      "termAnchors": [
+        {
+          "en": "door",
+          "ru": "двер"
+        },
+        {
+          "en": "lights",
+          "ru": "свет"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-7",
+      "source": "The exam results will be posted tomorrow.",
+      "sourceLanguage": "en",
+      "reference": "Результаты экзамена вывесят завтра.",
+      "termAnchors": [
+        {
+          "en": "exam",
+          "ru": "экзамен"
+        }
+      ]
+    },
+    {
+      "id": "dev-plain-8",
+      "source": "I bought two tickets for the evening show.",
+      "sourceLanguage": "en",
+      "reference": "Я купил два билета на вечерний сеанс.",
+      "termAnchors": [
+        {
+          "en": "tickets",
+          "ru": "билет"
+        }
+      ]
+    },
+    {
+      "id": "dev-question-1",
+      "source": "Whaddya say? How about it?",
+      "sourceLanguage": "en",
+      "reference": "Что скажешь? Как тебе такое?",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-question-2",
+      "source": "Could you wait here for a moment?",
+      "sourceLanguage": "en",
+      "reference": "Не мог бы ты подождать здесь минутку?",
+      "termAnchors": [
+        {
+          "en": "wait",
+          "ru": "подожд"
+        }
+      ]
+    },
+    {
+      "id": "dev-question-3",
+      "source": "Why didn't you tell me anything?",
+      "sourceLanguage": "en",
+      "reference": "Почему ты мне ничего не сказал?",
+      "termAnchors": [
+        {
+          "en": "tell",
+          "ru": "сказ"
+        }
+      ]
+    },
+    {
+      "id": "dev-question-4",
+      "source": "Are you seriously going alone?",
+      "sourceLanguage": "en",
+      "reference": "Ты серьёзно пойдёшь один?",
+      "termAnchors": [
+        {
+          "en": "alone",
+          "ru": "один"
+        }
+      ]
+    },
+    {
+      "id": "dev-request-1",
+      "source": "Please don't tell anyone about this.",
+      "sourceLanguage": "en",
+      "reference": "Пожалуйста, никому об этом не рассказывай.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-colloq-1",
+      "source": "I'm gonna be late, don't wait up.",
+      "sourceLanguage": "en",
+      "reference": "Я опоздаю, не жди меня.",
+      "termAnchors": [
+        {
+          "en": "late",
+          "ru": "опозда"
+        }
+      ]
+    },
+    {
+      "id": "dev-colloq-2",
+      "source": "C'mon, it's not that big a deal.",
+      "sourceLanguage": "en",
+      "reference": "Да ладно, ничего страшного.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-colloq-3",
+      "source": "Dunno, maybe he just forgot.",
+      "sourceLanguage": "en",
+      "reference": "Не знаю, может, он просто забыл.",
+      "termAnchors": [
+        {
+          "en": "forgot",
+          "ru": "забы"
+        }
+      ]
+    },
+    {
+      "id": "dev-colloq-4",
+      "source": "You're nuts if you believe that rumor.",
+      "sourceLanguage": "en",
+      "reference": "Ты спятил, если веришь этому слуху.",
+      "termAnchors": [
+        {
+          "en": "rumor",
+          "ru": "слух"
+        }
+      ]
+    },
+    {
+      "id": "dev-colloq-5",
+      "source": "That party was a total blast.",
+      "sourceLanguage": "en",
+      "reference": "Вечеринка вышла просто отпадной.",
+      "termAnchors": [
+        {
+          "en": "party",
+          "ru": "вечеринк"
+        }
+      ]
+    },
+    {
+      "id": "dev-colloq-6",
+      "source": "Lemme guess — you forgot your homework again.",
+      "sourceLanguage": "en",
+      "reference": "Дай угадаю — ты снова забыл домашку.",
+      "termAnchors": [
+        {
+          "en": "homework",
+          "ru": "домаш"
+        }
+      ]
+    },
+    {
+      "id": "dev-intj-1",
+      "source": "Ugh, I really don't want to go.",
+      "sourceLanguage": "en",
+      "reference": "Фу, мне совсем не хочется идти.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-intj-2",
+      "source": "Oh dear, the soup is ruined.",
+      "sourceLanguage": "en",
+      "reference": "Боже, суп испорчен.",
+      "termAnchors": [
+        {
+          "en": "soup",
+          "ru": "суп"
+        }
+      ]
+    },
+    {
+      "id": "dev-intj-3",
+      "source": "Whoa! Watch where you're going!",
+      "sourceLanguage": "en",
+      "reference": "Эй! Смотри, куда идёшь!",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-intj-4",
+      "source": "Hmph. Do whatever you want.",
+      "sourceLanguage": "en",
+      "reference": "Хм. Делай что хочешь.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-intj-5",
+      "source": "Yay, we finally made it!",
+      "sourceLanguage": "en",
+      "reference": "Ура, мы наконец добрались!",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-name-1",
+      "source": "Yuki, wait for me at the gate.",
+      "sourceLanguage": "en",
+      "reference": "Юки, подожди меня у ворот.",
+      "termAnchors": [
+        {
+          "en": "Yuki",
+          "ru": "юк"
+        },
+        {
+          "en": "gate",
+          "ru": "ворот"
+        }
+      ]
+    },
+    {
+      "id": "dev-name-2",
+      "source": "Have you seen Haruka today?",
+      "sourceLanguage": "en",
+      "reference": "Ты сегодня видел Харуку?",
+      "termAnchors": [
+        {
+          "en": "Haruka",
+          "ru": "харук"
+        }
+      ]
+    },
+    {
+      "id": "dev-name-3",
+      "source": "Kaito said he would come by later.",
+      "sourceLanguage": "en",
+      "reference": "Кайто сказал, что зайдёт позже.",
+      "termAnchors": [
+        {
+          "en": "Kaito",
+          "ru": "кайто"
+        }
+      ]
+    },
+    {
+      "id": "dev-name-4",
+      "source": "Mister Tanaka is waiting in the hall.",
+      "sourceLanguage": "en",
+      "reference": "Господин Танака ждёт в зале.",
+      "termAnchors": [
+        {
+          "en": "Tanaka",
+          "ru": "танака"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-1",
+      "source": "He was teetering on the verge of utter confusion.",
+      "sourceLanguage": "en",
+      "reference": "Он был на грани полного смятения.",
+      "termAnchors": [
+        {
+          "en": "verge",
+          "ru": "гран"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-2",
+      "source": "Her anger melted the moment she saw the kitten.",
+      "sourceLanguage": "en",
+      "reference": "Её гнев растаял, едва она увидела котёнка.",
+      "termAnchors": [
+        {
+          "en": "anger",
+          "ru": "гнев"
+        },
+        {
+          "en": "kitten",
+          "ru": "котён"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-3",
+      "source": "A shadow of doubt crossed his face.",
+      "sourceLanguage": "en",
+      "reference": "Тень сомнения пробежала по его лицу.",
+      "termAnchors": [
+        {
+          "en": "doubt",
+          "ru": "сомнен"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-4",
+      "source": "A flood of memories swept over her.",
+      "sourceLanguage": "en",
+      "reference": "Поток воспоминаний захлестнул её.",
+      "termAnchors": [
+        {
+          "en": "memories",
+          "ru": "воспоминан"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-5",
+      "source": "His cheeks burned with shame.",
+      "sourceLanguage": "en",
+      "reference": "Его щёки горели от стыда.",
+      "termAnchors": [
+        {
+          "en": "shame",
+          "ru": "стыд"
+        }
+      ]
+    },
+    {
+      "id": "dev-fig-6",
+      "source": "The silence between them grew heavy.",
+      "sourceLanguage": "en",
+      "reference": "Тишина между ними стала тягостной.",
+      "termAnchors": [
+        {
+          "en": "silence",
+          "ru": "тишин"
+        }
+      ]
+    },
+    {
+      "id": "dev-narr-1",
+      "source": "She said that happily, almost prancing around.",
+      "sourceLanguage": "en",
+      "reference": "Она сказала это радостно, чуть ли не вприпрыжку.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-narr-2",
+      "source": "He shook his head and sighed quietly.",
+      "sourceLanguage": "en",
+      "reference": "Он покачал головой и тихо вздохнул.",
+      "termAnchors": [
+        {
+          "en": "head",
+          "ru": "голов"
+        }
+      ]
+    },
+    {
+      "id": "dev-narr-3",
+      "source": "I felt my heart skip a beat.",
+      "sourceLanguage": "en",
+      "reference": "Я почувствовал, как сердце ёкнуло.",
+      "termAnchors": [
+        {
+          "en": "heart",
+          "ru": "сердц"
+        }
+      ]
+    },
+    {
+      "id": "dev-narr-4",
+      "source": "The rain kept falling all through the night.",
+      "sourceLanguage": "en",
+      "reference": "Дождь лил всю ночь напролёт.",
+      "termAnchors": [
+        {
+          "en": "rain",
+          "ru": "дожд"
+        },
+        {
+          "en": "night",
+          "ru": "ноч"
+        }
+      ]
+    },
+    {
+      "id": "dev-narr-5",
+      "source": "Sunlight spilled across the wooden floor.",
+      "sourceLanguage": "en",
+      "reference": "Солнечный свет разлился по деревянному полу.",
+      "termAnchors": [
+        {
+          "en": "floor",
+          "ru": "пол"
+        }
+      ]
+    },
+    {
+      "id": "dev-narr-6",
+      "source": "For a long moment nobody said anything.",
+      "sourceLanguage": "en",
+      "reference": "Долгое мгновение никто ничего не говорил.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-poly-1",
+      "source": "We sat on the bank and watched the moon.",
+      "sourceLanguage": "en",
+      "reference": "Мы сидели на берегу и смотрели на луну.",
+      "termAnchors": [
+        {
+          "en": "bank",
+          "ru": "берег"
+        },
+        {
+          "en": "moon",
+          "ru": "лун"
+        }
+      ]
+    },
+    {
+      "id": "dev-poly-2",
+      "source": "The bank refused to approve the loan.",
+      "sourceLanguage": "en",
+      "reference": "Банк отказался одобрить кредит.",
+      "termAnchors": [
+        {
+          "en": "bank",
+          "ru": "банк"
+        },
+        {
+          "en": "loan",
+          "ru": "кредит"
+        }
+      ]
+    },
+    {
+      "id": "dev-poly-3",
+      "source": "She wore a light summer dress.",
+      "sourceLanguage": "en",
+      "reference": "На ней было лёгкое летнее платье.",
+      "termAnchors": [
+        {
+          "en": "light",
+          "ru": "лёгк"
+        },
+        {
+          "en": "dress",
+          "ru": "плать"
+        }
+      ]
+    },
+    {
+      "id": "dev-poly-4",
+      "source": "Turn on the light, it's too dark here.",
+      "sourceLanguage": "en",
+      "reference": "Включи свет, здесь слишком темно.",
+      "termAnchors": [
+        {
+          "en": "light",
+          "ru": "свет"
+        }
+      ]
+    },
+    {
+      "id": "dev-poly-5",
+      "source": "He struck a match to light the candle.",
+      "sourceLanguage": "en",
+      "reference": "Он чиркнул спичкой, чтобы зажечь свечу.",
+      "termAnchors": [
+        {
+          "en": "match",
+          "ru": "спичк"
+        },
+        {
+          "en": "candle",
+          "ru": "свеч"
+        }
+      ]
+    },
+    {
+      "id": "dev-poly-6",
+      "source": "The match ended in a draw.",
+      "sourceLanguage": "en",
+      "reference": "Матч закончился вничью.",
+      "termAnchors": [
+        {
+          "en": "match",
+          "ru": "матч"
+        }
+      ]
+    },
+    {
+      "id": "dev-long-1",
+      "source": "If you had told me earlier, I would have changed my plans.",
+      "sourceLanguage": "en",
+      "reference": "Если бы ты сказал мне раньше, я бы поменял планы.",
+      "termAnchors": [
+        {
+          "en": "plans",
+          "ru": "план"
+        }
+      ]
+    },
+    {
+      "id": "dev-long-2",
+      "source": "She promised to return the book before the weekend, but she forgot.",
+      "sourceLanguage": "en",
+      "reference": "Она обещала вернуть книгу до выходных, но забыла.",
+      "termAnchors": [
+        {
+          "en": "book",
+          "ru": "книг"
+        }
+      ]
+    },
+    {
+      "id": "dev-long-3",
+      "source": "Even though it was already dark, we decided to keep walking.",
+      "sourceLanguage": "en",
+      "reference": "Хотя уже стемнело, мы решили идти дальше.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-long-4",
+      "source": "He looked at the letter for a while, then folded it carefully.",
+      "sourceLanguage": "en",
+      "reference": "Он какое-то время смотрел на письмо, потом аккуратно сложил его.",
+      "termAnchors": [
+        {
+          "en": "letter",
+          "ru": "письм"
+        }
+      ]
+    },
+    {
+      "id": "dev-long-5",
+      "source": "The teacher explained the rule twice, and it still made no sense.",
+      "sourceLanguage": "en",
+      "reference": "Учитель дважды объяснил правило, и всё равно ничего не понятно.",
+      "termAnchors": [
+        {
+          "en": "teacher",
+          "ru": "учител"
+        },
+        {
+          "en": "rule",
+          "ru": "правил"
+        }
+      ]
+    },
+    {
+      "id": "dev-short-1",
+      "source": "Stay close.",
+      "sourceLanguage": "en",
+      "reference": "Держись рядом.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-short-2",
+      "source": "Cut it out!",
+      "sourceLanguage": "en",
+      "reference": "Прекрати!",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-short-3",
+      "source": "Not a chance.",
+      "sourceLanguage": "en",
+      "reference": "Ни за что.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-short-4",
+      "source": "Just this once.",
+      "sourceLanguage": "en",
+      "reference": "Только в этот раз.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-short-5",
+      "source": "Let's go home.",
+      "sourceLanguage": "en",
+      "reference": "Пойдём домой.",
+      "termAnchors": [
+        {
+          "en": "home",
+          "ru": "дом"
+        }
+      ]
+    },
+    {
+      "id": "dev-short-6",
+      "source": "I'm home!",
+      "sourceLanguage": "en",
+      "reference": "Я дома!",
+      "termAnchors": [
+        {
+          "en": "home",
+          "ru": "дом"
+        }
+      ]
+    },
+    {
+      "id": "dev-formal-1",
+      "source": "We regret to inform you that the position has been filled.",
+      "sourceLanguage": "en",
+      "reference": "С сожалением сообщаем, что вакансия уже занята.",
+      "termAnchors": []
+    },
+    {
+      "id": "dev-formal-2",
+      "source": "Please submit the documents by Friday.",
+      "sourceLanguage": "en",
+      "reference": "Пожалуйста, подайте документы до пятницы.",
+      "termAnchors": [
+        {
+          "en": "documents",
+          "ru": "документ"
+        }
+      ]
+    },
+    {
+      "id": "dev-formal-3",
+      "source": "The ceremony will begin at noon sharp.",
+      "sourceLanguage": "en",
+      "reference": "Церемония начнётся ровно в полдень.",
+      "termAnchors": [
+        {
+          "en": "ceremony",
+          "ru": "церемони"
+        }
+      ]
+    },
+    {
+      "id": "dev-num-1",
+      "source": "It costs three hundred yen.",
+      "sourceLanguage": "en",
+      "reference": "Это стоит триста иен.",
+      "termAnchors": [
+        {
+          "en": "yen",
+          "ru": "иен"
+        }
+      ]
+    },
+    {
+      "id": "dev-num-2",
+      "source": "We'll meet on the fifth of April.",
+      "sourceLanguage": "en",
+      "reference": "Встретимся пятого апреля.",
+      "termAnchors": [
+        {
+          "en": "April",
+          "ru": "апрел"
+        }
+      ]
+    }
+  ]
+}

@@ -1554,8 +1554,9 @@ try
         "User dictionary editor and translation history",
         () => UserDictionaryAndHistoryTests.RunAsync(tempRoot));
 
-    await RunAsync("Ranker set schema", async () =>
+    await RunAsync("Benchmark set schema", async () =>
     {
+        TranslationBenchmark.VerifyMetrics();
         string? repositoryRoot = AppContext.BaseDirectory;
         while (repositoryRoot is not null &&
                !File.Exists(Path.Combine(repositoryRoot, "AsteriaScale.slnx")))
@@ -1602,6 +1603,44 @@ try
         }
 
         Assert(validatedSets >= 4, "Expected the benchmark set and three holdout generations.");
+
+        // Translation sets (roadmap #13) carry references and term anchors
+        // instead of candidates; validate that shape separately.
+        string translationDirectory = Path.Combine(repositoryRoot!, "assets", "Translation");
+        int translationSets = 0;
+        foreach (string setPath in Directory.EnumerateFiles(translationDirectory, "translation-*.json"))
+        {
+            using System.Text.Json.JsonDocument set =
+                System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(setPath));
+            int caseCount = 0;
+            foreach (System.Text.Json.JsonElement translationCase in
+                     set.RootElement.GetProperty("cases").EnumerateArray())
+            {
+                string id = translationCase.GetProperty("id").GetString()!;
+                string source = translationCase.GetProperty("source").GetString()!;
+                string reference = translationCase.GetProperty("reference").GetString()!;
+                Assert(source.Trim().Length > 0 && reference.Trim().Length > 0,
+                    $"{id}: source and reference must be non-empty.");
+                Assert(TranslationBenchmark.ResidualEnglishRate(reference) == 0,
+                    $"{id}: the reference translation still contains Latin words.");
+                foreach (System.Text.Json.JsonElement anchor in
+                         translationCase.GetProperty("termAnchors").EnumerateArray())
+                {
+                    string russian = anchor.GetProperty("ru").GetString()!;
+                    Assert(russian.Trim().Length > 0,
+                        $"{id}: an empty term anchor is meaningless.");
+                    Assert(TranslationBenchmark.ContainsRussianStem(reference, russian),
+                        $"{id}: anchor '{russian}' is absent from its own reference.");
+                }
+
+                caseCount++;
+            }
+
+            Assert(caseCount >= 30, $"{Path.GetFileName(setPath)}: expected at least 30 cases.");
+            translationSets++;
+        }
+
+        Assert(translationSets >= 2, "Expected the translation dev set and its holdout.");
     });
 
     await RunAsync(
@@ -2178,6 +2217,29 @@ try
                 ? "<none>"
                 : $"{diagnostic.Selection.HoveredWord} | {diagnostic.Selection.Text} | index={diagnostic.Selection.CharacterIndex}"));
         });
+    }
+
+    int translationBenchmarkArgument = Array.FindIndex(args, arg =>
+        string.Equals(arg, "--translation-benchmark", StringComparison.OrdinalIgnoreCase));
+    if (translationBenchmarkArgument >= 0)
+    {
+        Assert(args.Length > translationBenchmarkArgument + 1,
+            "Usage: --translation-benchmark <set.json> [engine] [--dump <file>]");
+        string translationSet = args[translationBenchmarkArgument + 1];
+        string translationEngine =
+            args.Length > translationBenchmarkArgument + 2 &&
+            !args[translationBenchmarkArgument + 2].StartsWith("--", StringComparison.Ordinal)
+                ? args[translationBenchmarkArgument + 2]
+                : "qwen";
+        int translationDumpArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--dump", StringComparison.OrdinalIgnoreCase));
+        await RunAsync($"Full translation benchmark ({translationEngine})", () =>
+            TranslationBenchmark.RunAsync(
+                translationSet,
+                translationEngine,
+                translationDumpArgument >= 0 && args.Length > translationDumpArgument + 1
+                    ? args[translationDumpArgument + 1]
+                    : null));
     }
 
     int rankerBenchmarkArgument = Array.FindIndex(args, arg =>

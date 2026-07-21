@@ -45,8 +45,11 @@ Smoke-набор — консольная программа без тестов
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--screen-ocr-image <png>` | Диагностика экранного OCR |
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu]` | Бенчмарк GlossBERT через полный продакшн-конвейер |
+| `--translation-benchmark <set.json> [engine] [--dump <file>]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность. Требует живой Foundry Local |
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev) и `ranker-holdout-v2.json` (замороженный — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
+
+Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 случая) и `translation-holdout-v1.json` (замороженный, 30 случаев — правило то же). Схема обоих семейств наборов проверяется смоук-тестом «Benchmark set schema»: он валидирует непустые поля, отсутствие латиницы в эталонах и присутствие каждого терминологического якоря в собственном эталоне.
 
 ## Публикация
 

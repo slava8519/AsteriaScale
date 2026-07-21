@@ -1,0 +1,300 @@
+{
+  "name": "Asteria Scale EN-RU full-translation blind holdout v1",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original lines written from style-class descriptions before any engine was measured.",
+  "frozen": "Do not open while tuning prompts, scaffolding, context or engines. Record every opening in docs/RESEARCH.md.",
+  "cases": [
+    {
+      "id": "hold-1",
+      "source": "Long time no see! You've grown taller.",
+      "sourceLanguage": "en",
+      "reference": "Давно не виделись! Ты подрос.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-2",
+      "source": "I can't believe you actually did it.",
+      "sourceLanguage": "en",
+      "reference": "Не могу поверить, что ты и правда это сделал.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-3",
+      "source": "The cat knocked over the vase again.",
+      "sourceLanguage": "en",
+      "reference": "Кот снова опрокинул вазу.",
+      "termAnchors": [
+        {
+          "en": "cat",
+          "ru": "кот"
+        },
+        {
+          "en": "vase",
+          "ru": "ваз"
+        }
+      ]
+    },
+    {
+      "id": "hold-4",
+      "source": "Don't worry, I'll handle the rest.",
+      "sourceLanguage": "en",
+      "reference": "Не волнуйся, остальное я беру на себя.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-5",
+      "source": "Her voice faltered halfway through the sentence.",
+      "sourceLanguage": "en",
+      "reference": "Её голос дрогнул на середине фразы.",
+      "termAnchors": [
+        {
+          "en": "voice",
+          "ru": "голос"
+        }
+      ]
+    },
+    {
+      "id": "hold-6",
+      "source": "We should probably head back before it gets dark.",
+      "sourceLanguage": "en",
+      "reference": "Нам, наверное, стоит вернуться, пока не стемнело.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-7",
+      "source": "That's none of your business.",
+      "sourceLanguage": "en",
+      "reference": "Это не твоё дело.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-8",
+      "source": "He kept staring at the ceiling, thinking.",
+      "sourceLanguage": "en",
+      "reference": "Он всё смотрел в потолок и думал.",
+      "termAnchors": [
+        {
+          "en": "ceiling",
+          "ru": "потол"
+        }
+      ]
+    },
+    {
+      "id": "hold-9",
+      "source": "Sorry, I wasn't listening. Say that again?",
+      "sourceLanguage": "en",
+      "reference": "Прости, я не слушал. Повтори, пожалуйста?",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-10",
+      "source": "The festival starts at seven near the river.",
+      "sourceLanguage": "en",
+      "reference": "Фестиваль начинается в семь у реки.",
+      "termAnchors": [
+        {
+          "en": "festival",
+          "ru": "фестивал"
+        },
+        {
+          "en": "river",
+          "ru": "рек"
+        }
+      ]
+    },
+    {
+      "id": "hold-11",
+      "source": "You've got some nerve showing up here.",
+      "sourceLanguage": "en",
+      "reference": "Ну и наглость — заявиться сюда.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-12",
+      "source": "I'd rather stay in tonight.",
+      "sourceLanguage": "en",
+      "reference": "Я лучше останусь дома сегодня.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-13",
+      "source": "A faint scent of flowers drifted through the window.",
+      "sourceLanguage": "en",
+      "reference": "Слабый аромат цветов долетал из окна.",
+      "termAnchors": [
+        {
+          "en": "scent",
+          "ru": "аромат"
+        },
+        {
+          "en": "window",
+          "ru": "окн"
+        }
+      ]
+    },
+    {
+      "id": "hold-14",
+      "source": "Everyone was staring, and I wanted to disappear.",
+      "sourceLanguage": "en",
+      "reference": "Все смотрели, и мне хотелось провалиться сквозь землю.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-15",
+      "source": "He apologized, though it clearly wasn't his fault.",
+      "sourceLanguage": "en",
+      "reference": "Он извинился, хотя явно был не виноват.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-16",
+      "source": "The old clock in the hallway stopped last winter.",
+      "sourceLanguage": "en",
+      "reference": "Старые часы в коридоре остановились прошлой зимой.",
+      "termAnchors": [
+        {
+          "en": "clock",
+          "ru": "час"
+        },
+        {
+          "en": "winter",
+          "ru": "зим"
+        }
+      ]
+    },
+    {
+      "id": "hold-17",
+      "source": "Phew, that was closer than I expected.",
+      "sourceLanguage": "en",
+      "reference": "Фух, это было ближе, чем я думал.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-18",
+      "source": "She smiled, but her eyes were sad.",
+      "sourceLanguage": "en",
+      "reference": "Она улыбнулась, но глаза были грустными.",
+      "termAnchors": [
+        {
+          "en": "eyes",
+          "ru": "глаз"
+        }
+      ]
+    },
+    {
+      "id": "hold-19",
+      "source": "Let's settle this once and for all.",
+      "sourceLanguage": "en",
+      "reference": "Давай покончим с этим раз и навсегда.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-20",
+      "source": "I owe you one, seriously.",
+      "sourceLanguage": "en",
+      "reference": "Я твой должник, серьёзно.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-21",
+      "source": "The corridor smelled of dust and old paper.",
+      "sourceLanguage": "en",
+      "reference": "В коридоре пахло пылью и старой бумагой.",
+      "termAnchors": [
+        {
+          "en": "dust",
+          "ru": "пыл"
+        },
+        {
+          "en": "paper",
+          "ru": "бумаг"
+        }
+      ]
+    },
+    {
+      "id": "hold-22",
+      "source": "Wait — did you hear that just now?",
+      "sourceLanguage": "en",
+      "reference": "Погоди — ты сейчас это слышал?",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-23",
+      "source": "It's been raining since morning without a break.",
+      "sourceLanguage": "en",
+      "reference": "Дождь идёт с утра без перерыва.",
+      "termAnchors": [
+        {
+          "en": "morning",
+          "ru": "утр"
+        }
+      ]
+    },
+    {
+      "id": "hold-24",
+      "source": "He drew a sharp breath and stepped forward.",
+      "sourceLanguage": "en",
+      "reference": "Он резко вдохнул и шагнул вперёд.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-25",
+      "source": "Honestly, you two never change.",
+      "sourceLanguage": "en",
+      "reference": "Честное слово, вы двое совсем не меняетесь.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-26",
+      "source": "The plan sounded simple enough on paper.",
+      "sourceLanguage": "en",
+      "reference": "На бумаге план звучал достаточно просто.",
+      "termAnchors": [
+        {
+          "en": "plan",
+          "ru": "план"
+        }
+      ]
+    },
+    {
+      "id": "hold-27",
+      "source": "I'll take the blame if something goes wrong.",
+      "sourceLanguage": "en",
+      "reference": "Если что-то пойдёт не так, вину возьму на себя.",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-28",
+      "source": "There's still a seat left by the window.",
+      "sourceLanguage": "en",
+      "reference": "У окна ещё осталось свободное место.",
+      "termAnchors": [
+        {
+          "en": "seat",
+          "ru": "мест"
+        }
+      ]
+    },
+    {
+      "id": "hold-29",
+      "source": "Goodness, look at the time!",
+      "sourceLanguage": "en",
+      "reference": "Боже, посмотри на время!",
+      "termAnchors": []
+    },
+    {
+      "id": "hold-30",
+      "source": "We parted at the station without saying goodbye.",
+      "sourceLanguage": "en",
+      "reference": "Мы расстались на станции, не попрощавшись.",
+      "termAnchors": [
+        {
+          "en": "station",
+          "ru": "станци"
+        }
+      ]
+    }
+  ]
+}
