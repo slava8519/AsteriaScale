@@ -39,6 +39,27 @@ internal sealed class RankerEngine : IDisposable
     private const long NpuCompatibilityLength = 235;
     private const string NpuCompatibilitySha256 =
         "a15f82d6aed5de34eb6bd75b727e4ecbc2476fbf14c91b04e37a7f1c1ff0f777";
+    private const long EmbeddingIndexLength = 91_577_685;
+    private const string EmbeddingIndexSha256 =
+        "13c0fb6db773d85f94e2c930e2c49c8bc022bd2003550413bcf1f963cc55c2d3";
+    private const long EmbeddingModelLength = 90_405_214;
+    private const string EmbeddingModelSha256 =
+        "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452";
+    private const long EmbeddingTokenizerLength = 466_247;
+    private const string EmbeddingTokenizerSha256 =
+        "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037";
+    private const string EmbeddingModelId =
+        "sentence-transformers/all-MiniLM-L6-v2";
+    private const string EmbeddingRevision =
+        "c9745ed1d9f207416be6d2e6f8de32d1f16199bf";
+    private const string EmbeddingSenseFileSha256 =
+        "A15C4037F37137DD54CD5B3E451A6D4E1B3E847A7D94266CD40A7B3F970E85FF";
+    private const int EmbeddingDimensions = 384;
+    private const int EmbeddingSequenceLength = 64;
+    private const int EmbeddingKeyCount = 147_426;
+    private const int EmbeddingVectorCount = 225_217;
+    private const string EmbeddingBundleCacheTag =
+        "bi-c9745ed1-13c0fb6d-6fd5d72f-be50c362";
     private static readonly HashSet<string> AllowedCpuProfileNodes =
     [
         "/model/bert/embeddings/word_embeddings/Gather_kernel_time|Gather",
@@ -53,8 +74,6 @@ internal sealed class RankerEngine : IDisposable
     // hyper-polysemous words ("set"), inflating the margin past the
     // abstention threshold on a wrong answer, while pruning 13-16 groups by
     // one or two only pays the encoder cost without a latency win.
-    private const int PrefilterTopGroups = 12;
-    private const int PrefilterEngageGroups = 16;
     private const string EmbeddingBundleDirectoryName = "GlossEmbeddings";
 
     private readonly WorkerOptions _options;
@@ -64,9 +83,11 @@ internal sealed class RankerEngine : IDisposable
     private GlossEmbeddingIndex? _embeddingIndex;
     private ContextEncoder? _contextEncoder;
     private bool _embeddingLoadAttempted;
+    private RankerException? _embeddingFailure;
     private RankerException? _initializationFailure;
     private bool _warmupCompleted;
     private bool _npuExecutionVerified;
+    private string _crossModelVersion;
 
     public RankerEngine(WorkerOptions options)
     {
@@ -75,6 +96,7 @@ internal sealed class RankerEngine : IDisposable
             ? "VitisAIExecutionProvider"
             : "CPUExecutionProvider";
         Device = options.Provider == RankerProvider.Npu ? "NPU" : "CPU";
+        _crossModelVersion = DefaultModelVersion;
         ModelVersion = DefaultModelVersion;
     }
 
@@ -87,6 +109,11 @@ internal sealed class RankerEngine : IDisposable
     public async Task WarmAsync()
     {
         await EnsureLoadedAsync();
+        if (_options.Provider == RankerProvider.Cpu)
+        {
+            EnsureEmbeddingPipelineLoaded();
+        }
+
         if (_warmupCompleted)
         {
             return;
@@ -151,7 +178,7 @@ internal sealed class RankerEngine : IDisposable
 
     /// <summary>
     /// MiniLM prefilter for large sense inventories (roadmap task #7): rank
-    /// GROUPS by their best gloss/context cosine similarity and keep the top 8
+    /// GROUPS by their best gloss/context cosine similarity and keep the top 12
     /// groups with all their glosses, so GroupIds and group-margin semantics
     /// survive unchanged. Fail-open everywhere: a missing index, an unknown
     /// key or an unmatched gloss hash keeps the full candidate set.
@@ -164,7 +191,10 @@ internal sealed class RankerEngine : IDisposable
         var fallback = (candidates, groupIds, "cross");
         try
         {
-            if (groupIds.Distinct().Count() <= PrefilterEngageGroups)
+            int distinctGroupCount = groupIds.Distinct().Count();
+            if (!RankerSelectionLogic.ShouldApplyBiEncoder(
+                    _options.Provider == RankerProvider.Cpu,
+                    distinctGroupCount))
             {
                 return fallback;
             }
@@ -182,26 +212,32 @@ internal sealed class RankerEngine : IDisposable
             }
 
             var byHash = vectors.ToLookup(vector => vector.GlossHash);
-            var query = _contextEncoder.Encode(markedContext);
-            var groupBest = new Dictionary<int, double>();
+            var matchedVectors = new GlossVector[candidates.Count][];
             for (var index = 0; index < candidates.Count; index++)
             {
                 var hash = GlossEmbeddingIndex.HashNormalizedGloss(candidates[index]);
                 var matches = byHash[hash].ToArray();
-                var similarity = matches.Length == 0
-                    ? double.PositiveInfinity
-                    : matches.Max(vector =>
-                        GlossEmbeddingIndex.Similarity(query, vector));
-                groupBest[groupIds[index]] = Math.Max(
-                    groupBest.GetValueOrDefault(groupIds[index], double.NegativeInfinity),
-                    similarity);
+                if (matches.Length == 0)
+                {
+                    return fallback;
+                }
+
+                matchedVectors[index] = matches;
             }
 
-            var keptGroups = groupBest
-                .OrderByDescending(entry => entry.Value)
-                .Take(PrefilterTopGroups)
-                .Select(entry => entry.Key)
-                .ToHashSet();
+            var query = _contextEncoder.Encode(markedContext);
+            var similarities = matchedVectors
+                .Select(matches => (double?)matches.Max(vector =>
+                    GlossEmbeddingIndex.Similarity(query, vector)))
+                .ToArray();
+            HashSet<int>? keptGroups = RankerSelectionLogic.SelectPrefilterGroups(
+                groupIds,
+                similarities);
+            if (keptGroups is null)
+            {
+                return fallback;
+            }
+
             var filteredCandidates = new List<string>(candidates.Count);
             var filteredGroupIds = new List<int>(groupIds.Count);
             for (var index = 0; index < candidates.Count; index++)
@@ -222,12 +258,18 @@ internal sealed class RankerEngine : IDisposable
             _contextEncoder?.Dispose();
             _embeddingIndex = null;
             _contextEncoder = null;
+            RefreshModelVersion();
             return fallback;
         }
     }
 
     private void EnsureEmbeddingPipelineLoaded()
     {
+        if (_embeddingFailure is { } failure)
+        {
+            throw new RankerException(failure.ErrorCode, failure.Message, failure);
+        }
+
         if (_embeddingLoadAttempted)
         {
             return;
@@ -240,30 +282,109 @@ internal sealed class RankerEngine : IDisposable
         var indexPath = Path.Combine(directory, "eng-senses.vec");
         var modelPath = Path.Combine(directory, "minilm-l6-v2.onnx");
         var tokenizerPath = Path.Combine(directory, "tokenizer.json");
-        if (!File.Exists(indexPath) ||
-            !File.Exists(modelPath) ||
-            !File.Exists(tokenizerPath))
+        string[] paths = [indexPath, modelPath, tokenizerPath];
+        int presentCount = paths.Count(File.Exists);
+        if (presentCount == 0)
         {
+            RefreshModelVersion();
             return;
+        }
+
+        if (presentCount != paths.Length)
+        {
+            _embeddingFailure = new RankerException(
+                "embedding_bundle_incomplete",
+                "The optional GlossEmbeddings bundle is partially present. " +
+                "Remove it or install all three pinned artifacts.");
+            throw _embeddingFailure;
         }
 
         try
         {
-            var index = new GlossEmbeddingIndex(indexPath);
-            _contextEncoder = new ContextEncoder(
+            ValidateFileIntegrity(
+                indexPath,
+                EmbeddingIndexLength,
+                EmbeddingIndexSha256,
+                "embedding_bundle_integrity_failed",
+                "gloss embedding index");
+            ValidateFileIntegrity(
+                modelPath,
+                EmbeddingModelLength,
+                EmbeddingModelSha256,
+                "embedding_bundle_integrity_failed",
+                "MiniLM context encoder");
+            ValidateFileIntegrity(
+                tokenizerPath,
+                EmbeddingTokenizerLength,
+                EmbeddingTokenizerSha256,
+                "embedding_bundle_integrity_failed",
+                "MiniLM tokenizer");
+        }
+        catch (RankerException ex)
+        {
+            _embeddingFailure = ex;
+            throw;
+        }
+
+        GlossEmbeddingIndex? index = null;
+        ContextEncoder? encoder = null;
+        try
+        {
+            index = new GlossEmbeddingIndex(indexPath);
+            ValidateEmbeddingMetadata(index);
+            encoder = new ContextEncoder(
                 modelPath,
                 tokenizerPath,
                 index.Dimensions);
             _embeddingIndex = index;
+            index = null;
+            _contextEncoder = encoder;
+            encoder = null;
+            RefreshModelVersion();
             Console.Error.WriteLine(
-                $"[ranker] bi-encoder prefilter ready: {index.KeyCount:N0} keys, " +
-                $"{index.ModelId}@{index.Revision[..8]}");
+                $"[ranker] bi-encoder prefilter ready: {_embeddingIndex.KeyCount:N0} keys, " +
+                $"{_embeddingIndex.ModelId}@{_embeddingIndex.Revision[..8]}");
+        }
+        catch (RankerException ex)
+        {
+            _embeddingFailure = ex;
+            throw;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[ranker] bi-encoder prefilter unavailable: {ex.Message}");
-            _embeddingIndex = null;
-            _contextEncoder = null;
+            _embeddingFailure = new RankerException(
+                "embedding_bundle_invalid",
+                $"The pinned GlossEmbeddings bundle could not be loaded: {ex.Message}",
+                ex);
+            throw _embeddingFailure;
+        }
+        finally
+        {
+            index?.Dispose();
+            encoder?.Dispose();
+        }
+    }
+
+    private static void ValidateEmbeddingMetadata(GlossEmbeddingIndex index)
+    {
+        if (index.Format != 1 ||
+            !string.Equals(index.ModelId, EmbeddingModelId, StringComparison.Ordinal) ||
+            !string.Equals(index.Revision, EmbeddingRevision, StringComparison.Ordinal) ||
+            index.Dimensions != EmbeddingDimensions ||
+            !index.Normalized ||
+            index.SequenceLength != EmbeddingSequenceLength ||
+            !string.Equals(
+                index.SenseFileSha256,
+                EmbeddingSenseFileSha256,
+                StringComparison.Ordinal) ||
+            index.DeclaredKeyCount != EmbeddingKeyCount ||
+            index.DeclaredVectorCount != EmbeddingVectorCount ||
+            index.KeyCount != EmbeddingKeyCount)
+        {
+            throw new RankerException(
+                "embedding_metadata_mismatch",
+                "The GlossEmbeddings header does not match the pinned model, " +
+                "revision, source dictionary or index dimensions.");
         }
     }
 
@@ -1296,7 +1417,15 @@ internal sealed class RankerEngine : IDisposable
         var onnxVersionTag = metadata.Version > 0 && metadata.Version < long.MaxValue
             ? $":onnx-{metadata.Version}"
             : string.Empty;
-        ModelVersion = DefaultModelVersion + artifactTag + onnxVersionTag;
+        _crossModelVersion = DefaultModelVersion + artifactTag + onnxVersionTag;
+        RefreshModelVersion();
+    }
+
+    private void RefreshModelVersion()
+    {
+        ModelVersion = _embeddingIndex is null
+            ? _crossModelVersion + ":pipeline-cross"
+            : _crossModelVersion + ":" + EmbeddingBundleCacheTag;
     }
 
     private void ThrowCachedInitializationFailure()
@@ -1369,21 +1498,16 @@ internal sealed class RankerEngine : IDisposable
         sourceLanguage.Contains("english", StringComparison.OrdinalIgnoreCase) ||
         sourceLanguage.Contains("англ", StringComparison.OrdinalIgnoreCase);
 
-    private static string BuildMarkedContext(
+    internal static string BuildMarkedContext(
         string context,
         string target,
         int? characterIndex)
     {
-        var index = characterIndex is { } requestedIndex &&
-                    requestedIndex >= 0 &&
-                    requestedIndex <= context.Length &&
-                    target.Length <= context.Length - requestedIndex &&
-                    string.Equals(
-                        context.Substring(requestedIndex, target.Length),
-                        target,
-                        StringComparison.OrdinalIgnoreCase)
-            ? requestedIndex
-            : context.IndexOf(target, StringComparison.OrdinalIgnoreCase);
+        int anchor = Math.Clamp(characterIndex ?? 0, 0, context.Length);
+        int index = RankerSelectionLogic.FindClosestTargetOccurrence(
+            context,
+            target,
+            anchor);
         if (index < 0)
         {
             throw new RankerException(

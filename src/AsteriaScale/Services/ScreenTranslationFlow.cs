@@ -15,7 +15,7 @@ internal sealed class ScreenTranslationFlow
     private readonly ScreenTranslationOverlay _screenOverlay;
     private readonly Dispatcher _dispatcher;
     private readonly Action<string> _reportStatus;
-    private readonly Func<bool> _stillActive;
+    private readonly Func<nint, int, bool> _stillActive;
 
     public ScreenTranslationFlow(
         WindowsAiOcrService ocr,
@@ -23,7 +23,7 @@ internal sealed class ScreenTranslationFlow
         ScreenTranslationOverlay screenOverlay,
         Dispatcher dispatcher,
         Action<string> reportStatus,
-        Func<bool> stillActive)
+        Func<nint, int, bool> stillActive)
     {
         _ocr = ocr;
         _translator = translator;
@@ -41,32 +41,75 @@ internal sealed class ScreenTranslationFlow
     private void HideScreenOverlay() =>
         _dispatcher.BeginInvoke(_screenOverlay.HideOverlay, DispatcherPriority.Normal);
 
-    public async Task<bool> ProcessAsync(nint foregroundWindow, CancellationToken cancellationToken)
+    private bool TargetStillActive(nint window, int processId)
+    {
+        if (_stillActive(window, processId))
+        {
+            return true;
+        }
+
+        HideScreenOverlay();
+        return false;
+    }
+
+    public async Task<bool> ProcessAsync(
+        nint foregroundWindow,
+        int foregroundProcessId,
+        CancellationToken cancellationToken)
     {
         bool translatedSuccessfully = false;
         try
         {
+            if (!TargetStillActive(foregroundWindow, foregroundProcessId))
+            {
+                return false;
+            }
+
             await _dispatcher.InvokeAsync(_screenOverlay.HideOverlay, DispatcherPriority.Send, cancellationToken);
             await Task.Delay(90, cancellationToken);
+            if (!TargetStillActive(foregroundWindow, foregroundProcessId))
+            {
+                return false;
+            }
+
             ReportStatus("Экранный перевод: распознаю все текстовые области…");
             ScreenOcrResult recognized = await _ocr.RecognizeScreenAsync(foregroundWindow, cancellationToken);
-            if (!_stillActive())
+            if (!TargetStillActive(foregroundWindow, foregroundProcessId))
             {
                 return false;
             }
 
             if (recognized.Blocks.Count == 0)
             {
-                await ShowScreenMessageAsync(recognized.CaptureBounds, "Текст для перевода не найден", cancellationToken);
+                await ShowScreenMessageAsync(
+                    foregroundWindow,
+                    foregroundProcessId,
+                    recognized.CaptureBounds,
+                    "Текст для перевода не найден",
+                    cancellationToken);
                 return false;
             }
 
+            bool loadingShown = false;
             await _dispatcher.InvokeAsync(
-                () => _screenOverlay.ShowLoading(
-                    recognized.CaptureBounds,
-                    $"Перевожу блоков: {recognized.Blocks.Count}…"),
+                () =>
+                {
+                    if (_stillActive(foregroundWindow, foregroundProcessId))
+                    {
+                        _screenOverlay.ShowLoading(
+                            recognized.CaptureBounds,
+                            $"Перевожу блоков: {recognized.Blocks.Count}…");
+                        loadingShown = true;
+                    }
+                },
                 DispatcherPriority.Normal,
                 cancellationToken);
+            if (!loadingShown)
+            {
+                HideScreenOverlay();
+                return false;
+            }
+
             ReportStatus($"Экранный перевод: перевожу {recognized.Blocks.Count} текстовых блоков локально…");
 
             IReadOnlyList<string> translations = await _translator.TranslateManyToRussianAsync(
@@ -86,7 +129,7 @@ internal sealed class ScreenTranslationFlow
                 visuals.Add(new ScreenTranslationVisual(source, translation));
             }
 
-            if (!_stillActive())
+            if (!TargetStillActive(foregroundWindow, foregroundProcessId))
             {
                 return false;
             }
@@ -94,16 +137,32 @@ internal sealed class ScreenTranslationFlow
             if (visuals.Count == 0)
             {
                 await ShowScreenMessageAsync(
+                    foregroundWindow,
+                    foregroundProcessId,
                     recognized.CaptureBounds,
                     "На экране уже русский текст или перевод не требуется",
                     cancellationToken);
                 return false;
             }
 
+            bool shown = false;
             await _dispatcher.InvokeAsync(
-                () => _screenOverlay.ShowTranslations(recognized.CaptureBounds, visuals),
+                () =>
+                {
+                    if (_stillActive(foregroundWindow, foregroundProcessId))
+                    {
+                        _screenOverlay.ShowTranslations(recognized.CaptureBounds, visuals);
+                        shown = true;
+                    }
+                },
                 DispatcherPriority.Normal,
                 cancellationToken);
+            if (!shown)
+            {
+                HideScreenOverlay();
+                return false;
+            }
+
             translatedSuccessfully = true;
             ReportStatus($"Экранный перевод: наложено реплик — {visuals.Count}; Alt+Shift+T обновит экран");
         }
@@ -122,15 +181,37 @@ internal sealed class ScreenTranslationFlow
     }
 
     private async Task ShowScreenMessageAsync(
+        nint foregroundWindow,
+        int foregroundProcessId,
         System.Drawing.Rectangle bounds,
         string message,
         CancellationToken cancellationToken)
     {
+        bool shown = false;
         await _dispatcher.InvokeAsync(
-            () => _screenOverlay.ShowMessage(bounds, message),
+            () =>
+            {
+                if (_stillActive(foregroundWindow, foregroundProcessId))
+                {
+                    _screenOverlay.ShowMessage(bounds, message);
+                    shown = true;
+                }
+            },
             DispatcherPriority.Normal,
             cancellationToken);
-        await Task.Delay(2400, cancellationToken);
+        if (!shown)
+        {
+            HideScreenOverlay();
+            return;
+        }
+
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(2400);
+        while (DateTime.UtcNow < deadline &&
+               _stillActive(foregroundWindow, foregroundProcessId))
+        {
+            await Task.Delay(50, cancellationToken);
+        }
+
         HideScreenOverlay();
     }
 

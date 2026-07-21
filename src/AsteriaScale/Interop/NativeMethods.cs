@@ -29,7 +29,6 @@ internal static class NativeMethods
     internal const ushort VkD = 0x44;
     internal const ushort VkQ = 0x51;
     internal const ushort VkT = 0x54;
-    internal static readonly nint HwndBroadcast = new(0xffff);
     internal static readonly nint HwndMessage = new(-3);
     internal static readonly nint HwndTopmost = new(-1);
 
@@ -200,6 +199,39 @@ internal static class NativeMethods
         return buffer.ToString();
     }
 
+    internal static nint FindTopLevelWindow(string className, int processId)
+    {
+        nint result = nint.Zero;
+        EnumWindows((window, _) =>
+        {
+            if (string.Equals(ReadClassName(window), className, StringComparison.Ordinal) &&
+                GetWindowThreadProcessId(window, out uint ownerProcessId) != 0 &&
+                ownerProcessId == (uint)processId)
+            {
+                result = window;
+                return false;
+            }
+
+            return true;
+        }, nint.Zero);
+        return result;
+    }
+
+    internal static nint FindMessageOnlyWindow(string className, int processId)
+    {
+        nint current = nint.Zero;
+        while ((current = FindWindowEx(HwndMessage, current, className, null)) != nint.Zero)
+        {
+            if (GetWindowThreadProcessId(current, out uint ownerProcessId) != 0 &&
+                ownerProcessId == unchecked((uint)processId))
+            {
+                return current;
+            }
+        }
+
+        return nint.Zero;
+    }
+
     internal static bool IsCloaked(nint hWnd) =>
         DwmGetWindowAttribute(hWnd, DwmwaCloaked, out int cloaked, sizeof(int)) == 0 && cloaked != 0;
 
@@ -230,7 +262,7 @@ internal static class NativeMethods
         }
     }
 
-    internal static void SendMagpieHotkey(bool windowed)
+    internal static bool SendMagpieHotkey(bool windowed)
     {
         ushort trigger = windowed ? VkQ : VkA;
         Input[] inputs =
@@ -242,12 +274,15 @@ internal static class NativeMethods
             KeyUp(VkShift),
             KeyUp(VkMenu)
         ];
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) == inputs.Length;
     }
 
-    internal static bool TriggerMagpieAction(bool windowed)
+    internal static bool TriggerMagpieAction(
+        bool windowed,
+        int processId,
+        bool allowKeyboardFallback)
     {
-        nint hotkeyWindow = FindWindowEx(HwndMessage, nint.Zero, "Magpie_Hotkey", null);
+        nint hotkeyWindow = FindMessageOnlyWindow("Magpie_Hotkey", processId);
         if (hotkeyWindow != nint.Zero && PostMessage(
                 hotkeyWindow,
                 WmHotkey,
@@ -257,8 +292,7 @@ internal static class NativeMethods
             return true;
         }
 
-        SendMagpieHotkey(windowed);
-        return false;
+        return allowKeyboardFallback && SendMagpieHotkey(windowed);
     }
 
     private static Input KeyDown(ushort key) => new()

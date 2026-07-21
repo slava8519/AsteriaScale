@@ -59,6 +59,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ExpectedModelVersionPrefix + ":fp32-dynamic";
     public const string NpuModelCacheId =
         ExpectedModelVersionPrefix + ":vitis-epcontext-b4-s64";
+    public const string CpuEmbeddingBundleCacheTag =
+        "bi-c9745ed1-13c0fb6d-6fd5d72f-be50c362";
     public const string CpuExecutionProvider = "CPUExecutionProvider";
     public const string NpuExecutionProvider = "VitisAIExecutionProvider";
     public const string CpuEngineLabel = "NPU OCR  •  CPU-СМЫСЛ";
@@ -66,6 +68,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
     private const int MaximumCandidates = 128;
     private static readonly TimeSpan DefaultIdleTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan DefaultResponseTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ShutdownResponseTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan ShutdownExitTimeout = TimeSpan.FromSeconds(5);
 
@@ -74,6 +77,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     private readonly string _workerExecutable;
     private readonly string _modelDirectory;
     private readonly TimeSpan _idleTimeout;
+    private readonly TimeSpan _responseTimeout;
+    private readonly Func<GlossBertRankerProvider, ProcessStartInfo>? _workerStartInfoFactory;
     private Process? _worker;
     private StreamWriter? _workerInput;
     private StreamReader? _workerOutput;
@@ -111,11 +116,29 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     }
 
     internal GlossBertDictionarySelectorService(string baseDirectory, TimeSpan idleTimeout)
+        : this(
+            baseDirectory,
+            idleTimeout,
+            DefaultResponseTimeout,
+            workerStartInfoFactory: null)
+    {
+    }
+
+    internal GlossBertDictionarySelectorService(
+        string baseDirectory,
+        TimeSpan idleTimeout,
+        TimeSpan responseTimeout,
+        Func<GlossBertRankerProvider, ProcessStartInfo>? workerStartInfoFactory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
         if (idleTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(idleTimeout));
+        }
+
+        if (responseTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(responseTimeout));
         }
 
         string rankerDirectory = Path.Combine(Path.GetFullPath(baseDirectory), "Ranker");
@@ -124,6 +147,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             "AsteriaScale.RankerWorker.exe");
         _modelDirectory = Path.Combine(rankerDirectory, "Models");
         _idleTimeout = idleTimeout;
+        _responseTimeout = responseTimeout;
+        _workerStartInfoFactory = workerStartInfoFactory;
         _idleTimer = new System.Threading.Timer(
             static state =>
             {
@@ -228,15 +253,13 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             .Select(value => value.Trim())
             .ToArray();
         int[] stableGroupIds = candidateGroupIds.ToArray();
-        RankerRequest request = NewRequest(RankerProtocolV2.Select) with
-        {
-            Context = context.Trim(),
-            Target = target.Trim(),
-            CharacterIndex = characterIndex,
-            SourceLanguage = sourceLanguage.Trim(),
-            Candidates = normalizedCandidates,
-            CandidateGroupIds = stableGroupIds
-        };
+        RankerRequest request = CreateSelectionRequestForTests(
+            context,
+            target,
+            characterIndex,
+            normalizedCandidates,
+            stableGroupIds,
+            sourceLanguage);
 
         RankerResponse response = await SendAsync(
             request,
@@ -311,10 +334,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 request.RequestId,
                 provider,
                 expectedGroupIds,
-                requireSelection: string.Equals(
-                    request.Command,
-                    RankerProtocolV2.Select,
-                    StringComparison.Ordinal));
+                expectedCommand: request.Command);
             _activeModelVersion = response.ModelVersion;
             return response;
         }
@@ -350,23 +370,29 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
 
         ValidateArtifactPaths();
-        ProcessStartInfo startInfo = new(_workerExecutable)
+        ProcessStartInfo startInfo = _workerStartInfoFactory?.Invoke(provider) ??
+            new ProcessStartInfo(_workerExecutable);
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.RedirectStandardInput = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.StandardInputEncoding = new UTF8Encoding(false);
+        startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+        startInfo.StandardErrorEncoding = new UTF8Encoding(false);
+        if (string.IsNullOrWhiteSpace(startInfo.WorkingDirectory))
         {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = new UTF8Encoding(false),
-            StandardErrorEncoding = new UTF8Encoding(false),
-            WorkingDirectory = Path.GetDirectoryName(_workerExecutable)!
-        };
-        startInfo.ArgumentList.Add("--provider");
-        startInfo.ArgumentList.Add(
-            provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
-        startInfo.ArgumentList.Add("--model-directory");
-        startInfo.ArgumentList.Add(_modelDirectory);
+            startInfo.WorkingDirectory = Path.GetDirectoryName(_workerExecutable)!;
+        }
+
+        if (_workerStartInfoFactory is null)
+        {
+            startInfo.ArgumentList.Add("--provider");
+            startInfo.ArgumentList.Add(
+                provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
+            startInfo.ArgumentList.Add("--model-directory");
+            startInfo.ArgumentList.Add(_modelDirectory);
+        }
 
         Process worker;
         try
@@ -401,7 +427,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 hello.RequestId,
                 provider,
                 expectedGroupIds: null,
-                requireSelection: false);
+                expectedCommand: hello.Command);
             _activeModelVersion = response.ModelVersion;
         }
         catch
@@ -434,7 +460,24 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 "GlossBERT worker output is not available.");
         }
 
-        string? line = await _workerOutput.ReadLineAsync(CancellationToken.None);
+        Task<string?> readTask = _workerOutput
+            .ReadLineAsync(CancellationToken.None)
+            .AsTask();
+        string? line;
+        try
+        {
+            line = await readTask.WaitAsync(_responseTimeout);
+        }
+        catch (TimeoutException ex)
+        {
+            _ = ObserveTimedOutReadAsync(readTask);
+            throw new GlossBertRankerException(
+                "worker_response_timeout",
+                "GlossBERT worker не ответил в установленный срок. " +
+                "Процесс будет принудительно перезапущен.",
+                ex);
+        }
+
         if (line is null)
         {
             int? exitCode = _worker is { HasExited: true } worker
@@ -462,13 +505,34 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
     }
 
+    private static async Task ObserveTimedOutReadAsync(Task<string?> readTask)
+    {
+        try
+        {
+            _ = await readTask;
+        }
+        catch
+        {
+            // The timeout owner kills and disposes the worker tree. This observer
+            // only prevents the abandoned pipe read from surfacing unobserved.
+        }
+    }
+
     private static void ValidateResponse(
         RankerResponse response,
         string expectedRequestId,
         GlossBertRankerProvider requestedProvider,
         IReadOnlyCollection<int>? expectedGroupIds,
-        bool requireSelection)
+        string expectedCommand)
     {
+        bool requireSelection = string.Equals(
+            expectedCommand,
+            RankerProtocolV2.Select,
+            StringComparison.Ordinal);
+        bool requireLoadedIdentity = requireSelection || string.Equals(
+            expectedCommand,
+            RankerProtocolV2.Warm,
+            StringComparison.Ordinal);
         if (!string.Equals(
                 response.Version,
                 RankerProtocolV2.Version,
@@ -518,23 +582,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw ProtocolError(
                 $"Unexpected ranker model '{response.ModelVersion ?? "<null>"}'.");
         }
-        if (requireSelection &&
-            !response.ModelVersion.StartsWith(
-                GetModelCacheId(requestedProvider),
-                StringComparison.Ordinal))
-        {
-            throw ProtocolError(
-                $"Ranker artifact '{response.ModelVersion}' does not match the " +
-                $"requested {requestedProvider} cache identity.");
-        }
-
-        ValidateFinite(response.Margin, "margin");
-        ValidateFinite(response.Score, "score");
-        ValidateFinite(response.Confidence, "confidence");
-        if (response.Confidence is < 0 or > 1)
-        {
-            throw ProtocolError("Worker confidence must be in the [0, 1] range.");
-        }
 
         if (!response.Ok)
         {
@@ -545,6 +592,32 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 ? "GlossBERT worker rejected the request."
                 : response.Error;
             throw new GlossBertRankerException(errorCode, message);
+        }
+
+        if (requireLoadedIdentity &&
+            !response.ModelVersion.StartsWith(
+                GetModelCacheId(requestedProvider),
+                StringComparison.Ordinal))
+        {
+            throw ProtocolError(
+                $"Ranker artifact '{response.ModelVersion}' does not match the " +
+                $"requested {requestedProvider} cache identity.");
+        }
+
+        if (requireLoadedIdentity &&
+            !HasPinnedPipelineIdentity(response.ModelVersion, requestedProvider))
+        {
+            throw ProtocolError(
+                $"Ranker artifact '{response.ModelVersion}' does not declare " +
+                "the pinned cross/bi-encoder pipeline identity.");
+        }
+
+        ValidateFinite(response.Margin, "margin");
+        ValidateFinite(response.Score, "score");
+        ValidateFinite(response.Confidence, "confidence");
+        if (response.Confidence is < 0 or > 1)
+        {
+            throw ProtocolError("Worker confidence must be in the [0, 1] range.");
         }
 
         if (!requireSelection)
@@ -576,6 +649,20 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw ProtocolError(
                 $"A selection response must declare its ranking pipeline; " +
                 $"received '{response.Pipeline ?? "<null>"}'.");
+        }
+
+        bool allowsBiEncoderPipeline =
+            requestedProvider == GlossBertRankerProvider.Cpu &&
+            response.ModelVersion.EndsWith(
+                ":" + CpuEmbeddingBundleCacheTag,
+                StringComparison.Ordinal) &&
+            expectedGroupIds.Distinct().Count() > 16;
+        if (string.Equals(response.Pipeline, "bi+cross", StringComparison.Ordinal) &&
+            !allowsBiEncoderPipeline)
+        {
+            throw ProtocolError(
+                $"Worker pipeline '{response.Pipeline}' does not match the pinned " +
+                $"{requestedProvider} artifact or candidate inventory.");
         }
 
         if (response.Abstained)
@@ -611,7 +698,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             response.RequestId,
             requestedProvider,
             expectedGroupIds,
-            requireSelection: true);
+            expectedCommand: RankerProtocolV2.Select);
         return new GlossBertDictionarySelection(
             response.Index,
             response.Abstained,
@@ -742,7 +829,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                     shutdown.RequestId,
                     requestedProvider,
                     expectedGroupIds: null,
-                    requireSelection: false);
+                    expectedCommand: shutdown.Command);
 
                 using CancellationTokenSource exitTimeout =
                     new(ShutdownExitTimeout);
@@ -881,12 +968,69 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         RequestId = Guid.NewGuid().ToString("N")
     };
 
+    internal static RankerRequest CreateSelectionRequestForTests(
+        string context,
+        string target,
+        int characterIndex,
+        IReadOnlyList<string> candidates,
+        IReadOnlyList<int> candidateGroupIds,
+        string sourceLanguage) =>
+        NewRequest(RankerProtocolV2.Select) with
+        {
+            Context = context,
+            Target = target.Trim(),
+            CharacterIndex = characterIndex,
+            SourceLanguage = sourceLanguage.Trim(),
+            Candidates = candidates,
+            CandidateGroupIds = candidateGroupIds
+        };
+
     private static void ValidateFinite(double? value, string fieldName)
     {
         if (value is { } number && (double.IsNaN(number) || double.IsInfinity(number)))
         {
             throw ProtocolError($"Worker {fieldName} must be finite.");
         }
+    }
+
+    private static bool HasPinnedPipelineIdentity(
+        string modelVersion,
+        GlossBertRankerProvider provider)
+    {
+        string artifactIdentity = GetModelCacheId(provider);
+        if (!modelVersion.StartsWith(artifactIdentity, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        string suffix = modelVersion[artifactIdentity.Length..];
+        if (suffix.StartsWith(":onnx-", StringComparison.Ordinal))
+        {
+            int tagEnd = suffix.IndexOf(':', 6);
+            if (tagEnd < 0 ||
+                !long.TryParse(
+                    suffix.AsSpan(6, tagEnd - 6),
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out long version) ||
+                version <= 0)
+            {
+                return false;
+            }
+
+            suffix = suffix[tagEnd..];
+        }
+
+        if (string.Equals(suffix, ":pipeline-cross", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return provider == GlossBertRankerProvider.Cpu &&
+               string.Equals(
+                   suffix,
+                   ":" + CpuEmbeddingBundleCacheTag,
+                   StringComparison.Ordinal);
     }
 
     private static GlossBertRankerException ProtocolError(string message) =>
@@ -903,9 +1047,20 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             expectedRequestId,
             requestedProvider,
             expectedGroupIds,
-            requireSelection: true);
+            expectedCommand: RankerProtocolV2.Select);
         return CreateSelection(response, requestedProvider, expectedGroupIds);
     }
+
+    internal static void ValidateWarmResponseForTests(
+        RankerResponse response,
+        string expectedRequestId,
+        GlossBertRankerProvider requestedProvider) =>
+        ValidateResponse(
+            response,
+            expectedRequestId,
+            requestedProvider,
+            expectedGroupIds: null,
+            expectedCommand: RankerProtocolV2.Warm);
 
     public async ValueTask DisposeAsync()
     {

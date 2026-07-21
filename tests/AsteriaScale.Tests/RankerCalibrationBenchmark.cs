@@ -11,6 +11,11 @@ using AsteriaScale.Services;
 /// </summary>
 internal static class RankerCalibrationBenchmark
 {
+    // Recorded CPU/NPU baselines stay above this floor, including the older
+    // frozen confirmation sets. The gate detects real selection regressions
+    // without changing the runtime's margin-only abstention contract.
+    private const double MinimumAcceptedDecisionPrecision = 0.90;
+
     private sealed record BenchmarkCase(
         string Id,
         string Context,
@@ -45,12 +50,25 @@ internal static class RankerCalibrationBenchmark
                 element.GetProperty("characterIndex").GetInt32(),
                 element.GetProperty("expectedTranslation").GetString()!))
             .ToArray();
+        if (cases.Length == 0)
+        {
+            throw new InvalidDataException("The ranker benchmark contains no cases.");
+        }
 
-        LocalDictionaryService dictionary = new();
-        await dictionary.LoadSenseMetadataAsync();
-        await using GlossBertDictionarySelectorService selector = new(
-            workerBaseDirectory,
-            TimeSpan.FromMinutes(10));
+        string isolatedUserDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "AsteriaScale",
+            "ranker-benchmark-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedUserDirectory);
+        try
+        {
+            LocalDictionaryService dictionary = new(
+                Path.Combine(AppContext.BaseDirectory, "Dictionaries"),
+                isolatedUserDirectory);
+            await dictionary.LoadSenseMetadataAsync();
+            await using GlossBertDictionarySelectorService selector = new(
+                workerBaseDirectory,
+                TimeSpan.FromMinutes(10));
 
         List<CaseResult> results = [];
         List<(int Glosses, long Milliseconds)> selectLatencies = [];
@@ -197,6 +215,70 @@ internal static class RankerCalibrationBenchmark
         PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
         PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
         PrintBucket("all ranked", results);
+        VerifyMeasurementCounts(
+            cases.Length,
+            results.Count,
+            coveredCount,
+            results.Count(result => result.ExpectedCovered && !result.Abstained),
+            results.Count(result => result.Correct == true));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(isolatedUserDirectory, recursive: true);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Benchmark isolation matters more than best-effort temp cleanup.
+            }
+        }
+    }
+
+    internal static void VerifyMeasurementCounts(
+        int caseCount,
+        int rankedCount,
+        int coveredCount,
+        int decidedCount,
+        int correctCount)
+    {
+        if (caseCount <= 0)
+        {
+            throw new InvalidDataException("The ranker benchmark contains no cases.");
+        }
+
+        if (rankedCount <= 0)
+        {
+            throw new InvalidDataException(
+                "The ranker benchmark produced no rankable inventories.");
+        }
+
+        if (coveredCount <= 0)
+        {
+            throw new InvalidDataException(
+                "The ranker benchmark covered none of its expected labels.");
+        }
+
+        if (decidedCount <= 0)
+        {
+            throw new InvalidDataException(
+                "The ranker benchmark made no labeled decisions.");
+        }
+
+        if (correctCount < 0 || correctCount > decidedCount)
+        {
+            throw new InvalidDataException(
+                "The ranker benchmark reported inconsistent correctness counts.");
+        }
+
+        double precision = correctCount / (double)decidedCount;
+        if (precision < MinimumAcceptedDecisionPrecision)
+        {
+            throw new InvalidOperationException(
+                $"Ranker accepted-decision precision {precision:P1} is below the " +
+                $"{MinimumAcceptedDecisionPrecision:P0} quality gate " +
+                $"({correctCount}/{decidedCount}).");
+        }
     }
 
     private static void PrintBucket(string label, IEnumerable<CaseResult> bucket)

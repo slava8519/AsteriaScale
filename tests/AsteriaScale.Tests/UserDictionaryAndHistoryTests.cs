@@ -10,7 +10,8 @@ internal static class UserDictionaryAndHistoryTests
     {
         await VerifyUserDictionaryAsync(tempRoot);
         await VerifyUserEntryReachesLookupAsync(tempRoot);
-        VerifyHistory(tempRoot);
+        await VerifyLegacyJapaneseMigrationAsync(tempRoot);
+        await VerifyHistoryAsync(tempRoot);
     }
 
     private static async Task VerifyUserDictionaryAsync(string tempRoot)
@@ -23,21 +24,27 @@ internal static class UserDictionaryAndHistoryTests
         Check(canonical == "hello", $"Key was not canonicalized on write: '{canonical}'");
         Check(await service.SaveEntryAsync("Don’t", "не надо") == "don't",
             "A typographic apostrophe must be folded to the straight one.");
+        Check(await service.SaveEntryAsync("ありがとう!", "спасибо") == "ありがとう",
+            "A Japanese key was not routed through Japanese normalization.");
 
         IReadOnlyList<UserDictionaryEntry> entries = await service.LoadAsync();
-        Check(entries.Count == 2, $"Expected two stored entries, got {entries.Count}.");
+        Check(entries.Count == 3 &&
+              entries.Single(entry => entry.Key == "ありがとう").Language == "JA" &&
+              File.Exists(service.JapaneseFilePath),
+            $"Expected separate English/Japanese entries, got {entries.Count}.");
 
         // Re-saving the same word replaces instead of duplicating.
         await service.SaveEntryAsync("HELLO", "здравствуйте");
         entries = await service.LoadAsync();
-        Check(entries.Count == 2 &&
+        Check(entries.Count == 3 &&
               entries.Single(entry => entry.Key == "hello").Translation == "здравствуйте",
             "Saving an existing key must replace its translation.");
 
         Check(await service.RemoveEntryAsync("Hello"), "Removal by non-canonical key failed.");
         Check(!await service.RemoveEntryAsync("absent"), "Removing a missing key must report false.");
         entries = await service.LoadAsync();
-        Check(entries.Count == 1 && entries[0].Key == "don't",
+        Check(entries.Count == 2 && entries.Any(entry => entry.Key == "don't") &&
+              entries.Any(entry => entry.Key == "ありがとう" && entry.Language == "JA"),
             "Removal did not leave the remaining entries intact.");
 
         try
@@ -48,6 +55,16 @@ internal static class UserDictionaryAndHistoryTests
         catch (ArgumentException)
         {
             // Expected.
+        }
+
+        try
+        {
+            await service.SaveEntryAsync(" # hidden", "невидимый");
+            throw new InvalidOperationException("A comment-prefixed key was accepted.");
+        }
+        catch (ArgumentException)
+        {
+            // Expected: the TSV loader treats leading # as a comment.
         }
     }
 
@@ -71,45 +88,249 @@ internal static class UserDictionaryAndHistoryTests
 
         UserDictionaryService editor = new(user);
         await editor.SaveEntryAsync("Hello", "мой привет");
+        await editor.SaveEntryAsync("こんにちは", "мой японский привет");
 
         LocalDictionaryService dictionary = new(bundled, user);
         await dictionary.LoadAsync();
         DictionaryLookupResult lookup = await dictionary.LookupAsync("Hello world", "Hello", 0);
         Check(lookup is { Found: true, Translation: "мой привет" },
             $"A user-added entry must override bundled layers: {lookup.Translation}");
+        DictionaryLookupResult japaneseLookup = await dictionary.LookupAsync(
+            "こんにちは", "こんにちは", 1);
+        Check(japaneseLookup is { Found: true, Translation: "мой японский привет", Language: "JA" },
+            $"A Japanese user entry did not reach its lookup layer: {japaneseLookup}");
     }
 
-    private static void VerifyHistory(string tempRoot)
+    private static async Task VerifyLegacyJapaneseMigrationAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "legacy-japanese-user");
+        string bundled = Path.Combine(root, "bundled");
+        string user = Path.Combine(root, "user");
+        Directory.CreateDirectory(bundled);
+        Directory.CreateDirectory(user);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            ["hello\tпривет"]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "jpn-rus.tsv"),
+            ["こんにちは\tздравствуйте"]);
+        string legacyPath = Path.Combine(user, "eng-rus-user.tsv");
+        await File.WriteAllLinesAsync(
+            legacyPath,
+            [
+                "# мой комментарий",
+                "hello\tмой привет",
+                "неизвестная строка",
+                "",
+                "古語\tстарое слово",
+                "旧語\tустаревшее слово"
+            ]);
+        string japaneseUserPath = Path.Combine(user, "jpn-rus-user.tsv");
+        await File.WriteAllLinesAsync(
+            japaneseUserPath,
+            [
+                "# мой японский комментарий",
+                "неизвестная японская строка",
+                "古語\tновое значение"
+            ]);
+
+        LocalDictionaryService compatibleDictionary = new(bundled, user);
+        await compatibleDictionary.LoadAsync();
+        DictionaryLookupResult compatibleLookup = await compatibleDictionary.LookupAsync(
+            "古語",
+            "古語",
+            0);
+        DictionaryLookupResult legacyOnlyLookup = await compatibleDictionary.LookupAsync(
+            "旧語",
+            "旧語",
+            0);
+        Check(compatibleLookup is { Found: true, Translation: "новое значение", Language: "JA" } &&
+              legacyOnlyLookup is { Found: true, Translation: "устаревшее слово", Language: "JA" },
+            "Japanese compatibility lookup did not merge legacy and dedicated user rows.");
+
+        UserDictionaryService editor = new(user);
+        IReadOnlyList<UserDictionaryEntry> migrated = await editor.LoadAsync();
+        string migratedJapaneseText = File.ReadAllText(japaneseUserPath);
+        Check(migrated.Any(entry => entry is
+                  { Key: "古語", Translation: "новое значение", Language: "JA" }) &&
+              migrated.Any(entry => entry is
+                  { Key: "旧語", Translation: "устаревшее слово", Language: "JA" }) &&
+              !File.ReadAllText(legacyPath).Contains("古語", StringComparison.Ordinal) &&
+              !File.ReadAllText(legacyPath).Contains("旧語", StringComparison.Ordinal) &&
+              migratedJapaneseText.Contains("古語\tновое значение", StringComparison.Ordinal) &&
+              !migratedJapaneseText.Contains("古語\tстарое слово", StringComparison.Ordinal) &&
+              migratedJapaneseText.Contains("旧語\tустаревшее слово", StringComparison.Ordinal) &&
+              migratedJapaneseText.Contains("# мой японский комментарий", StringComparison.Ordinal) &&
+              migratedJapaneseText.Contains("неизвестная японская строка", StringComparison.Ordinal) &&
+              File.ReadAllText(legacyPath).Contains("# мой комментарий", StringComparison.Ordinal) &&
+              File.ReadAllText(legacyPath).Contains("неизвестная строка", StringComparison.Ordinal),
+            "Japanese legacy migration lost raw rows or merged with the dedicated layer incorrectly.");
+        Check(await editor.RemoveEntryAsync("古語"),
+            "A migrated Japanese row could not be removed through the editor.");
+
+        LocalDictionaryService afterRemoval = new(bundled, user);
+        await afterRemoval.LoadAsync();
+        DictionaryLookupResult removedLookup = await afterRemoval.LookupAsync("古語", "古語", 0);
+        Check(!removedLookup.Found,
+            "Removing a migrated Japanese entry left a legacy lookup copy behind.");
+    }
+
+    private static async Task VerifyHistoryAsync(string tempRoot)
     {
         string path = Path.Combine(tempRoot, "history", "translation-history.v1.json");
-        TranslationHistoryService history = new(path);
-        history.Record("teetering", "быть на грани", "SMART-FAST", "He was teetering on the verge.");
-        history.Record("teetering", "быть на грани", "SMART-FAST", "He was teetering on the verge.");
-        history.Record("  verge  ", " на грани ", "СЛОВАРЬ");
-        Check(history.Snapshot().Count == 2,
-            "Consecutive duplicates must collapse and fields must be trimmed.");
-        Check(history.Snapshot()[0].Source == "verge",
-            "The newest entry must come first.");
-        history.Record(string.Empty, "пусто", "СЛОВАРЬ");
-        Check(history.Snapshot().Count == 2, "Empty sources must be ignored.");
+        using (TranslationHistoryService history = new(
+                   path,
+                   TimeSpan.FromMilliseconds(40),
+                   TimeSpan.FromMilliseconds(40)))
+        {
+            history.Record(
+                "teetering",
+                "быть на грани",
+                "SMART-FAST",
+                "He was teetering on the verge.",
+                "EN");
+            history.Record(
+                "teetering",
+                "быть на грани",
+                "SMART-FAST",
+                "He was teetering on the verge.",
+                "EN");
+            history.Record("  verge  ", " на грани ", "СЛОВАРЬ", "Near the verge.");
+            Check(history.Snapshot().Count == 2,
+                "Consecutive duplicates must collapse and fields must be trimmed.");
+            Check(history.Snapshot()[0].Source == "verge",
+                "The newest entry must come first.");
+            history.Record(string.Empty, "пусто", "СЛОВАРЬ");
+            Check(history.Snapshot().Count == 2, "Empty sources must be ignored.");
 
-        history.Flush();
-        TranslationHistoryService reopened = new(path);
+            await WaitUntilAsync(
+                () => File.Exists(path),
+                TimeSpan.FromSeconds(2),
+                "Debounced history persistence did not create its file.");
+        }
+
+        using TranslationHistoryService reopened = new(path);
         Check(reopened.Snapshot().Count == 2, "History did not survive a restart.");
+        Check(reopened.Snapshot().Any(entry =>
+                entry.Source == "teetering" &&
+                entry.Context == "He was teetering on the verge." &&
+                entry.Language == "EN"),
+            "History dropped the production context or language metadata.");
+        reopened.Record(
+            "teetering",
+            "шататься на грани",
+            "SMART",
+            "He kept teetering.");
+        reopened.Flush();
 
         string exportPath = Path.Combine(tempRoot, "history", "anki.tsv");
         int exported = reopened.ExportToAnki(exportPath);
         string[] lines = File.ReadAllLines(exportPath);
         Check(exported == 2 && lines.Length == 2,
             $"Anki export wrote {lines.Length} rows for {exported} entries.");
-        Check(lines[0].Split('\t').Length == 3 &&
-              lines[0].StartsWith("teetering\tбыть на грани\t", StringComparison.Ordinal),
-            $"Anki rows must be front/back/context in chronological order: {lines[0]}");
+        Check(lines.All(line => line.Split('\t').Length == 3) &&
+              lines.Single(line => line.StartsWith("teetering\t", StringComparison.Ordinal))
+                  .StartsWith("teetering\tшататься на грани\tHe kept teetering.", StringComparison.Ordinal),
+            "Anki export did not keep the newest correction and its context.");
 
-        reopened.Clear();
-        Check(reopened.Snapshot().Count == 0, "Clear did not empty the history.");
-        Check(new TranslationHistoryService(path).Snapshot().Count == 0,
-            "Clear was not persisted.");
+        string emptyExportPath = Path.Combine(tempRoot, "history", "existing-empty-target.tsv");
+        await File.WriteAllTextAsync(emptyExportPath, "do not replace");
+        using TranslationHistoryService empty = new(
+            Path.Combine(tempRoot, "history", "empty-history.json"));
+        Check(empty.ExportToAnki(emptyExportPath) == 0 &&
+              await File.ReadAllTextAsync(emptyExportPath) == "do not replace",
+            "An empty export clobbered an existing Anki file.");
+
+        reopened.Dispose();
+        await VerifyHistoryIoRecoveryAsync(path);
+        await VerifyBrokenHistoryRecoveryAsync(tempRoot);
+
+        using TranslationHistoryService clear = new(path);
+        Check(clear.Clear(), "Clear did not persist a readable history.");
+        Check(clear.Snapshot().Count == 0, "Clear did not empty the history.");
+        using TranslationHistoryService afterClear = new(path);
+        Check(afterClear.Snapshot().Count == 0, "Clear was not persisted.");
+    }
+
+    private static async Task VerifyHistoryIoRecoveryAsync(string path)
+    {
+        using TranslationHistoryService pending = new(
+            path,
+            TimeSpan.FromHours(1),
+            TimeSpan.FromHours(1));
+        using (FileStream locked = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            pending.Record("pending", "ожидающий", "СЛОВАРЬ", "Pending context.");
+            Check(pending.Snapshot().Count == 1,
+                "A translation recorded during a transient read failure was lost in memory.");
+            pending.Flush();
+            Check(!pending.Clear(),
+                "Clear reported success while the existing history could not be read.");
+        }
+
+        pending.Flush();
+
+        using (TranslationHistoryService loaded = new(path))
+        {
+            Check(loaded.Snapshot().Any(entry => entry.Source == "teetering") &&
+                  loaded.Snapshot().Any(entry => entry.Source == "pending"),
+                "A transient load failure caused the old history to be overwritten.");
+            loaded.Record("retry", "повтор", "СЛОВАРЬ");
+            using (FileStream locked = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                loaded.Flush();
+            }
+
+            loaded.Flush();
+        }
+
+        using TranslationHistoryService afterRetry = new(path);
+        Check(afterRetry.Snapshot().Any(entry => entry.Source == "retry"),
+            "A failed flush cleared the dirty flag instead of retrying.");
+
+        await Task.CompletedTask;
+    }
+
+    private static async Task VerifyBrokenHistoryRecoveryAsync(string tempRoot)
+    {
+        foreach ((string name, string brokenDocument) in new[]
+                 {
+                     ("invalid-json", "{ definitely not json"),
+                     ("unknown-schema", "{\"version\":99,\"entries\":[]}")
+                 })
+        {
+            string path = Path.Combine(tempRoot, "history", name + ".json");
+            await File.WriteAllTextAsync(path, brokenDocument);
+            using (TranslationHistoryService history = new(path))
+            {
+                history.Record("new entry", "новая запись", "СЛОВАРЬ");
+                history.Flush();
+            }
+
+            string[] quarantined = Directory.GetFiles(
+                Path.GetDirectoryName(path)!,
+                Path.GetFileName(path) + ".broken-*");
+            Check(quarantined.Length == 1 &&
+                  await File.ReadAllTextAsync(quarantined[0]) == brokenDocument,
+                $"A permanently broken history was not preserved: {name}.");
+            using TranslationHistoryService reopened = new(path);
+            Check(reopened.Snapshot().Any(entry => entry.Source == "new entry"),
+                $"A broken history blocked later persistence: {name}.");
+        }
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> predicate,
+        TimeSpan timeout,
+        string failureMessage)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (!predicate() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Check(predicate(), failureMessage);
     }
 
     private static void Check(bool condition, string message)

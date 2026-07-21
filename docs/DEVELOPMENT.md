@@ -48,8 +48,11 @@ Smoke-набор — консольная программа без тестов
 | `--translation-benchmark <set.json> [engine] [--dump <file>]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность. Требует живой Foundry Local |
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev) и `ranker-holdout-v2.json` (замороженный — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
+Команда завершается с ошибкой при отсутствии ранжируемых/размеченных решений или при точности принятых решений ниже `90 %`; это CI-gate результата, не дополнительный критерий воздержания модели.
 
-Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 случая) и `translation-holdout-v1.json` (замороженный, 30 случаев — правило то же). Схема обоих семейств наборов проверяется смоук-тестом «Benchmark set schema»: он валидирует непустые поля, отсутствие латиницы в эталонах и присутствие каждого терминологического якоря в собственном эталоне.
+Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 случая) и `translation-holdout-v1.json` (замороженный, 30 случаев — правило то же). Смоук-тест «Benchmark set schema» читает и проверяет только dev-наборы `ranker-benchmark.json` и `translation-benchmark.json`: default smoke никогда не открывает frozen holdout. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
+
+`--translation-benchmark` всегда падает на пустом наборе или пустом ответе. После получения воспроизводимой baseline можно включить quality gates переменными окружения `ASTERIA_TRANSLATION_MIN_CHRF`, `ASTERIA_TRANSLATION_MIN_ANCHOR_RATE` и `ASTERIA_TRANSLATION_MAX_RESIDUAL_ENGLISH`; значения задаются от `0` до `1` с точкой. По умолчанию числовые пороги отключены, поскольку baseline Foundry Local ещё не зафиксирована в `RESEARCH.md`.
 
 ## Публикация
 
@@ -69,7 +72,11 @@ New-SelfSignedCertificate -Type Custom -Subject "CN=Asteria Scale Local" `
 
 Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRecognizer` недоступен обычному Win32-процессу.
 
-Публикация чистит `dist/AsteriaScale`; запущенное из трея приложение держит EXE — закройте его перед сборкой.
+Публикация сначала собирает и проверяет приложение, Ranker с обоими наборами моделей и подписанный identity-пакет
+в уникальном staging-каталоге внутри `dist`. Рабочие `dist/AsteriaScale` и `AsteriaScale.Identity.msix`
+заменяются только после всех проверок; при ошибке прежняя публикация остаётся на месте. `run` и `install`
+сверяют `.build-revision` с Git HEAD и `.build-source-fingerprint` с манифестом путей, содержимого и удалений входных файлов, поэтому устаревший `dist` пересобирается даже в dirty worktree.
+Запущенное из трея приложение всё равно следует закрыть перед сборкой: Windows может удерживать файлы старой публикации.
 
 ## Регенерация морфословаря
 

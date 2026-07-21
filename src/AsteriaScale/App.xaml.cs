@@ -10,6 +10,8 @@ namespace AsteriaScale;
 public partial class App : System.Windows.Application
 {
     private Mutex? _singleInstanceMutex;
+    private readonly object _settingsSaveSync = new();
+    private readonly HashSet<Task> _pendingSettingsSaves = [];
 
     public new static App Current => (App)System.Windows.Application.Current;
 
@@ -102,7 +104,6 @@ public partial class App : System.Windows.Application
 
             AsteriaWindow = new MainWindow(
                 Settings,
-                SettingsService,
                 WindowCatalog,
                 Engine,
                 StartupManager,
@@ -378,12 +379,30 @@ public partial class App : System.Windows.Application
     {
         try
         {
-            await SettingsService.SaveAsync(Settings);
+            await SaveSettingsTrackedAsync();
         }
         catch (Exception ex)
         {
             AsteriaWindow?.SetStatus("Не удалось сохранить настройки: " + ex.Message);
         }
+    }
+
+    internal Task SaveSettingsTrackedAsync()
+    {
+        Task save;
+        lock (_settingsSaveSync)
+        {
+            if (IsExiting)
+            {
+                return Task.CompletedTask;
+            }
+
+            save = SettingsService.SaveAsync(Settings);
+            _pendingSettingsSaves.Add(save);
+        }
+
+        _ = RemoveCompletedSettingsSaveAsync(save);
+        return save;
     }
 
     public void ShowTrayHintOnce()
@@ -395,14 +414,14 @@ public partial class App : System.Windows.Application
 
         Settings.ShowFirstTrayHint = false;
         Tray.ShowHint("Asteria Scale работает в фоне", "Дважды щёлкните значок в трее, чтобы открыть окно.");
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
     }
 
     private void SetAutomation(bool enabled)
     {
         Settings.AutomationEnabled = enabled;
         AsteriaWindow?.SetAutomationUi(enabled);
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
     }
 
     private void SetHoverTranslation(bool enabled)
@@ -410,7 +429,7 @@ public partial class App : System.Windows.Application
         Settings.HoverTranslationEnabled = enabled;
         HoverTranslation.SetEnabled(enabled);
         AsteriaWindow?.SetHoverTranslationUi(enabled);
-        _ = SaveSettingsAsync();
+        QueueSettingsSave();
     }
 
     private void SetHoverTranslationMode(string mode)
@@ -419,20 +438,58 @@ public partial class App : System.Windows.Application
         HoverTranslation.SetMode(normalized);
         AsteriaWindow?.SetTranslationModeUi(normalized);
         Tray?.SetTranslationMode(normalized);
+        QueueSettingsSave();
+    }
+
+    private void QueueSettingsSave()
+    {
         _ = SaveSettingsAsync();
+    }
+
+    private async Task RemoveCompletedSettingsSaveAsync(Task save)
+    {
+        try
+        {
+            await save;
+        }
+        catch
+        {
+            // The initiating UI path reports the error; tracking must still drain.
+        }
+        finally
+        {
+            lock (_settingsSaveSync)
+            {
+                _pendingSettingsSaves.Remove(save);
+            }
+        }
     }
 
     public async Task ExitApplicationAsync()
     {
-        if (IsExiting)
+        Task[] pendingSettingsSaves;
+        lock (_settingsSaveSync)
         {
-            return;
+            if (IsExiting)
+            {
+                return;
+            }
+
+            IsExiting = true;
+            pendingSettingsSaves = [.. _pendingSettingsSaves];
         }
 
-        IsExiting = true;
-        AutoScale.Dispose();
         Tray?.Dispose();
         Tray = null;
+        await AutoScale.DisposeAsync();
+        try
+        {
+            await Task.WhenAll(pendingSettingsSaves);
+        }
+        catch
+        {
+            // A failed settings write was already reported and cannot block exit.
+        }
 
         try
         {

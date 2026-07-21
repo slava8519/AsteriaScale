@@ -19,7 +19,6 @@ from pathlib import Path
 XML_LANG = "{http://www.w3.org/XML/1998/namespace}lang"
 TEI = "{http://www.tei-c.org/ns/1.0}"
 SPACE_RE = re.compile(r"\s+")
-ENGLISH_TOKEN_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
 JAPANESE_CHARACTER_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff々〆ヶ]")
 MAX_DIALOGUE_WORDS = 10
 MAX_JAPANESE_DIALOGUE_LENGTH = 32
@@ -59,14 +58,97 @@ def is_usable_english_definition(value: str) -> bool:
     return normalized not in {"translation", "translations"}
 
 
+ENGLISH_TRIM_CHARACTERS = " .,!?:;\"“”()[]"
+
+
+def canonical_english_casefold(value: str) -> str:
+    # Keep this expansion list byte-identical to LocalDictionaryService.
+    # Python's wider Unicode casefold would otherwise create keys that .NET's
+    # invariant lower-casing cannot reproduce at lookup time.
+    expanded = (
+        value
+        .replace("ß", "ss")
+        .replace("ẞ", "ss")
+        .replace("İ", "i\u0307")
+        .replace("ſ", "s")
+        .replace("ς", "σ")
+        .replace("ﬀ", "ff")
+        .replace("ﬁ", "fi")
+        .replace("ﬂ", "fl")
+        .replace("ﬃ", "ffi")
+        .replace("ﬄ", "ffl")
+        .replace("ﬅ", "st")
+        .replace("ﬆ", "st")
+    )
+    return "".join(character.lower() for character in expanded)
+
+
+def english_tokens(text: str) -> list[str]:
+    result: list[str] = []
+    start = -1
+    index = 0
+    while index < len(text):
+        category = unicodedata.category(text[index])
+        if category[0] in {"L", "M"}:
+            if start < 0:
+                start = index
+            index += 1
+            continue
+
+        if (
+            start >= 0
+            and text[index] in {"'", "’", "-"}
+            and index + 1 < len(text)
+            and unicodedata.category(text[index + 1])[0] in {"L", "M"}
+        ):
+            index += 1
+            continue
+
+        if start >= 0:
+            result.append(text[start:index])
+            start = -1
+        index += 1
+
+    if start >= 0:
+        result.append(text[start:])
+    return result
+
+
 def normalize_english(value: str | None) -> str:
-    # Keys keep only the straight apostrophe: the runtime lookup canonicalizes
-    # OCR text the same way, so both spellings resolve to one entry.
-    return " ".join(ENGLISH_TOKEN_RE.findall(clean(value))).casefold().replace("’", "'")
+    # Lexical keys retain internal punctuation and digits. Sentence keys use
+    # normalize_english_sentence_key instead.
+    collapsed = clean(value).replace("’", "'").strip(ENGLISH_TRIM_CHARACTERS)
+    return canonical_english_casefold(collapsed)
+
+
+def normalize_english_sentence_key(value: str | None) -> str:
+    return " ".join(
+        canonical_english_casefold(token.replace("’", "'"))
+        for token in english_tokens(clean(value))
+    )
 
 
 def normalize_japanese(value: str | None) -> str:
     return "".join(JAPANESE_CHARACTER_RE.findall(clean(value)))
+
+
+def verify_normalization_contract() -> None:
+    contract_path = Path(__file__).with_name("dictionary-normalization-contract.tsv")
+    for line_number, line in enumerate(
+        contract_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not line or line.startswith("#"):
+            continue
+        source, lexical_expected, sentence_expected = line.split("\t")
+        lexical_actual = normalize_english(source)
+        sentence_actual = normalize_english_sentence_key(source)
+        if lexical_actual != lexical_expected or sentence_actual != sentence_expected:
+            raise RuntimeError(
+                f"{contract_path.name}:{line_number}: "
+                f"normalization of {source!r} produced "
+                f"({lexical_actual!r}, {sentence_actual!r}), expected "
+                f"({lexical_expected!r}, {sentence_expected!r})"
+            )
 
 
 def add(
@@ -591,7 +673,7 @@ def parse_tatoeba(
                 continue
 
             if language == "eng":
-                key = normalize_english(parts[2])
+                key = normalize_english_sentence_key(parts[2])
                 token_count = key.count(" ") + 1 if key else 0
                 if token_count == 0 or token_count > MAX_DIALOGUE_WORDS:
                     continue
@@ -656,6 +738,7 @@ def write_sense_dictionary(
 
 
 def main() -> None:
+    verify_normalization_contract()
     parser = argparse.ArgumentParser()
     parser.add_argument("--freedict", type=Path)
     parser.add_argument("--jmdict", type=Path)

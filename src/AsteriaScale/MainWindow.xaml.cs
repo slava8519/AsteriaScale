@@ -17,7 +17,6 @@ public partial class MainWindow : Window
     public IReadOnlyList<UpscalePreset> AvailablePresets => PresetCatalog.All;
 
     private readonly AppSettings _settings;
-    private readonly SettingsService _settingsService;
     private readonly WindowCatalogService _windowCatalog;
     private readonly MagpieEngineService _engine;
     private readonly StartupService _startup;
@@ -74,14 +73,12 @@ public partial class MainWindow : Window
 
     public MainWindow(
         AppSettings settings,
-        SettingsService settingsService,
         WindowCatalogService windowCatalog,
         MagpieEngineService engine,
         StartupService startup,
         HoverTranslationService hoverTranslation)
     {
         _settings = settings;
-        _settingsService = settingsService;
         _windowCatalog = windowCatalog;
         _engine = engine;
         _startup = startup;
@@ -121,6 +118,10 @@ public partial class MainWindow : Window
             option => option.Milliseconds == _settings.HoverTranslationDelayMs) ?? HoverDelays[1];
         UpdateTranslationModePresentation();
         RefreshProfiles();
+        // Control event suppression is only needed while initial values are
+        // assigned. Keeping it across asynchronous hardware discovery loses
+        // real user changes made after the window becomes interactive.
+        _initializing = false;
 
         _engine.StatusChanged += OnEngineStatusChanged;
         _statusTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -630,6 +631,7 @@ public partial class MainWindow : Window
         }
 
         _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        _hoverTranslation.ApplyTextHookSettings();
         await PersistSettingsAsync();
     }
 
@@ -641,6 +643,7 @@ public partial class MainWindow : Window
         }
 
         _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        _hoverTranslation.ApplyTextHookSettings();
         await PersistSettingsAsync();
     }
 
@@ -651,6 +654,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _hoverTranslation.ApplyTextHookSettings();
         await PersistSettingsAsync();
     }
 
@@ -681,7 +685,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            await _settingsService.SaveAsync(_settings);
+            await App.Current.SaveSettingsTrackedAsync();
             return true;
         }
         catch (Exception ex)

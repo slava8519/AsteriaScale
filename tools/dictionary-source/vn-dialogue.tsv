@@ -1,4 +1,8 @@
 # Common visual-novel dialogue, contractions and chat abbreviations.
+# English Wiktionary also lists an obsolete pronoun homograph for "the";
+# keep modern visual-novel text on the definite-article meaning.
+the	определённый артикль
+i get that a lot	я часто это слышу
 ain't	не; не является; нет
 aren't	не являются; не
 can't	не могу; нельзя

@@ -36,9 +36,16 @@ internal sealed class GlossEmbeddingIndex : IDisposable
             leaveOpen: true);
         string headerLine = ReadHeaderLine(_stream);
         using JsonDocument header = JsonDocument.Parse(headerLine);
+        Format = header.RootElement.GetProperty("format").GetInt32();
         Dimensions = header.RootElement.GetProperty("dimensions").GetInt32();
         ModelId = header.RootElement.GetProperty("model").GetString() ?? "unknown";
         Revision = header.RootElement.GetProperty("revision").GetString() ?? "unknown";
+        Normalized = header.RootElement.GetProperty("normalized").GetBoolean();
+        SequenceLength = header.RootElement.GetProperty("sequenceLength").GetInt32();
+        SenseFileSha256 =
+            header.RootElement.GetProperty("senseFileSha256").GetString() ?? "unknown";
+        DeclaredKeyCount = header.RootElement.GetProperty("keys").GetInt32();
+        DeclaredVectorCount = header.RootElement.GetProperty("vectors").GetInt32();
         if (Dimensions is < 16 or > 4096)
         {
             throw new RankerException(
@@ -49,9 +56,15 @@ internal sealed class GlossEmbeddingIndex : IDisposable
         _offsets = BuildOffsetTable(_stream, Dimensions);
     }
 
+    public int Format { get; }
     public int Dimensions { get; }
     public string ModelId { get; }
     public string Revision { get; }
+    public bool Normalized { get; }
+    public int SequenceLength { get; }
+    public string SenseFileSha256 { get; }
+    public int DeclaredKeyCount { get; }
+    public int DeclaredVectorCount { get; }
     public int KeyCount => _offsets.Count;
 
     public bool TryReadVectors(string key, out IReadOnlyList<GlossVector> vectors)

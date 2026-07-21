@@ -19,7 +19,8 @@ public sealed record SmartDictionaryCacheRequest(
     string SourceLanguage,
     string Backend,
     string ModelId,
-    string DictionaryVersion);
+    string DictionaryVersion,
+    string RankingPipeline = "cross");
 
 /// <summary>
 /// A small persistent LRU for completed Smart Dictionary selections.
@@ -295,6 +296,7 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         string backend = NormalizeIdentifier(request.Backend);
         string modelId = NormalizeIdentifier(request.ModelId);
         string dictionaryVersion = NormalizeIdentifier(request.DictionaryVersion);
+        string rankingPipeline = NormalizeIdentifier(request.RankingPipeline);
         if (backend.Length == 0)
         {
             throw new ArgumentException("Smart Dictionary cache backend cannot be empty.", nameof(request));
@@ -310,8 +312,15 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
             throw new ArgumentException("Smart Dictionary cache dictionary version cannot be empty.", nameof(request));
         }
 
+        if (rankingPipeline is not ("cross" or "bi+cross"))
+        {
+            throw new ArgumentException(
+                "Smart Dictionary cache ranking pipeline must be cross or bi+cross.",
+                nameof(request));
+        }
+
         StringBuilder canonical = new();
-        AppendComponent(canonical, "asteria-smart-dictionary-cache-key-v2");
+        AppendComponent(canonical, "asteria-smart-dictionary-cache-key-v3");
         AppendComponent(canonical, NormalizeLanguage(request.SourceLanguage));
         AppendComponent(canonical, CreateLocalContextWindow(
             request.Context,
@@ -320,6 +329,7 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         AppendComponent(canonical, target);
         AppendComponent(canonical, backend);
         AppendComponent(canonical, modelId);
+        AppendComponent(canonical, rankingPipeline);
         AppendComponent(canonical, dictionaryVersion);
         AppendComponent(canonical, candidates.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         foreach (string candidate in candidates)

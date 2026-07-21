@@ -19,6 +19,7 @@ src/AsteriaScale.RankerWorker/Models/GlossBert/Npu/*.bin
 # Dictionary source dumps (downloaded separately, multi-GB)
 tools/dictionary-source/*.bz2
 tools/dictionary-source/*.jsonl
+tools/dictionary-source/*.jsonl.gz
 tools/dictionary-source/*.tei
 tools/dictionary-source/JMdict.gz
 **/__pycache__/

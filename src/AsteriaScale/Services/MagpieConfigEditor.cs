@@ -19,6 +19,10 @@ public sealed class MagpieConfigEditor
         JsonObject root = await ReadConfigAsync(configPath, cancellationToken);
         JsonArray scalingModes = root["scalingModes"] as JsonArray ?? [];
         root["scalingModes"] = scalingModes;
+        JsonArray profiles = root["profiles"] as JsonArray ?? [];
+        root["profiles"] = profiles;
+        IReadOnlyList<ProfileModeReference> profileModeReferences =
+            CaptureProfileModeReferences(profiles, scalingModes);
 
         RemoveAsteriaModes(scalingModes);
         foreach (UpscalePreset preset in PresetCatalog.All)
@@ -26,14 +30,14 @@ public sealed class MagpieConfigEditor
             scalingModes.Add(CreateMode(preset));
         }
 
+        RestoreProfileModeReferences(profileModeReferences, scalingModes);
+
         int selectedIndex = FindModeIndex(scalingModes, selectedPreset.EngineModeName);
         if (selectedIndex < 0)
         {
             throw new InvalidOperationException("Не удалось добавить выбранный пресет в конфигурацию Magpie.");
         }
 
-        JsonArray profiles = root["profiles"] as JsonArray ?? [];
-        root["profiles"] = profiles;
         bool isVisualNovelPreset = selectedPreset.IsVisualNovel;
         int normalizedFrameRateLimit = VisualNovelFrameRates.Normalize(visualNovelFrameRateLimit);
         if (profiles.Count == 0)
@@ -130,6 +134,51 @@ public sealed class MagpieConfigEditor
         }
     }
 
+    private static IReadOnlyList<ProfileModeReference> CaptureProfileModeReferences(
+        JsonArray profiles,
+        JsonArray modes)
+    {
+        List<ProfileModeReference> references = [];
+        foreach (JsonNode? profileNode in profiles)
+        {
+            if (profileNode is not JsonObject profile ||
+                profile["scalingMode"] is not JsonValue indexValue ||
+                !indexValue.TryGetValue(out int index) ||
+                index < 0 ||
+                index >= modes.Count)
+            {
+                continue;
+            }
+
+            JsonNode? mode = modes[index];
+            references.Add(new ProfileModeReference(
+                profile,
+                mode,
+                mode?["name"]?.GetValue<string>()));
+        }
+
+        return references;
+    }
+
+    private static void RestoreProfileModeReferences(
+        IReadOnlyList<ProfileModeReference> references,
+        JsonArray modes)
+    {
+        foreach (ProfileModeReference reference in references)
+        {
+            int index = reference.Mode is not null ? modes.IndexOf(reference.Mode) : -1;
+            if (index < 0 && !string.IsNullOrEmpty(reference.ModeName))
+            {
+                index = FindModeIndex(modes, reference.ModeName);
+            }
+
+            if (index >= 0)
+            {
+                reference.Profile["scalingMode"] = index;
+            }
+        }
+    }
+
     private static JsonObject CreateMode(UpscalePreset preset)
     {
         JsonArray effects = [];
@@ -214,4 +263,6 @@ public sealed class MagpieConfigEditor
         ["scalingModes"] = new JsonArray(),
         ["profiles"] = new JsonArray()
     };
+
+    private sealed record ProfileModeReference(JsonObject Profile, JsonNode? Mode, string? ModeName);
 }

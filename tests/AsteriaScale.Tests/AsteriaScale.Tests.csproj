@@ -17,4 +17,8 @@
     <ProjectReference Include="..\..\src\AsteriaScale\AsteriaScale.csproj" />
     <ProjectReference Include="..\..\src\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerSelectionLogic.cs"
+             Link="RankerSelectionLogic.cs" />
+  </ItemGroup>
 </Project>

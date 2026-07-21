@@ -4,16 +4,21 @@ using AsteriaScale.Models;
 
 namespace AsteriaScale.Services;
 
-public sealed class AutoScaleService : IDisposable
+public sealed class AutoScaleService : IAsyncDisposable
 {
+    private static readonly TimeSpan IdlePollingInterval = TimeSpan.FromMilliseconds(650);
+    private static readonly TimeSpan ScalingPollingInterval = TimeSpan.FromMilliseconds(75);
+
     private readonly AppSettings _settings;
     private readonly WindowCatalogService _windowCatalog;
     private readonly MagpieEngineService _engine;
     private readonly DispatcherTimer _timer;
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
     private nint _candidateHandle;
     private DateTime _candidateSince;
     private nint _lastTriggeredHandle;
-    private bool _busy;
+    private Task? _activeTick;
+    private bool _disposed;
 
     public AutoScaleService(
         AppSettings settings,
@@ -25,7 +30,7 @@ public sealed class AutoScaleService : IDisposable
         _engine = engine;
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromMilliseconds(650)
+            Interval = IdlePollingInterval
         };
         _timer.Tick += OnTimerTick;
     }
@@ -33,32 +38,63 @@ public sealed class AutoScaleService : IDisposable
     public WindowInfo? LastEligibleWindow { get; private set; }
     public event EventHandler<string>? StatusChanged;
 
-    public void Start() => _timer.Start();
+    public void Start()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _timer.Start();
+    }
+
     public void Stop() => _timer.Stop();
 
-    private async void OnTimerTick(object? sender, EventArgs e)
+    private void OnTimerTick(object? sender, EventArgs e)
     {
-        if (_busy)
+        _timer.Interval = PollingIntervalFor(_engine.IsScaling);
+        if (_disposed || _activeTick is { IsCompleted: false })
         {
             return;
         }
 
-        // Swiping to the desktop (Win+D / show desktop) can leave Magpie
-        // scaling active with the system cursor hidden. Stopping scaling as
-        // soon as the desktop takes focus restores the cursor. This guard is
-        // independent of the automation toggle.
-        if (_engine.IsScaling && IsDesktopForeground())
-        {
-            _busy = true;
-            try
-            {
-                await _engine.StopScalingAsync();
-            }
-            finally
-            {
-                _busy = false;
-            }
+        Task tick = RunTimerTickAsync(_lifetimeCancellation.Token);
+        _activeTick = tick;
+        _ = ObserveTimerTickAsync(tick);
+    }
 
+    private async Task ObserveTimerTickAsync(Task tick)
+    {
+        try
+        {
+            await tick;
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // Disposal owns this cancellation and waits for the same operation below.
+        }
+        catch (Exception ex)
+        {
+            StatusChanged?.Invoke(this, "Автоматизация: " + ex.Message);
+        }
+        finally
+        {
+            _timer.Interval = PollingIntervalFor(_engine.IsScaling);
+            if (ReferenceEquals(_activeTick, tick))
+            {
+                _activeTick = null;
+            }
+        }
+    }
+
+    private async Task RunTimerTickAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Magpie keeps the system cursor hidden while it draws its scaled
+        // cursor. Minimized and virtual-desktop source windows intentionally
+        // remain scaled upstream, so Asteria must end its owned session.
+        bool isScaling = _engine.IsScaling;
+        _timer.Interval = PollingIntervalFor(isScaling);
+        if (isScaling && (IsDesktopForeground() || _engine.IsScalingSourceLost))
+        {
+            await _engine.StopScalingAsync(cancellationToken);
             return;
         }
 
@@ -98,7 +134,6 @@ public sealed class AutoScaleService : IDisposable
             return;
         }
 
-        _busy = true;
         try
         {
             StatusChanged?.Invoke(this, string.Format("Автозапуск: {0}", profile.Name));
@@ -106,17 +141,13 @@ public sealed class AutoScaleService : IDisposable
                 foreground,
                 PresetCatalog.Find(profile.PresetId),
                 profile.Windowed,
-                _settings.VisualNovelFrameRateLimit);
+                _settings.VisualNovelFrameRateLimit,
+                cancellationToken);
             _lastTriggeredHandle = foreground.Handle;
-        }
-        catch (Exception ex)
-        {
-            StatusChanged?.Invoke(this, "Автоматизация: " + ex.Message);
         }
         finally
         {
             ResetCandidate();
-            _busy = false;
         }
     }
 
@@ -135,12 +166,43 @@ public sealed class AutoScaleService : IDisposable
         }
 
         string className = NativeMethods.ReadClassName(foreground);
-        return className is "Progman" or "WorkerW";
+        return IsDesktopWindowClass(className);
     }
 
-    public void Dispose()
+    internal static bool IsDesktopWindowClass(string className) =>
+        className is "Progman" or "WorkerW" or "Shell_TrayWnd";
+
+    internal static TimeSpan PollingIntervalFor(bool isScaling) =>
+        isScaling ? ScalingPollingInterval : IdlePollingInterval;
+
+    public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _timer.Stop();
         _timer.Tick -= OnTimerTick;
+        _lifetimeCancellation.Cancel();
+
+        Task? activeTick = _activeTick;
+        if (activeTick is not null)
+        {
+            try
+            {
+                await activeTick;
+            }
+            catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+            {
+            }
+            catch
+            {
+                // The observer already reports operational failures; shutdown only drains the task.
+            }
+        }
+
+        _lifetimeCancellation.Dispose();
     }
 }

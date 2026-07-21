@@ -78,6 +78,9 @@ internal static class SmartDictionaryResultCacheTests
                 request with { ModelId = "another-model:1" }),
             "Model id must participate in the cache key.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { RankingPipeline = "bi+cross" }),
+            "The actual cross/bi+cross pipeline must participate in the cache key.");
+        Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { DictionaryVersion = "dictionary-v2" }),
             "Dictionary version must participate in the cache key.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(

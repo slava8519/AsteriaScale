@@ -55,7 +55,8 @@ public sealed partial class LocalDictionaryService
         FrozenDictionary<string, byte[]>.Empty;
     private HashSet<string> _preferredEnglishSurfaceForms = new(StringComparer.Ordinal);
     private HashSet<string> _lexicalEnglishPhrases = new(StringComparer.Ordinal);
-    private HashSet<string> _dialogueEnglishSentences = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _dialogueEnglishTranslations = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _dialogueJapaneseTranslations = new(StringComparer.Ordinal);
     private int _maximumJapaneseLength = 1;
     private int _sourceCount;
     private string _versionToken = "unloaded";
@@ -129,7 +130,9 @@ public sealed partial class LocalDictionaryService
             ["shaken"] = "shake"
         };
 
-    public int EntryCount => _english.Count + _japanese.Count;
+    public int EntryCount =>
+        _english.Count + _japanese.Count +
+        _dialogueEnglishTranslations.Count + _dialogueJapaneseTranslations.Count;
     public int SourceCount => _sourceCount;
     internal int SenseMetadataKeyCount => _englishSenseMetadata.Count;
     internal int SenseMetadataCandidateCount { get; private set; }
@@ -211,7 +214,8 @@ public sealed partial class LocalDictionaryService
             _englishSenseMetadata = FrozenDictionary<string, byte[]>.Empty;
             _preferredEnglishSurfaceForms = new HashSet<string>(StringComparer.Ordinal);
             _lexicalEnglishPhrases = new HashSet<string>(StringComparer.Ordinal);
-            _dialogueEnglishSentences = new HashSet<string>(StringComparer.Ordinal);
+            _dialogueEnglishTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
+            _dialogueJapaneseTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
             _maximumJapaneseLength = 1;
             _sourceCount = 0;
             SenseMetadataCandidateCount = 0;
@@ -329,7 +333,8 @@ public sealed partial class LocalDictionaryService
         _japanese = japanese.Entries;
         _preferredEnglishSurfaceForms = english.PreferredSurfaceForms;
         _lexicalEnglishPhrases = english.LexicalPhrases;
-        _dialogueEnglishSentences = english.DialogueSentences;
+        _dialogueEnglishTranslations = english.DialogueTranslations;
+        _dialogueJapaneseTranslations = japanese.DialogueTranslations;
         _sourceCount = english.SourceCount + japanese.SourceCount;
         _versionToken = english.VersionToken + "." + japanese.VersionToken;
         _maximumJapaneseLength = _japanese.Count == 0
@@ -448,7 +453,7 @@ public sealed partial class LocalDictionaryService
         HashSet<string> userKeys = new(StringComparer.Ordinal);
         HashSet<string> preferredSurfaceForms = new(StringComparer.Ordinal);
         HashSet<string> lexicalPhrases = new(StringComparer.Ordinal);
-        HashSet<string> dialogueSentences = new(StringComparer.Ordinal);
+        Dictionary<string, string> dialogueTranslations = new(StringComparer.Ordinal);
         bool japaneseLayer = prefix.StartsWith("jpn", StringComparison.OrdinalIgnoreCase);
         foreach (string path in files)
         {
@@ -467,7 +472,7 @@ public sealed partial class LocalDictionaryService
                 userKeys,
                 preferredSurfaceForms,
                 lexicalPhrases,
-                dialogueSentences,
+                dialogueTranslations,
                 userLayer,
                 curatedLayer,
                 dialogueLayer,
@@ -495,7 +500,7 @@ public sealed partial class LocalDictionaryService
             files.Count,
             preferredSurfaceForms,
             lexicalPhrases,
-            dialogueSentences,
+            dialogueTranslations,
             ComputeVersionToken(files));
     }
 
@@ -534,6 +539,18 @@ public sealed partial class LocalDictionaryService
 
         IEnumerable<string> userFiles = Enumerate(userDirectory, prefix)
             .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+        if (prefix.StartsWith("jpn", StringComparison.OrdinalIgnoreCase))
+        {
+            string legacyEnglishUserFile = Path.Combine(userDirectory, "eng-rus-user.tsv");
+            if (File.Exists(legacyEnglishUserFile))
+            {
+                // Older releases stored Japanese user rows in the English file.
+                // Read it first as a compatibility layer; a new jpn-rus user
+                // entry then overrides the legacy copy normally.
+                userFiles = new[] { legacyEnglishUserFile }.Concat(userFiles);
+            }
+        }
+
         IEnumerable<string> bundledFiles = Enumerate(bundledDirectory, prefix)
             .OrderBy(path => DictionaryPriority(path, prefix))
             .ThenBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
@@ -588,7 +605,7 @@ public sealed partial class LocalDictionaryService
         HashSet<string> userKeys,
         HashSet<string> preferredSurfaceForms,
         HashSet<string> lexicalPhrases,
-        HashSet<string> dialogueSentences,
+        Dictionary<string, string> dialogueTranslations,
         bool userLayer,
         bool curatedLayer,
         bool dialogueLayer,
@@ -613,22 +630,27 @@ public sealed partial class LocalDictionaryService
             // stored but never found.
             string key = japaneseLayer
                 ? NormalizeJapanese(line[..separator])
-                : NormalizeEnglish(line[..separator]);
+                : dialogueLayer
+                    ? NormalizeEnglishSentenceKey(line[..separator])
+                    : NormalizeEnglish(line[..separator]);
             if (key.Length == 0)
             {
                 continue;
             }
 
             string value = line[(separator + 1)..];
-            if (!dialogueLayer &&
-                key.Contains(' '))
+            if (dialogueLayer)
+            {
+                // Dialogue rows are sentence context, never lexical phrases.
+                // Keeping them outside the main map prevents a short Tatoeba
+                // sentence from shadowing a real word or phrase entry.
+                dialogueTranslations.TryAdd(key, value);
+                continue;
+            }
+
+            if (key.Contains(' '))
             {
                 lexicalPhrases.Add(key);
-            }
-            else if (dialogueLayer &&
-                     key.Contains(' '))
-            {
-                dialogueSentences.Add(key);
             }
 
             if (userLayer)
@@ -941,7 +963,10 @@ public sealed partial class LocalDictionaryService
         int characterIndex,
         bool includeSenseMetadata)
     {
-        MatchCollection tokens = EnglishTokenRegex().Matches(text);
+        // Lookup anchors include numbers even though dialogue sentence keys do
+        // not. Otherwise valid lexical keys such as "101", "24/7" and
+        // "3d printer" are loaded canonically but can never be reached.
+        MatchCollection tokens = EnglishLookupTokenRegex().Matches(text);
         if (tokens.Count == 0)
         {
             return Missing(hoveredWord, "EN");
@@ -949,11 +974,27 @@ public sealed partial class LocalDictionaryService
 
         int tokenIndex = FindClosestToken(tokens, characterIndex, hoveredWord);
         string normalizedSentence = NormalizeEnglishSentenceKey(text);
-        string? dialogueTranslation =
-            _dialogueEnglishSentences.Contains(normalizedSentence) &&
-            _english.TryGetValue(normalizedSentence, out string? exactSentenceTranslation)
-                ? exactSentenceTranslation
-                : null;
+        _dialogueEnglishTranslations.TryGetValue(
+            normalizedSentence,
+            out string? dialogueTranslation);
+
+        Match hoveredToken = tokens[tokenIndex];
+        string lexicalSurface = ExtractEnglishLexeme(text, hoveredToken);
+        string normalizedWord = NormalizeEnglish(hoveredToken.Value);
+        string lexicalSurfaceKey = NormalizeEnglish(lexicalSurface);
+        if (!string.Equals(lexicalSurfaceKey, normalizedWord, StringComparison.Ordinal) &&
+            _english.TryGetValue(lexicalSurfaceKey, out string? lexicalSurfaceTranslation))
+        {
+            return Found(
+                TrimEnglishDisplayPunctuation(lexicalSurface),
+                lexicalSurfaceTranslation,
+                false,
+                "EN",
+                lexicalSurfaceKey,
+                includeSenseMetadata,
+                dialogueTranslation);
+        }
+
         int maximumTokens = Math.Min(10, tokens.Count);
         for (int length = maximumTokens; length >= 2; length--)
         {
@@ -965,20 +1006,31 @@ public sealed partial class LocalDictionaryService
                     " ",
                     Enumerable.Range(start, length).Select(index => tokens[index].Value));
                 string key = NormalizeEnglish(phrase);
-                if (_english.TryGetValue(key, out string? translation) &&
-                    (length <= MaximumGeneralPhraseTokens ||
-                     _preferredEnglishSurfaceForms.Contains(key) ||
-                     length <= MaximumLexicalPhraseTokens &&
-                     _lexicalEnglishPhrases.Contains(key)))
+                string rawPhrase = ExtractEnglishPhrase(text, tokens, start, length);
+                string rawKey = NormalizeEnglish(rawPhrase);
+                string[] lookupKeys = rawKey.Contains(' ') &&
+                                      !string.Equals(rawKey, key, StringComparison.Ordinal)
+                    ? [rawKey, key]
+                    : [key];
+                foreach (string lookupKey in lookupKeys)
                 {
-                    return Found(
-                        phrase,
-                        translation,
-                        true,
-                        "EN",
-                        key,
-                        includeSenseMetadata,
-                        dialogueTranslation);
+                    if (_english.TryGetValue(lookupKey, out string? translation) &&
+                        (length <= MaximumGeneralPhraseTokens ||
+                         _preferredEnglishSurfaceForms.Contains(lookupKey) ||
+                         length <= MaximumLexicalPhraseTokens &&
+                         _lexicalEnglishPhrases.Contains(lookupKey)))
+                    {
+                        return Found(
+                            string.Equals(lookupKey, rawKey, StringComparison.Ordinal)
+                                ? TrimEnglishDisplayPunctuation(rawPhrase)
+                                : phrase,
+                            translation,
+                            true,
+                            "EN",
+                            lookupKey,
+                            includeSenseMetadata,
+                            dialogueTranslation);
+                    }
                 }
 
                 if (length > MaximumLexicalPhraseTokens)
@@ -1012,8 +1064,7 @@ public sealed partial class LocalDictionaryService
             }
         }
 
-        string word = tokens[tokenIndex].Value;
-        string normalizedWord = NormalizeEnglish(word);
+        string word = hoveredToken.Value;
         bool preferredSurface = _preferredEnglishSurfaceForms.Contains(normalizedWord);
         string[] candidates = EnglishCandidates(word, false).ToArray();
         string[] preferredLemmaCandidates = preferredSurface
@@ -1068,6 +1119,38 @@ public sealed partial class LocalDictionaryService
         return Missing(word, "EN");
     }
 
+    private static string ExtractEnglishLexeme(string text, Match token)
+    {
+        int start = token.Index;
+        while (start > 0 && !char.IsWhiteSpace(text[start - 1]))
+        {
+            start--;
+        }
+
+        int end = token.Index + token.Length;
+        while (end < text.Length && !char.IsWhiteSpace(text[end]))
+        {
+            end++;
+        }
+
+        return text[start..end];
+    }
+
+    private static string ExtractEnglishPhrase(
+        string text,
+        MatchCollection tokens,
+        int start,
+        int length)
+    {
+        int first = tokens[start].Index;
+        int nextToken = start + length;
+        int end = nextToken < tokens.Count ? tokens[nextToken].Index : text.Length;
+        return text[first..end].TrimEnd();
+    }
+
+    private static string TrimEnglishDisplayPunctuation(string value) =>
+        value.Trim(' ', '.', ',', '!', '?', ':', ';', '"', '“', '”', '(', ')', '[', ']');
+
     private DictionaryLookupResult LookupJapanese(string text, string hoveredWord, int characterIndex)
     {
         (string normalized, int anchor) = NormalizeJapaneseWithAnchor(text, characterIndex);
@@ -1077,6 +1160,7 @@ public sealed partial class LocalDictionaryService
             anchor = Math.Max(0, normalized.Length / 2);
         }
 
+        _dialogueJapaneseTranslations.TryGetValue(normalized, out string? dialogueTranslation);
         int maximumLength = Math.Min(_maximumJapaneseLength, normalized.Length);
         for (int length = maximumLength; length >= 1; length--)
         {
@@ -1087,9 +1171,24 @@ public sealed partial class LocalDictionaryService
                 string candidate = normalized.Substring(start, length);
                 if (_japanese.TryGetValue(candidate, out string? translation))
                 {
-                    return Found(candidate, translation, length > 1, "JA");
+                    return Found(
+                        candidate,
+                        translation,
+                        length > 1,
+                        "JA",
+                        contextTranslation: dialogueTranslation);
                 }
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(dialogueTranslation))
+        {
+            return Found(
+                text,
+                dialogueTranslation,
+                true,
+                "JA",
+                contextTranslation: dialogueTranslation);
         }
 
         string fallback = NormalizeJapanese(hoveredWord);
@@ -1274,23 +1373,51 @@ public sealed partial class LocalDictionaryService
     private static bool EndsWithDoubledLetter(string value) =>
         value.Length > 1 && value[^1] == value[^2];
 
-    // OCR regularly reads the typographic apostrophe, while dictionary keys use
-    // the straight one; both must resolve to the same canonical key.
-    // Internal so the user-dictionary editor writes byte-identical keys
-    // (invariant 1: one normalization for lookup and for storage).
-    internal static string NormalizeEnglish(string value) =>
-        string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+    // Lexical keys retain internal punctuation and digits. Only surrounding
+    // display punctuation is trimmed; sentence keys use the token-only helper
+    // below. The generator mirrors both forms exactly (invariant 1).
+    internal static string NormalizeEnglish(string value)
+    {
+        string collapsed = string.Join(
+                " ",
+                (value ?? string.Empty)
+                    .Normalize(NormalizationForm.FormC)
+                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
             .Replace('’', '\'')
-            .Trim(' ', '.', ',', '!', '?', ':', ';', '"', '“', '”', '(', ')', '[', ']')
-            .ToLowerInvariant();
+            .Trim(' ', '.', ',', '!', '?', ':', ';', '"', '“', '”', '(', ')', '[', ']');
+        return FoldEnglishCase(collapsed);
+    }
 
     // Dialogue sentence keys are built by build-dictionaries.py as tokens joined
     // with single spaces and no punctuation. Trim-based normalization keeps
     // internal commas and quotes and would never match those keys.
-    private static string NormalizeEnglishSentenceKey(string value) =>
-        NormalizeEnglish(string.Join(
+    internal static string NormalizeEnglishSentenceKey(string value) =>
+        string.Join(
             " ",
-            EnglishTokenRegex().Matches(value).Select(match => match.Value)));
+            EnglishTokenRegex()
+                .Matches((value ?? string.Empty).Normalize(NormalizationForm.FormC))
+                .Select(match => FoldEnglishCase(match.Value.Replace('’', '\''))));
+
+    // Unicode default lower-casing is one-to-one in .NET. These expanding
+    // folds cover the English-adjacent characters accepted by our dictionaries
+    // and mirror canonical_casefold in build-dictionaries.py.
+    private static string FoldEnglishCase(string value)
+    {
+        string expanded = value
+            .Replace("ß", "ss", StringComparison.Ordinal)
+            .Replace("ẞ", "ss", StringComparison.Ordinal)
+            .Replace("İ", "i\u0307", StringComparison.Ordinal)
+            .Replace("ſ", "s", StringComparison.Ordinal)
+            .Replace("ς", "σ", StringComparison.Ordinal)
+            .Replace("ﬀ", "ff", StringComparison.Ordinal)
+            .Replace("ﬁ", "fi", StringComparison.Ordinal)
+            .Replace("ﬂ", "fl", StringComparison.Ordinal)
+            .Replace("ﬃ", "ffi", StringComparison.Ordinal)
+            .Replace("ﬄ", "ffl", StringComparison.Ordinal)
+            .Replace("ﬅ", "st", StringComparison.Ordinal)
+            .Replace("ﬆ", "st", StringComparison.Ordinal);
+        return new string(expanded.Select(char.ToLowerInvariant).ToArray());
+    }
 
     private static (string Text, int Anchor) NormalizeJapaneseWithAnchor(string value, int characterIndex)
     {
@@ -1314,7 +1441,7 @@ public sealed partial class LocalDictionaryService
         return (builder.ToString(), Math.Clamp(anchor, 0, Math.Max(0, builder.Length - 1)));
     }
 
-    private static string NormalizeJapanese(string value) =>
+    internal static string NormalizeJapanese(string value) =>
         new(value.Where(IsJapaneseDictionaryCharacter).ToArray());
 
     private static bool ContainsJapanese(string value) => value.Any(character =>
@@ -1378,11 +1505,14 @@ public sealed partial class LocalDictionaryService
     [GeneratedRegex(@"[\p{L}\p{M}]+(?:['’\-][\p{L}\p{M}]+)*", RegexOptions.CultureInvariant)]
     private static partial Regex EnglishTokenRegex();
 
+    [GeneratedRegex(@"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*", RegexOptions.CultureInvariant)]
+    private static partial Regex EnglishLookupTokenRegex();
+
     private sealed record LoadedDictionary(
         Dictionary<string, string> Entries,
         int SourceCount,
         HashSet<string> PreferredSurfaceForms,
         HashSet<string> LexicalPhrases,
-        HashSet<string> DialogueSentences,
+        Dictionary<string, string> DialogueTranslations,
         string VersionToken);
 }

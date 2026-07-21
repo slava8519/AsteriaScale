@@ -31,11 +31,20 @@ public partial class UserDictionaryWindow : Window
         _reloadDictionaries = reloadDictionaries;
         EntriesList.ItemsSource = _entries;
         HistoryList.ItemsSource = _historyEntries;
-        Loaded += async (_, _) =>
+        Loaded += OnLoaded;
+    }
+
+    private async void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        try
         {
             await RefreshEntriesAsync();
             RefreshHistory();
-        };
+        }
+        catch (Exception exception) when (IsFileSystemFailure(exception))
+        {
+            StatusText.Text = "Не удалось прочитать пользовательские данные: " + exception.Message;
+        }
     }
 
     private async Task RefreshEntriesAsync()
@@ -96,6 +105,10 @@ public partial class UserDictionaryWindow : Window
         {
             StatusText.Text = exception.Message;
         }
+        catch (Exception exception) when (IsFileSystemFailure(exception))
+        {
+            StatusText.Text = "Не удалось сохранить словарь: " + exception.Message;
+        }
     }
 
     private async void OnRemoveEntryClick(object sender, RoutedEventArgs e)
@@ -105,10 +118,17 @@ public partial class UserDictionaryWindow : Window
             return;
         }
 
-        await _userDictionary.RemoveEntryAsync(entry.Key);
-        await RefreshEntriesAsync();
-        await _reloadDictionaries();
-        StatusText.Text = $"Удалено: «{entry.Key}». Словари перечитаны.";
+        try
+        {
+            await _userDictionary.RemoveEntryAsync(entry.Key);
+            await RefreshEntriesAsync();
+            await _reloadDictionaries();
+            StatusText.Text = $"Удалено: «{entry.Key}». Словари перечитаны.";
+        }
+        catch (Exception exception) when (IsFileSystemFailure(exception))
+        {
+            StatusText.Text = "Не удалось удалить запись: " + exception.Message;
+        }
     }
 
     private void OnPromoteHistoryClick(object sender, RoutedEventArgs e)
@@ -162,8 +182,16 @@ public partial class UserDictionaryWindow : Window
             return;
         }
 
-        _history.Clear();
+        if (!_history.Clear())
+        {
+            StatusText.Text = "Не удалось очистить историю: файл временно недоступен.";
+            return;
+        }
+
         RefreshHistory();
         StatusText.Text = "История очищена.";
     }
+
+    private static bool IsFileSystemFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException;
 }

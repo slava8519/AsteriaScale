@@ -17,16 +17,29 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly GlobalHotkeyService _hotkeys;
     private readonly Dispatcher _dispatcher;
     private readonly object _lifecycleLock = new();
+    private readonly object _processingLock = new();
+    private readonly object _taskLock = new();
+    private readonly HashSet<Task> _activeTasks = [];
+    private readonly List<CancellationTokenSource> _retiredModeCancellations = [];
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SmartHoverPipeline _smartPipeline;
     private readonly ScreenTranslationFlow _screenFlow;
     private readonly HoverTracking _tracking;
     private readonly TextHookService _textHook;
     private readonly TranslationHistoryService _history = new();
     private Task _pendingUnload = Task.CompletedTask;
+    private long _unloadRevision;
+    private bool _unloadWorkerRunning;
     private CancellationTokenSource? _screenIdleUnloadCancellation;
+    private CancellationTokenSource? _screenTargetMonitorCancellation;
     private CancellationTokenSource? _smartFallbackUnloadCancellation;
+    private CancellationTokenSource? _modeCancellation;
     private bool _enabled;
-    private int _processing;
+    private bool _processing;
+    private TaskCompletionSource _processingIdle = CompletedSource();
+    private bool _hotkeysReady = true;
+    private bool _disposed;
+    private long _overlayGeneration;
     private string? _lastReportedStatus;
     private SmartFallbackRequest? _lastSmartFallbackRequest;
 
@@ -59,14 +72,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _screenOverlay,
             _dispatcher,
             ReportStatus,
-            () => _enabled && IsScreenMode);
+            IsScreenTargetActive);
         _tracking = new HoverTracking(
             () => _enabled && !IsScreenMode,
             EffectiveDelayMs,
             HideOverlay,
-            () => Interlocked.CompareExchange(ref _processing, 1, 0) == 0,
-            (point, token) => _ = ProcessCursorAsync(point, token));
+            TryBeginProcessing,
+            (point, token) => TrackTask(ProcessCursorAsync(point, token)));
         _textHook = new TextHookService(settings);
+        RestartModeCancellation();
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -81,7 +95,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         if (_enabled)
         {
             ConfigureActiveMode();
-            _ = WarmUpSafeAsync();
+            QueueWarmUpAfterPendingUnload();
         }
     }
 
@@ -89,13 +103,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         _enabled = enabled;
         _settings.HoverTranslationEnabled = enabled;
+        _lastSmartFallbackRequest = null;
+        RestartModeCancellation();
         ResetTracking();
         CancelScreenIdleUnload();
         CancelSmartFallbackUnload();
         if (enabled)
         {
             ConfigureActiveMode();
-            _ = WarmUpSafeAsync();
+            QueueWarmUpAfterPendingUnload();
         }
         else
         {
@@ -110,6 +126,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private void ConfigureActiveMode()
     {
+        _hotkeysReady = true;
         if (!_enabled)
         {
             StopTimer();
@@ -124,6 +141,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _hotkeys.UnregisterSmartFallback();
             if (!_hotkeys.RegisterScreenTranslation())
             {
+                _hotkeysReady = false;
                 ReportStatus("Не удалось назначить Alt+Shift+T — сочетание занято другой программой");
             }
         }
@@ -134,6 +152,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 if (!_hotkeys.RegisterSmartFallback())
                 {
+                    _hotkeysReady = false;
                     ReportStatus("Не удалось назначить Alt+Shift+D — сочетание занято другой программой");
                 }
             }
@@ -148,6 +167,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     public void ApplySmartDictionarySettings()
     {
+        RestartModeCancellation();
         _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
         _lastSmartFallbackRequest = null;
         ResetTracking();
@@ -155,7 +175,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         if (_enabled && IsSmartMode)
         {
             QueueUnload();
-            _ = WarmUpSafeAsync();
+            QueueWarmUpAfterPendingUnload();
         }
     }
 
@@ -168,10 +188,17 @@ public sealed class HoverTranslationService : IAsyncDisposable
         string normalized = HoverTranslationModes.Normalize(mode);
         if (string.Equals(_settings.HoverTranslationMode, normalized, StringComparison.Ordinal))
         {
+            ConfigureActiveMode();
+            if (_enabled)
+            {
+                QueueWarmUpAfterPendingUnload();
+            }
             return;
         }
 
         _settings.HoverTranslationMode = normalized;
+        _lastSmartFallbackRequest = null;
+        RestartModeCancellation();
         ResetTracking();
         CancelScreenIdleUnload();
         CancelSmartFallbackUnload();
@@ -180,19 +207,96 @@ public sealed class HoverTranslationService : IAsyncDisposable
         if (_enabled)
         {
             QueueUnload();
-
-            _ = WarmUpSafeAsync();
+            QueueWarmUpAfterPendingUnload();
         }
     }
 
     private void QueueUnload()
     {
+        TaskCompletionSource? completion = null;
+        Task pendingUnload;
         lock (_lifecycleLock)
         {
-            if (_pendingUnload.IsCompleted)
+            _unloadRevision++;
+            if (!_unloadWorkerRunning)
             {
-                _pendingUnload = UnloadWhenIdleSafeAsync();
+                _unloadWorkerRunning = true;
+                completion = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _pendingUnload = completion.Task;
             }
+
+            pendingUnload = _pendingUnload;
+        }
+
+        if (completion is not null)
+        {
+            TrackTask(pendingUnload);
+            _ = RunUnloadUntilStableAsync(completion);
+        }
+    }
+
+    private async Task RunUnloadUntilStableAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            while (true)
+            {
+                long revision;
+                lock (_lifecycleLock)
+                {
+                    revision = _unloadRevision;
+                }
+
+                await UnloadWhenIdleSafeAsync();
+
+                lock (_lifecycleLock)
+                {
+                    if (revision != _unloadRevision)
+                    {
+                        continue;
+                    }
+
+                    _unloadWorkerRunning = false;
+                    completion.TrySetResult();
+                    return;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+            lock (_lifecycleLock)
+            {
+                _unloadWorkerRunning = false;
+                completion.TrySetResult();
+            }
+        }
+    }
+
+    private void QueueWarmUpAfterPendingUnload()
+    {
+        Task pendingUnload;
+        lock (_lifecycleLock)
+        {
+            pendingUnload = _pendingUnload;
+        }
+
+        CancellationToken cancellationToken = CurrentModeToken;
+        TrackTask(WarmUpAfterUnloadSafeAsync(pendingUnload, cancellationToken));
+    }
+
+    private async Task WarmUpAfterUnloadSafeAsync(
+        Task pendingUnload,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await pendingUnload.WaitAsync(cancellationToken);
+            await WarmUpSafeAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 
@@ -210,10 +314,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private async Task UnloadWhenIdleAsync()
     {
-        for (int attempt = 0; attempt < 100 && Volatile.Read(ref _processing) != 0; attempt++)
-        {
-            await Task.Delay(50);
-        }
+        await WaitForProcessingIdleAsync();
 
         if (!_enabled || IsDictionaryMode || IsScreenMode || IsSmartMode)
         {
@@ -244,7 +345,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private async Task WarmUpSafeAsync()
+    private async Task WarmUpSafeAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -258,6 +359,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 _ => "Подготовка NPU OCR и локального переводчика…"
             });
             await _ocr.EnsureReadyAsync();
+            cancellationToken.ThrowIfCancellationRequested();
             if (!_enabled || requestedMode != HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
             {
                 return;
@@ -267,11 +369,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 if (SmartRankerApplicable)
                 {
-                    await _dictionary.LoadSenseMetadataAsync();
+                    await _dictionary.LoadSenseMetadataAsync(cancellationToken);
                 }
                 else
                 {
-                    await _dictionary.LoadAsync();
+                    await _dictionary.LoadAsync(cancellationToken);
                 }
 
                 _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
@@ -279,19 +381,21 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 {
                     await _smartPipeline.PrepareSmartBackendAsync(
                         ResolveSmartBackend(),
-                        CancellationToken.None);
+                        cancellationToken);
                 }
             }
             else if (requestedMode == HoverTranslationModes.Dictionary)
             {
-                await _dictionary.LoadAsync();
+                await _dictionary.LoadAsync(cancellationToken);
             }
             else if (requestedMode != HoverTranslationModes.Screen)
             {
-                await _translator.WarmUpAsync();
+                await _translator.WarmUpAsync(cancellationToken);
             }
 
-            if (_enabled && requestedMode == HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
+            if (_enabled &&
+                _hotkeysReady &&
+                requestedMode == HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
             {
                 ReportStatus(requestedMode switch
                 {
@@ -308,6 +412,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     _ => "Перевод под курсором готов: NPU OCR + локальная Qwen"
                 });
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
@@ -333,26 +440,36 @@ public sealed class HoverTranslationService : IAsyncDisposable
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _processing, 1, 0) != 0)
+        if (!TryBeginProcessing())
         {
             ReportStatus("Перевод ещё выполняется — повторите Alt+Shift+D через секунду");
             return;
         }
 
-        _ = ProcessSmartFallbackOnDemandAsync(request);
+        TrackTask(ProcessSmartFallbackOnDemandAsync(request));
     }
 
     private async Task ProcessSmartFallbackOnDemandAsync(SmartFallbackRequest request)
     {
         try
         {
+            using CancellationTokenSource operationCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    _lifetimeCancellation.Token,
+                    CurrentModeToken);
+            CancellationToken cancellationToken = operationCancellation.Token;
+            long displayGeneration = BeginOverlayOperation();
             NativeMethods.Point cursor = VisibleCursorService.TryGetPosition(out NativeMethods.Point current)
                 ? current
                 : request.Cursor;
-            ShowLoading(request.Source, FoundryTranslationService.EngineLabel, cursor);
+            ShowLoading(
+                request.Source,
+                FoundryTranslationService.EngineLabel,
+                cursor,
+                displayGeneration);
             (string source, string translation, string engine) = await TranslateSmartFallbackAsync(
                 request.Source,
-                CancellationToken.None);
+                cancellationToken);
             if (!_enabled || !IsSmartMode || !IsOnDemandFallback ||
                 string.IsNullOrWhiteSpace(translation))
             {
@@ -368,9 +485,16 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 dictionaryFound: true,
                 isPhrase: false,
                 language: null,
-                confidence: null);
+                confidence: null,
+                context: request.Source,
+                displayGeneration: displayGeneration,
+                requireCursorNear: false);
             ReportStatus("Полная реплика переведена по Alt+Shift+D");
             ScheduleSmartFallbackUnload();
+        }
+        catch (OperationCanceledException)
+        {
+            HideOverlay();
         }
         catch (Exception ex)
         {
@@ -380,7 +504,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Exchange(ref _processing, 0);
+            EndProcessing();
         }
     }
 
@@ -393,31 +517,68 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
 
         CancelScreenIdleUnload();
+        CancelScreenTargetMonitor();
         CancellationToken token = _tracking.RestartOperation();
 
-        if (Interlocked.CompareExchange(ref _processing, 1, 0) != 0)
+        if (!TryBeginProcessing())
         {
             ReportStatus("Экранный перевод: предыдущая операция отменена, нажмите ещё раз");
             return;
         }
 
         nint foregroundWindow = NativeMethods.GetForegroundWindow();
-        _ = Task.Run(() => RunScreenFlowAsync(foregroundWindow, token), token);
+        NativeMethods.GetWindowThreadProcessId(foregroundWindow, out uint processId);
+        if (foregroundWindow == nint.Zero || processId == 0)
+        {
+            EndProcessing();
+            ReportStatus("Экранный перевод: активное окно недоступно");
+            return;
+        }
+
+        TrackTask(RunScreenFlowAsync(foregroundWindow, unchecked((int)processId), token));
     }
 
-    private async Task RunScreenFlowAsync(nint foregroundWindow, CancellationToken cancellationToken)
+    private async Task RunScreenFlowAsync(
+        nint foregroundWindow,
+        int foregroundProcessId,
+        CancellationToken cancellationToken)
     {
         bool translated = false;
         try
         {
-            translated = await _screenFlow.ProcessAsync(foregroundWindow, cancellationToken);
+            CancellationToken targetMonitorToken = StartScreenTargetMonitor(
+                foregroundWindow,
+                foregroundProcessId);
+            using CancellationTokenSource linkedCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    _lifetimeCancellation.Token,
+                    CurrentModeToken,
+                    targetMonitorToken);
+            translated = await _screenFlow.ProcessAsync(
+                foregroundWindow,
+                foregroundProcessId,
+                linkedCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+            ReportStatus("Экранный перевод: " + exception.Message);
         }
         finally
         {
-            Interlocked.Exchange(ref _processing, 0);
+            EndProcessing();
             if (translated && _enabled && IsScreenMode)
             {
                 ScheduleScreenIdleUnload();
+            }
+            else
+            {
+                CancelScreenTargetMonitor();
+                HideScreenOverlay();
             }
         }
     }
@@ -426,6 +587,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         try
         {
+            using CancellationTokenSource linkedCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    _lifetimeCancellation.Token,
+                    CurrentModeToken);
+            cancellationToken = linkedCancellation.Token;
+            long displayGeneration = BeginOverlayOperation();
             HoverOcrResult? recognized = await _ocr.RecognizeNearCursorAsync(
                 cursor,
                 sentenceContext: !IsDictionaryMode,
@@ -442,7 +610,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
             string currentEngine = IsSmartMode
                 ? SmartHoverPipeline.SmartEngineLabel(smartBackend)
                 : IsDictionaryMode ? LocalDictionaryService.EngineLabel : FoundryTranslationService.EngineLabel;
-            ShowLoading(IsSmartMode ? recognized.HoveredWord : recognized.Text, currentEngine, cursor);
+            ShowLoading(
+                IsSmartMode ? recognized.HoveredWord : recognized.Text,
+                currentEngine,
+                cursor,
+                displayGeneration);
             string source;
             string translation;
             string engine;
@@ -508,7 +680,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 dictionaryFound,
                 isPhrase,
                 language,
-                confidence);
+                confidence,
+                recognized.Text,
+                displayGeneration,
+                requireCursorNear: true);
             if (resultCacheRequest is not null && resultCacheSelection is not null)
             {
                 await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
@@ -531,7 +706,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
         finally
         {
-            Interlocked.Exchange(ref _processing, 0);
+            EndProcessing();
         }
     }
 
@@ -545,33 +720,42 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         if (!_textHook.IsEnabled)
         {
+            _textHook.Detach();
             return recognized;
         }
 
         try
         {
             nint window = NativeMethods.WindowFromPoint(cursor);
-            if (window != nint.Zero)
+            if (window == nint.Zero)
             {
-                NativeMethods.GetWindowThreadProcessId(window, out uint processId);
-                if (processId != 0 &&
-                    processId != Environment.ProcessId &&
-                    _textHook.IsProcessAllowed((int)processId))
-                {
-                    _textHook.EnsureAttached((int)processId);
-                }
+                _textHook.Detach();
+                return recognized;
             }
 
-            string? sentence = _textHook.TryGetSentenceContaining(recognized.HoveredWord);
-            if (sentence is not null)
+            NativeMethods.GetWindowThreadProcessId(window, out uint processIdValue);
+            int processId = unchecked((int)processIdValue);
+            if (processId <= 0 ||
+                processId == Environment.ProcessId ||
+                !_textHook.IsProcessAllowed(processId))
             {
-                int index = sentence.IndexOf(
-                    recognized.HoveredWord,
-                    StringComparison.OrdinalIgnoreCase);
-                if (index >= 0)
+                _textHook.Detach();
+                return recognized;
+            }
+
+            _textHook.EnsureAttached(processId);
+            TextHookMatch? match = _textHook.TryGetSentenceContaining(
+                processId,
+                recognized.HoveredWord,
+                recognized.Text,
+                recognized.CharacterIndex);
+            if (match is not null)
+            {
+                return recognized with
                 {
-                    return recognized with { Text = sentence, CharacterIndex = index };
-                }
+                    Text = match.Text,
+                    CharacterIndex = match.CharacterIndex
+                };
             }
         }
         catch (Exception exception)
@@ -626,8 +810,22 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private void ResetTracking() => _tracking.Reset();
 
-    private void ShowLoading(string source, string engine, NativeMethods.Point cursor) =>
-        _dispatcher.BeginInvoke(() => _overlay.ShowLoading(source, cursor, engine), DispatcherPriority.Normal);
+    private void ShowLoading(
+        string source,
+        string engine,
+        NativeMethods.Point cursor,
+        long displayGeneration) =>
+        _dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!_disposed &&
+                    _enabled &&
+                    displayGeneration == Volatile.Read(ref _overlayGeneration))
+                {
+                    _overlay.ShowLoading(source, cursor, engine);
+                }
+            },
+            DispatcherPriority.Normal);
 
     private void ShowTranslation(
         string source,
@@ -637,23 +835,36 @@ public sealed class HoverTranslationService : IAsyncDisposable
         bool dictionaryFound,
         bool isPhrase,
         string? language,
-        double? confidence)
+        double? confidence,
+        string context,
+        long displayGeneration,
+        bool requireCursorNear)
     {
-        if (dictionaryFound)
-        {
-            _history.Record(source, translation, engine);
-        }
-
         _dispatcher.BeginInvoke(
-            () => _overlay.ShowTranslation(
-                source,
-                translation,
-                cursor,
-                engine,
-                dictionaryFound,
-                isPhrase,
-                language,
-                confidence),
+            () =>
+            {
+                if (_disposed ||
+                    !_enabled ||
+                    displayGeneration != Volatile.Read(ref _overlayGeneration) ||
+                    requireCursorNear && !CursorIsNear(cursor))
+                {
+                    return;
+                }
+
+                _overlay.ShowTranslation(
+                    source,
+                    translation,
+                    cursor,
+                    engine,
+                    dictionaryFound,
+                    isPhrase,
+                    language,
+                    confidence);
+                if (dictionaryFound)
+                {
+                    _history.Record(source, translation, engine, context);
+                }
+            },
             DispatcherPriority.Normal);
     }
 
@@ -667,17 +878,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     public async Task ReloadDictionariesAsync()
     {
         await _dictionary.UnloadAsync();
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _dictionary.LoadAsync();
-            }
-            catch (Exception exception)
-            {
-                LogError(exception);
-            }
-        });
+        await _dictionary.LoadAsync(_lifetimeCancellation.Token);
     }
 
     private async Task<(string Source, string Translation, string Engine)> TranslateSmartFallbackAsync(
@@ -689,16 +890,91 @@ public sealed class HoverTranslationService : IAsyncDisposable
         return (source, translation, FoundryTranslationService.EngineLabel);
     }
 
-    private void HideOverlay() =>
+    private void HideOverlay()
+    {
+        Interlocked.Increment(ref _overlayGeneration);
         _dispatcher.BeginInvoke(_overlay.HideOverlay, DispatcherPriority.Normal);
+    }
 
     private void HideScreenOverlay() =>
         _dispatcher.BeginInvoke(_screenOverlay.HideOverlay, DispatcherPriority.Normal);
 
     private void HideAllOverlays()
     {
+        CancelScreenTargetMonitor();
         HideOverlay();
         HideScreenOverlay();
+    }
+
+    private CancellationToken StartScreenTargetMonitor(nint window, int processId)
+    {
+        CancelScreenTargetMonitor();
+        CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _lifetimeCancellation.Token,
+            CurrentModeToken);
+        CancellationToken cancellationToken = cancellation.Token;
+        _screenTargetMonitorCancellation = cancellation;
+        TrackTask(MonitorScreenTargetAsync(
+            window,
+            processId,
+            cancellation,
+            cancellationToken));
+        return cancellationToken;
+    }
+
+    private async Task MonitorScreenTargetAsync(
+        nint window,
+        int processId,
+        CancellationTokenSource cancellation,
+        CancellationToken cancellationToken)
+    {
+        bool targetLost = false;
+        try
+        {
+            while (IsScreenTargetActive(window, processId))
+            {
+                await Task.Delay(75, cancellationToken);
+            }
+
+            targetLost = !cancellationToken.IsCancellationRequested;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            bool ownsSlot = ReferenceEquals(
+                Interlocked.CompareExchange(
+                    ref _screenTargetMonitorCancellation,
+                    null,
+                    cancellation),
+                cancellation);
+            if (ownsSlot)
+            {
+                if (targetLost)
+                {
+                    // Losing focus invalidates the whole capture, not just its
+                    // loading overlay. This prevents a result from reappearing if
+                    // the user returns to the same window before translation ends.
+                    cancellation.Cancel();
+                    HideScreenOverlay();
+                }
+
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private void CancelScreenTargetMonitor()
+    {
+        CancellationTokenSource? cancellation = Interlocked.Exchange(
+            ref _screenTargetMonitorCancellation,
+            null);
+        if (cancellation is not null)
+        {
+            cancellation.Cancel();
+            cancellation.Dispose();
+        }
     }
 
     private void ScheduleScreenIdleUnload()
@@ -706,12 +982,12 @@ public sealed class HoverTranslationService : IAsyncDisposable
         CancelScreenIdleUnload();
         CancellationTokenSource cancellation = new();
         _screenIdleUnloadCancellation = cancellation;
-        _ = Task.Run(async () =>
+        TrackTask(Task.Run(async () =>
         {
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(2), cancellation.Token);
-                if (_enabled && IsScreenMode && Volatile.Read(ref _processing) == 0)
+                if (_enabled && IsScreenMode && !IsProcessing)
                 {
                     await _translator.UnloadAsync();
                     ReportStatus("Экранный перевод готов: Qwen выгружена после простоя, Alt+Shift+T загрузит её снова");
@@ -725,7 +1001,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 LogError(ex);
             }
-        });
+        }, cancellation.Token));
     }
 
     private void CancelScreenIdleUnload()
@@ -742,13 +1018,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
         CancelSmartFallbackUnload();
         CancellationTokenSource cancellation = new();
         _smartFallbackUnloadCancellation = cancellation;
-        _ = Task.Run(async () =>
+        TrackTask(Task.Run(async () =>
         {
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(45), cancellation.Token);
                 if (_enabled && IsSmartMode &&
-                    Volatile.Read(ref _processing) == 0)
+                    !IsProcessing)
                 {
                     await _translator.UnloadAsync();
                     ReportStatus("Умный словарь готов: резервная полная модель выгружена после простоя");
@@ -762,7 +1038,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 LogError(ex);
             }
-        });
+        }, cancellation.Token));
     }
 
     private void CancelSmartFallbackUnload()
@@ -772,6 +1048,164 @@ public sealed class HoverTranslationService : IAsyncDisposable
             null);
         cancellation?.Cancel();
         cancellation?.Dispose();
+    }
+
+    public void ApplyTextHookSettings() => _textHook.ApplySettings();
+
+    private long BeginOverlayOperation() => Interlocked.Increment(ref _overlayGeneration);
+
+    private bool IsScreenTargetActive(nint window, int processId)
+    {
+        if (_disposed || !_enabled || !IsScreenMode ||
+            window == nint.Zero ||
+            NativeMethods.GetForegroundWindow() != window ||
+            !NativeMethods.IsWindow(window))
+        {
+            return false;
+        }
+
+        NativeMethods.GetWindowThreadProcessId(window, out uint currentProcessId);
+        return currentProcessId == unchecked((uint)processId);
+    }
+
+    private bool TryBeginProcessing()
+    {
+        lock (_processingLock)
+        {
+            if (_processing || _disposed)
+            {
+                return false;
+            }
+
+            _processing = true;
+            _processingIdle = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            return true;
+        }
+    }
+
+    private void EndProcessing()
+    {
+        TaskCompletionSource? completion = null;
+        lock (_processingLock)
+        {
+            if (!_processing)
+            {
+                return;
+            }
+
+            _processing = false;
+            completion = _processingIdle;
+        }
+
+        completion.TrySetResult();
+    }
+
+    private bool IsProcessing
+    {
+        get
+        {
+            lock (_processingLock)
+            {
+                return _processing;
+            }
+        }
+    }
+
+    private Task WaitForProcessingIdleAsync()
+    {
+        lock (_processingLock)
+        {
+            return _processing ? _processingIdle.Task : Task.CompletedTask;
+        }
+    }
+
+    private CancellationToken CurrentModeToken
+    {
+        get
+        {
+            lock (_lifecycleLock)
+            {
+                return _modeCancellation?.Token ?? _lifetimeCancellation.Token;
+            }
+        }
+    }
+
+    private void RestartModeCancellation()
+    {
+        CancellationTokenSource replacement = CancellationTokenSource.CreateLinkedTokenSource(
+            _lifetimeCancellation.Token);
+        CancellationTokenSource? previous;
+        lock (_lifecycleLock)
+        {
+            previous = _modeCancellation;
+            _modeCancellation = replacement;
+        }
+
+        previous?.Cancel();
+        if (previous is not null)
+        {
+            lock (_lifecycleLock)
+            {
+                _retiredModeCancellations.Add(previous);
+            }
+        }
+    }
+
+    private void TrackTask(Task task)
+    {
+        lock (_taskLock)
+        {
+            _activeTasks.Add(task);
+        }
+
+        _ = task.ContinueWith(
+            completed =>
+            {
+                lock (_taskLock)
+                {
+                    _activeTasks.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private async Task AwaitActiveTasksAsync()
+    {
+        while (true)
+        {
+            Task[] tasks;
+            lock (_taskLock)
+            {
+                tasks = _activeTasks.ToArray();
+            }
+
+            if (tasks.Length == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                await Task.WhenAll(tasks);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception exception)
+            {
+                LogError(exception);
+            }
+        }
+    }
+
+    private static TaskCompletionSource CompletedSource()
+    {
+        TaskCompletionSource source = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.SetResult();
+        return source;
     }
 
     private void ReportStatus(string status)
@@ -810,21 +1244,31 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
         _enabled = false;
+        _lifetimeCancellation.Cancel();
+        CancellationTokenSource? modeCancellation;
+        lock (_lifecycleLock)
+        {
+            modeCancellation = _modeCancellation;
+            _modeCancellation = null;
+        }
+
+        modeCancellation?.Cancel();
         StopTimer();
         ResetTracking();
         CancelScreenIdleUnload();
         CancelSmartFallbackUnload();
         _hotkeys.UnregisterScreenTranslation();
         _hotkeys.UnregisterSmartFallback();
-        QueueUnload();
-        Task pendingUnload;
-        lock (_lifecycleLock)
-        {
-            pendingUnload = _pendingUnload;
-        }
-
-        await pendingUnload;
+        HideAllOverlays();
+        await WaitForProcessingIdleAsync();
+        await AwaitActiveTasksAsync();
         await _dispatcher.InvokeAsync(() =>
         {
             _overlay.HideOverlay();
@@ -835,13 +1279,26 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _hotkeys.SmartFallbackPressed -= OnSmartFallbackPressed;
             _hotkeys.Dispose();
         });
+        _tracking.Dispose();
         _ocr.Dispose();
-        _history.Flush();
+        _history.Dispose();
         await _textHook.DisposeAsync();
         await _translator.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();
         _smartPipeline.Dispose();
+        modeCancellation?.Dispose();
+        lock (_lifecycleLock)
+        {
+            foreach (CancellationTokenSource cancellation in _retiredModeCancellations)
+            {
+                cancellation.Dispose();
+            }
+
+            _retiredModeCancellations.Clear();
+        }
+
+        _lifetimeCancellation.Dispose();
     }
 
     private sealed record SmartFallbackRequest(

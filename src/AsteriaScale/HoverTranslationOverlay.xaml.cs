@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -10,6 +11,15 @@ namespace AsteriaScale;
 
 public partial class HoverTranslationOverlay : Window
 {
+    private const double MaximumOverlayWidth = 430;
+    private const double LongSmartStatusMinimumWidth = 376;
+    private const double HeaderHorizontalChrome = 61;
+    private const double HeaderMeasurementSafety = 12;
+    private static readonly Typeface ModeTypeface = new(
+        new System.Windows.Media.FontFamily("Segoe UI"),
+        FontStyles.Normal,
+        FontWeights.SemiBold,
+        FontStretches.Normal);
     private static readonly SolidColorBrush DictionaryAccent = Brush(0x45, 0xDD, 0xC8);
     private static readonly SolidColorBrush DictionaryBorder = Brush(0x2F, 0x91, 0x84);
     private static readonly SolidColorBrush DictionaryBadge = Brush(0x14, 0x2A, 0x2B);
@@ -55,7 +65,12 @@ public partial class HoverTranslationOverlay : Window
         TranslationText.FontWeight = FontWeights.Normal;
         TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0xA8, 0xB1, 0xC9));
         HintText.Visibility = Visibility.Collapsed;
-        Width = PreferredWidth(normalizedSource, TranslationText.Text, dictionaryMode || smartMode);
+        Width = PreferredWidth(
+            normalizedSource,
+            TranslationText.Text,
+            dictionaryMode || smartMode,
+            ModeText.Text,
+            MetaText.Text);
         ShowNear(cursor);
     }
 
@@ -109,7 +124,12 @@ public partial class HoverTranslationOverlay : Window
 
         SourceText.Text = normalizedSource;
         SourceText.FontSize = SourceFontSize(normalizedSource);
-        Width = PreferredWidth(normalizedSource, normalizedTranslation, dictionaryMode || smartMode);
+        Width = PreferredWidth(
+            normalizedSource,
+            normalizedTranslation,
+            dictionaryMode || smartMode,
+            ModeText.Text,
+            MetaText.Text);
 
         bool smartCandidatesPending =
             smartMode &&
@@ -159,7 +179,12 @@ public partial class HoverTranslationOverlay : Window
         }
     }
 
-    internal static double PreferredWidth(string source, string translation, bool dictionaryMode)
+    internal static double PreferredWidth(
+        string source,
+        string translation,
+        bool dictionaryMode,
+        string? modeLabel = null,
+        string? metaLabel = null)
     {
         int sourceLength = source.Trim().Length;
         string[] visibleMeanings = translation
@@ -172,23 +197,69 @@ public partial class HoverTranslationOverlay : Window
         int translationLength = visibleMeanings.Length == 0
             ? translation.Trim().Length
             : visibleMeanings.Max(value => value.Length);
+        double contentWidth;
         if (dictionaryMode)
         {
             if (sourceLength <= 30 && translationLength <= 28)
             {
-                return 268;
+                contentWidth = 268;
             }
-
-            return sourceLength <= 58 && translationLength <= 52 ? 292 : 324;
+            else
+            {
+                contentWidth = sourceLength <= 58 && translationLength <= 52 ? 292 : 324;
+            }
+        }
+        else
+        {
+            int totalLength = sourceLength + translationLength;
+            contentWidth = totalLength switch
+            {
+                <= 100 => 320,
+                <= 230 => 376,
+                _ => MaximumOverlayWidth
+            };
         }
 
-        int totalLength = sourceLength + translationLength;
-        return totalLength switch
+        double headerWidth = PreferredHeaderWidth(modeLabel, metaLabel);
+        return Math.Min(MaximumOverlayWidth, Math.Max(contentWidth, headerWidth));
+    }
+
+    internal static double PreferredHeaderWidth(string? modeLabel, string? metaLabel)
+    {
+        if (string.IsNullOrWhiteSpace(modeLabel) || string.IsNullOrWhiteSpace(metaLabel))
         {
-            <= 100 => 320,
-            <= 230 => 376,
-            _ => 430
-        };
+            return 0;
+        }
+
+        // WPF sizes text in device-independent pixels, so measuring in DIPs keeps
+        // the header stable across monitor scale factors. The small reserve covers
+        // Display-mode glyph rounding without forcing every short card to be wide.
+        double modeWidth = MeasureHeaderText(modeLabel, 10.5);
+        double metaWidth = MeasureHeaderText(metaLabel, 8.5);
+        double measuredWidth = Math.Ceiling(
+            HeaderHorizontalChrome +
+            HeaderMeasurementSafety +
+            modeWidth +
+            metaWidth);
+        bool longSmartStatus =
+            metaLabel.Contains("НЕ УВЕРЕН", StringComparison.Ordinal) ||
+            metaLabel.Contains("НЕДОСТУПЕН", StringComparison.Ordinal);
+        return longSmartStatus
+            ? Math.Max(LongSmartStatusMinimumWidth, measuredWidth)
+            : measuredWidth;
+    }
+
+    private static double MeasureHeaderText(string value, double fontSize)
+    {
+        FormattedText formatted = new(
+            value,
+            CultureInfo.GetCultureInfo("ru-RU"),
+            System.Windows.FlowDirection.LeftToRight,
+            ModeTypeface,
+            fontSize,
+            System.Windows.Media.Brushes.White,
+            pixelsPerDip: 1);
+        return formatted.WidthIncludingTrailingWhitespace;
     }
 
     private void ConfigureMode(

@@ -58,8 +58,8 @@ outcome. The worker:
 At most 128 glosses are accepted. CPU inference uses dynamic inputs in chunks
 of 32 and pads only to the longest pair in that chunk, capped at 128 tokens.
 NPU inference uses fixed `[4,64]` chunks and duplicates the final real lane for
-padding; padded results never participate in ranking. A request spanning more
-than one calibrated chunk returns a conservative normal abstention.
+padding; padded results never participate in ranking. Scores from every real
+lane are grouped before the same margin-only acceptance rule is applied.
 
 CPU FP32 is the reference default. On the frozen 30-case VN holdout it accepted
 18 decisions, of which 17 matched the labels (60% coverage, 94.4% selective

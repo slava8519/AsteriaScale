@@ -30,6 +30,11 @@ internal static class TranslationBenchmark
     public static async Task RunAsync(string setPath, string engine, string? dumpPath)
     {
         BenchmarkCase[] cases = LoadCases(setPath);
+        if (cases.Length == 0)
+        {
+            throw new InvalidOperationException("The translation benchmark set contains no cases.");
+        }
+
         Console.WriteLine($"  set={Path.GetFileName(setPath)} cases={cases.Length} engine={engine}");
         if (!string.Equals(engine, "qwen", StringComparison.OrdinalIgnoreCase))
         {
@@ -37,43 +42,71 @@ internal static class TranslationBenchmark
                 $"Engine '{engine}' is not implemented yet; only 'qwen' exists before roadmap #14/#16.");
         }
 
-        await using FoundryTranslationService translator = new();
-        await translator.WarmUpAsync();
-
-        List<CaseResult> results = [];
-        foreach (BenchmarkCase benchmarkCase in cases)
+        string isolatedUserDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "AsteriaScale",
+            "translation-benchmark-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(isolatedUserDirectory);
+        try
         {
-            Stopwatch timer = Stopwatch.StartNew();
-            string output = await translator.TranslateToRussianAsync(
-                benchmarkCase.Source,
-                CancellationToken.None);
-            timer.Stop();
+            LocalDictionaryService dictionary = new(
+                Path.Combine(AppContext.BaseDirectory, "Dictionaries"),
+                isolatedUserDirectory);
+            await using FoundryTranslationService translator = new(dictionary);
+            await translator.WarmUpAsync();
 
-            int hits = benchmarkCase.Anchors.Count(
-                anchor => ContainsRussianStem(output, anchor.Russian));
-            CaseResult result = new(
-                benchmarkCase.Id,
-                ChrF(output, benchmarkCase.Reference),
-                benchmarkCase.Anchors.Count,
-                hits,
-                ResidualEnglishRate(output),
-                timer.ElapsedMilliseconds,
-                output);
-            results.Add(result);
-            Console.WriteLine(
-                $"  {result.Id,-18} chrF={result.ChrF:F3} " +
-                $"anchors={result.AnchorsHit}/{result.AnchorsTotal} " +
-                $"en={result.ResidualEnglish:F2} {result.Milliseconds,5} ms  {result.Output}");
+            List<CaseResult> results = [];
+            foreach (BenchmarkCase benchmarkCase in cases)
+            {
+                Stopwatch timer = Stopwatch.StartNew();
+                string output = await translator.TranslateToRussianAsync(
+                    benchmarkCase.Source,
+                    CancellationToken.None);
+                timer.Stop();
+                if (string.IsNullOrWhiteSpace(output))
+                {
+                    throw new InvalidOperationException(
+                        $"{benchmarkCase.Id}: the translation engine returned an empty result.");
+                }
+
+                int hits = benchmarkCase.Anchors.Count(
+                    anchor => ContainsRussianStem(output, anchor.Russian));
+                CaseResult result = new(
+                    benchmarkCase.Id,
+                    ChrF(output, benchmarkCase.Reference),
+                    benchmarkCase.Anchors.Count,
+                    hits,
+                    ResidualEnglishRate(output),
+                    timer.ElapsedMilliseconds,
+                    output);
+                results.Add(result);
+                Console.WriteLine(
+                    $"  {result.Id,-18} chrF={result.ChrF:F3} " +
+                    $"anchors={result.AnchorsHit}/{result.AnchorsTotal} " +
+                    $"en={result.ResidualEnglish:F2} {result.Milliseconds,5} ms  {result.Output}");
+            }
+
+            Report(results);
+            EnforceConfiguredThresholds(results);
+            if (dumpPath is not null)
+            {
+                await File.WriteAllTextAsync(
+                    dumpPath,
+                    JsonSerializer.Serialize(
+                        results,
+                        new JsonSerializerOptions { WriteIndented = true }));
+            }
         }
-
-        Report(results);
-        if (dumpPath is not null)
+        finally
         {
-            await File.WriteAllTextAsync(
-                dumpPath,
-                JsonSerializer.Serialize(
-                    results,
-                    new JsonSerializerOptions { WriteIndented = true }));
+            try
+            {
+                Directory.Delete(isolatedUserDirectory, recursive: true);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Benchmark isolation matters more than best-effort temp cleanup.
+            }
         }
     }
 
@@ -106,6 +139,65 @@ internal static class TranslationBenchmark
         Console.WriteLine(
             $"  latency median={latencies[latencies.Length / 2]} ms " +
             $"max={latencies[^1]} ms");
+    }
+
+    private static void EnforceConfiguredThresholds(IReadOnlyList<CaseResult> results)
+    {
+        if (results.Count == 0)
+        {
+            throw new InvalidOperationException("The translation benchmark produced no results.");
+        }
+
+        double meanChrF = results.Average(result => result.ChrF);
+        int anchorsTotal = results.Sum(result => result.AnchorsTotal);
+        double anchorRate = anchorsTotal == 0
+            ? 1
+            : results.Sum(result => result.AnchorsHit) / (double)anchorsTotal;
+        double residualEnglish = results.Average(result => result.ResidualEnglish);
+        EnforceMinimum("ASTERIA_TRANSLATION_MIN_CHRF", meanChrF);
+        EnforceMinimum("ASTERIA_TRANSLATION_MIN_ANCHOR_RATE", anchorRate);
+        EnforceMaximum("ASTERIA_TRANSLATION_MAX_RESIDUAL_ENGLISH", residualEnglish);
+    }
+
+    private static void EnforceMinimum(string variable, double actual)
+    {
+        if (ReadThreshold(variable) is { } threshold && actual < threshold)
+        {
+            throw new InvalidOperationException(
+                $"Translation quality gate {variable}={threshold:F3} failed: {actual:F3}.");
+        }
+    }
+
+    private static void EnforceMaximum(string variable, double actual)
+    {
+        if (ReadThreshold(variable) is { } threshold && actual > threshold)
+        {
+            throw new InvalidOperationException(
+                $"Translation quality gate {variable}={threshold:F3} failed: {actual:F3}.");
+        }
+    }
+
+    private static double? ReadThreshold(string variable)
+    {
+        string? raw = Environment.GetEnvironmentVariable(variable);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        if (!double.TryParse(
+                raw,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out double threshold) ||
+            !double.IsFinite(threshold) ||
+            threshold is < 0 or > 1)
+        {
+            throw new InvalidOperationException(
+                $"{variable} must be a number from 0 to 1 using a dot decimal separator.");
+        }
+
+        return threshold;
     }
 
     /// <summary>

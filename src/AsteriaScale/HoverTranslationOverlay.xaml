@@ -31,6 +31,7 @@
                              Margin="0,0,7,0" />
                     <TextBlock x:Name="ModeText" Text="Словарь" FontSize="10.5"
                                FontWeight="SemiBold" Foreground="#D6DAEA"
+                               TextTrimming="CharacterEllipsis"
                                VerticalAlignment="Center" />
                 </StackPanel>
 
@@ -39,7 +40,7 @@
                         Padding="7,2.5" Margin="10,0,0,0">
                     <TextBlock x:Name="MetaText" Text="EN → RU  ·  СЛОВО"
                                Foreground="#59DDCC" FontSize="8.5"
-                               FontWeight="SemiBold" />
+                               FontWeight="SemiBold" TextWrapping="NoWrap" />
                 </Border>
             </Grid>
 

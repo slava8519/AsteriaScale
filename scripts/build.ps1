@@ -6,45 +6,51 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path -LiteralPath (Split-Path $PSScriptRoot -Parent)).Path
+. (Join-Path $PSScriptRoot "build-state.ps1")
+
 $mainProject = Join-Path $root "src\AsteriaScale\AsteriaScale.csproj"
 $rankerProject = Join-Path $root "src\AsteriaScale.RankerWorker\AsteriaScale.RankerWorker.csproj"
 $distDirectory = [IO.Path]::GetFullPath((Join-Path $root "dist")).TrimEnd('\', '/')
-$output = [IO.Path]::GetFullPath((Join-Path $root "dist\AsteriaScale")).TrimEnd('\', '/')
-$expectedOutput = [IO.Path]::GetFullPath((Join-Path $root "dist\AsteriaScale")).TrimEnd('\', '/')
+$output = [IO.Path]::GetFullPath((Join-Path $distDirectory "AsteriaScale")).TrimEnd('\', '/')
 $identitySource = Join-Path $root "packaging\Identity"
-$identityPackage = Join-Path $root "dist\AsteriaScale.Identity.msix"
+$identityPackage = Join-Path $distDirectory "AsteriaScale.Identity.msix"
+$buildId = [Guid]::NewGuid().ToString("N")
+$stagingRoot = Join-Path $distDirectory ".asteria-staging-$buildId"
+$stagingOutput = Join-Path $stagingRoot "AsteriaScale"
+$stagingIdentity = Join-Path $stagingRoot "AsteriaScale.Identity.msix"
+$previousOutput = Join-Path $distDirectory ".asteria-previous-$buildId"
+$previousIdentity = Join-Path $distDirectory ".asteria-identity-previous-$buildId.msix"
 
+$expectedOutput = [IO.Path]::GetFullPath((Join-Path $root "dist\AsteriaScale")).TrimEnd('\', '/')
 if (-not [string]::Equals($output, $expectedOutput, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to clean an unexpected output path: $output"
+    throw "Refusing to replace an unexpected output path: $output"
 }
 
 $workspacePrefix = [IO.Path]::GetFullPath($root).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
 if (-not $output.StartsWith($workspacePrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "Refusing to clean an output path outside the workspace: $output"
+    throw "Refusing to replace an output path outside the workspace: $output"
 }
 
 if (Test-Path -LiteralPath $distDirectory) {
     $distItem = Get-Item -LiteralPath $distDirectory -Force
-    if (($distItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Refusing to clean through a reparse-point dist directory: $distDirectory"
+    if (-not $distItem.PSIsContainer -or
+        ($distItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to publish through an unsafe dist directory: $distDirectory"
     }
+} else {
+    New-Item -ItemType Directory -Path $distDirectory | Out-Null
 }
 
 if (Test-Path -LiteralPath $output) {
     $outputItem = Get-Item -LiteralPath $output -Force
-    if (-not $outputItem.PSIsContainer) {
-        throw "Refusing to recursively clean a non-directory output path: $output"
+    if (-not $outputItem.PSIsContainer -or
+        ($outputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::Equals(
+            $outputItem.FullName.TrimEnd('\', '/'),
+            $expectedOutput,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to replace an unsafe output directory: $output"
     }
-    if (($outputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Refusing to recursively clean a reparse-point output directory: $output"
-    }
-
-    $resolvedOutput = $outputItem.FullName.TrimEnd('\', '/')
-    if (-not [string]::Equals($resolvedOutput, $expectedOutput, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to recursively clean an unexpected resolved path: $resolvedOutput"
-    }
-
-    Remove-Item -LiteralPath $resolvedOutput -Recurse -Force
 }
 
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
@@ -56,58 +62,12 @@ if (-not $dotnetPath) {
     throw ".NET SDK was not found. Install Microsoft.DotNet.SDK.10 with winget."
 }
 
-& $dotnetPath publish $mainProject `
-    -c $Configuration `
-    -r $Runtime `
-    --self-contained true `
-    -p:PublishSingleFile=true `
-    -p:EnableMsixTooling=true `
-    -p:DebugType=None `
-    -p:DebugSymbols=false `
-    -o $output
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Main application build failed with exit code $LASTEXITCODE."
-}
-
-$rankerOutput = Join-Path $output "Ranker"
-& $dotnetPath publish $rankerProject `
-    -c $Configuration `
-    -r $Runtime `
-    --self-contained true `
-    -p:PublishSingleFile=false `
-    -p:DebugType=None `
-    -p:DebugSymbols=false `
-    -o $rankerOutput
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Ranker worker build failed with exit code $LASTEXITCODE."
-}
-
-$requiredRankerFiles = @(
-    (Join-Path $rankerOutput "AsteriaScale.RankerWorker.exe"),
-    (Join-Path $rankerOutput "Models\GlossBert\tokenizer.json"),
-    (Join-Path $rankerOutput "Models\GlossBert\Cpu\glossbert-fp32-dynamic.onnx"),
-    (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx"),
-    (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx.compatibility.txt"),
-    (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx_VITISAI.bin")
-)
-foreach ($requiredFile in $requiredRankerFiles) {
-    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
-        throw "Ranker package is incomplete. Missing: $requiredFile"
-    }
-}
-
 $sdkTools = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.windows.sdk.buildtools\10.0.26100.8249\bin\10.0.26100.0\x64"
 $makeAppx = Join-Path $sdkTools "makeappx.exe"
 $signTool = Join-Path $sdkTools "signtool.exe"
-if (-not (Test-Path $makeAppx) -or -not (Test-Path $signTool)) {
+if (-not (Test-Path -LiteralPath $makeAppx -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $signTool -PathType Leaf)) {
     throw "Windows SDK packaging tools were not restored. Run dotnet restore first."
-}
-
-& $makeAppx pack /d $identitySource /p $identityPackage /o /nv
-if ($LASTEXITCODE -ne 0) {
-    throw "Identity package creation failed with exit code $LASTEXITCODE."
 }
 
 $certificate = Get-ChildItem Cert:\CurrentUser\My |
@@ -119,11 +79,161 @@ if (-not $certificate) {
     throw "Signing certificate 'CN=Asteria Scale Local' with a private key was not found."
 }
 
-& $signTool sign /sha1 $certificate.Thumbprint /fd SHA256 $identityPackage
-if ($LASTEXITCODE -ne 0) {
-    throw "Identity package signing failed with exit code $LASTEXITCODE."
+function Remove-SafeBuildDirectory {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $item = Get-Item -LiteralPath $Path -Force
+    if (-not $item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        -not [string]::Equals($item.Parent.FullName, $distDirectory, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clean an unsafe build directory: $Path"
+    }
+
+    Remove-Item -LiteralPath $item.FullName -Recurse -Force
+}
+
+$swapSucceeded = $false
+$oldOutputMoved = $false
+$newOutputInstalled = $false
+$oldIdentityMoved = $false
+$newIdentityInstalled = $false
+try {
+    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
+
+    & $dotnetPath publish $mainProject `
+        -c $Configuration `
+        -r $Runtime `
+        --self-contained true `
+        -p:PublishSingleFile=true `
+        -p:EnableMsixTooling=true `
+        -p:DebugType=None `
+        -p:DebugSymbols=false `
+        -o $stagingOutput
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Main application build failed with exit code $LASTEXITCODE."
+    }
+
+    $rankerOutput = Join-Path $stagingOutput "Ranker"
+    & $dotnetPath publish $rankerProject `
+        -c $Configuration `
+        -r $Runtime `
+        --self-contained true `
+        -p:PublishSingleFile=false `
+        -p:DebugType=None `
+        -p:DebugSymbols=false `
+        -o $rankerOutput
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Ranker worker build failed with exit code $LASTEXITCODE."
+    }
+
+    $requiredRankerFiles = @(
+        (Join-Path $rankerOutput "AsteriaScale.RankerWorker.exe"),
+        (Join-Path $rankerOutput "Models\GlossBert\tokenizer.json"),
+        (Join-Path $rankerOutput "Models\GlossBert\Cpu\glossbert-fp32-dynamic.onnx"),
+        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx"),
+        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx.compatibility.txt"),
+        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx_VITISAI.bin"),
+        (Join-Path $rankerOutput "Models\GlossEmbeddings\eng-senses.vec"),
+        (Join-Path $rankerOutput "Models\GlossEmbeddings\minilm-l6-v2.onnx"),
+        (Join-Path $rankerOutput "Models\GlossEmbeddings\tokenizer.json")
+    )
+    foreach ($requiredFile in $requiredRankerFiles) {
+        if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+            throw "Ranker package is incomplete. Missing: $requiredFile"
+        }
+    }
+
+    & $makeAppx pack /d $identitySource /p $stagingIdentity /o /nv
+    if ($LASTEXITCODE -ne 0) {
+        throw "Identity package creation failed with exit code $LASTEXITCODE."
+    }
+
+    & $signTool sign /sha1 $certificate.Thumbprint /fd SHA256 $stagingIdentity
+    if ($LASTEXITCODE -ne 0) {
+        throw "Identity package signing failed with exit code $LASTEXITCODE."
+    }
+
+    $sourceRevision = Get-AsteriaSourceRevision -Root $root
+    if (-not $sourceRevision) {
+        $sourceRevision = "unknown"
+    }
+    Set-Content -LiteralPath (Join-Path $stagingOutput ".build-revision") `
+        -Value $sourceRevision -Encoding Ascii -NoNewline
+    $sourceFingerprint = Get-AsteriaSourceFingerprint -Root $root
+    Set-Content -LiteralPath (Join-Path $stagingOutput ".build-source-fingerprint") `
+        -Value $sourceFingerprint -Encoding Ascii -NoNewline
+
+    try {
+        if (Test-Path -LiteralPath $output) {
+            Move-Item -LiteralPath $output -Destination $previousOutput
+            $oldOutputMoved = $true
+        }
+
+        Move-Item -LiteralPath $stagingOutput -Destination $output
+        $newOutputInstalled = $true
+
+        if (Test-Path -LiteralPath $identityPackage) {
+            Move-Item -LiteralPath $identityPackage -Destination $previousIdentity
+            $oldIdentityMoved = $true
+        }
+
+        Move-Item -LiteralPath $stagingIdentity -Destination $identityPackage
+        $newIdentityInstalled = $true
+        $swapSucceeded = $true
+    } catch {
+        $swapError = $_
+        $rollbackFailures = @(Invoke-AsteriaBuildSwapRollback `
+            -Output $output `
+            -PreviousOutput $previousOutput `
+            -FailedOutput (Join-Path $stagingRoot "failed-AsteriaScale") `
+            -IdentityPackage $identityPackage `
+            -PreviousIdentity $previousIdentity `
+            -FailedIdentity $stagingIdentity `
+            -OldOutputMoved:$oldOutputMoved `
+            -NewOutputInstalled:$newOutputInstalled `
+            -OldIdentityMoved:$oldIdentityMoved `
+            -NewIdentityInstalled:$newIdentityInstalled)
+        if ($rollbackFailures.Count -eq 0) {
+            throw
+        }
+
+        throw (New-AsteriaBuildSwapException `
+            -OriginalError $swapError.Exception `
+            -RollbackFailures $rollbackFailures)
+    }
+} finally {
+    if ($swapSucceeded) {
+        if (Test-Path -LiteralPath $previousIdentity) {
+            try {
+                Remove-Item -LiteralPath $previousIdentity -Force
+            } catch {
+                Write-Warning "The previous identity package remains at '$previousIdentity': $($_.Exception.Message)"
+            }
+        }
+        if (Test-Path -LiteralPath $previousOutput) {
+            try {
+                Remove-SafeBuildDirectory -Path $previousOutput
+            } catch {
+                Write-Warning "The previous publish remains at '$previousOutput': $($_.Exception.Message)"
+            }
+        }
+    }
+
+    if (Test-Path -LiteralPath $stagingRoot) {
+        try {
+            Remove-SafeBuildDirectory -Path $stagingRoot
+        } catch {
+            Write-Warning "The staging directory remains at '$stagingRoot': $($_.Exception.Message)"
+        }
+    }
 }
 
 Write-Host "Ready: $(Join-Path $output 'AsteriaScale.exe')"
-Write-Host "Ranker: $(Join-Path $rankerOutput 'AsteriaScale.RankerWorker.exe')"
+Write-Host "Ranker: $(Join-Path $output 'Ranker\AsteriaScale.RankerWorker.exe')"
 Write-Host "Identity: $identityPackage"

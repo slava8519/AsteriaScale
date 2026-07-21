@@ -283,15 +283,43 @@ internal sealed class SmartHoverPipeline : IDisposable
                     UsedFullFallback: false);
             }
 
+            GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
+            if (!string.Equals(_activeSmartBackend, smartBackend, StringComparison.Ordinal) ||
+                _glossBertSelector.ActiveProvider != provider ||
+                string.IsNullOrWhiteSpace(_glossBertSelector.ActiveModelVersion))
+            {
+                await PrepareSmartBackendAsync(smartBackend, cancellationToken);
+            }
+
+            string modelVersion = _glossBertSelector.ActiveModelVersion
+                ?? GlossBertDictionarySelectorService.GetModelCacheId(provider);
+            string expectedPipeline = ExpectedRankingPipeline(
+                provider,
+                visibleTranslations.Length,
+                modelVersion);
             SmartDictionaryCacheRequest cacheRequest = CreateSmartCacheRequest(
                 recognized.Text,
                 lookup.Source,
                 recognized.CharacterIndex,
                 visibleTranslations,
                 "English",
-                smartBackend);
+                smartBackend,
+                modelVersion,
+                expectedPipeline);
             SmartDictionarySelection? cachedSelection =
                 await TryGetSmartSelectionSafeAsync(cacheRequest, cancellationToken);
+            if (cachedSelection is null && expectedPipeline == "bi+cross")
+            {
+                // Missing target/gloss hashes deterministically fail open to the
+                // full cross encoder, so that result has its own reusable key.
+                SmartDictionaryCacheRequest crossRequest = cacheRequest with
+                {
+                    RankingPipeline = "cross"
+                };
+                cachedSelection =
+                    await TryGetSmartSelectionSafeAsync(crossRequest, cancellationToken);
+            }
+
             if (cachedSelection is not null)
             {
                 return new SmartHoverResult(
@@ -309,8 +337,6 @@ internal sealed class SmartHoverPipeline : IDisposable
             // state until the ranker delivers the final verdict, so the card
             // renders exactly once instead of flashing candidates first.
             string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
-            await PrepareSmartBackendAsync(smartBackend, cancellationToken);
-            GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
             GlossBertDictionarySelection ranked =
                 await _glossBertSelector.SelectAsync(
                     recognized.Text,
@@ -321,6 +347,15 @@ internal sealed class SmartHoverPipeline : IDisposable
                     "English",
                     provider,
                     cancellationToken);
+            cacheRequest = CreateSmartCacheRequest(
+                recognized.Text,
+                lookup.Source,
+                recognized.CharacterIndex,
+                visibleTranslations,
+                "English",
+                smartBackend,
+                ranked.ModelVersion,
+                ranked.Pipeline);
             if (ranked.Abstained || ranked.SelectedGroupId is not { } groupId)
             {
                 // An exact Tatoeba sentence translation outranks a shrug: the
@@ -503,9 +538,10 @@ internal sealed class SmartHoverPipeline : IDisposable
         int characterIndex,
         IReadOnlyList<string> candidates,
         string sourceLanguage,
-        string backend)
+        string backend,
+        string modelVersion,
+        string rankingPipeline)
     {
-        GlossBertRankerProvider provider = ResolveRankerProvider(backend);
         return new SmartDictionaryCacheRequest(
             context,
             target,
@@ -513,9 +549,22 @@ internal sealed class SmartHoverPipeline : IDisposable
             candidates,
             sourceLanguage,
             backend,
-            GlossBertDictionarySelectorService.GetModelCacheId(provider),
-            _dictionary.VersionToken + "." + SmartRankingPipelineVersion);
+            modelVersion,
+            _dictionary.VersionToken + "." + SmartRankingPipelineVersion,
+            rankingPipeline);
     }
+
+    internal static string ExpectedRankingPipeline(
+        GlossBertRankerProvider provider,
+        int distinctGroupCount,
+        string modelVersion) =>
+        provider == GlossBertRankerProvider.Cpu &&
+        distinctGroupCount > 16 &&
+        modelVersion.EndsWith(
+            ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
+            StringComparison.Ordinal)
+            ? "bi+cross"
+            : "cross";
 
     private async Task<SmartDictionarySelection?> TryGetSmartSelectionSafeAsync(
         SmartDictionaryCacheRequest request,

@@ -91,6 +91,12 @@ Encoder: sentence-transformers/all-MiniLM-L6-v2 @ c9745ed1 (Apache-2.0),
 225,217 int8 vectors (384-dim, per-vector scale), matched by FNV-1a hashes of
 normalized definitions. The prefilter engages only above 16 distinct outcome
 groups and keeps the top 12 with all their glosses (GroupIds preserved).
+It is CPU-only: explicit NPU requests always use the pinned GlossBERT cross
+encoder without a hidden CPU stage. At startup the CPU worker validates the
+size and SHA-256 of all three files plus the index model/revision/source
+metadata; a partial or mismatched bundle is a hard error. Worker model identity
+includes the validated bundle revision, and each result separately reports
+`cross` or `bi+cross` for cache isolation.
 Measured: decisions and margins are bit-identical to the pure cross path on
 the dev set and the hyper-polysemy probe; k=8 was rejected after it evicted
 the correct sense of "set" and turned a calibrated abstention into a wrong

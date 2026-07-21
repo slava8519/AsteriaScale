@@ -26,7 +26,7 @@
 
                 <StackPanel Grid.Row="0" Margin="0,0,0,12">
                     <TextBlock Text="Мой словарь" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="Ваши записи имеют высший приоритет и переживают обновления."
+                    <TextBlock Text="Английские и японские записи имеют высший приоритет и переживают обновления."
                                TextWrapping="Wrap" FontSize="11"
                                Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,0" />
                 </StackPanel>

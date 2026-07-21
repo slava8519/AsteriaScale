@@ -129,6 +129,10 @@ try
             "The legacy GPU smart-ranker backend must migrate to CPU.");
     });
 
+    await RunAsync(
+        "Magpie config and backup safety",
+        () => MagpieSafetyTests.RunAsync(tempRoot));
+
     await RunAsync("Local dictionary lookup", async () =>
     {
         string mergedMeanings = LocalDictionaryService.MergeBundledMeanings(
@@ -146,7 +150,12 @@ try
 
         long managedBefore = GC.GetTotalMemory(true);
         Stopwatch loadTimer = Stopwatch.StartNew();
-        LocalDictionaryService dictionary = new();
+        string bundledDictionaries = Path.Combine(AppContext.BaseDirectory, "Dictionaries");
+        string isolatedUserDictionaries = Path.Combine(tempRoot, "local-dictionary-user");
+        Directory.CreateDirectory(isolatedUserDictionaries);
+        LocalDictionaryService dictionary = new(
+            bundledDictionaries,
+            isolatedUserDictionaries);
         await dictionary.LoadAsync();
         loadTimer.Stop();
         Assert(dictionary.EntryCount > 850_000,
@@ -258,9 +267,9 @@ try
 
         DictionaryLookupResult dialogue = await dictionary.LookupAsync(
             "Let's try something.", "try", 7);
-        Assert(dialogue.Found && dialogue.IsPhrase &&
-               dialogue.Translation.Contains("попроб", StringComparison.OrdinalIgnoreCase),
-            "The additional English dialogue dictionary was not loaded.");
+        Assert(dialogue.Found &&
+               dialogue.ContextTranslation.Contains("попроб", StringComparison.OrdinalIgnoreCase),
+            "The exact English dialogue sentence was not available as context.");
 
         DictionaryLookupResult colloquial = await dictionary.LookupAsync(
             "I didn't know.", "didn't", 3);
@@ -395,9 +404,11 @@ try
 
         DictionaryLookupResult japaneseDialogue = await dictionary.LookupAsync(
             "何かしてみましょう。", "してみましょう", 5);
-        Assert(japaneseDialogue.Found && japaneseDialogue.IsPhrase &&
-               japaneseDialogue.Translation.Contains("попроб", StringComparison.OrdinalIgnoreCase),
-            "The additional Japanese dialogue dictionary was not loaded.");
+        Assert(japaneseDialogue.Found &&
+               japaneseDialogue.ContextTranslation.Contains(
+                   "попроб",
+                   StringComparison.OrdinalIgnoreCase),
+            "The exact Japanese dialogue sentence was not available as context.");
 
         long managedDictionaryBytes = GC.GetTotalMemory(true) - managedBefore;
         Console.WriteLine(
@@ -447,6 +458,36 @@ try
                        "Translations",
                        StringComparison.OrdinalIgnoreCase)),
             "Kaikki section headings leaked into the aligned sense definitions.");
+
+        const string damagedArticleContext =
+            "He felt like he was teetering on the ver utter confusion.";
+        DictionaryLookupResult definiteArticle =
+            await dictionary.LookupWithSenseMetadataAsync(
+                damagedArticleContext,
+                "the",
+                damagedArticleContext.IndexOf("the", StringComparison.Ordinal));
+        Assert(definiteArticle.Found &&
+               definiteArticle.Translation == "определённый артикль" &&
+               definiteArticle.SenseCandidates.Count == 0,
+            $"The modern definite article was contaminated by an obsolete pronoun sense: {definiteArticle}");
+
+        const string frequentRemark = "[Coco] \"I get that a lot.\"";
+        foreach (string hoveredWord in new[] { "get", "that" })
+        {
+            DictionaryLookupResult frequentRemarkPhrase =
+                await dictionary.LookupWithSenseMetadataAsync(
+                    frequentRemark,
+                    hoveredWord,
+                    frequentRemark.IndexOf(hoveredWord, StringComparison.Ordinal));
+            Assert(frequentRemarkPhrase.Found &&
+                   frequentRemarkPhrase.IsPhrase &&
+                   frequentRemarkPhrase.Source.Equals(
+                       "I get that a lot",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   frequentRemarkPhrase.Translation == "я часто это слышу" &&
+                   frequentRemarkPhrase.SenseCandidates.Count == 0,
+                $"The exact first-person remark was split into ambiguous words: {frequentRemarkPhrase}");
+        }
         GC.KeepAlive(dictionary);
         await dictionary.UnloadAsync();
         Assert(dictionary.EntryCount == 0 && dictionary.SourceCount == 0,
@@ -1092,6 +1133,36 @@ try
                    dictionaryMode: true) <= 292,
             "A short multi-meaning card still expands to the legacy wide layout.");
 
+        const string smartModeLabel = "Умный словарь";
+        const string abstentionLabel = "EN → RU  ·  NPU · НЕ УВЕРЕН";
+        const string unavailableLabel = "EN → RU  ·  NPU · НЕДОСТУПЕН";
+        double abstentionWidth = HoverTranslationOverlay.PreferredWidth(
+            "get",
+            "получать; приносить; становиться",
+            dictionaryMode: true,
+            smartModeLabel,
+            abstentionLabel);
+        double unavailableWidth = HoverTranslationOverlay.PreferredWidth(
+            "get",
+            "получать; приносить; становиться",
+            dictionaryMode: true,
+            smartModeLabel,
+            unavailableLabel);
+        Assert(
+            abstentionWidth >= HoverTranslationOverlay.PreferredHeaderWidth(
+                smartModeLabel,
+                abstentionLabel) &&
+            abstentionWidth > 292 &&
+            abstentionWidth <= 430,
+            "The smart abstention badge can still be clipped by a compact card.");
+        Assert(
+            unavailableWidth >= abstentionWidth &&
+            unavailableWidth >= HoverTranslationOverlay.PreferredHeaderWidth(
+                smartModeLabel,
+                unavailableLabel) &&
+            unavailableWidth <= 430,
+            "Longer Russian smart status labels do not reserve enough header width.");
+
         Assert(SmartDictionarySenseResolver.CanonicalizePartOfSpeech("Adjective") == "adj" &&
                SmartDictionarySenseResolver.CanonicalizePartOfSpeech("ADV") == "adv" &&
                SmartDictionarySenseResolver.CanonicalizePartOfSpeech("proper-noun") == "name",
@@ -1119,7 +1190,12 @@ try
 
     await RunAsync("Residual English translation guard", async () =>
     {
-        LocalDictionaryService dictionary = new();
+        string bundledDictionaries = Path.Combine(AppContext.BaseDirectory, "Dictionaries");
+        string isolatedUserDictionaries = Path.Combine(tempRoot, "residual-guard-user");
+        Directory.CreateDirectory(isolatedUserDictionaries);
+        LocalDictionaryService dictionary = new(
+            bundledDictionaries,
+            isolatedUserDictionaries);
         ResidualEnglishTranslationGuard guard = new(dictionary);
 
         string repaired = await guard.ProtectAsync(
@@ -1547,6 +1623,10 @@ try
     });
 
     await RunAsync(
+        "Text hook process isolation and token boundaries",
+        () => TextHookSafetyTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));
 
@@ -1554,9 +1634,52 @@ try
         "User dictionary editor and translation history",
         () => UserDictionaryAndHistoryTests.RunAsync(tempRoot));
 
+    await RunAsync(
+        "Build artifact rollback",
+        () => BuildScriptSafetyTests.RunAsync(tempRoot));
+
     await RunAsync("Benchmark set schema", async () =>
     {
         TranslationBenchmark.VerifyMetrics();
+        RankerCalibrationBenchmark.VerifyMeasurementCounts(1, 1, 1, 1, 1);
+        foreach ((int cases, int ranked, int covered, int decided, int correct) in new[]
+                 {
+                     (0, 0, 0, 0, 0),
+                     (1, 0, 0, 0, 0),
+                     (1, 1, 0, 0, 0),
+                     (1, 1, 1, 0, 0),
+                     (1, 1, 1, 1, 2)
+                 })
+        {
+            try
+            {
+                RankerCalibrationBenchmark.VerifyMeasurementCounts(
+                    cases,
+                    ranked,
+                    covered,
+                    decided,
+                    correct);
+                throw new InvalidOperationException(
+                    "A ranker benchmark without usable measurements passed its gate.");
+            }
+            catch (InvalidDataException)
+            {
+                // Expected: a diagnostic run with no measurements must fail CI.
+            }
+        }
+
+        try
+        {
+            RankerCalibrationBenchmark.VerifyMeasurementCounts(1, 1, 1, 1, 0);
+            throw new InvalidOperationException(
+                "An incorrect accepted ranker decision unexpectedly passed.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains("quality gate", StringComparison.Ordinal))
+        {
+            // Expected: non-empty measurements are not enough to pass quality CI.
+        }
+
         string? repositoryRoot = AppContext.BaseDirectory;
         while (repositoryRoot is not null &&
                !File.Exists(Path.Combine(repositoryRoot, "AsteriaScale.slnx")))
@@ -1565,11 +1688,18 @@ try
         }
 
         Assert(repositoryRoot is not null, "Repository root was not found above the test binary.");
-        LocalDictionaryService schemaDictionary = new();
+        string schemaUserDirectory = Path.Combine(tempRoot, "benchmark-schema-user");
+        Directory.CreateDirectory(schemaUserDirectory);
+        LocalDictionaryService schemaDictionary = new(
+            Path.Combine(AppContext.BaseDirectory, "Dictionaries"),
+            schemaUserDirectory);
         await schemaDictionary.LoadAsync();
         string rankerDirectory = Path.Combine(repositoryRoot!, "assets", "Ranker");
         int validatedSets = 0;
-        foreach (string setPath in Directory.EnumerateFiles(rankerDirectory, "ranker-*.json"))
+        foreach (string setPath in new[]
+                 {
+                     Path.Combine(rankerDirectory, "ranker-benchmark.json")
+                 })
         {
             using System.Text.Json.JsonDocument set =
                 System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(setPath));
@@ -1602,13 +1732,16 @@ try
             validatedSets++;
         }
 
-        Assert(validatedSets >= 4, "Expected the benchmark set and three holdout generations.");
+        Assert(validatedSets == 1, "Expected exactly the ranker development set.");
 
         // Translation sets (roadmap #13) carry references and term anchors
         // instead of candidates; validate that shape separately.
         string translationDirectory = Path.Combine(repositoryRoot!, "assets", "Translation");
         int translationSets = 0;
-        foreach (string setPath in Directory.EnumerateFiles(translationDirectory, "translation-*.json"))
+        foreach (string setPath in new[]
+                 {
+                     Path.Combine(translationDirectory, "translation-benchmark.json")
+                 })
         {
             using System.Text.Json.JsonDocument set =
                 System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(setPath));
@@ -1640,7 +1773,7 @@ try
             translationSets++;
         }
 
-        Assert(translationSets >= 2, "Expected the translation dev set and its holdout.");
+        Assert(translationSets == 1, "Expected exactly the translation development set.");
     });
 
     await RunAsync(
@@ -1650,6 +1783,10 @@ try
     await RunAsync(
         "GlossBERT ranker protocol and host validation",
         () => GlossBertDictionarySelectorServiceTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Ranker worker fail-open and target anchoring",
+        RankerWorkerRegressionTests.RunAsync);
 
     await RunAsync("Magpie visible cursor mapping", () =>
     {
@@ -1945,19 +2082,24 @@ try
 
     await RunAsync("Engine lifecycle", async () =>
     {
-        MagpieEngineService engine = new();
+        string configPath = Path.Combine(tempRoot, "magpie-engine", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+        await File.WriteAllTextAsync(configPath, "{}");
+        MagpieEngineService engine = new(configPath: configPath);
         try
         {
             await engine.EnsureReadyAsync(PresetCatalog.Default);
-            Assert(engine.IsRunning, "Magpie did not stay running after initialization.");
-            Assert(File.Exists(engine.ConfigPath + ".before-asteria.json"), "The original engine config was not backed up.");
+            Assert(engine.IsOwnedEngineRunning,
+                "The Magpie process owned by the integration test did not stay running.");
+            Assert(File.Exists(configPath + ".before-asteria.json"), "The original engine config was not backed up.");
         }
         finally
         {
-            await engine.StopEngineAsync();
+            await engine.DisposeAsync();
         }
 
-        Assert(!engine.IsRunning, "Magpie did not stop cleanly.");
+        Assert(!engine.IsOwnedEngineRunning,
+            "The Magpie process owned by the integration test did not stop cleanly.");
     });
 
     if (args.Any(arg => string.Equals(arg, "--foundry-live", StringComparison.OrdinalIgnoreCase)))
