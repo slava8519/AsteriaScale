@@ -120,7 +120,7 @@ CPU использует исходный динамический FP32 ONNX. П
 | `Npu/glossbert-eager-vitis-context.onnx.compatibility.txt` | 235 | `A15F82D6AED5DE34EB6BD75B727E4ECBC2476FBF14C91B04E37A7F1C1FF0F777` |
 | `Npu/glossbert-eager-vitis-context.onnx_VITISAI.bin` | 123 964 416 | `94095699D6B7B59AB6EDC92C7471BF507B861BD14B4D57CB3EC75F49F3F5D672` |
 
-Итоговая схема: NPU распознаёт текст; умный словарь получает определения из локальной базы и при необходимости запускает GlossBERT на CPU либо явно выбранном NPU; полный перевод отдельно выполняет Qwen 3.5 2B на CPU. GPU-путь Magpie независимо масштабирует изображение. Все компоненты работают локально; подсказка не активируется и не перехватывает мышь.
+Итоговая схема: NPU распознаёт текст; умный словарь получает определения из локальной базы, а GlossBERT на CPU либо явно выбранном NPU ранжирует их и служит консервативным semantic validator для всех EN full-text маршрутов. Сам полный перевод выполняет Qwen 3.5 2B на CPU; его первый prompt получает только детерминированный каркас. GPU-путь Magpie независимо масштабирует изображение. Все компоненты работают локально; подсказка не активируется и не перехватывает мышь.
 
 ### Упрощённый словарный режим
 
@@ -230,11 +230,12 @@ Dev-набор содержит **64 реплики, а не 61**. Число `6
 15 реплик не имеют якорей. chrF, residual English и латентность считаются на
 всех 64 случаях; anchor accuracy — только по 61 якорю.
 
-Финальный same-build A/B выполнен 22 июля 2026 на той же конфигурации Foundry
-Local / Qwen и на прогретой системе. Личный user-словарь заменён пустым
-временным каталогом. `qwen-scaffold` здесь использует только детерминированную
-ветвь: опциональный GlossBERT разрешён в production лишь для одиночного полного
-fallback из «Умного словаря» и в A/B намеренно выключен.
+Закрывающий same-build A/B детерминированного этапа выполнен 22 июля 2026 на
+той же конфигурации Foundry Local / Qwen и на прогретой системе. Личный
+user-словарь заменён пустым временным каталогом. `qwen-scaffold` в этом
+историческом замере использовал только детерминированную ветвь; GlossBERT был
+намеренно выключен. Поэтому таблица ниже подтверждает каркас, но не является
+результатом финальной neural-архитектуры №14.
 
 | Метрика | `qwen` | `qwen-scaffold` | Изменение |
 |---|---:|---:|---:|
@@ -251,8 +252,9 @@ residual English не хуже и median latency не выше `+25 %` прой�
 Высокий max связан с ограниченными одним запросом fidelity-retry; медиана не
 ухудшилась.
 
-Диагностика финального каркаса: 64/64 случаев с диагностикой, 27 обязательных
-терминов, 26 соблюдены в принятом результате, 4 exact-sentence bypass,
+Диагностика детерминированного каркаса: 64/64 случаев с диагностикой,
+27 обязательных терминов, 26 соблюдены в принятом результате,
+4 exact-sentence bypass,
 4 первичных нарушения и 4 повтора, после которых осталось 1 нарушение. Это не
 противоречит `61/61`: внутренние scaffold-термины и размеченные benchmark-якоря
 — разные множества.
@@ -269,13 +271,137 @@ mandatory-порог `0.95`: пробное снижение до `0.9` доба
 Первый агрессивный ablation, принуждавший 119 словарных значений, подтвердил
 этот риск: chrF `0.511`, anchors `51/61`, residual English mean `0.003` (одна
 строка с латиницей), median `1448.5` мс, 30 retry и нарушения `44 → 29`.
-Зафиксированный контракт: **извлекать широко, принуждать редко**. При ручном
-single-hover fallback оставшуюся неоднозначность может разрешить GlossBERT;
-принимается исключительно его frozen margin `0.25`, выбранный `GroupId`
-сопоставляется с исходным outcome, ошибка/abstention fail-open удаляет только
-этот термин. Пакетный путь neural ranker не запускает.
+Зафиксированный контракт: **извлекать широко, принуждать редко**. Он остаётся
+основанием revised-архитектуры: детерминированные элементы могут быть
+обязательными, а neural-решение используется только как консервативная
+семантическая проверка.
 
-Артефакты финального A/B (локальны и исключены из git):
+### Отклонённые neural dev-итерации 22 июля 2026
+
+Первые три прогона выполнены на dev-наборе; это ablation-результаты, а не
+финальные показатели №14.
+
+- **Mandatory neural terms:** chrF `0.545`, anchors `58/61`, median latency
+  `1816` мс; GlossBERT `requests=140`, `selected=77`, `abstained=63`,
+  `errors=0`. Вариант отклонён: принятое значение превращалось в обязательную
+  русскую поверхность, хотя один смысл может естественно реализоваться другой
+  словоформой или синонимом.
+- **Always-soft hints:** chrF `0.564`, anchors `58/61`, latency median/max
+  `1164.5/7315` мс, соблюдение deterministic terms `25/27`, exact bypass `4`,
+  retries `4`, mandatory violations `4 → 2`; GlossBERT `requests=140`,
+  `selected=77`, `abstained=63`, `errors=0`, `skipped=2`; neural
+  `terms=0`, `hints=100`. Вариант отклонён: постоянная передача soft hints в
+  первый prompt всё ещё направляла небольшую Qwen даже без обязательного
+  контракта и не восстановила anchors.
+- **Conservative-v1:** chrF `0.581`, anchors `60/61`, latency median/max
+  `967/7847` мс, соблюдение deterministic terms `26/27`, exact bypass `4`,
+  retries `12`, mandatory violations `4 → 1`, sense conflicts `9 → 7`,
+  sense retries `9`; GlossBERT `requests=140`, `selected=77`, `abstained=63`,
+  `errors=0`, `skipped=2`; neural `terms=0`, `hints=100`. Несмотря на лучший
+  результат из трёх, вариант отклонён из-за ложных конфликтов и prompt leaks.
+- **Advisory-v1 с неавторитетной русской гипотезой:** chrF `0.588`, anchors
+  `60/61`, residual English `0`, latency median/max `1036/17175` мс,
+  deterministic terms `26/27`, exact bypass `4`, retries `10`, mandatory
+  violations `4 → 1`, sense flags `7 → 5`, sense retries `7`; GlossBERT
+  `requests=140`, `selected=77`, `abstained=63`, `errors=0`, `skipped=2`, neural
+  `terms=0`, `hints=100`. Prompt leaks исчезли, но Qwen всё ещё приняла спорную
+  словарную поверхность за команду: `dev-question-1` ухудшился с chrF `0.334`
+  до `0.123`. Поэтому свободный текст заменён явным consensus-протоколом.
+- **Consensus-v1 с русскими review-инструкциями:** chrF `0.589`, anchors
+  `59/61`, residual English `0`, latency median/max `1249/21750` мс,
+  соблюдение deterministic terms `25/27`, exact bypass `4`, retries `10`,
+  mandatory violations `4 → 2`, sense-prefilters/reviews `7`, неразрешённых
+  sense-флагов `7 → 7`; review outcomes: `KEEP=0`, `FIX=0`, `rejected=7`,
+  `failed=0`; GlossBERT `requests=140`, `selected=77`, `abstained=63`,
+  `errors=0`, `skipped=2`; neural `terms=0`, `hints=100`. Вариант отклонён:
+  русские служебные инструкции приводили chat endpoint к внепротокольному
+  выводу во всех семи review, поэтому ни одна проверка не могла принять
+  `KEEP/FIX`.
+
+Два класса ошибок conservative-v1 показали границу автоматической проверки.
+В `dev-fig-4` для “A flood of memories swept over her.” GlossBERT выбрал
+`память` и отверг `воспоминание`, хотя `поток воспоминаний` — естественная
+реализация того же смысла. В `dev-poly-4` и `dev-long-3` для `dark` выбранная
+поверхность `тёмный` конкурировала с отвергнутой `темнота`, а естественное
+`темно` попадало под слишком широкий морфологический match. Русский retry-prompt
+v1 с формулировкой об отвергнутом значении затем частично воспроизводился
+моделью в ответе. Поэтому ни выбранная словарная поверхность, ни формулировка
+старого retry не могут считаться авторитетным текстом перевода.
+
+Локальные артефакты этих отклонённых итераций исключены из git:
+
+- `artifacts/translation-qwen-scaffold-glossbert-cpu-2026-07-22.json`;
+- `artifacts/translation-qwen-scaffold-glossbert-cpu-soft-hints-2026-07-22.json`;
+- `artifacts/translation-qwen-scaffold-glossbert-cpu-validated-2026-07-22.json`;
+- `artifacts/translation-qwen-scaffold-glossbert-cpu-advisory-2026-07-22.json`;
+- `artifacts/translation-qwen-scaffold-glossbert-cpu-consensus-2026-07-22.json`.
+
+### Revised-v2: финальный контракт
+
+GlossBERT теперь подключён ко всем EN full-text маршрутам (`Neural`, оба
+полных fallback режима `Smart`, пакетный `Screen`) как **semantic validator**.
+Первый prompt Qwen получает только deterministic scaffold. Accepted sense
+хранит source, английское определение, выбранную и отвергнутые русские
+поверхности, но не становится mandatory term. Явная отвергнутая поверхность без
+выбранной — только prefilter для одного structured review, а не доказательство
+ошибки. Если mandatory-термины соблюдены, review получает полностью английские
+служебные инструкции, English source, предыдущий русский перевод и английские
+definitions как non-authoritative hypotheses, но не получает выбранные или
+отвергнутые neural-поверхности. Строгий ответ `KEEP` сохраняет естественный
+синоним/словоформу или отвергает неподходящую GlossBERT-гипотезу;
+`FIX|<перевод>` предлагает коррекцию.
+
+При mandatory miss semantic review не совмещается с исправлением: единственный
+дополнительный запрос использует прежний deterministic fidelity prompt, затем
+sense-prefilter пересчитывается для диагностики. Кандидат `FIX` или
+deterministic retry принимается только при строгом лексикографическом улучшении
+`(mandatory violations, unresolved sense flags)`; `KEEP` сохраняет первый
+ответ. Валидный `FIX` является окончательной semantic adjudication Qwen, но
+снимает flag только для содержательно изменившегося очищенного текста и не
+может ухудшить mandatory-компонент. Empty/invalid output и prompt echo никогда
+не заменяют первый ответ и не кэшируются. Trusted exact dialogue bypass
+сохраняется, если он совместим с deterministic terms.
+Batch-ранжирование последовательно и имеет общий circuit на операцию. Provider
+задаётся явно без fallback; кэшируются selected и abstained решения, но не
+errors. Критерий GlossBERT остаётся исключительно margin-only с замороженным
+порогом `0.25`.
+
+После revised-v2 matcher отвергнутых поверхностей сделан консервативным:
+закрытые парадигмы допускают падеж/число, но не производные существительные и
+совпадения по общему префиксу. Финальный strict-v3 English-review dev-прогон
+принят как dev-подтверждение:
+
+- chrF mean/median/min — `0.591288` / `0.563388` / `0.064103`;
+- anchors — `60/61` (`98.361 %`), residual English — `0`, строк с латиницей —
+  `0`;
+- latency median/max — `1230.5/6666` мс;
+- deterministic terms — `26/27`, exact bypass — `4`, retries — `9`,
+  mandatory violations — `4 → 1`;
+- sense flags — `6 → 3`, sense-prefilter cases — `6`; structured review:
+  `KEEP=3`, `FIX=0`, `rejected=2`, `failed=0`. Шестой sense-prefilter совпал
+  с mandatory miss, поэтому получил только deterministic fidelity retry и
+  остался с outcome `NotIssued`;
+- GlossBERT — `requests=140`, `selected=77`, `abstained=63`, `errors=0`,
+  `skipped=2`; neural `terms=0`, `hints=100`.
+
+Gate №14 пройден: anchors не ниже `59/61`, chrF выше чистого Qwen-baseline,
+residual English не ухудшился, а median latency укладывается в лимит `+25 %`.
+Относительно baseline `1190` мс итоговая медиана выросла на `3.4 %`.
+С детерминированным final-reviewed прогоном `63/64` outputs совпали побайтно.
+Единственное отличие, `dev-greeting-1`, имело review outcome `NotIssued`, то
+есть не было вызвано GlossBERT. Это важнее малого различия chrF
+`0.591323 → 0.591288`: semantic validator сохранил исходный генеративный путь
+почти полностью и вмешивался только после явного prefilter. Все `64/64`
+видимых outputs совпадают с revised-v2; строгий matcher лишь перераспределил
+три prefilter-решения и уменьшил их суммарное число на один.
+
+Локальный артефакт финального dev-прогона, исключённый из git:
+`artifacts/translation-qwen-scaffold-glossbert-cpu-strict-final-2026-07-22.json`.
+Замороженный `translation-holdout-v1.json` не открывался; он остаётся будущим
+one-shot подтверждением и не используется для настройки.
+
+Артефакты закрывающего A/B детерминированного этапа (локальны и исключены из
+git):
 
 - `artifacts/translation-qwen-final-ab-2026-07-22.json` — SHA-256
   `82440FA4CB71F4D42B6BED0E627063C96201885757C95C2FE8653BBB7CA9A3E5`;
@@ -284,8 +410,8 @@ single-hover fallback оставшуюся неоднозначность мож
 - dev-набор — SHA-256
   `7E1C20F47362328FABCCBC2125E1499FA5D92DBF620640C3FB252C2931C82B4A`.
 
-Замороженный `translation-holdout-v1.json` при разработке и финальном A/B не
-открывался.
+Замороженный `translation-holdout-v1.json` при разработке, детерминированном
+A/B и neural dev-итерациях не открывался.
 
 Исходная блокировка GPU/NPU также разобрана. После установки второго AMD NPU EP
 Foundry 0.10.2 видит дубли `VitisAIExecutionProvider` /

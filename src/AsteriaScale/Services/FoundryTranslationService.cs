@@ -10,10 +10,17 @@ using System.Text.Json.Serialization;
 
 namespace AsteriaScale.Services;
 
+internal enum TranslationScaffoldMode
+{
+    Disabled,
+    Deterministic,
+    GlossBert
+}
+
 public sealed class FoundryTranslationService : IAsyncDisposable
 {
     public const string ModelId = "qwen3.5-2b-text-generic-cpu:1";
-    public const string EngineLabel = "NPU OCR  •  QWEN LOCAL";
+    public const string EngineLabel = "NPU OCR  •  GLOSSBERT+QWEN";
     public const string SmartDictionaryEngineLabel = "NPU OCR  •  CPU-КОНТЕКСТ";
 
     private static readonly JsonSerializerOptions BatchPromptJsonOptions = new()
@@ -42,26 +49,35 @@ public sealed class FoundryTranslationService : IAsyncDisposable
     private readonly Action<TranslationScaffoldDiagnostics>? _diagnosticSink;
     private readonly bool _ownsDictionary;
     private readonly bool _useTranslationScaffold;
+    private readonly bool _useNeuralScaffold;
     private Uri? _endpoint;
     private string? _foundryPath;
 
     public FoundryTranslationService(LocalDictionaryService? dictionary = null)
-        : this(dictionary, useTranslationScaffold: true, diagnosticSink: null)
+        : this(dictionary, TranslationScaffoldMode.Deterministic, diagnosticSink: null)
     {
     }
 
     internal FoundryTranslationService(
         LocalDictionaryService? dictionary,
-        bool useTranslationScaffold,
+        TranslationScaffoldMode scaffoldMode,
         Action<TranslationScaffoldDiagnostics>? diagnosticSink = null,
         TranslationScaffoldNeuralRanker? neuralRanker = null)
     {
+        if (scaffoldMode == TranslationScaffoldMode.GlossBert && neuralRanker is null)
+        {
+            throw new ArgumentNullException(
+                nameof(neuralRanker),
+                "GlossBERT scaffold mode requires a neural ranker.");
+        }
+
         _dictionary = dictionary ?? new LocalDictionaryService();
         _ownsDictionary = dictionary is null;
-        _useTranslationScaffold = useTranslationScaffold;
+        _useTranslationScaffold = scaffoldMode != TranslationScaffoldMode.Disabled;
+        _useNeuralScaffold = scaffoldMode == TranslationScaffoldMode.GlossBert;
         _diagnosticSink = diagnosticSink;
         _translationGuard = new ResidualEnglishTranslationGuard(_dictionary);
-        _scaffoldBuilder = useTranslationScaffold
+        _scaffoldBuilder = _useTranslationScaffold
             ? new TranslationScaffoldBuilder(_dictionary, neuralRanker)
             : null;
     }
@@ -79,14 +95,8 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         await EnsureInitializedAsync(cancellationToken);
     }
 
-    public Task<string> TranslateToRussianAsync(
+    public async Task<string> TranslateToRussianAsync(
         string source,
-        CancellationToken cancellationToken) =>
-        TranslateToRussianAsync(source, useNeuralRanker: false, cancellationToken);
-
-    internal async Task<string> TranslateToRussianAsync(
-        string source,
-        bool useNeuralRanker,
         CancellationToken cancellationToken)
     {
         source = Normalize(source);
@@ -97,7 +107,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
         TranslationScaffold scaffold = await BuildScaffoldFailOpenAsync(
             source,
-            useNeuralRanker,
+            neuralSession: null,
             cancellationToken);
         string cacheKey = CreateTranslationCacheKey(source, scaffold);
         if (_cache.TryGetValue(cacheKey, out string? cached))
@@ -112,7 +122,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             IReadOnlyList<ScaffoldTerm> missing = FindMissingTermsFailOpen(exact, scaffold.Terms);
             if (exact.Length > 0 && missing.Count == 0)
             {
-                ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+                ReportDiagnostics(source, scaffold, scaffold.Terms.Count,
                     exactSentenceUsed: true, initialViolationCount: 0,
                     retryIssued: false, finalViolationCount: 0);
                 CacheTranslation(cacheKey, exact);
@@ -201,6 +211,9 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         string[] normalized = sources.Select(Normalize).ToArray();
         string[] translations = new string[normalized.Length];
         List<BatchItem> pending = [];
+        TranslationScaffoldNeuralSession? neuralSession = _useNeuralScaffold
+            ? new TranslationScaffoldNeuralSession()
+            : null;
         for (int index = 0; index < normalized.Length; index++)
         {
             string source = normalized[index];
@@ -212,7 +225,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             {
                 TranslationScaffold scaffold = await BuildScaffoldFailOpenAsync(
                     source,
-                    useNeuralRanker: false,
+                    neuralSession,
                     cancellationToken);
                 string cacheKey = CreateTranslationCacheKey(source, scaffold);
                 if (_cache.TryGetValue(cacheKey, out string? cached))
@@ -226,7 +239,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                     IReadOnlyList<ScaffoldTerm> missing = FindMissingTermsFailOpen(exact, scaffold.Terms);
                     if (exact.Length > 0 && missing.Count == 0)
                     {
-                        ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+                        ReportDiagnostics(source, scaffold, scaffold.Terms.Count,
                             exactSentenceUsed: true, initialViolationCount: 0,
                             retryIssued: false, finalViolationCount: 0);
                         translations[index] = exact;
@@ -428,18 +441,43 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 scaffold,
                 violatedTerms: null,
                 previousTranslation: null,
+                senseHints: null,
                 cancellationToken);
         string first = await CleanAndProtectAsync(source, firstRaw, cancellationToken);
+        first = await RetryEmptyTranslationOnceAsync(
+            first,
+            async retryCancellationToken =>
+            {
+                string retryRaw = await RequestSingleWithTransportRetriesAsync(
+                    source,
+                    scaffold,
+                    violatedTerms: null,
+                    previousTranslation: null,
+                    senseHints: null,
+                    retryCancellationToken);
+                return await CleanAndProtectAsync(
+                    source,
+                    retryRaw,
+                    retryCancellationToken);
+            },
+            cancellationToken);
         IReadOnlyList<ScaffoldTerm> initialMissing = FindMissingTermsFailOpen(first, scaffold.Terms);
-        if (initialMissing.Count == 0)
+        IReadOnlyList<ScaffoldSenseHint> initialSenseConflicts =
+            FindSenseConflictsFailOpen(first, scaffold.SenseHints);
+        if (initialMissing.Count == 0 && initialSenseConflicts.Count == 0)
         {
-            ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+            ReportDiagnostics(source, scaffold, scaffold.Terms.Count,
                 exactSentenceUsed: false, initialViolationCount: 0,
-                retryIssued: false, finalViolationCount: 0);
+                retryIssued: false, finalViolationCount: 0,
+                initialSenseConflictCount: 0, finalSenseConflictCount: 0);
             return new PreparedTranslationResult(first, Cacheable: first.Length > 0);
         }
 
         string retry;
+        int retrySenseConflictCount = initialSenseConflicts.Count;
+        bool senseReviewIssued = initialSenseConflicts.Count > 0 && initialMissing.Count == 0;
+        TranslationSenseReviewOutcome senseReviewOutcome =
+            TranslationSenseReviewOutcome.NotIssued;
         try
         {
             string retryRaw = await RequestSingleWithTransportRetriesAsync(
@@ -447,8 +485,87 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 scaffold,
                 initialMissing,
                 first,
+                senseReviewIssued ? initialSenseConflicts : null,
                 cancellationToken);
+            if (senseReviewIssued)
+            {
+                if (ContainsFidelityPromptEcho(retryRaw))
+                {
+                    ReportDiagnostics(source, scaffold,
+                        scaffold.Terms.Count - initialMissing.Count,
+                        exactSentenceUsed: false,
+                        initialViolationCount: initialMissing.Count,
+                        retryIssued: true,
+                        finalViolationCount: initialMissing.Count,
+                        initialSenseConflictCount: initialSenseConflicts.Count,
+                        finalSenseConflictCount: initialSenseConflicts.Count,
+                        senseReviewOutcome: TranslationSenseReviewOutcome.RejectedResponse);
+                    // The first text remains the safest visible fallback, but
+                    // caching it would suppress semantic review on every later
+                    // occurrence of the same line.
+                    return new PreparedTranslationResult(first, Cacheable: false);
+                }
+
+                FidelityRetryResponse response = ParseFidelityRetryResponse(retryRaw);
+                if (response.Action == FidelityRetryAction.Keep)
+                {
+                    if (initialMissing.Count == 0)
+                    {
+                        ReportDiagnostics(source, scaffold, scaffold.Terms.Count,
+                            exactSentenceUsed: false,
+                            initialViolationCount: 0,
+                            retryIssued: true,
+                            finalViolationCount: 0,
+                            initialSenseConflictCount: initialSenseConflicts.Count,
+                            finalSenseConflictCount: 0,
+                            senseReviewOutcome: TranslationSenseReviewOutcome.KeptOriginal);
+                        return new PreparedTranslationResult(first, Cacheable: first.Length > 0);
+                    }
+
+                    ReportDiagnostics(source, scaffold,
+                        scaffold.Terms.Count - initialMissing.Count,
+                        exactSentenceUsed: false,
+                        initialViolationCount: initialMissing.Count,
+                        retryIssued: true,
+                        finalViolationCount: initialMissing.Count,
+                        initialSenseConflictCount: initialSenseConflicts.Count,
+                        finalSenseConflictCount: initialSenseConflicts.Count,
+                        senseReviewOutcome: TranslationSenseReviewOutcome.RejectedResponse);
+                    return new PreparedTranslationResult(first, Cacheable: false);
+                }
+
+                if (response.Action != FidelityRetryAction.Fix)
+                {
+                    ReportDiagnostics(source, scaffold,
+                        scaffold.Terms.Count - initialMissing.Count,
+                        exactSentenceUsed: false,
+                        initialViolationCount: initialMissing.Count,
+                        retryIssued: true,
+                        finalViolationCount: initialMissing.Count,
+                        initialSenseConflictCount: initialSenseConflicts.Count,
+                        finalSenseConflictCount: initialSenseConflicts.Count,
+                        senseReviewOutcome: TranslationSenseReviewOutcome.RejectedResponse);
+                    return new PreparedTranslationResult(first, Cacheable: false);
+                }
+
+                retryRaw = response.Translation;
+                retrySenseConflictCount = 0;
+                senseReviewOutcome = TranslationSenseReviewOutcome.AppliedCorrection;
+            }
+
             retry = await CleanAndProtectAsync(source, retryRaw, cancellationToken);
+            if (senseReviewIssued &&
+                !IsMeaningfulFidelityFix(first, retry))
+            {
+                retrySenseConflictCount = initialSenseConflicts.Count;
+                senseReviewOutcome = TranslationSenseReviewOutcome.RejectedResponse;
+            }
+            else if (!senseReviewIssued)
+            {
+                retrySenseConflictCount = FindSenseConflictsFailOpen(
+                    retry,
+                    scaffold.SenseHints).Count;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -457,24 +574,48 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         catch (Exception exception)
         {
             HoverTranslationService.LogError(exception);
-            ReportDiagnostics(source, scaffold.Terms,
+            ReportDiagnostics(source, scaffold,
                 scaffold.Terms.Count - initialMissing.Count,
                 exactSentenceUsed: false,
                 initialViolationCount: initialMissing.Count,
                 retryIssued: true,
-                finalViolationCount: initialMissing.Count);
+                finalViolationCount: initialMissing.Count,
+                initialSenseConflictCount: initialSenseConflicts.Count,
+                finalSenseConflictCount: initialSenseConflicts.Count,
+                senseReviewOutcome: senseReviewIssued
+                    ? TranslationSenseReviewOutcome.Failed
+                    : TranslationSenseReviewOutcome.NotIssued);
             return new PreparedTranslationResult(first, Cacheable: false);
         }
 
         IReadOnlyList<ScaffoldTerm> finalMissing = FindMissingTermsFailOpen(retry, scaffold.Terms);
-        string selected = finalMissing.Count <= initialMissing.Count ? retry : first;
-        int selectedMissingCount = Math.Min(finalMissing.Count, initialMissing.Count);
-        ReportDiagnostics(source, scaffold.Terms,
+        bool selectRetry = ShouldSelectFidelityRetry(
+            retry,
+            initialMissing.Count,
+            finalMissing.Count,
+            initialSenseConflicts.Count,
+            retrySenseConflictCount);
+        string selected = selectRetry ? retry : first;
+        int selectedMissingCount = selectRetry
+            ? finalMissing.Count
+            : initialMissing.Count;
+        int selectedSenseConflictCount = selectRetry
+            ? retrySenseConflictCount
+            : initialSenseConflicts.Count;
+        if (!selectRetry && senseReviewOutcome == TranslationSenseReviewOutcome.AppliedCorrection)
+        {
+            senseReviewOutcome = TranslationSenseReviewOutcome.RejectedResponse;
+        }
+
+        ReportDiagnostics(source, scaffold,
             scaffold.Terms.Count - selectedMissingCount,
             exactSentenceUsed: false,
             initialViolationCount: initialMissing.Count,
             retryIssued: true,
-            finalViolationCount: selectedMissingCount);
+            finalViolationCount: selectedMissingCount,
+            initialSenseConflictCount: initialSenseConflicts.Count,
+            finalSenseConflictCount: selectedSenseConflictCount,
+            senseReviewOutcome: senseReviewOutcome);
         if (selectedMissingCount > 0)
         {
             HoverTranslationService.LogError(new InvalidOperationException(
@@ -482,9 +623,66 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 $"Source: {source}"));
         }
 
+        if (selectedSenseConflictCount > 0)
+        {
+            HoverTranslationService.LogError(new InvalidOperationException(
+                $"Qwen translation left {selectedSenseConflictCount} GlossBERT sense conflict(s) " +
+                $"unresolved after one review. Source: {source}"));
+        }
+
         return new PreparedTranslationResult(
             selected,
-            Cacheable: selected.Length > 0 && selectedMissingCount == 0);
+            Cacheable: selected.Length > 0 &&
+                       selectedMissingCount == 0 &&
+                       selectedSenseConflictCount == 0);
+    }
+
+    internal static bool ShouldSelectFidelityRetry(
+        string retryTranslation,
+        int initialMissingCount,
+        int retryMissingCount,
+        int initialSenseConflictCount = 0,
+        int retrySenseConflictCount = 0)
+    {
+        if (string.IsNullOrWhiteSpace(retryTranslation) ||
+            retryMissingCount > initialMissingCount)
+        {
+            return false;
+        }
+
+        return retryMissingCount < initialMissingCount ||
+               retrySenseConflictCount < initialSenseConflictCount;
+    }
+
+    internal static bool IsMeaningfulFidelityFix(
+        string previousTranslation,
+        string retryTranslation) =>
+        !string.IsNullOrWhiteSpace(retryTranslation) &&
+        !string.Equals(
+            NormalizeCachePart(previousTranslation),
+            NormalizeCachePart(retryTranslation),
+            StringComparison.Ordinal);
+
+    internal static async Task<string> RetryEmptyTranslationOnceAsync(
+        string firstTranslation,
+        Func<CancellationToken, Task<string>> retry,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(retry);
+        if (!string.IsNullOrWhiteSpace(firstTranslation))
+        {
+            return firstTranslation;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        string secondTranslation = await retry(cancellationToken);
+        if (string.IsNullOrWhiteSpace(secondTranslation))
+        {
+            throw new InvalidOperationException(
+                "Локальная модель перевода дважды вернула пустой ответ.");
+        }
+
+        return secondTranslation;
     }
 
     private async Task<string> RequestSingleWithTransportRetriesAsync(
@@ -492,6 +690,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         TranslationScaffold scaffold,
         IReadOnlyList<ScaffoldTerm>? violatedTerms,
         string? previousTranslation,
+        IReadOnlyList<ScaffoldSenseHint>? senseHints,
         CancellationToken cancellationToken)
     {
         for (int attempt = 0; ; attempt++)
@@ -499,7 +698,12 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             try
             {
                 string prompt = _useTranslationScaffold
-                    ? BuildTranslationPrompt(source, scaffold, violatedTerms, previousTranslation)
+                    ? BuildTranslationPrompt(
+                        source,
+                        scaffold,
+                        violatedTerms,
+                        previousTranslation,
+                        senseHints)
                     : BuildLegacyTranslationPrompt(source);
                 return await SendPromptAsync(prompt, 420, cancellationToken);
             }
@@ -514,10 +718,20 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         string source,
         TranslationScaffold scaffold,
         IReadOnlyList<ScaffoldTerm>? violatedTerms = null,
-        string? previousTranslation = null)
+        string? previousTranslation = null,
+        IReadOnlyList<ScaffoldSenseHint>? senseHints = null)
     {
         ArgumentNullException.ThrowIfNull(scaffold);
-        _ = previousTranslation; // Echoing the failed text anchors small models on the same mistake.
+        if (senseHints is { Count: > 0 })
+        {
+            return BuildSenseReviewPrompt(
+                source,
+                scaffold,
+                violatedTerms,
+                previousTranslation,
+                senseHints);
+        }
+
         StringBuilder prompt = new(
             "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n");
         if (violatedTerms is { Count: > 0 })
@@ -550,6 +764,60 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         }
 
         prompt.Append("Реплика: ").Append(NormalizePromptLine(source));
+        return prompt.ToString();
+    }
+
+    private static string BuildSenseReviewPrompt(
+        string source,
+        TranslationScaffold scaffold,
+        IReadOnlyList<ScaffoldTerm>? violatedTerms,
+        string? previousTranslation,
+        IReadOnlyList<ScaffoldSenseHint> senseHints)
+    {
+        StringBuilder prompt = new(
+            "Review a Russian translation of a visual-novel line.\nEnglish source: ");
+        prompt.Append(NormalizePromptLine(source))
+            .Append("\nPrevious Russian translation: ")
+            .Append(NormalizePromptLine(previousTranslation ?? string.Empty))
+            .Append('\n');
+        if (scaffold.Terms.Count > 0)
+        {
+            prompt.Append("Required Russian terminology (synonyms are not allowed; inflection is allowed):\n");
+            foreach (ScaffoldTerm term in scaffold.Terms)
+            {
+                prompt.Append("- ")
+                    .Append(NormalizePromptLine(term.Source))
+                    .Append(" -> ")
+                    .Append(NormalizePromptLine(term.Translation))
+                    .Append('\n');
+            }
+        }
+
+        prompt.Append("Possible contextual senses (hypotheses, not required wording):\n");
+        foreach (ScaffoldSenseHint hint in senseHints)
+        {
+            prompt.Append("- ")
+                .Append(NormalizePromptLine(hint.Source))
+                .Append(": ")
+                .Append(NormalizePromptLine(hint.EnglishDefinition))
+                .Append('\n');
+        }
+
+        prompt.Append(
+            "Check each hypothesis against the complete English source. Russian synonyms and inflections are allowed. ");
+        if (violatedTerms is { Count: > 0 })
+        {
+            prompt.Append("KEEP is forbidden because required terminology is missing. ");
+        }
+        else
+        {
+            prompt.Append(
+                "If the previous translation already conveys the meaning naturally, or if a hypothesis does not fit " +
+                "the source, output exactly KEEP. ");
+        }
+
+        prompt.Append(
+            "Otherwise output exactly FIX| followed by the corrected Russian translation. Output no explanation.");
         return prompt.ToString();
     }
 
@@ -748,7 +1016,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
     private async Task<TranslationScaffold> BuildScaffoldFailOpenAsync(
         string source,
-        bool useNeuralRanker,
+        TranslationScaffoldNeuralSession? neuralSession,
         CancellationToken cancellationToken)
     {
         if (_scaffoldBuilder is null)
@@ -760,7 +1028,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         {
             return await _scaffoldBuilder.BuildAsync(
                 source,
-                useNeuralRanker,
+                neuralSession,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -789,6 +1057,51 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         }
     }
 
+    private static IReadOnlyList<ScaffoldSenseHint> FindSenseConflictsFailOpen(
+        string translation,
+        IReadOnlyList<ScaffoldSenseHint> hints)
+    {
+        try
+        {
+            return NeuralSenseFidelityGuard.FindConflictingHints(translation, hints);
+        }
+        catch (Exception exception)
+        {
+            HoverTranslationService.LogError(exception);
+            return [];
+        }
+    }
+
+    internal static bool ContainsFidelityPromptEcho(string value) =>
+        value.Contains("GlossBERT", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("Возможные контекстные значения для проверки", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("служебные подсказки", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("В прошлом переводе значение", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("Possible contextual senses", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("Review a Russian translation", StringComparison.OrdinalIgnoreCase) ||
+        value.Contains("Output no explanation", StringComparison.OrdinalIgnoreCase);
+
+    internal static FidelityRetryResponse ParseFidelityRetryResponse(string value)
+    {
+        string normalized = Normalize(value).Trim('"', '\'', '«', '»');
+        if (string.Equals(normalized, "KEEP", StringComparison.OrdinalIgnoreCase))
+        {
+            return new FidelityRetryResponse(FidelityRetryAction.Keep, string.Empty);
+        }
+
+        const string fixMarker = "FIX|";
+        if (normalized.StartsWith(fixMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            string translation = normalized[fixMarker.Length..].Trim();
+            if (translation.Length > 0)
+            {
+                return new FidelityRetryResponse(FidelityRetryAction.Fix, translation);
+            }
+        }
+
+        return new FidelityRetryResponse(FidelityRetryAction.Invalid, string.Empty);
+    }
+
     private async Task<string> CleanAndProtectAsync(
         string source,
         string modelOutput,
@@ -805,7 +1118,9 @@ public sealed class FoundryTranslationService : IAsyncDisposable
             return "qwen\u001f" + source;
         }
 
-        StringBuilder key = new("qwen-scaffold\u001f");
+        StringBuilder key = new(_useNeuralScaffold
+            ? "qwen-scaffold-glossbert\u001f"
+            : "qwen-scaffold\u001f");
         key.Append(_dictionary.VersionToken).Append('\u001f').Append(source);
         foreach (ScaffoldTerm term in scaffold.Terms)
         {
@@ -815,6 +1130,24 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 .Append(term.Translation)
                 .Append('\u001d')
                 .Append(term.Confidence.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        foreach (ScaffoldSenseHint hint in scaffold.SenseHints)
+        {
+            key.Append('\u001c')
+                .Append(hint.Source)
+                .Append('\u001d')
+                .Append(hint.EnglishDefinition)
+                .Append('\u001d')
+                .Append(hint.SelectedTranslation)
+                .Append('\u001d');
+            foreach (string rejectedTranslation in hint.RejectedTranslations)
+            {
+                key.Append(rejectedTranslation).Append('\u001b');
+            }
+
+            key.Append('\u001d')
+                .Append(hint.Confidence.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
         }
 
         key.Append('\u001f').Append(scaffold.ExactSentenceTranslation);
@@ -838,12 +1171,16 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
     private void ReportDiagnostics(
         string source,
-        IReadOnlyList<ScaffoldTerm> terms,
+        TranslationScaffold scaffold,
         int satisfiedTermCount,
         bool exactSentenceUsed,
         int initialViolationCount,
         bool retryIssued,
-        int finalViolationCount)
+        int finalViolationCount,
+        int initialSenseConflictCount = 0,
+        int finalSenseConflictCount = 0,
+        TranslationSenseReviewOutcome senseReviewOutcome =
+            TranslationSenseReviewOutcome.NotIssued)
     {
         if (!_useTranslationScaffold || _diagnosticSink is null)
         {
@@ -852,7 +1189,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
         try
         {
-            int termCount = terms.Count;
+            int termCount = scaffold.Terms.Count;
             _diagnosticSink(new TranslationScaffoldDiagnostics(
                 source,
                 termCount,
@@ -861,7 +1198,12 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 initialViolationCount,
                 retryIssued,
                 finalViolationCount,
-                terms.ToArray()));
+                initialSenseConflictCount,
+                finalSenseConflictCount,
+                senseReviewOutcome,
+                scaffold.Terms.ToArray(),
+                scaffold.NeuralDecisions.ToArray(),
+                scaffold.SenseHints.ToArray()));
         }
         catch
         {
@@ -880,7 +1222,7 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 cached,
                 CleanTrustedExactOutput(scaffold.ExactSentenceTranslation),
                 StringComparison.Ordinal);
-        ReportDiagnostics(source, scaffold.Terms, scaffold.Terms.Count,
+        ReportDiagnostics(source, scaffold, scaffold.Terms.Count,
             exactSentenceUsed, initialViolationCount: 0,
             retryIssued: false, finalViolationCount: 0);
     }
@@ -1101,6 +1443,17 @@ public sealed class FoundryTranslationService : IAsyncDisposable
 
     private sealed record PreparedTranslationResult(string Translation, bool Cacheable);
 
+    internal enum FidelityRetryAction
+    {
+        Invalid,
+        Keep,
+        Fix
+    }
+
+    internal sealed record FidelityRetryResponse(
+        FidelityRetryAction Action,
+        string Translation);
+
     internal sealed record BatchItem(
         int Id,
         string Source,
@@ -1124,4 +1477,5 @@ public sealed class FoundryTranslationService : IAsyncDisposable
     private sealed record BatchPromptTerm(
         [property: JsonPropertyName("source")] string Source,
         [property: JsonPropertyName("translation")] string Translation);
+
 }

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AsteriaScale.Services;
 
 /// <summary>
@@ -14,6 +15,17 @@ using AsteriaScale.Services;
 /// </summary>
 internal static class TranslationBenchmark
 {
+    private const int DumpSchemaVersion = 3;
+    private static readonly JsonSerializerOptions DumpJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters =
+        {
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)
+        }
+    };
+
     private sealed record BenchmarkCase(
         string Id,
         string SourceLanguage,
@@ -39,7 +51,26 @@ internal static class TranslationBenchmark
         int ExactSentenceUses,
         int InitialViolationCount,
         int RetriesIssued,
-        int FinalViolationCount);
+        int FinalViolationCount,
+        int InitialSenseConflictCount,
+        int FinalSenseConflictCount,
+        int SenseRetriesIssued,
+        int SenseReviewKeeps,
+        int SenseReviewCorrections,
+        int SenseReviewRejected,
+        int SenseReviewFailures,
+        int NeuralRequests,
+        int NeuralSelections,
+        int NeuralAbstentions,
+        int NeuralErrors,
+        int NeuralSkipped,
+        int NeuralSkippedAfterError,
+        int NeuralTermsEmitted,
+        int NeuralHintsEmitted,
+        int CasesWithNeuralRequests,
+        int CasesWithNeuralErrors,
+        int CasesWithNeuralSkipped,
+        int CasesWithNeuralSkippedAfterError);
 
     private sealed record BenchmarkAggregate(
         int Cases,
@@ -63,13 +94,34 @@ internal static class TranslationBenchmark
         string Engine,
         string ModelId,
         string FoundryCliVersion,
+        RankerRuntime? Ranker,
         BenchmarkAggregate Overall,
         IReadOnlyDictionary<string, BenchmarkAggregate> PerLanguage,
         IReadOnlyList<CaseResult> Results);
 
-    public static async Task RunAsync(string setPath, string engine, string? dumpPath)
+    private sealed record RankerRuntime(
+        string RequestedProvider,
+        string? ActiveProvider,
+        string ExpectedExecutionProvider,
+        string ExpectedDevice,
+        string? ModelVersion);
+
+    private sealed record EngineConfiguration(
+        string Name,
+        TranslationScaffoldMode ScaffoldMode,
+        GlossBertRankerProvider? RankerProvider);
+
+    private const string NeuralDisabledAfterErrorDetail = "session-disabled-after-error";
+
+    public static async Task RunAsync(
+        string setPath,
+        string engine,
+        string? dumpPath,
+        string? rankerBaseDirectory = null)
     {
-        string normalizedEngine = NormalizeEngine(engine);
+        EngineConfiguration configuration = ResolveEngine(engine);
+        string normalizedEngine = configuration.Name;
+        ValidateRankerBase(configuration, rankerBaseDirectory);
         string resolvedSetPath = Path.GetFullPath(setPath);
         BenchmarkCase[] cases = LoadCases(resolvedSetPath);
         if (cases.Length == 0)
@@ -88,17 +140,42 @@ internal static class TranslationBenchmark
             "AsteriaScale",
             "translation-benchmark-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(isolatedUserDirectory);
+        GlossBertDictionarySelectorService? rankerSelector = null;
         try
         {
             LocalDictionaryService dictionary = new(
                 Path.Combine(AppContext.BaseDirectory, "Dictionaries"),
                 isolatedUserDirectory);
             TranslationScaffoldDiagnostics? currentDiagnostics = null;
+            TranslationScaffoldNeuralRanker? neuralRanker = null;
+            if (configuration.RankerProvider is { } provider)
+            {
+                rankerSelector = new GlossBertDictionarySelectorService(
+                    Path.GetFullPath(rankerBaseDirectory!),
+                    TimeSpan.FromMinutes(5));
+                rankerSelector.ConfigureKeepWarm(true);
+                TranslationScaffoldGlossBertRanker ranker = new(
+                    rankerSelector,
+                    () => provider,
+                    () => dictionary.VersionToken);
+                neuralRanker = ranker.RankAsync;
+            }
+
             await using FoundryTranslationService translator = new(
                 dictionary,
-                useTranslationScaffold: normalizedEngine == "qwen-scaffold",
-                diagnosticSink: diagnostics => currentDiagnostics = diagnostics);
-            await translator.WarmUpAsync();
+                configuration.ScaffoldMode,
+                diagnosticSink: diagnostics => currentDiagnostics = diagnostics,
+                neuralRanker: neuralRanker);
+            if (configuration.RankerProvider is { } rankerProvider)
+            {
+                await Task.WhenAll(
+                    translator.WarmUpAsync(),
+                    rankerSelector!.WarmUpAsync(rankerProvider));
+            }
+            else
+            {
+                await translator.WarmUpAsync();
+            }
 
             List<CaseResult> results = [];
             foreach (BenchmarkCase benchmarkCase in cases)
@@ -141,44 +218,168 @@ internal static class TranslationBenchmark
             if (dumpPath is not null)
             {
                 BenchmarkDump dump = new(
-                    SchemaVersion: 2,
+                    SchemaVersion: DumpSchemaVersion,
                     GeneratedAtUtc: DateTimeOffset.UtcNow,
                     ResolvedSetPath: resolvedSetPath,
                     SetSha256: setSha256,
                     Engine: normalizedEngine,
                     ModelId: FoundryTranslationService.ModelId,
                     FoundryCliVersion: await TryGetFoundryCliVersionAsync(),
+                    Ranker: CreateRankerRuntime(configuration, rankerSelector),
                     Overall: overall,
                     PerLanguage: perLanguage,
                     Results: results);
                 await WriteDumpAsync(dumpPath, dump);
             }
 
+            EnforceNeuralExecution(configuration, overall);
             EnforceConfiguredThresholds(overall);
         }
         finally
         {
             try
             {
-                Directory.Delete(isolatedUserDirectory, recursive: true);
+                if (rankerSelector is not null)
+                {
+                    await rankerSelector.DisposeAsync();
+                }
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            finally
             {
-                // Benchmark isolation matters more than best-effort temp cleanup.
+                try
+                {
+                    Directory.Delete(isolatedUserDirectory, recursive: true);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // Benchmark isolation matters more than best-effort temp cleanup.
+                }
             }
         }
     }
 
     internal static string NormalizeEngine(string engine)
+        => ResolveEngine(engine).Name;
+
+    internal static bool RequiresRankerBase(string engine) =>
+        ResolveEngine(engine).RankerProvider is not null;
+
+    private static EngineConfiguration ResolveEngine(string engine)
     {
         string normalized = (engine ?? string.Empty).Trim().ToLowerInvariant();
         return normalized switch
         {
-            "qwen" => normalized,
-            "qwen-scaffold" => normalized,
+            "qwen" => new EngineConfiguration(
+                normalized,
+                TranslationScaffoldMode.Disabled,
+                RankerProvider: null),
+            "qwen-scaffold" => new EngineConfiguration(
+                normalized,
+                TranslationScaffoldMode.Deterministic,
+                RankerProvider: null),
+            "qwen-scaffold-glossbert-cpu" => new EngineConfiguration(
+                normalized,
+                TranslationScaffoldMode.GlossBert,
+                GlossBertRankerProvider.Cpu),
+            "qwen-scaffold-glossbert-npu" => new EngineConfiguration(
+                normalized,
+                TranslationScaffoldMode.GlossBert,
+                GlossBertRankerProvider.Npu),
             _ => throw new InvalidOperationException(
-                $"Engine '{engine}' is not supported; expected 'qwen' or 'qwen-scaffold'.")
+                $"Engine '{engine}' is not supported; expected 'qwen', 'qwen-scaffold', " +
+                "'qwen-scaffold-glossbert-cpu' or 'qwen-scaffold-glossbert-npu'.")
         };
+    }
+
+    private static void ValidateRankerBase(
+        EngineConfiguration configuration,
+        string? rankerBaseDirectory)
+    {
+        if (configuration.RankerProvider is not null &&
+            string.IsNullOrWhiteSpace(rankerBaseDirectory))
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' requires --ranker-base.");
+        }
+
+        if (configuration.RankerProvider is null &&
+            !string.IsNullOrWhiteSpace(rankerBaseDirectory))
+        {
+            throw new InvalidOperationException(
+                "--ranker-base is valid only for a GlossBERT translation engine.");
+        }
+    }
+
+    private static RankerRuntime? CreateRankerRuntime(
+        EngineConfiguration configuration,
+        GlossBertDictionarySelectorService? selector)
+    {
+        if (configuration.RankerProvider is not { } provider)
+        {
+            return null;
+        }
+
+        return new RankerRuntime(
+            RequestedProvider: ProviderName(provider),
+            ActiveProvider: selector?.ActiveProvider is { } activeProvider
+                ? ProviderName(activeProvider)
+                : null,
+            ExpectedExecutionProvider: provider == GlossBertRankerProvider.Npu
+                ? GlossBertDictionarySelectorService.NpuExecutionProvider
+                : GlossBertDictionarySelectorService.CpuExecutionProvider,
+            ExpectedDevice: provider == GlossBertRankerProvider.Npu ? "NPU" : "CPU",
+            ModelVersion: selector?.ActiveModelVersion);
+    }
+
+    private static string ProviderName(GlossBertRankerProvider provider) =>
+        provider == GlossBertRankerProvider.Npu ? "npu" : "cpu";
+
+    private static void EnforceNeuralExecution(
+        EngineConfiguration configuration,
+        BenchmarkAggregate overall)
+    {
+        if (configuration.RankerProvider is null)
+        {
+            return;
+        }
+
+        ScaffoldDiagnosticsAggregate neural = overall.ScaffoldDiagnostics;
+        if (neural.NeuralRequests == 0)
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' made no GlossBERT requests; " +
+                "the benchmark did not exercise its declared neural pipeline.");
+        }
+
+        if (neural.NeuralErrors > 0)
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' recorded {neural.NeuralErrors} GlossBERT " +
+                "error(s). Provider fallback is forbidden; inspect the schema-v3 dump.");
+        }
+
+        if (neural.NeuralTermsEmitted > 0)
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' emitted {neural.NeuralTermsEmitted} mandatory " +
+                "GlossBERT term(s). Neural senses must remain soft Qwen hints.");
+        }
+
+        if (neural.NeuralHintsEmitted == 0)
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' produced no GlossBERT sense metadata.");
+        }
+
+        int senseReviews = neural.SenseReviewKeeps +
+                           neural.SenseReviewCorrections +
+                           neural.SenseReviewRejected +
+                           neural.SenseReviewFailures;
+        if (senseReviews == 0)
+        {
+            throw new InvalidOperationException(
+                $"Engine '{configuration.Name}' never exercised the Qwen sense-review path.");
+        }
     }
 
     private static void Report(
@@ -205,7 +406,27 @@ internal static class TranslationBenchmark
                 $"  scaffold cases={scaffold.CasesWithDiagnostics} " +
                 $"terms={scaffold.SatisfiedTermCount}/{scaffold.TermCount} " +
                 $"exact={scaffold.ExactSentenceUses} retries={scaffold.RetriesIssued} " +
-                $"violations={scaffold.InitialViolationCount}->{scaffold.FinalViolationCount}");
+                $"violations={scaffold.InitialViolationCount}->{scaffold.FinalViolationCount} " +
+                $"sense-conflicts={scaffold.InitialSenseConflictCount}->{scaffold.FinalSenseConflictCount} " +
+                $"sense-retries={scaffold.SenseRetriesIssued}");
+            if (scaffold.SenseRetriesIssued > 0)
+            {
+                Console.WriteLine(
+                    $"  sense reviews keep={scaffold.SenseReviewKeeps} " +
+                    $"fix={scaffold.SenseReviewCorrections} rejected={scaffold.SenseReviewRejected} " +
+                    $"failed={scaffold.SenseReviewFailures}");
+            }
+            if (scaffold.NeuralRequests > 0 ||
+                scaffold.NeuralSkipped > 0)
+            {
+                Console.WriteLine(
+                    $"  GlossBERT requests={scaffold.NeuralRequests} " +
+                    $"selected={scaffold.NeuralSelections} abstained={scaffold.NeuralAbstentions} " +
+                    $"errors={scaffold.NeuralErrors} skipped={scaffold.NeuralSkipped} " +
+                    $"after-error={scaffold.NeuralSkippedAfterError} " +
+                    $"terms={scaffold.NeuralTermsEmitted} " +
+                    $"hints={scaffold.NeuralHintsEmitted}");
+            }
         }
 
         foreach ((string sourceLanguage, BenchmarkAggregate aggregate) in perLanguage)
@@ -248,6 +469,23 @@ internal static class TranslationBenchmark
             .Select(result => result.ScaffoldDiagnostics)
             .OfType<TranslationScaffoldDiagnostics>()
             .ToArray();
+        TranslationScaffoldNeuralDiagnostic[] neuralDecisions = diagnostics
+            .SelectMany(item => item.NeuralDecisions)
+            .ToArray();
+        int neuralSelections = neuralDecisions.Count(item =>
+            item.Status == TranslationScaffoldNeuralStatus.Selected);
+        int neuralAbstentions = neuralDecisions.Count(item =>
+            item.Status == TranslationScaffoldNeuralStatus.Abstained);
+        int neuralErrors = neuralDecisions.Count(item =>
+            item.Status == TranslationScaffoldNeuralStatus.Error);
+        int neuralSkipped = neuralDecisions.Count(item =>
+            item.Status == TranslationScaffoldNeuralStatus.Skipped);
+        int neuralSkippedAfterError = neuralDecisions.Count(item =>
+            item.Status == TranslationScaffoldNeuralStatus.Skipped &&
+            string.Equals(
+                item.Detail,
+                NeuralDisabledAfterErrorDetail,
+                StringComparison.Ordinal));
         return new ScaffoldDiagnosticsAggregate(
             CasesWithDiagnostics: diagnostics.Length,
             TermCount: diagnostics.Sum(item => item.TermCount),
@@ -255,7 +493,43 @@ internal static class TranslationBenchmark
             ExactSentenceUses: diagnostics.Count(item => item.ExactSentenceUsed),
             InitialViolationCount: diagnostics.Sum(item => item.InitialViolationCount),
             RetriesIssued: diagnostics.Count(item => item.RetryIssued),
-            FinalViolationCount: diagnostics.Sum(item => item.FinalViolationCount));
+            FinalViolationCount: diagnostics.Sum(item => item.FinalViolationCount),
+            InitialSenseConflictCount: diagnostics.Sum(item => item.InitialSenseConflictCount),
+            FinalSenseConflictCount: diagnostics.Sum(item => item.FinalSenseConflictCount),
+            SenseRetriesIssued: diagnostics.Count(item =>
+                item.RetryIssued && item.InitialSenseConflictCount > 0),
+            SenseReviewKeeps: diagnostics.Count(item =>
+                item.SenseReviewOutcome == TranslationSenseReviewOutcome.KeptOriginal),
+            SenseReviewCorrections: diagnostics.Count(item =>
+                item.SenseReviewOutcome == TranslationSenseReviewOutcome.AppliedCorrection),
+            SenseReviewRejected: diagnostics.Count(item =>
+                item.SenseReviewOutcome == TranslationSenseReviewOutcome.RejectedResponse),
+            SenseReviewFailures: diagnostics.Count(item =>
+                item.SenseReviewOutcome == TranslationSenseReviewOutcome.Failed),
+            NeuralRequests: neuralSelections + neuralAbstentions + neuralErrors,
+            NeuralSelections: neuralSelections,
+            NeuralAbstentions: neuralAbstentions,
+            NeuralErrors: neuralErrors,
+            NeuralSkipped: neuralSkipped,
+            NeuralSkippedAfterError: neuralSkippedAfterError,
+            NeuralTermsEmitted: diagnostics.Sum(item => item.Terms.Count(term =>
+                term.Provenance == ScaffoldTermProvenance.GlossBert)),
+            NeuralHintsEmitted: diagnostics.Sum(item => item.SenseHints.Count),
+            CasesWithNeuralRequests: diagnostics.Count(item => item.NeuralDecisions.Any(decision =>
+                decision.Status is TranslationScaffoldNeuralStatus.Selected or
+                    TranslationScaffoldNeuralStatus.Abstained or
+                    TranslationScaffoldNeuralStatus.Error)),
+            CasesWithNeuralErrors: diagnostics.Count(item => item.NeuralDecisions.Any(decision =>
+                decision.Status == TranslationScaffoldNeuralStatus.Error)),
+            CasesWithNeuralSkipped: diagnostics.Count(item => item.NeuralDecisions.Any(decision =>
+                decision.Status == TranslationScaffoldNeuralStatus.Skipped)),
+            CasesWithNeuralSkippedAfterError: diagnostics.Count(item =>
+                item.NeuralDecisions.Any(decision =>
+                    decision.Status == TranslationScaffoldNeuralStatus.Skipped &&
+                    string.Equals(
+                        decision.Detail,
+                        NeuralDisabledAfterErrorDetail,
+                        StringComparison.Ordinal))));
     }
 
     private static IReadOnlyDictionary<string, BenchmarkAggregate> AggregateBySourceLanguage(
@@ -295,13 +569,7 @@ internal static class TranslationBenchmark
             Directory.CreateDirectory(directory);
         }
 
-        string json = JsonSerializer.Serialize(
-            dump,
-            new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            });
+        string json = JsonSerializer.Serialize(dump, DumpJsonOptions);
         await File.WriteAllTextAsync(resolvedDumpPath, json, new UTF8Encoding(false));
         Console.WriteLine($"  dump={resolvedDumpPath}");
     }
@@ -704,14 +972,110 @@ internal static class TranslationBenchmark
         [
             new(
                 "en-1", "en", 0.2, 2, 1, 0.1, 10, "one",
-                new("source-one", 3, 2, false, 1, true, 0, [])),
+                new(
+                    Source: "source-one",
+                    TermCount: 3,
+                    SatisfiedTermCount: 2,
+                    ExactSentenceUsed: false,
+                    InitialViolationCount: 1,
+                    RetryIssued: true,
+                    FinalViolationCount: 0,
+                    InitialSenseConflictCount: 1,
+                    FinalSenseConflictCount: 0,
+                    SenseReviewOutcome: TranslationSenseReviewOutcome.KeptOriginal,
+                    Terms: [new ScaffoldTerm(
+                        "ceremony",
+                        "церемония",
+                        Confidence: 1)],
+                    NeuralDecisions: [new TranslationScaffoldNeuralDiagnostic(
+                        "bank",
+                        4,
+                        TranslationScaffoldNeuralStatus.Selected,
+                        CandidateGroupCount: 2,
+                        CandidateGlossCount: 2,
+                        SelectedGroupId: 1,
+                        SelectedTranslation: "берег",
+                        Margin: 0.4,
+                        Score: 0.8,
+                        Confidence: 0.9,
+                        RequestedProvider: GlossBertRankerProvider.Cpu,
+                        ExecutionProvider: GlossBertDictionarySelectorService.CpuExecutionProvider,
+                        Device: "CPU",
+                        ModelVersion: GlossBertDictionarySelectorService.CpuModelCacheId,
+                        Pipeline: "cross",
+                        ElapsedMilliseconds: 12)],
+                    SenseHints: [new ScaffoldSenseHint(
+                        "bank",
+                        "sloping land alongside a river",
+                        "берег",
+                        ["банк"],
+                        TranslationScaffoldBuilder.MinimumConfidence)])),
             new("en-2", "en", 0.6, 2, 2, 0.3, 30, "two", null),
             new(
                 "ja-1", "ja", 0.4, 1, 0, 0.0, 20, "three",
-                new("source-three", 1, 1, true, 0, false, 0, [])),
+                new(
+                    Source: "source-three",
+                    TermCount: 1,
+                    SatisfiedTermCount: 1,
+                    ExactSentenceUsed: true,
+                    InitialViolationCount: 0,
+                    RetryIssued: false,
+                    FinalViolationCount: 0,
+                    InitialSenseConflictCount: 0,
+                    FinalSenseConflictCount: 0,
+                    SenseReviewOutcome: TranslationSenseReviewOutcome.NotIssued,
+                    Terms: [],
+                    NeuralDecisions: [new TranslationScaffoldNeuralDiagnostic(
+                        "light",
+                        2,
+                        TranslationScaffoldNeuralStatus.Abstained,
+                        CandidateGroupCount: 3,
+                        CandidateGlossCount: 4,
+                        Margin: 0.1,
+                        Score: 0.6,
+                        Confidence: 0.7,
+                        RequestedProvider: GlossBertRankerProvider.Cpu,
+                        ExecutionProvider: GlossBertDictionarySelectorService.CpuExecutionProvider,
+                        Device: "CPU",
+                        ModelVersion: GlossBertDictionarySelectorService.CpuModelCacheId,
+                        Pipeline: "cross",
+                        ElapsedMilliseconds: 15)],
+                    SenseHints: [])),
             new(
                 "ja-2", "ja", 0.8, 1, 1, 0.2, 40, "four",
-                new("source-four", 2, 1, false, 1, true, 1, []))
+                new(
+                    Source: "source-four",
+                    TermCount: 2,
+                    SatisfiedTermCount: 1,
+                    ExactSentenceUsed: false,
+                    InitialViolationCount: 1,
+                    RetryIssued: true,
+                    FinalViolationCount: 1,
+                    InitialSenseConflictCount: 0,
+                    FinalSenseConflictCount: 0,
+                    SenseReviewOutcome: TranslationSenseReviewOutcome.NotIssued,
+                    Terms: [],
+                    NeuralDecisions:
+                    [
+                        new TranslationScaffoldNeuralDiagnostic(
+                            "party",
+                            3,
+                            TranslationScaffoldNeuralStatus.Error,
+                            CandidateGroupCount: 2,
+                            CandidateGlossCount: 3,
+                            ElapsedMilliseconds: 7,
+                            ErrorCode: "synthetic_error",
+                            Detail: "synthetic failure"),
+                        new TranslationScaffoldNeuralDiagnostic(
+                            "locked",
+                            9,
+                            TranslationScaffoldNeuralStatus.Skipped,
+                            CandidateGroupCount: 2,
+                            CandidateGlossCount: 2,
+                            ErrorCode: NeuralDisabledAfterErrorDetail,
+                            Detail: NeuralDisabledAfterErrorDetail)
+                    ],
+                    SenseHints: []))
         ];
         BenchmarkAggregate overall = Aggregate(syntheticResults);
         Check(
@@ -731,7 +1095,26 @@ internal static class TranslationBenchmark
             overall.ScaffoldDiagnostics.ExactSentenceUses == 1 &&
             overall.ScaffoldDiagnostics.InitialViolationCount == 2 &&
             overall.ScaffoldDiagnostics.RetriesIssued == 2 &&
-            overall.ScaffoldDiagnostics.FinalViolationCount == 1,
+            overall.ScaffoldDiagnostics.FinalViolationCount == 1 &&
+            overall.ScaffoldDiagnostics.InitialSenseConflictCount == 1 &&
+            overall.ScaffoldDiagnostics.FinalSenseConflictCount == 0 &&
+            overall.ScaffoldDiagnostics.SenseRetriesIssued == 1 &&
+            overall.ScaffoldDiagnostics.SenseReviewKeeps == 1 &&
+            overall.ScaffoldDiagnostics.SenseReviewCorrections == 0 &&
+            overall.ScaffoldDiagnostics.SenseReviewRejected == 0 &&
+            overall.ScaffoldDiagnostics.SenseReviewFailures == 0 &&
+            overall.ScaffoldDiagnostics.NeuralRequests == 3 &&
+            overall.ScaffoldDiagnostics.NeuralSelections == 1 &&
+            overall.ScaffoldDiagnostics.NeuralAbstentions == 1 &&
+            overall.ScaffoldDiagnostics.NeuralErrors == 1 &&
+            overall.ScaffoldDiagnostics.NeuralSkipped == 1 &&
+            overall.ScaffoldDiagnostics.NeuralSkippedAfterError == 1 &&
+            overall.ScaffoldDiagnostics.NeuralTermsEmitted == 0 &&
+            overall.ScaffoldDiagnostics.NeuralHintsEmitted == 1 &&
+            overall.ScaffoldDiagnostics.CasesWithNeuralRequests == 3 &&
+            overall.ScaffoldDiagnostics.CasesWithNeuralErrors == 1 &&
+            overall.ScaffoldDiagnostics.CasesWithNeuralSkipped == 1 &&
+            overall.ScaffoldDiagnostics.CasesWithNeuralSkippedAfterError == 1,
             "Overall translation benchmark aggregation is inconsistent.");
 
         IReadOnlyDictionary<string, BenchmarkAggregate> byLanguage =
@@ -741,15 +1124,134 @@ internal static class TranslationBenchmark
             byLanguage["en"].Cases == 2 &&
             Math.Abs(byLanguage["en"].ChrFMedian - 0.4) < 1e-9 &&
             byLanguage["en"].ScaffoldDiagnostics.CasesWithDiagnostics == 1 &&
+            byLanguage["en"].ScaffoldDiagnostics.NeuralSelections == 1 &&
+            byLanguage["en"].ScaffoldDiagnostics.NeuralTermsEmitted == 0 &&
+            byLanguage["en"].ScaffoldDiagnostics.NeuralHintsEmitted == 1 &&
             Math.Abs(byLanguage["ja"].LatencyMedianMilliseconds - 30.0) < 1e-9 &&
             byLanguage["ja"].ScaffoldDiagnostics.CasesWithDiagnostics == 2 &&
-            byLanguage["ja"].ScaffoldDiagnostics.TermCount == 3,
+            byLanguage["ja"].ScaffoldDiagnostics.TermCount == 3 &&
+            byLanguage["ja"].ScaffoldDiagnostics.NeuralAbstentions == 1 &&
+            byLanguage["ja"].ScaffoldDiagnostics.NeuralErrors == 1,
             "Per-language translation benchmark aggregation is inconsistent.");
+
+        EngineConfiguration neuralCpu = ResolveEngine("qwen-scaffold-glossbert-cpu");
+        BenchmarkAggregate validNeuralOverall = overall with
+        {
+            ScaffoldDiagnostics = overall.ScaffoldDiagnostics with { NeuralErrors = 0 }
+        };
+        EnforceNeuralExecution(neuralCpu, validNeuralOverall);
+        ExpectInvalid(
+            () => EnforceNeuralExecution(
+                neuralCpu,
+                validNeuralOverall with
+                {
+                    ScaffoldDiagnostics = validNeuralOverall.ScaffoldDiagnostics with
+                    {
+                        NeuralTermsEmitted = 1
+                    }
+                }),
+            "A neural translation benchmark accepted a mandatory GlossBERT term.");
+        ExpectInvalid(
+            () => EnforceNeuralExecution(
+                neuralCpu,
+                validNeuralOverall with
+                {
+                    ScaffoldDiagnostics = validNeuralOverall.ScaffoldDiagnostics with
+                    {
+                        NeuralHintsEmitted = 0
+                    }
+                }),
+            "A neural translation benchmark accepted a run without sense metadata.");
+        ExpectInvalid(
+            () => EnforceNeuralExecution(
+                neuralCpu,
+                validNeuralOverall with
+                {
+                    ScaffoldDiagnostics = validNeuralOverall.ScaffoldDiagnostics with
+                    {
+                        SenseReviewKeeps = 0,
+                        SenseReviewCorrections = 0,
+                        SenseReviewRejected = 0,
+                        SenseReviewFailures = 0
+                    }
+                }),
+            "A neural translation benchmark accepted senses that never reached Qwen review.");
+        ExpectInvalid(
+            () => EnforceNeuralExecution(neuralCpu, overall),
+            "A neural translation benchmark accepted a ranker error.");
+        ExpectInvalid(
+            () => EnforceNeuralExecution(
+                neuralCpu,
+                overall with
+                {
+                    ScaffoldDiagnostics = overall.ScaffoldDiagnostics with
+                    {
+                        NeuralRequests = 0,
+                        NeuralErrors = 0
+                    }
+                }),
+            "A neural translation benchmark accepted a run without ranker requests.");
+        EnforceNeuralExecution(ResolveEngine("qwen-scaffold"), overall);
+
+        string schemaJson = JsonSerializer.Serialize(
+            new
+            {
+                SchemaVersion = DumpSchemaVersion,
+                Overall = overall,
+                Result = syntheticResults[0]
+            },
+            DumpJsonOptions);
+        Check(
+            schemaJson.Contains("\"schemaVersion\": 3", StringComparison.Ordinal) &&
+            schemaJson.Contains("\"neuralRequests\": 3", StringComparison.Ordinal) &&
+            schemaJson.Contains("\"neuralTermsEmitted\": 0", StringComparison.Ordinal) &&
+            schemaJson.Contains("\"neuralHintsEmitted\": 1", StringComparison.Ordinal) &&
+            schemaJson.Contains("\"status\": \"selected\"", StringComparison.Ordinal) &&
+            schemaJson.Contains(
+                "\"englishDefinition\": \"sloping land alongside a river\"",
+                StringComparison.Ordinal) &&
+            schemaJson.Contains("\"candidateGroupCount\": 2", StringComparison.Ordinal),
+            "Translation benchmark schema v3 omitted neural diagnostics or enum names.");
 
         Check(NormalizeEngine("qwen") == "qwen",
             "The baseline engine name must stay stable.");
         Check(NormalizeEngine(" QWEN-SCAFFOLD ") == "qwen-scaffold",
             "The scaffold engine name must be trimmed and case-normalized.");
+        Check(
+            NormalizeEngine(" QWEN-SCAFFOLD-GLOSSBERT-CPU ") ==
+            "qwen-scaffold-glossbert-cpu" &&
+            RequiresRankerBase("qwen-scaffold-glossbert-cpu"),
+            "The CPU GlossBERT engine must be explicit and require ranker assets.");
+        Check(
+            NormalizeEngine("qwen-scaffold-glossbert-npu") ==
+            "qwen-scaffold-glossbert-npu" &&
+            RequiresRankerBase("qwen-scaffold-glossbert-npu"),
+            "The NPU GlossBERT engine must be explicit and require ranker assets.");
+        Check(!RequiresRankerBase("qwen-scaffold"),
+            "The deterministic scaffold engine must not require ranker assets.");
+        RankerRuntime cpuRuntime = CreateRankerRuntime(
+            ResolveEngine("qwen-scaffold-glossbert-cpu"),
+            selector: null)!;
+        Check(
+            cpuRuntime.RequestedProvider == "cpu" &&
+            cpuRuntime.ActiveProvider is null &&
+            cpuRuntime.ExpectedExecutionProvider ==
+            GlossBertDictionarySelectorService.CpuExecutionProvider &&
+            cpuRuntime.ExpectedDevice == "CPU",
+            "The CPU ranker identity in schema v3 is inconsistent.");
+        ValidateRankerBase(
+            ResolveEngine("qwen-scaffold-glossbert-cpu"),
+            "synthetic-ranker-base");
+        ExpectInvalid(
+            () => ValidateRankerBase(
+                ResolveEngine("qwen-scaffold-glossbert-cpu"),
+                rankerBaseDirectory: null),
+            "A neural translation engine accepted a missing ranker base directory.");
+        ExpectInvalid(
+            () => ValidateRankerBase(
+                ResolveEngine("qwen-scaffold"),
+                "synthetic-ranker-base"),
+            "A deterministic translation engine accepted --ranker-base.");
         ExpectInvalid(
             () => NormalizeEngine("foundry"),
             "Unsupported translation benchmark engines must be rejected.");

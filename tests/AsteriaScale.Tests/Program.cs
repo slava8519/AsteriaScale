@@ -14,13 +14,15 @@ try
 {
     if (args.Any(arg => string.Equals(arg, "--benchmark-only", StringComparison.OrdinalIgnoreCase)))
     {
-        (string translationSet, string translationEngine, string? translationDump) =
+        (string translationSet, string translationEngine, string? translationDump,
+            string? translationRankerBase) =
             ParseTranslationBenchmarkArguments(args);
         await RunAsync($"Full translation benchmark ({translationEngine})", () =>
             TranslationBenchmark.RunAsync(
                 translationSet,
                 translationEngine,
-                translationDump));
+                translationDump,
+                translationRankerBase));
         Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
         return 0;
     }
@@ -141,6 +143,8 @@ try
         Assert(migrated.SmartDictionaryBackend == SmartDictionaryBackends.Cpu,
             "The legacy GPU smart-ranker backend must migrate to CPU.");
     });
+
+    await RunAsync("Model activity lifecycle gate", ModelActivityGateTests.RunAsync);
 
     await RunAsync(
         "Magpie config and backup safety",
@@ -1253,7 +1257,7 @@ try
         await dictionary.UnloadAsync();
     });
 
-    await RunAsync("Foundry batch translation response", () =>
+    await RunAsync("Foundry batch translation response", async () =>
     {
         IReadOnlyDictionary<int, string> translated = FoundryTranslationService.ParseBatchResponse(
             "```json\n{\"translations\":[{\"id\":2,\"text\":\"Добрый вечер\"},{\"id\":5,\"text\":\"До встречи\"}]}\n```");
@@ -1267,7 +1271,78 @@ try
             () => FoundryTranslationService.ParseBatchResponse(
                 "{\"translations\":[{\"id\":2,\"text\":\"\"}]}"),
             "An empty batch translation was accepted.");
-        return Task.CompletedTask;
+        int emptyRetryCalls = 0;
+        string recovered = await FoundryTranslationService.RetryEmptyTranslationOnceAsync(
+            string.Empty,
+            _ =>
+            {
+                emptyRetryCalls++;
+                return Task.FromResult("Повторный перевод");
+            });
+        Assert(recovered == "Повторный перевод" && emptyRetryCalls == 1,
+            "An empty cleaned model response was not retried exactly once.");
+        string unchanged = await FoundryTranslationService.RetryEmptyTranslationOnceAsync(
+            "Готовый перевод",
+            _ => throw new InvalidOperationException("A non-empty response must not retry."));
+        Assert(unchanged == "Готовый перевод",
+            "A non-empty model response unexpectedly entered the content retry.");
+        await AssertThrowsAsync<InvalidOperationException>(
+            () => FoundryTranslationService.RetryEmptyTranslationOnceAsync(
+                " ",
+                _ => Task.FromResult(string.Empty)),
+            "Two empty model responses were silently accepted.");
+        Assert(!FoundryTranslationService.ShouldSelectFidelityRetry(
+                   string.Empty,
+                   initialMissingCount: 1,
+                   retryMissingCount: 1) &&
+               !FoundryTranslationService.ShouldSelectFidelityRetry(
+                   "Исправленный перевод",
+                   initialMissingCount: 1,
+                   retryMissingCount: 1) &&
+               FoundryTranslationService.ShouldSelectFidelityRetry(
+                   "Исправленный перевод",
+                   initialMissingCount: 2,
+                   retryMissingCount: 1) &&
+               FoundryTranslationService.ShouldSelectFidelityRetry(
+                   "Исправленный перевод",
+                   initialMissingCount: 0,
+                   retryMissingCount: 0,
+                   initialSenseConflictCount: 1,
+                   retrySenseConflictCount: 0) &&
+               !FoundryTranslationService.ShouldSelectFidelityRetry(
+                   "Исправленный перевод",
+                   initialMissingCount: 0,
+                   retryMissingCount: 0,
+                   initialSenseConflictCount: 1,
+                   retrySenseConflictCount: 1) &&
+               FoundryTranslationService.IsMeaningfulFidelityFix(
+                   "Первый перевод.",
+                   "Исправленный перевод.") &&
+               !FoundryTranslationService.IsMeaningfulFidelityFix(
+                   " Первый перевод. ",
+                   "первый   перевод!") &&
+               FoundryTranslationService.ContainsFidelityPromptEcho(
+                   "GlossBERT предложил значение. Перевод: исправленный текст") &&
+               !FoundryTranslationService.ContainsFidelityPromptEcho(
+                   "Обычный естественный перевод."),
+            "A fidelity retry was not selected by strict lexicographic improvement.");
+        FoundryTranslationService.FidelityRetryResponse keep =
+            FoundryTranslationService.ParseFidelityRetryResponse(" KEEP ");
+        FoundryTranslationService.FidelityRetryResponse fix =
+            FoundryTranslationService.ParseFidelityRetryResponse(
+                "FIX|Исправленный перевод.");
+        FoundryTranslationService.FidelityRetryResponse invalid =
+            FoundryTranslationService.ParseFidelityRetryResponse(
+                "Вот исправленный перевод.");
+        FoundryTranslationService.FidelityRetryResponse embellishedKeep =
+            FoundryTranslationService.ParseFidelityRetryResponse(
+                "KEEP|лишний текст");
+        Assert(keep.Action == FoundryTranslationService.FidelityRetryAction.Keep &&
+               fix.Action == FoundryTranslationService.FidelityRetryAction.Fix &&
+               fix.Translation == "Исправленный перевод." &&
+               invalid.Action == FoundryTranslationService.FidelityRetryAction.Invalid &&
+               embellishedKeep.Action == FoundryTranslationService.FidelityRetryAction.Invalid,
+            "The semantic review protocol accepted an ambiguous model response.");
     });
 
     await RunAsync("Translation scaffold prompt and fidelity guard", () =>
@@ -1288,7 +1363,18 @@ try
                 new ScaffoldTerm("Yuki", "Юки", 1)
             ],
             ExactSentenceTranslation: null,
-            ProperNames: ["Yuki"]);
+            ProperNames: ["Yuki"])
+        {
+            SenseHints =
+            [
+                new ScaffoldSenseHint(
+                    "tears",
+                    "drops of clear salty liquid secreted from the eyes",
+                    "слёзы",
+                    ["разрывы"],
+                    TranslationScaffoldBuilder.MinimumConfidence)
+            ]
+        };
         string fullPrompt = FoundryTranslationService.BuildTranslationPrompt(
             "Yuki was on the verge of tears.",
             full);
@@ -1296,8 +1382,9 @@ try
                    "Обязательная терминология:\n- on the verge of → на грани\n- Yuki → Юки\n",
                    StringComparison.Ordinal) &&
                fullPrompt.EndsWith(
-                   "Реплика: Yuki was on the verge of tears.",
-                   StringComparison.Ordinal),
+                    "Реплика: Yuki was on the verge of tears.",
+                    StringComparison.Ordinal) &&
+               !fullPrompt.Contains("GlossBERT", StringComparison.Ordinal),
             $"The full scaffold prompt does not match the roadmap template: {fullPrompt}");
 
         string retryPrompt = FoundryTranslationService.BuildTranslationPrompt(
@@ -1310,8 +1397,30 @@ try
                    StringComparison.Ordinal) &&
                retryPrompt.Contains("Переведи заново.", StringComparison.Ordinal) &&
                retryPrompt.Contains("- Yuki → Юки", StringComparison.Ordinal) &&
-               !retryPrompt.Contains("Она была на грани", StringComparison.Ordinal),
-            "The single semantic retry did not reinforce the violated term.");
+               !retryPrompt.Contains("Она была на грани слёз", StringComparison.Ordinal),
+            "The single deterministic retry did not reinforce the violated term.");
+
+        string senseReviewPrompt = FoundryTranslationService.BuildTranslationPrompt(
+            "Yuki was on the verge of tears.",
+            full,
+            violatedTerms: null,
+            previousTranslation: "Она была на грани слёз.",
+            senseHints: full.SenseHints);
+        Assert(senseReviewPrompt.StartsWith(
+                   "Review a Russian translation of a visual-novel line.",
+                   StringComparison.Ordinal) &&
+               senseReviewPrompt.Contains(
+                   "English source: Yuki was on the verge of tears.",
+                   StringComparison.Ordinal) &&
+               senseReviewPrompt.Contains(
+                   "Previous Russian translation: Она была на грани слёз.",
+                   StringComparison.Ordinal) &&
+               senseReviewPrompt.Contains(
+                   "- tears: drops of clear salty liquid secreted from the eyes",
+                   StringComparison.Ordinal) &&
+               senseReviewPrompt.Contains("output exactly KEEP", StringComparison.Ordinal) &&
+               senseReviewPrompt.Contains("FIX|", StringComparison.Ordinal),
+            "The Qwen semantic review prompt did not preserve its strict protocol.");
 
         FoundryTranslationService.BatchItem[] batch =
         [
@@ -1323,10 +1432,50 @@ try
                    "\"id\":3,\"text\":\"Yuki waited.\",\"terminology\":[",
                    StringComparison.Ordinal) &&
                batchPrompt.Contains("\"source\":\"Yuki\",\"translation\":\"Юки\"",
-                   StringComparison.Ordinal) &&
+                    StringComparison.Ordinal) &&
+               !batchPrompt.Contains("senseHints", StringComparison.Ordinal) &&
                batchPrompt.Contains("\"id\":7,\"text\":\"Please wait.\"}",
                    StringComparison.Ordinal),
             $"Batch terminology was not associated with its own id: {batchPrompt}");
+
+        Assert(NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Её глаза наполнились разрывами.",
+                    full.SenseHints).Count == 1 &&
+               NeuralSenseFidelityGuard.FindConflictingHints(
+                    "На глазах выступили слёзы, но ткань получила разрывы.",
+                    full.SenseHints).Count == 0 &&
+               NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Она едва сдерживала плач.",
+                    full.SenseHints).Count == 0,
+            "GlossBERT must retry only an explicit rejected-surface substitution.");
+        ScaffoldSenseHint bankHint = new(
+            "bank",
+            "sloping land beside a river",
+            "берег",
+            ["банк"],
+            TranslationScaffoldBuilder.MinimumConfidence);
+        Assert(NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Начался праздничный банкет.",
+                    [bankHint]).Count == 0 &&
+               NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Он вышел из банка.",
+                    [bankHint]).Count == 1,
+            "A short rejected surface matched an unrelated longer Russian word.");
+        ScaffoldSenseHint memoryHint = new(
+            "memory",
+            "the faculty by which information is stored and recalled",
+            "воспоминание",
+            ["память"],
+            TranslationScaffoldBuilder.MinimumConfidence);
+        Assert(RussianMorphology.AreConservativeInflectionVariants("память", "памяти") &&
+               !RussianMorphology.AreConservativeInflectionVariants("память", "памятник") &&
+               NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Это старый памятник.",
+                    [memoryHint]).Count == 0 &&
+               NeuralSenseFidelityGuard.FindConflictingHints(
+                    "Это осталось в моей памяти.",
+                    [memoryHint]).Count == 1,
+            "Rejected-sense detection must accept inflection without matching a derived noun.");
 
         Assert(SenseFidelityGuard.FindMissingTerms("Юки была на грани слёз.", full.Terms).Count == 0,
             "Short names, stress marks and inflected glossary stems must validate.");
@@ -1334,6 +1483,10 @@ try
                 "Она выбрала лёгкое платье.",
                 [new ScaffoldTerm("light", "лёгкий", 1)]).Count == 0,
             "Russian adjective endings must not trigger a false semantic retry.");
+        Assert(SenseFidelityGuard.FindMissingTerms(
+                "Здесь слишком темно.",
+                [new ScaffoldTerm("dark", "тёмный", 1)]).Count == 0,
+            "A Russian predicative adjective form must not look like a rejected sense.");
         Assert(SenseFidelityGuard.FindMissingTerms(
                 "Без Анны мы не начнём.",
                 [new ScaffoldTerm("Anna", "Анна", 1)]).Count == 0,
@@ -2500,13 +2653,15 @@ try
         string.Equals(arg, "--translation-benchmark", StringComparison.OrdinalIgnoreCase));
     if (translationBenchmarkArgument >= 0)
     {
-        (string translationSet, string translationEngine, string? translationDump) =
+        (string translationSet, string translationEngine, string? translationDump,
+            string? translationRankerBase) =
             ParseTranslationBenchmarkArguments(args);
         await RunAsync($"Full translation benchmark ({translationEngine})", () =>
             TranslationBenchmark.RunAsync(
                 translationSet,
                 translationEngine,
-                translationDump));
+                translationDump,
+                translationRankerBase));
     }
 
     int rankerBenchmarkArgument = Array.FindIndex(args, arg =>
@@ -2607,11 +2762,13 @@ async Task RunAsync(string name, Func<Task> test)
     Console.WriteLine("ok  " + name);
 }
 
-static (string SetPath, string Engine, string? DumpPath) ParseTranslationBenchmarkArguments(
+static (string SetPath, string Engine, string? DumpPath, string? RankerBaseDirectory)
+    ParseTranslationBenchmarkArguments(
     string[] arguments)
 {
     const string usage =
-        "Usage: --translation-benchmark <set.json> [engine] [--dump <file>] [--benchmark-only]";
+        "Usage: --translation-benchmark <set.json> [engine] [--ranker-base <directory>] " +
+        "[--dump <file>] [--benchmark-only]";
     int benchmarkArgument = -1;
     for (int index = 0; index < arguments.Length; index++)
     {
@@ -2676,7 +2833,51 @@ static (string SetPath, string Engine, string? DumpPath) ParseTranslationBenchma
         dumpPath = arguments[dumpArgument + 1];
     }
 
-    return (setPath, engine, dumpPath);
+    int rankerBaseArgument = -1;
+    for (int index = 0; index < arguments.Length; index++)
+    {
+        if (!string.Equals(arguments[index], "--ranker-base", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (rankerBaseArgument >= 0)
+        {
+            throw new InvalidOperationException(
+                "--ranker-base may be specified only once. " + usage);
+        }
+
+        rankerBaseArgument = index;
+    }
+
+    string? rankerBaseDirectory = null;
+    if (rankerBaseArgument >= 0)
+    {
+        if (rankerBaseArgument + 1 >= arguments.Length ||
+            string.IsNullOrWhiteSpace(arguments[rankerBaseArgument + 1]) ||
+            arguments[rankerBaseArgument + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "--ranker-base requires a directory path. " + usage);
+        }
+
+        rankerBaseDirectory = arguments[rankerBaseArgument + 1];
+    }
+
+    bool neuralEngine = TranslationBenchmark.RequiresRankerBase(engine);
+    if (neuralEngine && rankerBaseDirectory is null)
+    {
+        throw new InvalidOperationException(
+            $"Engine '{engine}' requires --ranker-base. " + usage);
+    }
+
+    if (!neuralEngine && rankerBaseDirectory is not null)
+    {
+        throw new InvalidOperationException(
+            $"--ranker-base is valid only for a GlossBERT translation engine. {usage}");
+    }
+
+    return (setPath, engine, dumpPath, rankerBaseDirectory);
 }
 
 static void Assert(bool condition, string message)
@@ -2693,6 +2894,21 @@ static void AssertThrows<TException>(Action action, string message)
     try
     {
         action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+
+    throw new InvalidOperationException(message);
+}
+
+static async Task AssertThrowsAsync<TException>(Func<Task> action, string message)
+    where TException : Exception
+{
+    try
+    {
+        await action();
     }
     catch (TException)
     {

@@ -1,5 +1,14 @@
 namespace AsteriaScale.Services;
 
+internal enum TranslationSenseReviewOutcome
+{
+    NotIssued,
+    KeptOriginal,
+    AppliedCorrection,
+    RejectedResponse,
+    Failed
+}
+
 internal sealed record TranslationScaffoldDiagnostics(
     string Source,
     int TermCount,
@@ -8,7 +17,12 @@ internal sealed record TranslationScaffoldDiagnostics(
     int InitialViolationCount,
     bool RetryIssued,
     int FinalViolationCount,
-    IReadOnlyList<ScaffoldTerm> Terms);
+    int InitialSenseConflictCount,
+    int FinalSenseConflictCount,
+    TranslationSenseReviewOutcome SenseReviewOutcome,
+    IReadOnlyList<ScaffoldTerm> Terms,
+    IReadOnlyList<TranslationScaffoldNeuralDiagnostic> NeuralDecisions,
+    IReadOnlyList<ScaffoldSenseHint> SenseHints);
 
 /// <summary>
 /// Checks only distinctive Russian stems from high-confidence glossary terms.
@@ -55,6 +69,24 @@ internal static class SenseFidelityGuard
 
     internal static bool IsSatisfied(ScaffoldTerm term, string translation) =>
         !FindMissingTerms(translation, [term]).Any();
+
+    internal static bool IsDistinctSurfaceSatisfied(ScaffoldTerm term, string translation)
+    {
+        string[] expectedTokens = RussianMorphology.TokenRegex()
+            .Matches(RussianMorphology.RemoveStressMarks(term.Translation ?? string.Empty))
+            .Select(match => NormalizeRussianToken(match.Value))
+            .Where(token => token.Length >= 2)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        string[] actualTokens = RussianMorphology.TokenRegex()
+            .Matches(RussianMorphology.RemoveStressMarks(translation ?? string.Empty))
+            .Select(match => NormalizeRussianToken(match.Value))
+            .Where(token => token.Length > 0)
+            .ToArray();
+        return expectedTokens.Length > 0 && expectedTokens.All(expected =>
+            actualTokens.Any(actual =>
+                RussianMorphology.AreConservativeInflectionVariants(expected, actual)));
+    }
 
     private static bool IsSatisfied(
         ScaffoldTerm term,

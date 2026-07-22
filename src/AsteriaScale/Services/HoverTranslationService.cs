@@ -11,13 +11,14 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly FoundryTranslationService _translator;
     private readonly LocalDictionaryService _dictionary;
     private readonly GlossBertDictionarySelectorService _glossBertSelector = new();
+    private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
     private readonly SmartDictionaryResultCache _smartResultCache = new();
     private readonly HoverTranslationOverlay _overlay;
     private readonly ScreenTranslationOverlay _screenOverlay;
     private readonly GlobalHotkeyService _hotkeys;
     private readonly Dispatcher _dispatcher;
     private readonly object _lifecycleLock = new();
-    private readonly object _processingLock = new();
+    private readonly ModelActivityGate _modelActivity = new();
     private readonly object _taskLock = new();
     private readonly HashSet<Task> _activeTasks = [];
     private readonly List<CancellationTokenSource> _retiredModeCancellations = [];
@@ -35,8 +36,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private CancellationTokenSource? _smartFallbackUnloadCancellation;
     private CancellationTokenSource? _modeCancellation;
     private bool _enabled;
-    private bool _processing;
-    private TaskCompletionSource _processingIdle = CompletedSource();
     private bool _hotkeysReady = true;
     private bool _disposed;
     private long _overlayGeneration;
@@ -48,11 +47,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _settings = settings;
         _ = isScaling; // Kept for source compatibility with existing callers.
         _dictionary = new LocalDictionaryService();
+        _scaffoldGlossBertRanker = new(
+            _glossBertSelector,
+            ResolveGlossBertProvider,
+            () => _dictionary.VersionToken);
         _translator = new FoundryTranslationService(
             _dictionary,
-            useTranslationScaffold: true,
+            TranslationScaffoldMode.GlossBert,
             diagnosticSink: null,
-            neuralRanker: RankScaffoldSenseAsync);
+            neuralRanker: _scaffoldGlossBertRanker.RankAsync);
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _overlay = new HoverTranslationOverlay();
         _screenOverlay = new ScreenTranslationOverlay();
@@ -176,7 +179,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _lastSmartFallbackRequest = null;
         ResetTracking();
         ConfigureActiveMode();
-        if (_enabled && IsSmartMode)
+        if (_enabled && !IsDictionaryMode)
         {
             QueueUnload();
             QueueWarmUpAfterPendingUnload();
@@ -318,34 +321,64 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private async Task UnloadWhenIdleAsync()
     {
-        await WaitForProcessingIdleAsync();
-
-        if (!_enabled || IsDictionaryMode || IsScreenMode || IsSmartMode)
-        {
-            await _translator.UnloadAsync();
-        }
-
-        if (!_enabled || (!IsDictionaryMode && !IsSmartMode))
-        {
-            await _dictionary.UnloadAsync();
-        }
+        using IDisposable maintenance =
+            await _modelActivity.BeginMaintenanceWhenIdleAsync();
 
         bool backendChanged =
             _enabled &&
-            IsSmartMode &&
-            _smartPipeline.ActiveBackend is not null &&
-            !string.Equals(
-                _smartPipeline.ActiveBackend,
-                ResolveSmartBackend(),
-                StringComparison.Ordinal);
-        if (!_enabled || !IsSmartMode || !SmartRankerApplicable || backendChanged)
+            _glossBertSelector.ActiveProvider is { } activeProvider &&
+            activeProvider != ResolveGlossBertProvider();
+        await UnloadModelOwnersAsync(
+            unloadTranslator: !_enabled || IsDictionaryMode || IsScreenMode || IsSmartMode,
+            unloadDictionary: !_enabled || (!IsDictionaryMode && !IsSmartMode),
+            unloadRanker: !_enabled || !ActiveModeUsesGlossBert || backendChanged,
+            forgetSmartBackend: !_enabled || !IsSmartMode);
+    }
+
+    private async Task UnloadModelOwnersAsync(
+        bool unloadTranslator,
+        bool unloadDictionary,
+        bool unloadRanker,
+        bool forgetSmartBackend)
+    {
+        List<Exception> failures = [];
+        if (unloadTranslator)
         {
-            await _smartPipeline.UnloadRankerAsync();
+            await CaptureUnloadFailureAsync(_translator.UnloadAsync, failures);
         }
 
-        if (!_enabled || !IsSmartMode)
+        if (unloadDictionary)
+        {
+            await CaptureUnloadFailureAsync(_dictionary.UnloadAsync, failures);
+        }
+
+        if (unloadRanker)
+        {
+            await CaptureUnloadFailureAsync(_smartPipeline.UnloadRankerAsync, failures);
+        }
+
+        if (forgetSmartBackend)
         {
             _smartPipeline.ForgetBackend();
+        }
+
+        if (failures.Count > 0)
+        {
+            throw new AggregateException("One or more translation model owners failed to unload.", failures);
+        }
+    }
+
+    private static async Task CaptureUnloadFailureAsync(
+        Func<Task> unload,
+        ICollection<Exception> failures)
+    {
+        try
+        {
+            await unload();
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
         }
     }
 
@@ -392,9 +425,21 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 await _dictionary.LoadAsync(cancellationToken);
             }
-            else if (requestedMode != HoverTranslationModes.Screen)
+            else if (requestedMode == HoverTranslationModes.Neural)
             {
-                await _translator.WarmUpAsync(cancellationToken);
+                Task translatorWarmUp = _translator.WarmUpAsync(cancellationToken);
+                if (_settings.SmartDictionaryKeepWarm)
+                {
+                    await Task.WhenAll(
+                        translatorWarmUp,
+                        _glossBertSelector.WarmUpAsync(
+                            ResolveGlossBertProvider(),
+                            cancellationToken));
+                }
+                else
+                {
+                    await translatorWarmUp;
+                }
             }
 
             if (_enabled &&
@@ -413,7 +458,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     HoverTranslationModes.Dictionary =>
                         $"Быстрый перевод готов: {_dictionary.EntryCount:N0} записей из {_dictionary.SourceCount} словарей",
                     HoverTranslationModes.Screen => "Экранный перевод готов: Alt+Shift+T — перевести все реплики",
-                    _ => "Перевод под курсором готов: NPU OCR + локальная Qwen"
+                    _ => "Перевод под курсором готов: NPU OCR + GlossBERT + локальная Qwen"
                 });
             }
         }
@@ -790,14 +835,30 @@ public sealed class HoverTranslationService : IAsyncDisposable
         return SmartDictionaryBackends.Cpu;
     }
 
+    private GlossBertRankerProvider ResolveGlossBertProvider() =>
+        string.Equals(
+            ResolveSmartBackend(),
+            SmartDictionaryBackends.Npu,
+            StringComparison.Ordinal)
+            ? GlossBertRankerProvider.Npu
+            : GlossBertRankerProvider.Cpu;
+
     private bool IsDictionaryMode =>
         HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Dictionary;
+
+    private bool IsNeuralMode =>
+        HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Neural;
 
     private bool IsSmartMode =>
         HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
 
     private bool IsScreenMode =>
         HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Screen;
+
+    private bool ActiveModeUsesGlossBert =>
+        IsNeuralMode ||
+        IsScreenMode ||
+        IsSmartMode && SmartRankerApplicable;
 
     private bool IsAutomaticFallback =>
         SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
@@ -881,6 +942,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
     /// </summary>
     public async Task ReloadDictionariesAsync()
     {
+        using IDisposable maintenance =
+            await _modelActivity.BeginMaintenanceWhenIdleAsync(_lifetimeCancellation.Token);
         await _dictionary.UnloadAsync();
         await _dictionary.LoadAsync(_lifetimeCancellation.Token);
     }
@@ -892,45 +955,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         CancelSmartFallbackUnload();
         string translation = await _translator.TranslateToRussianAsync(
             source,
-            useNeuralRanker: true,
             cancellationToken);
         return (source, translation, FoundryTranslationService.EngineLabel);
-    }
-
-    private async Task<SmartDictionaryRankerOutcome?> RankScaffoldSenseAsync(
-        TranslationScaffoldNeuralRequest request,
-        CancellationToken cancellationToken)
-    {
-        if (!SmartRankerApplicable)
-        {
-            return null;
-        }
-
-        GlossBertRankerProvider provider =
-            string.Equals(
-                ResolveSmartBackend(),
-                SmartDictionaryBackends.Npu,
-                StringComparison.Ordinal)
-                ? GlossBertRankerProvider.Npu
-                : GlossBertRankerProvider.Cpu;
-        GlossBertDictionarySelection ranked = await _glossBertSelector.SelectAsync(
-            request.Sentence,
-            request.Target,
-            request.CharacterIndex,
-            request.Plan.CandidateGlosses,
-            request.Plan.CandidateGroupIds,
-            "English",
-            provider,
-            cancellationToken);
-        if (ranked.Abstained || ranked.SelectedGroupId is not { } groupId)
-        {
-            return null;
-        }
-
-        // Selection acceptance remains exclusively the worker's frozen margin
-        // decision; no second confidence threshold is introduced here.
-        return request.Plan.Outcomes.FirstOrDefault(
-            outcome => outcome.GroupId == groupId);
     }
 
     private void HideOverlay()
@@ -1030,10 +1056,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(2), cancellation.Token);
-                if (_enabled && IsScreenMode && !IsProcessing)
+                using IDisposable maintenance =
+                    await _modelActivity.BeginMaintenanceWhenIdleAsync(cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (_enabled && IsScreenMode)
                 {
-                    await _translator.UnloadAsync();
-                    ReportStatus("Экранный перевод готов: Qwen выгружена после простоя, Alt+Shift+T загрузит её снова");
+                    await UnloadModelOwnersAsync(
+                        unloadTranslator: true,
+                        unloadDictionary: false,
+                        unloadRanker: true,
+                        forgetSmartBackend: false);
+
+                    ReportStatus("Экранный перевод готов: модели выгружены после простоя, Alt+Shift+T загрузит их снова");
                 }
             }
             catch (OperationCanceledException)
@@ -1066,10 +1100,16 @@ public sealed class HoverTranslationService : IAsyncDisposable
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(45), cancellation.Token);
-                if (_enabled && IsSmartMode &&
-                    !IsProcessing)
+                using IDisposable maintenance =
+                    await _modelActivity.BeginMaintenanceWhenIdleAsync(cancellation.Token);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (_enabled && IsSmartMode)
                 {
-                    await _translator.UnloadAsync();
+                    await UnloadModelOwnersAsync(
+                        unloadTranslator: true,
+                        unloadDictionary: false,
+                        unloadRanker: false,
+                        forgetSmartBackend: false);
                     ReportStatus("Умный словарь готов: резервная полная модель выгружена после простоя");
                 }
             }
@@ -1113,55 +1153,23 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private bool TryBeginProcessing()
     {
-        lock (_processingLock)
+        if (_disposed || !_modelActivity.TryBeginProcessing())
         {
-            if (_processing || _disposed)
-            {
-                return false;
-            }
+            return false;
+        }
 
-            _processing = true;
-            _processingIdle = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_disposed)
+        {
             return true;
         }
+
+        _modelActivity.EndProcessing();
+        return false;
     }
 
-    private void EndProcessing()
-    {
-        TaskCompletionSource? completion = null;
-        lock (_processingLock)
-        {
-            if (!_processing)
-            {
-                return;
-            }
+    private void EndProcessing() => _modelActivity.EndProcessing();
 
-            _processing = false;
-            completion = _processingIdle;
-        }
-
-        completion.TrySetResult();
-    }
-
-    private bool IsProcessing
-    {
-        get
-        {
-            lock (_processingLock)
-            {
-                return _processing;
-            }
-        }
-    }
-
-    private Task WaitForProcessingIdleAsync()
-    {
-        lock (_processingLock)
-        {
-            return _processing ? _processingIdle.Task : Task.CompletedTask;
-        }
-    }
+    private Task WaitForProcessingIdleAsync() => _modelActivity.WaitForIdleAsync();
 
     private CancellationToken CurrentModeToken
     {
@@ -1242,13 +1250,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 LogError(exception);
             }
         }
-    }
-
-    private static TaskCompletionSource CompletedSource()
-    {
-        TaskCompletionSource source = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        source.SetResult();
-        return source;
     }
 
     private void ReportStatus(string status)

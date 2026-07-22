@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace AsteriaScale.Services;
@@ -5,17 +6,116 @@ namespace AsteriaScale.Services;
 internal sealed record ScaffoldTerm(
     string Source,
     string Translation,
-    double Confidence);
+    double Confidence,
+    ScaffoldTermProvenance Provenance = ScaffoldTermProvenance.Deterministic);
+
+internal sealed record ScaffoldSenseHint(
+    string Source,
+    string EnglishDefinition,
+    string SelectedTranslation,
+    IReadOnlyList<string> RejectedTranslations,
+    double Confidence)
+{
+    public ScaffoldSenseHint(
+        string Source,
+        string EnglishDefinition,
+        double Confidence)
+        : this(
+            Source,
+            EnglishDefinition,
+            SelectedTranslation: string.Empty,
+            Array.Empty<string>(),
+            Confidence)
+    {
+    }
+}
+
+internal enum ScaffoldTermProvenance
+{
+    Deterministic,
+    GlossBert
+}
+
+internal enum TranslationScaffoldNeuralStatus
+{
+    Selected,
+    Abstained,
+    Error,
+    Skipped
+}
+
+internal sealed record TranslationScaffoldNeuralResult(
+    int? GroupId,
+    bool Abstained,
+    double? Margin,
+    double? Score,
+    double? Confidence,
+    GlossBertRankerProvider RequestedProvider,
+    string ExecutionProvider,
+    string Device,
+    string ModelVersion,
+    string Pipeline,
+    long ElapsedMilliseconds,
+    bool FromCache = false);
+
+internal sealed record TranslationScaffoldNeuralDiagnostic(
+    string Target,
+    int CharacterIndex,
+    TranslationScaffoldNeuralStatus Status,
+    int CandidateGroupCount,
+    int CandidateGlossCount,
+    int? SelectedGroupId = null,
+    string? SelectedTranslation = null,
+    double? Margin = null,
+    double? Score = null,
+    double? Confidence = null,
+    GlossBertRankerProvider? RequestedProvider = null,
+    string? ExecutionProvider = null,
+    string? Device = null,
+    string? ModelVersion = null,
+    string? Pipeline = null,
+    long ElapsedMilliseconds = 0,
+    string? ErrorCode = null,
+    bool FromCache = false,
+    string? Detail = null,
+    ScaffoldTermProvenance? Provenance = null);
 
 internal sealed record TranslationScaffold(
     IReadOnlyList<ScaffoldTerm> Terms,
     string? ExactSentenceTranslation,
-    IReadOnlyList<string> ProperNames)
+    IReadOnlyList<string> ProperNames,
+    IReadOnlyList<TranslationScaffoldNeuralDiagnostic> NeuralDecisions)
 {
+    public IReadOnlyList<ScaffoldSenseHint> SenseHints { get; init; } =
+        Array.Empty<ScaffoldSenseHint>();
+
+    public TranslationScaffold(
+        IReadOnlyList<ScaffoldTerm> Terms,
+        string? ExactSentenceTranslation,
+        IReadOnlyList<string> ProperNames)
+        : this(
+            Terms,
+            ExactSentenceTranslation,
+            ProperNames,
+            Array.Empty<TranslationScaffoldNeuralDiagnostic>())
+    {
+    }
+
+    public void Deconstruct(
+        out IReadOnlyList<ScaffoldTerm> terms,
+        out string? exactSentenceTranslation,
+        out IReadOnlyList<string> properNames)
+    {
+        terms = Terms;
+        exactSentenceTranslation = ExactSentenceTranslation;
+        properNames = ProperNames;
+    }
+
     public static TranslationScaffold Empty { get; } = new(
         Array.Empty<ScaffoldTerm>(),
         ExactSentenceTranslation: null,
-        Array.Empty<string>());
+        Array.Empty<string>(),
+        Array.Empty<TranslationScaffoldNeuralDiagnostic>());
 }
 
 internal sealed record TranslationScaffoldNeuralRequest(
@@ -24,19 +124,34 @@ internal sealed record TranslationScaffoldNeuralRequest(
     int CharacterIndex,
     SmartDictionaryRankerPlan Plan);
 
-internal delegate Task<SmartDictionaryRankerOutcome?> TranslationScaffoldNeuralRanker(
+internal delegate Task<TranslationScaffoldNeuralResult> TranslationScaffoldNeuralRanker(
     TranslationScaffoldNeuralRequest request,
     CancellationToken cancellationToken);
 
 /// <summary>
-/// Builds high-confidence terminology constraints deterministically by default.
-/// A neural ranker is available only for an explicitly requested single hover
-/// fallback; batch translation never starts one ranker request per token.
+/// Shares the fail-open circuit breaker across every sentence in one caller
+/// operation. A ranker transport/model failure must not be retried once per
+/// screen block, while cancellation remains owned by the caller.
+/// </summary>
+internal sealed class TranslationScaffoldNeuralSession
+{
+    private int _neuralDisabled;
+
+    public bool NeuralEnabled => Volatile.Read(ref _neuralDisabled) == 0;
+
+    internal void DisableNeural() => Interlocked.Exchange(ref _neuralDisabled, 1);
+}
+
+/// <summary>
+/// Builds high-confidence terminology constraints. Supplying a neural ranker
+/// enables margin-calibrated GlossBERT selection automatically; a builder with
+/// no ranker retains the deterministic benchmark/control behavior.
 /// </summary>
 internal sealed class TranslationScaffoldBuilder
 {
     internal const double MinimumConfidence = 0.9;
     internal const int MaximumTermCount = 12;
+    internal const int MaximumNeuralRequestCount = 12;
     // Mandatory prompt constraints are stricter than hover suggestions. The
     // 0.90-0.94 heuristic band includes reproducible false senses such as
     // "saw" -> "пилить" and "fifth" -> "квинта" in ordinary sentences.
@@ -72,11 +187,11 @@ internal sealed class TranslationScaffoldBuilder
     public Task<TranslationScaffold> BuildAsync(
         string sentence,
         CancellationToken cancellationToken = default) =>
-        BuildAsync(sentence, useNeuralRanker: false, cancellationToken);
+        BuildAsync(sentence, neuralSession: null, cancellationToken);
 
     internal async Task<TranslationScaffold> BuildAsync(
         string sentence,
-        bool useNeuralRanker,
+        TranslationScaffoldNeuralSession? neuralSession,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(sentence))
@@ -120,7 +235,12 @@ internal sealed class TranslationScaffoldBuilder
             }
 
             List<TermCandidate> candidates = [];
-            bool neuralRankerAvailable = useNeuralRanker && _neuralRanker is not null;
+            List<TranslationScaffoldNeuralDiagnostic> neuralDecisions = [];
+            List<ScaffoldSenseHint> senseHints = [];
+            HashSet<string> neuralSources = new(StringComparer.Ordinal);
+            TranslationScaffoldNeuralSession effectiveNeuralSession =
+                neuralSession ?? new TranslationScaffoldNeuralSession();
+            int neuralRequestCount = 0;
             for (int tokenIndex = 0; tokenIndex < tokens.Length; tokenIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -176,17 +296,56 @@ internal sealed class TranslationScaffoldBuilder
                     preferredEntry);
                 SelectedTranslation? selected = attempt.Selection;
                 if (selected is null &&
-                    neuralRankerAvailable &&
+                    _neuralRanker is not null &&
                     attempt.Plan is { Outcomes.Count: > 1, CandidateGlosses.Count: > 1 } plan)
                 {
-                    NeuralSelectionAttempt neural = await TrySelectWithNeuralRankerAsync(
-                        sentence,
-                        lookup.Source,
-                        token.Index,
-                        plan,
-                        cancellationToken);
-                    selected = neural.Selection;
-                    neuralRankerAvailable = !neural.Failed;
+                    string neuralSourceKey = LocalDictionaryService.NormalizeEnglish(
+                        lookup.Source);
+                    if (neuralSourceKey.Length == 0)
+                    {
+                        neuralDecisions.Add(CreateSkippedNeuralDiagnostic(
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            "invalid-source"));
+                    }
+                    else if (!neuralSources.Add(neuralSourceKey))
+                    {
+                        neuralDecisions.Add(CreateSkippedNeuralDiagnostic(
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            "duplicate-source"));
+                    }
+                    else if (!effectiveNeuralSession.NeuralEnabled)
+                    {
+                        neuralDecisions.Add(CreateSkippedNeuralDiagnostic(
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            "session-disabled-after-error"));
+                    }
+                    else if (neuralRequestCount >= MaximumNeuralRequestCount)
+                    {
+                        neuralDecisions.Add(CreateSkippedNeuralDiagnostic(
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            "sentence-request-limit"));
+                    }
+                    else
+                    {
+                        neuralRequestCount++;
+                        NeuralSelectionAttempt neural = await TrySelectWithNeuralRankerAsync(
+                            sentence,
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            effectiveNeuralSession,
+                            cancellationToken);
+                        senseHints.AddRange(neural.SenseHints);
+                        neuralDecisions.Add(neural.Diagnostic);
+                    }
                 }
 
                 if (selected is null || selected.Confidence < MinimumConfidence)
@@ -213,7 +372,11 @@ internal sealed class TranslationScaffoldBuilder
                         ? TermPriority.ProperName
                         : TermPriority.Word;
                 candidates.Add(new TermCandidate(
-                    new ScaffoldTerm(source, translation, selected.Confidence),
+                    new ScaffoldTerm(
+                        source,
+                        translation,
+                        selected.Confidence,
+                        selected.Provenance),
                     priority,
                     token.Index,
                     properName));
@@ -273,9 +436,23 @@ internal sealed class TranslationScaffoldBuilder
                 exactSentenceTranslation = null;
             }
 
-            return terms.Length == 0 && exactSentenceTranslation is null
+            IReadOnlyList<TranslationScaffoldNeuralDiagnostic> immutableNeuralDecisions =
+                Array.AsReadOnly(neuralDecisions.ToArray());
+            IReadOnlyList<ScaffoldSenseHint> immutableSenseHints =
+                Array.AsReadOnly(senseHints.ToArray());
+            return terms.Length == 0 &&
+                   exactSentenceTranslation is null &&
+                   immutableNeuralDecisions.Count == 0 &&
+                   immutableSenseHints.Count == 0
                 ? TranslationScaffold.Empty
-                : new TranslationScaffold(terms, exactSentenceTranslation, properNames);
+                : new TranslationScaffold(
+                    terms,
+                    exactSentenceTranslation,
+                    properNames,
+                    immutableNeuralDecisions)
+                {
+                    SenseHints = immutableSenseHints
+                };
         }
         catch (OperationCanceledException)
         {
@@ -340,7 +517,8 @@ internal sealed class TranslationScaffoldBuilder
             return new SelectionAttempt(
                 new SelectedTranslation(
                     aligned.Translation,
-                    aligned.Confidence),
+                    aligned.Confidence,
+                    ScaffoldTermProvenance.Deterministic),
                 plan);
         }
 
@@ -357,7 +535,8 @@ internal sealed class TranslationScaffoldBuilder
             return new SelectionAttempt(
                 new SelectedTranslation(
                     heuristic.Translation,
-                    heuristic.Confidence),
+                    heuristic.Confidence,
+                    ScaffoldTermProvenance.Deterministic),
                 plan);
         }
 
@@ -367,7 +546,10 @@ internal sealed class TranslationScaffoldBuilder
         // it came from the user/VN priority layers.
         return new SelectionAttempt(
             outcomes.Length == 1
-                ? new SelectedTranslation(outcomes[0], preferredEntry ? 1 : 0.85)
+                ? new SelectedTranslation(
+                    outcomes[0],
+                    preferredEntry ? 1 : 0.85,
+                    ScaffoldTermProvenance.Deterministic)
                 : null,
             plan);
     }
@@ -377,26 +559,68 @@ internal sealed class TranslationScaffoldBuilder
         string target,
         int characterIndex,
         SmartDictionaryRankerPlan plan,
+        TranslationScaffoldNeuralSession neuralSession,
         CancellationToken cancellationToken)
     {
+        Stopwatch elapsed = Stopwatch.StartNew();
         try
         {
-            SmartDictionaryRankerOutcome? selected = await _neuralRanker!(
+            TranslationScaffoldNeuralResult result = await _neuralRanker!(
                 new TranslationScaffoldNeuralRequest(
                     sentence,
                     target,
                     characterIndex,
                     plan),
                 cancellationToken);
-            SmartDictionaryRankerOutcome? canonical = selected is null
-                ? null
-                : plan.Outcomes.FirstOrDefault(
-                    outcome => outcome.GroupId == selected.GroupId);
+
+            if (result.Abstained)
+            {
+                if (result.GroupId is not null)
+                {
+                    throw new InvalidOperationException(
+                        "An abstained GlossBERT result cannot contain a GroupId.");
+                }
+
+                return new NeuralSelectionAttempt(
+                    SenseHints: Array.Empty<ScaffoldSenseHint>(),
+                    Diagnostic: CreateNeuralDiagnostic(
+                        target,
+                        characterIndex,
+                        TranslationScaffoldNeuralStatus.Abstained,
+                        plan,
+                        result,
+                        selectedTranslation: null,
+                        provenance: null));
+            }
+
+            if (result.GroupId is not { } selectedGroupId)
+            {
+                throw new InvalidOperationException(
+                    "A selected GlossBERT result must contain a GroupId.");
+            }
+
+            SmartDictionaryRankerOutcome? canonical = plan.Outcomes.FirstOrDefault(
+                outcome => outcome.GroupId == selectedGroupId);
+            if (canonical is null)
+            {
+                throw new InvalidOperationException(
+                    $"GlossBERT selected unknown GroupId {selectedGroupId}.");
+            }
+
+            IReadOnlyList<ScaffoldSenseHint> selectedSenseHints = CreateSenseHints(
+                target,
+                plan,
+                selectedGroupId);
             return new NeuralSelectionAttempt(
-                canonical is null
-                    ? null
-                    : new SelectedTranslation(canonical.Translation, MinimumConfidence),
-                Failed: false);
+                selectedSenseHints,
+                CreateNeuralDiagnostic(
+                    target,
+                    characterIndex,
+                    TranslationScaffoldNeuralStatus.Selected,
+                    plan,
+                    result,
+                    canonical.Translation,
+                    ScaffoldTermProvenance.GlossBert));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -405,12 +629,135 @@ internal sealed class TranslationScaffoldBuilder
         catch (Exception exception)
         {
             // A failed optional ranker omits only this ambiguous term; already
-            // selected deterministic constraints must survive. The caller also
-            // disables more neural attempts for this sentence.
+            // selected deterministic constraints must survive. A shared session
+            // also prevents a systemic failure from repeating per screen block.
+            neuralSession.DisableNeural();
             HoverTranslationService.LogError(exception);
-            return new NeuralSelectionAttempt(null, Failed: true);
+            return new NeuralSelectionAttempt(
+                SenseHints: Array.Empty<ScaffoldSenseHint>(),
+                Diagnostic: new TranslationScaffoldNeuralDiagnostic(
+                    target,
+                    characterIndex,
+                    TranslationScaffoldNeuralStatus.Error,
+                    plan.Outcomes.Count,
+                    plan.CandidateGlosses.Count,
+                    ElapsedMilliseconds: elapsed.ElapsedMilliseconds,
+                    ErrorCode: exception is GlossBertRankerException rankerException
+                        ? rankerException.ErrorCode
+                        : exception.GetType().Name,
+                    Detail: exception.GetType().Name + ": " + exception.Message));
         }
     }
+
+    private static TranslationScaffoldNeuralDiagnostic CreateNeuralDiagnostic(
+        string source,
+        int characterIndex,
+        TranslationScaffoldNeuralStatus status,
+        SmartDictionaryRankerPlan plan,
+        TranslationScaffoldNeuralResult result,
+        string? selectedTranslation,
+        ScaffoldTermProvenance? provenance) =>
+        new(
+            source,
+            characterIndex,
+            status,
+            plan.Outcomes.Count,
+            plan.CandidateGlosses.Count,
+            result.GroupId,
+            selectedTranslation,
+            result.Margin,
+            result.Score,
+            result.Confidence,
+            result.RequestedProvider,
+            result.ExecutionProvider,
+            result.Device,
+            result.ModelVersion,
+            result.Pipeline,
+            result.ElapsedMilliseconds,
+            ErrorCode: null,
+            FromCache: result.FromCache,
+            Provenance: provenance);
+
+    private static IReadOnlyList<ScaffoldSenseHint> CreateSenseHints(
+        string source,
+        SmartDictionaryRankerPlan plan,
+        int selectedGroupId)
+    {
+        string normalizedSource = NormalizeSource(source);
+        SmartDictionaryRankerOutcome? selectedOutcome = plan.Outcomes.FirstOrDefault(
+            outcome => outcome.GroupId == selectedGroupId);
+        if (selectedOutcome is null)
+        {
+            throw new InvalidOperationException(
+                $"GlossBERT selected unknown GroupId {selectedGroupId}.");
+        }
+
+        string selectedTranslation = NormalizeRussianTerm(selectedOutcome.Translation);
+        IReadOnlyList<string> rejectedTranslations = Array.AsReadOnly(plan.Outcomes
+            .Where(outcome => outcome.GroupId != selectedGroupId)
+            .Select(outcome => NormalizeRussianTerm(outcome.Translation))
+            .Where(translation => translation.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray());
+        ScaffoldSenseHint[] hints = Enumerable.Range(0, plan.CandidateGlosses.Count)
+            .Where(index => plan.CandidateGroupIds[index] == selectedGroupId)
+            .Select(index => NormalizeEnglishDefinition(plan.CandidateGlosses[index]))
+            .Where(definition => definition.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .Select(definition => new ScaffoldSenseHint(
+                normalizedSource,
+                definition,
+                selectedTranslation,
+                rejectedTranslations,
+                MinimumConfidence))
+            .ToArray();
+        if (normalizedSource.Length == 0 ||
+            selectedTranslation.Length == 0 ||
+            hints.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"GlossBERT selected GroupId {selectedGroupId} without a usable English sense hint.");
+        }
+
+        return Array.AsReadOnly(hints);
+    }
+
+    private static string NormalizeEnglishDefinition(string value)
+    {
+        string withoutControls = new(value
+            .Select(character => char.IsControl(character) ? ' ' : character)
+            .ToArray());
+        string normalized = string.Join(
+            " ",
+            withoutControls.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (normalized.Length <= 320)
+        {
+            return normalized;
+        }
+
+        int length = 320;
+        if (char.IsHighSurrogate(normalized[length - 1]))
+        {
+            length--;
+        }
+
+        return normalized[..length].TrimEnd();
+    }
+
+    private static TranslationScaffoldNeuralDiagnostic CreateSkippedNeuralDiagnostic(
+        string source,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        string detail) =>
+        new(
+            source,
+            characterIndex,
+            TranslationScaffoldNeuralStatus.Skipped,
+            plan.Outcomes.Count,
+            plan.CandidateGlosses.Count,
+            ErrorCode: detail,
+            Detail: detail);
 
     private static string NormalizeSource(string value)
     {
@@ -510,15 +857,16 @@ internal sealed class TranslationScaffoldBuilder
 
     private sealed record SelectedTranslation(
         string Translation,
-        double Confidence);
+        double Confidence,
+        ScaffoldTermProvenance Provenance);
 
     private sealed record SelectionAttempt(
         SelectedTranslation? Selection,
         SmartDictionaryRankerPlan? Plan);
 
     private sealed record NeuralSelectionAttempt(
-        SelectedTranslation? Selection,
-        bool Failed);
+        IReadOnlyList<ScaffoldSenseHint> SenseHints,
+        TranslationScaffoldNeuralDiagnostic Diagnostic);
 
     private sealed record TermCandidate(
         ScaffoldTerm Term,
