@@ -2036,6 +2036,10 @@ try
         () => VnDictionaryLayerTests.RunAsync(tempRoot));
 
     await RunAsync(
+        "Phrasal verb dictionary layer",
+        () => PhrasalVerbLayerTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));
 

@@ -25,6 +25,14 @@ They are data files loaded independently by Asteria Scale's optional fast dictio
   ru-Wiktionary layer. Enrichment is restricted to matching parts of speech, splits only
   top-level comma siblings and rejects Latin, meta-only and structurally unbalanced
   surfaces before they can enter a sense inventory.
+- `eng-rus-phrasal.tsv.gz`: 806 hand-curated common English phrasal and prepositional
+  verbs (`give up`, `burst out`, `look forward to`, `put up with`, `come up with`, …) with
+  Russian meanings, most frequent sense first.
+  It is an ordinary broad layer, so its multi-word keys join the lexical-phrase set and
+  resolve with priority over the single hovered word; only base surface forms are stored
+  because inflected occurrences canonicalize onto the base key at lookup. Unlike the other
+  files it is not produced by `build-dictionaries.py`: the source of truth is the readable
+  `eng-rus-phrasal.tsv` beside it, regenerated with `scripts/build-phrasal-dictionary.py`.
 - `eng-rus-vn.tsv.gz`: 114 reviewed display-safe VN overrides. This is the only bundled
   VN layer that can replace a broad dictionary value or participate in residual-English
   repair. It no longer becomes a mandatory full-translation term merely by being curated.
