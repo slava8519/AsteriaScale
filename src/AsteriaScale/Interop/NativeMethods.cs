@@ -175,6 +175,12 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(nint hWnd);
 
+    [DllImport("user32.dll")]
+    internal static extern nint GetWindowDpiAwarenessContext(nint hWnd);
+
+    [DllImport("user32.dll")]
+    internal static extern DpiAwareness GetAwarenessFromDpiAwarenessContext(nint value);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool EnumDisplayDevices(string? device, uint deviceIndex, ref DisplayDevice displayDevice, uint flags);
@@ -234,6 +240,24 @@ internal static class NativeMethods
 
     internal static bool IsCloaked(nint hWnd) =>
         DwmGetWindowAttribute(hWnd, DwmwaCloaked, out int cloaked, sizeof(int)) == 0 && cloaked != 0;
+
+    internal static DpiAwareness? TryGetWindowDpiAwareness(nint hWnd)
+    {
+        if (hWnd == nint.Zero || !IsWindow(hWnd))
+        {
+            return null;
+        }
+
+        try
+        {
+            DpiAwareness awareness = GetAwarenessFromDpiAwarenessContext(GetWindowDpiAwarenessContext(hWnd));
+            return awareness == DpiAwareness.Invalid ? null : awareness;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
+    }
 
     internal static void FocusWindow(nint hWnd)
     {
@@ -372,4 +396,12 @@ internal static class NativeMethods
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] internal string DeviceId;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] internal string DeviceKey;
     }
+}
+
+internal enum DpiAwareness
+{
+    Invalid = -1,
+    Unaware = 0,
+    SystemAware = 1,
+    PerMonitorAware = 2
 }

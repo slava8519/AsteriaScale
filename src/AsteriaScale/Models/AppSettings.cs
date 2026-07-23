@@ -29,7 +29,15 @@ public sealed class AppSettings
     public bool TextHookEnabled { get; set; }
 
     public string TextractorDirectory { get; set; } = string.Empty;
+    public List<ManagedDpiOverride> DpiOverrides { get; set; } = [];
     public List<AutomationProfile> Profiles { get; set; } = [];
+}
+
+public sealed class ManagedDpiOverride
+{
+    public string ProcessPath { get; set; } = string.Empty;
+    public string? OriginalCompatibilityLayers { get; set; }
+    public string AppliedCompatibilityLayers { get; set; } = string.Empty;
 }
 
 public static class VisualNovelFrameRates

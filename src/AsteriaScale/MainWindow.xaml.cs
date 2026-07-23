@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly StartupService _startup;
     private readonly HoverTranslationService _hoverTranslation;
     private readonly HardwareService _hardware = new();
+    private readonly DpiCompatibilityService _dpiCompatibility = new();
     private readonly ObservableCollection<WindowInfo> _visibleWindows = [];
     private readonly ObservableCollection<AutomationProfile> _profiles = [];
     private readonly DispatcherTimer _statusTimer;
@@ -120,6 +121,7 @@ public partial class MainWindow : Window
             option => option.Milliseconds == _settings.HoverTranslationDelayMs) ?? HoverDelays[1];
         UpdateTranslationModePresentation();
         UpdateTextHookPresentation();
+        UpdateDpiOptimizationPresentation();
         RefreshProfiles();
         // Control event suppression is only needed while initial values are
         // assigned. Keeping it across asynchronous hardware discovery loses
@@ -226,6 +228,7 @@ public partial class MainWindow : Window
         }
 
         SetStatus(string.Format("Найдено окон: {0}", _allWindows.Count));
+        UpdateDpiOptimizationPresentation();
     }
 
     private void ApplyWindowFilter()
@@ -261,6 +264,140 @@ public partial class MainWindow : Window
     private void OnWindowSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         AddProfileButton.IsEnabled = WindowsList.SelectedItem is WindowInfo;
+        UpdateDpiOptimizationPresentation();
+    }
+
+    private void UpdateDpiOptimizationPresentation()
+    {
+        if (WindowsList.SelectedItem is not WindowInfo window)
+        {
+            DpiOptimizationStatusText.Text = "Выберите окно игры слева";
+            DpiOptimizationButton.Content = "Оптимизировать";
+            DpiOptimizationButton.IsEnabled = false;
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(window.ProcessPath))
+        {
+            DpiOptimizationStatusText.Text = "Windows не разрешила определить путь к EXE";
+            DpiOptimizationButton.Content = "Недоступно";
+            DpiOptimizationButton.IsEnabled = false;
+            return;
+        }
+
+        try
+        {
+            DpiCompatibilityState state = _dpiCompatibility.GetState(
+                _settings,
+                window.ProcessPath,
+                window.Handle);
+
+            if (state.HasExternalConflict)
+            {
+                DpiOptimizationStatusText.Text =
+                    "Параметры совместимости изменены вне Asteria; проверьте свойства EXE вручную";
+                DpiOptimizationButton.Content = "Есть конфликт";
+                DpiOptimizationButton.IsEnabled = false;
+            }
+            else if (state.IsEnabled)
+            {
+                DpiOptimizationStatusText.Text = state.RuntimeIsDpiAware
+                    ? state.CanRestore
+                        ? "Оптимизировано: Windows не растягивает исходный кадр"
+                        : "Оптимизировано вручную: Windows не растягивает исходный кадр"
+                    : "Настройка записана — перезапустите игру, чтобы она вступила в силу";
+                DpiOptimizationButton.Content = state.CanRestore ? "Отменить" : "Уже настроено";
+                DpiOptimizationButton.IsEnabled = state.CanRestore;
+            }
+            else if (state.RuntimeIsDpiAware)
+            {
+                DpiOptimizationStatusText.Text = "Игра уже поддерживает DPI и не требует override";
+                DpiOptimizationButton.Content = "Не требуется";
+                DpiOptimizationButton.IsEnabled = false;
+            }
+            else
+            {
+                DpiOptimizationStatusText.Text = state.IsManaged
+                    ? "Настройка была снята вне Asteria — её можно включить снова"
+                    : "Для старых игр убирает размытие Windows и заметно снижает нагрузку Magpie";
+                DpiOptimizationButton.Content = state.IsManaged ? "Включить снова" : "Оптимизировать";
+                DpiOptimizationButton.IsEnabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            DpiOptimizationStatusText.Text = ex.Message;
+            DpiOptimizationButton.Content = "Недоступно";
+            DpiOptimizationButton.IsEnabled = false;
+        }
+    }
+
+    private async void OnDpiOptimizationClick(object sender, RoutedEventArgs e)
+    {
+        if (WindowsList.SelectedItem is not WindowInfo window || string.IsNullOrWhiteSpace(window.ProcessPath))
+        {
+            return;
+        }
+
+        try
+        {
+            DpiCompatibilityState state = _dpiCompatibility.GetState(
+                _settings,
+                window.ProcessPath,
+                window.Handle);
+            bool disable = state.CanRestore;
+            string prompt = disable
+                ? "Вернуть прежние параметры DPI для этой игры? Изменение применится после её перезапуска."
+                : "Отключить предварительное DPI-растяжение Windows только для этой игры? Текущую игру потребуется перезапустить.";
+            if (System.Windows.MessageBox.Show(
+                    this,
+                    prompt,
+                    "DPI игры",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            DpiOverrideMutation mutation = disable
+                ? _dpiCompatibility.Disable(_settings, window.ProcessPath)
+                : _dpiCompatibility.Enable(_settings, window.ProcessPath);
+            if (!mutation.Changed)
+            {
+                UpdateDpiOptimizationPresentation();
+                return;
+            }
+
+            if (!await PersistSettingsAsync())
+            {
+                mutation.Rollback();
+                UpdateDpiOptimizationPresentation();
+                return;
+            }
+
+            UpdateDpiOptimizationPresentation();
+            string result = disable
+                ? "Прежние параметры DPI восстановлены. Перезапустите игру."
+                : "DPI-оптимизация включена. Закройте и снова запустите игру перед масштабированием.";
+            SetStatus(result);
+            System.Windows.MessageBox.Show(
+                this,
+                result,
+                "Asteria Scale",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("DPI игры: " + ex.Message);
+            System.Windows.MessageBox.Show(
+                this,
+                ex.Message,
+                "Asteria Scale",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            UpdateDpiOptimizationPresentation();
+        }
     }
 
     private async void OnPresetSelectionChanged(object sender, SelectionChangedEventArgs e)

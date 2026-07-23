@@ -65,6 +65,15 @@ try
             SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.Japanese,
             SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.OnDemand,
             SmartDictionaryKeepWarm = false,
+            DpiOverrides =
+            [
+                new ManagedDpiOverride
+                {
+                    ProcessPath = @"C:\Games\Novel\novel.exe",
+                    OriginalCompatibilityLayers = "~ WIN7RTM",
+                    AppliedCompatibilityLayers = "~ WIN7RTM HIGHDPIAWARE"
+                }
+            ],
             Profiles =
             [
                 new AutomationProfile
@@ -116,6 +125,9 @@ try
                SmartDictionaryFallbackModes.Normalize("unsupported") == SmartDictionaryFallbackModes.Never,
             "Smart dictionary fallback normalization failed.");
         Assert(loaded.Profiles.Count == 1 && loaded.Profiles[0].ProcessName == "novel", "Profile was not preserved.");
+        Assert(loaded.DpiOverrides.Count == 1 &&
+               loaded.DpiOverrides[0].OriginalCompatibilityLayers == "~ WIN7RTM",
+            "Managed DPI override backup was not preserved.");
         string json = await File.ReadAllTextAsync(path);
         Assert(!json.Contains("\"Details\"", StringComparison.Ordinal), "Computed UI details must not be stored.");
     });
@@ -143,6 +155,8 @@ try
         Assert(migrated.SmartDictionaryBackend == SmartDictionaryBackends.Cpu,
             "The legacy GPU smart-ranker backend must migrate to CPU.");
     });
+
+    await RunAsync("Per-app DPI compatibility", () => DpiCompatibilityServiceTests.RunAsync(tempRoot));
 
     await RunAsync("Model activity lifecycle gate", ModelActivityGateTests.RunAsync);
 

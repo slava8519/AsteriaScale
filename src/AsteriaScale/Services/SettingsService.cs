@@ -41,6 +41,7 @@ public sealed class SettingsService
             }
 
             settings.Profiles ??= [];
+            settings.DpiOverrides ??= [];
             settings.SelectedPresetId = PresetCatalog.Find(settings.SelectedPresetId).Id;
             settings.VisualNovelFrameRateLimit = VisualNovelFrameRates.Normalize(settings.VisualNovelFrameRateLimit);
             settings.HoverTranslationMode = HoverTranslationModes.Normalize(settings.HoverTranslationMode);

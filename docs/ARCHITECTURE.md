@@ -193,3 +193,12 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 | Кэш умного словаря | `%LOCALAPPDATA%\AsteriaScale\smart-dictionary-cache.v2.json` |
 | Пользовательские словари | `%LOCALAPPDATA%\AsteriaScale\Dictionaries` |
 | Конфиг Magpie | `%LOCALAPPDATA%\Magpie\config\v4\config.json` (+ backup `.before-asteria.json`) |
+| DPI override игр | `HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers`; точные значения до изменения — в `settings.json` |
+
+`DpiCompatibilityService` применяет стандартный per-app флаг `HIGHDPIAWARE`
+только к выбранному игровому EXE. Перед записью он сохраняет полное прежнее
+значение compatibility layers, удаляет конфликтующие `DPIUNAWARE` /
+`GDIDPISCALING` и сохраняет остальные флаги. Откат разрешён только при точном
+совпадении текущего значения с записанным Asteria: внешние изменения никогда
+не затираются. Уже существующий ручной override распознаётся как внешний и не
+переходит под управление приложения.
