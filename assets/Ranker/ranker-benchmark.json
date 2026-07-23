@@ -356,6 +356,174 @@
       "characterIndex": 1,
       "candidates": ["вырежи это", "выключи", "убирайся", "перестань"],
       "expectedTranslation": "перестань"
+    },
+    {
+      "id": "field-pants-clothes",
+      "context": "It didn't seem his pants would dry any time soon.",
+      "target": "pants",
+      "characterIndex": 19,
+      "candidates": ["брюки", "трусы", "пыхтение", "задыхаться"],
+      "expectedTranslation": "брюки"
+    },
+    {
+      "id": "field-tug-arm",
+      "context": "She tugged at his arm.",
+      "target": "tugged",
+      "characterIndex": 4,
+      "candidates": ["потянуть", "дёрнуть", "отбуксировать"],
+      "expectedTranslation": "дёрнуть"
+    },
+    {
+      "id": "field-while-clause",
+      "context": "Wait here while I call the manager.",
+      "target": "while",
+      "characterIndex": 10,
+      "candidates": ["время", "пока", "хотя"],
+      "expectedTranslation": "пока"
+    },
+    {
+      "id": "field-while-noun",
+      "context": "I waited for a while before answering.",
+      "target": "while",
+      "characterIndex": 15,
+      "candidates": ["время", "пока", "хотя"],
+      "expectedTranslation": "время"
+    },
+    {
+      "id": "field-that-determiner",
+      "context": "That book belongs to me.",
+      "target": "That",
+      "characterIndex": 0,
+      "candidates": ["тот", "что", "чтобы", "настолько"],
+      "expectedTranslation": "тот"
+    },
+    {
+      "id": "field-that-conjunction",
+      "context": "I know that he left before dawn.",
+      "target": "that",
+      "characterIndex": 7,
+      "candidates": ["тот", "что", "чтобы", "настолько"],
+      "expectedTranslation": "что"
+    },
+    {
+      "id": "field-do-lexical",
+      "context": "I do the work every morning.",
+      "target": "do",
+      "characterIndex": 2,
+      "candidates": ["делать", "не", "же", "вечеринка"],
+      "expectedTranslation": "делать"
+    },
+    {
+      "id": "field-do-auxiliary",
+      "context": "I do not know the answer.",
+      "target": "do",
+      "characterIndex": 2,
+      "candidates": ["делать", "не", "же", "вечеринка"],
+      "expectedTranslation": "не"
+    },
+    {
+      "id": "field-first-time",
+      "context": "It was the first time she had seen the ocean.",
+      "target": "first time",
+      "characterIndex": 11,
+      "candidates": ["первый раз", "первый случай полового акта"],
+      "expectedTranslation": "первый раз"
+    },
+    {
+      "id": "field-get-that-a-lot",
+      "context": "I get that a lot.",
+      "target": "get",
+      "characterIndex": 2,
+      "candidates": ["получать", "понимать", "часто это слышать"],
+      "expectedTranslation": "я часто это слышу"
+    },
+    {
+      "id": "field-ago-duration",
+      "context": "It happened three days ago.",
+      "target": "ago",
+      "characterIndex": 23,
+      "candidates": ["назад", "тому назад"],
+      "expectedTranslation": "назад"
+    },
+    {
+      "id": "field-save-command",
+      "context": "Save",
+      "target": "Save",
+      "characterIndex": 0,
+      "candidates": ["сохранить", "спасать", "экономить"],
+      "expectedTranslation": "сохранить"
+    },
+    {
+      "id": "field-the-other-day",
+      "context": "It happened the other day.",
+      "target": "the other day",
+      "characterIndex": 12,
+      "candidates": ["на днях", "сегодня", "в другой день"],
+      "expectedTranslation": "на днях"
+    },
+    {
+      "id": "field-do-something",
+      "context": "You want me to do something funny?",
+      "target": "do something",
+      "characterIndex": 15,
+      "candidates": ["сделать что-нибудь", "ничего не делать"],
+      "expectedTranslation": "сделать что-нибудь"
+    },
+    {
+      "id": "field-tug-at-phrase",
+      "context": "Please tug at my sleeve.",
+      "target": "tug at",
+      "characterIndex": 7,
+      "candidates": ["дёргать за", "тянуть за", "отбуксировать"],
+      "expectedTranslation": "дёргать за"
+    },
+    {
+      "id": "field-who-cares",
+      "context": "Hey, who cares? Hurry up.",
+      "target": "who cares",
+      "characterIndex": 5,
+      "candidates": ["кому какое дело", "какая разница", "кто заботится"],
+      "expectedTranslation": "кому какое дело"
+    },
+    {
+      "id": "field-er-hesitation",
+      "context": "Er... maybe some other time.",
+      "target": "Er",
+      "characterIndex": 0,
+      "candidates": ["э-э", "эй"],
+      "expectedTranslation": "э-э"
+    },
+    {
+      "id": "field-tell-a-joke",
+      "context": "Tell a joke.",
+      "target": "Tell a joke",
+      "characterIndex": 0,
+      "candidates": ["рассказать шутку", "сказать шутку"],
+      "expectedTranslation": "рассказать шутку"
+    },
+    {
+      "id": "field-on-behalf-of",
+      "context": "On behalf of everyone, thank you.",
+      "target": "On behalf of",
+      "characterIndex": 0,
+      "candidates": ["от имени", "в от имени"],
+      "expectedTranslation": "от имени"
+    },
+    {
+      "id": "field-let-us-inside",
+      "context": "Let us inside already!",
+      "target": "Let us inside",
+      "characterIndex": 0,
+      "candidates": ["впусти нас", "пусти нас внутрь", "мы уже входим"],
+      "expectedTranslation": "впусти нас"
+    },
+    {
+      "id": "field-any-time-soon",
+      "context": "It won't dry any time soon.",
+      "target": "any time soon",
+      "characterIndex": 13,
+      "candidates": ["в ближайшее время", "в любое время скоро"],
+      "expectedTranslation": "в ближайшее время"
     }
   ]
 }

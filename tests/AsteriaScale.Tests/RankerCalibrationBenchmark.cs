@@ -15,6 +15,10 @@ internal static class RankerCalibrationBenchmark
     // frozen confirmation sets. The gate detects real selection regressions
     // without changing the runtime's margin-only abstention contract.
     private const double MinimumAcceptedDecisionPrecision = 0.90;
+    private const int MinimumBenchmarkCaseCount = 20;
+    private const double MinimumExpectedInventoryCoverage = 0.70;
+    private const double MinimumDecisionCoverage = 0.45;
+    private const double MinimumEndToEndCorrectCoverage = 0.45;
 
     private sealed record BenchmarkCase(
         string Id,
@@ -76,16 +80,27 @@ internal static class RankerCalibrationBenchmark
         int skippedNoInventory = 0;
         int skippedPhrase = 0;
         int autoResolved = 0;
+        int deterministicResolved = 0;
+        int deterministicCorrect = 0;
         foreach (BenchmarkCase benchmarkCase in cases)
         {
             DictionaryLookupResult lookup = await dictionary.LookupWithSenseMetadataAsync(
                 benchmarkCase.Context,
                 benchmarkCase.Target,
                 benchmarkCase.CharacterIndex);
-            if (lookup.Found && lookup.IsPhrase)
+            if (lookup.Found &&
+                lookup.IsPhrase &&
+                (lookup.IsTrustedPhrase || !lookup.HasMultipleMeanings))
             {
                 skippedPhrase++;
-                Console.WriteLine($"  {benchmarkCase.Id,-24} phrase-bypass ({lookup.Source})");
+                deterministicResolved++;
+                bool phraseCorrect = TranslationContainsExpected(
+                    lookup.Translation,
+                    benchmarkCase.ExpectedTranslation);
+                deterministicCorrect += phraseCorrect ? 1 : 0;
+                Console.WriteLine(
+                    $"  {benchmarkCase.Id,-24} phrase-bypass ({lookup.Source}) " +
+                    $"correct={(phraseCorrect ? "yes" : "NO")}");
                 continue;
             }
 
@@ -111,9 +126,21 @@ internal static class RankerCalibrationBenchmark
             if (plan.Outcomes.Count < 2)
             {
                 autoResolved++;
+                SmartDictionaryRankerOutcome? outcome = plan.Outcomes.FirstOrDefault();
+                if (outcome is not null)
+                {
+                    deterministicResolved++;
+                    bool autoCorrect = RussianLabelsMatch(
+                        outcome.Translation,
+                        NormalizeRussian(benchmarkCase.ExpectedTranslation));
+                    deterministicCorrect += autoCorrect ? 1 : 0;
+                }
                 Console.WriteLine(
                     $"  {benchmarkCase.Id,-24} auto-resolved without the model " +
-                    $"({plan.Outcomes.FirstOrDefault()?.Translation ?? "<none>"})");
+                    $"({outcome?.Translation ?? "<none>"})" +
+                    (outcome is null
+                        ? string.Empty
+                        : $" correct={(RussianLabelsMatch(outcome.Translation, NormalizeRussian(benchmarkCase.ExpectedTranslation)) ? "yes" : "NO")}"));
                 continue;
             }
 
@@ -183,11 +210,17 @@ internal static class RankerCalibrationBenchmark
 
         Console.WriteLine();
         int coveredCount = results.Count(result => result.ExpectedCovered);
+        int decidedCount = results.Count(result => result.ExpectedCovered && !result.Abstained);
+        int correctCount = results.Count(result => result.Correct == true);
         Console.WriteLine(
             $"  cases={cases.Length} ranked={results.Count} phrase-bypass={skippedPhrase} " +
             $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
         Console.WriteLine(
             $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
+        Console.WriteLine(
+            $"  deterministic resolutions: {deterministicCorrect}/{deterministicResolved} correct; " +
+            $"end-to-end correct coverage: " +
+            $"{correctCount + deterministicCorrect}/{cases.Length}");
         if (selectLatencies.Count > 0)
         {
             long[] ordered = selectLatencies.Select(entry => entry.Milliseconds)
@@ -219,8 +252,10 @@ internal static class RankerCalibrationBenchmark
             cases.Length,
             results.Count,
             coveredCount,
-            results.Count(result => result.ExpectedCovered && !result.Abstained),
-            results.Count(result => result.Correct == true));
+            decidedCount,
+            correctCount,
+            deterministicResolved,
+            deterministicCorrect);
         }
         finally
         {
@@ -240,7 +275,9 @@ internal static class RankerCalibrationBenchmark
         int rankedCount,
         int coveredCount,
         int decidedCount,
-        int correctCount)
+        int correctCount,
+        int deterministicResolvedCount,
+        int deterministicCorrectCount)
     {
         if (caseCount <= 0)
         {
@@ -271,6 +308,23 @@ internal static class RankerCalibrationBenchmark
                 "The ranker benchmark reported inconsistent correctness counts.");
         }
 
+        if (rankedCount > caseCount || coveredCount > rankedCount ||
+            decidedCount > coveredCount || deterministicResolvedCount < 0 ||
+            deterministicResolvedCount > caseCount - rankedCount ||
+            deterministicCorrectCount < 0 ||
+            deterministicCorrectCount > deterministicResolvedCount)
+        {
+            throw new InvalidDataException(
+                "The ranker benchmark reported inconsistent coverage counts.");
+        }
+
+        if (caseCount < MinimumBenchmarkCaseCount)
+        {
+            throw new InvalidOperationException(
+                $"Ranker benchmark has only {caseCount} cases; at least " +
+                $"{MinimumBenchmarkCaseCount} are required by the quality gate.");
+        }
+
         double precision = correctCount / (double)decidedCount;
         if (precision < MinimumAcceptedDecisionPrecision)
         {
@@ -278,6 +332,34 @@ internal static class RankerCalibrationBenchmark
                 $"Ranker accepted-decision precision {precision:P1} is below the " +
                 $"{MinimumAcceptedDecisionPrecision:P0} quality gate " +
                 $"({correctCount}/{decidedCount}).");
+        }
+
+        double inventoryCoverage = coveredCount / (double)rankedCount;
+        if (inventoryCoverage < MinimumExpectedInventoryCoverage)
+        {
+            throw new InvalidOperationException(
+                $"Ranker expected-inventory coverage {inventoryCoverage:P1} is below the " +
+                $"{MinimumExpectedInventoryCoverage:P0} quality gate " +
+                $"({coveredCount}/{rankedCount}).");
+        }
+
+        double decisionCoverage = decidedCount / (double)coveredCount;
+        if (decisionCoverage < MinimumDecisionCoverage)
+        {
+            throw new InvalidOperationException(
+                $"Ranker labeled-decision coverage {decisionCoverage:P1} is below the " +
+                $"{MinimumDecisionCoverage:P0} quality gate " +
+                $"({decidedCount}/{coveredCount}).");
+        }
+
+        int endToEndCorrect = correctCount + deterministicCorrectCount;
+        double endToEndCorrectCoverage = endToEndCorrect / (double)caseCount;
+        if (endToEndCorrectCoverage < MinimumEndToEndCorrectCoverage)
+        {
+            throw new InvalidOperationException(
+                $"Ranker end-to-end correct coverage {endToEndCorrectCoverage:P1} is below the " +
+                $"{MinimumEndToEndCorrectCoverage:P0} quality gate " +
+                $"({endToEndCorrect}/{caseCount}).");
         }
     }
 
@@ -347,6 +429,15 @@ internal static class RankerCalibrationBenchmark
         }
 
         return prefix >= (limit <= 5 ? 4 : 5);
+    }
+
+    private static bool TranslationContainsExpected(
+        string translation,
+        string expectedTranslation)
+    {
+        string expected = NormalizeRussian(expectedTranslation);
+        return NpuDictionarySelectorService.SplitMeanings(translation)
+            .Any(candidate => RussianLabelsMatch(candidate, expected));
     }
 
     private static string NormalizeRussian(string value) =>

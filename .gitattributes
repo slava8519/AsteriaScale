@@ -10,6 +10,9 @@
 *.json text
 
 *.tsv.gz binary
+tools/dictionary-source/vn-lexicon.tsv text eol=lf
+tools/dictionary-source/vn-sources.lock.json text eol=lf
+assets/Dictionaries/vn-build-manifest.json text eol=lf
 *.gz binary
 *.png binary
 *.ico binary

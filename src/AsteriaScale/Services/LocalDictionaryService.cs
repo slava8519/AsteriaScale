@@ -17,6 +17,8 @@ public sealed record DictionaryLookupResult(
     public IReadOnlyList<DictionarySenseCandidate> SenseCandidates { get; init; } =
         Array.Empty<DictionarySenseCandidate>();
     public string ContextTranslation { get; init; } = string.Empty;
+    public bool IsTrustedPhrase { get; init; }
+    public bool HasMultipleMeanings { get; init; }
     internal string MatchedEnglishKey { get; init; } = string.Empty;
 }
 
@@ -26,11 +28,19 @@ public sealed record DictionarySenseCandidate(
     string Register,
     string PartOfSpeech = "");
 
+internal sealed record ScaffoldDictionaryMatch(
+    string Source,
+    string MatchedEnglishKey,
+    string Translation,
+    int CharacterIndex,
+    int CharacterLength);
+
 public sealed partial class LocalDictionaryService
 {
     public const string EngineLabel = "NPU OCR  •  СЛОВАРЬ";
     private const int MaximumGeneralPhraseTokens = 3;
     private const int MaximumLexicalPhraseTokens = 6;
+    private const int MaximumTrustedPhraseTokens = 10;
     // The merged value only feeds a 380-character tooltip and an
     // eight-candidate SplitMeanings ranking, so a deeper tail is dead weight.
     private const int MaximumMergedMeaningCount = 32;
@@ -48,6 +58,8 @@ public sealed partial class LocalDictionaryService
     // ordinary dictionaries; only the sense-blob index below is frozen.
     private Dictionary<string, string> _english = new(StringComparer.Ordinal);
     private Dictionary<string, string> _japanese = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _scaffoldEnglishTranslations =
+        new(StringComparer.Ordinal);
     private Dictionary<string, string> _trustedEnglishExact = new(StringComparer.Ordinal);
     // Sense candidates are stored as one compact UTF-8 blob per key and decoded
     // only for the hovered key: English definitions are ASCII-heavy, so this
@@ -56,10 +68,12 @@ public sealed partial class LocalDictionaryService
         FrozenDictionary<string, byte[]>.Empty;
     private HashSet<string> _userEnglishKeys = new(StringComparer.Ordinal);
     private HashSet<string> _preferredEnglishSurfaceForms = new(StringComparer.Ordinal);
+    private HashSet<string> _softEnglishSurfaceForms = new(StringComparer.Ordinal);
     private HashSet<string> _lexicalEnglishPhrases = new(StringComparer.Ordinal);
     private Dictionary<string, string> _dialogueEnglishTranslations = new(StringComparer.Ordinal);
     private Dictionary<string, string> _dialogueJapaneseTranslations = new(StringComparer.Ordinal);
     private int _maximumJapaneseLength = 1;
+    private int _maximumEnglishScaffoldTokens = 1;
     private int _sourceCount;
     private string _versionToken = "unloaded";
     private string _senseMetadataVersionToken = string.Empty;
@@ -134,6 +148,7 @@ public sealed partial class LocalDictionaryService
 
     public int EntryCount =>
         _english.Count + _japanese.Count +
+        _scaffoldEnglishTranslations.Count +
         _dialogueEnglishTranslations.Count + _dialogueJapaneseTranslations.Count;
     public int SourceCount => _sourceCount;
     internal int SenseMetadataKeyCount => _englishSenseMetadata.Count;
@@ -212,14 +227,17 @@ public sealed partial class LocalDictionaryService
 
             _english = new Dictionary<string, string>(StringComparer.Ordinal);
             _japanese = new Dictionary<string, string>(StringComparer.Ordinal);
+            _scaffoldEnglishTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
             _trustedEnglishExact = new Dictionary<string, string>(StringComparer.Ordinal);
             _englishSenseMetadata = FrozenDictionary<string, byte[]>.Empty;
             _userEnglishKeys = new HashSet<string>(StringComparer.Ordinal);
             _preferredEnglishSurfaceForms = new HashSet<string>(StringComparer.Ordinal);
+            _softEnglishSurfaceForms = new HashSet<string>(StringComparer.Ordinal);
             _lexicalEnglishPhrases = new HashSet<string>(StringComparer.Ordinal);
             _dialogueEnglishTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
             _dialogueJapaneseTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
             _maximumJapaneseLength = 1;
+            _maximumEnglishScaffoldTokens = 1;
             _sourceCount = 0;
             SenseMetadataCandidateCount = 0;
             _versionToken = "unloaded";
@@ -329,6 +347,85 @@ public sealed partial class LocalDictionaryService
             : null;
     }
 
+    internal async Task<IReadOnlyList<ScaffoldDictionaryMatch>>
+        FindEnglishScaffoldMatchesAsync(
+            string sentence,
+            CancellationToken cancellationToken = default)
+    {
+        await LoadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_scaffoldEnglishTranslations.Count == 0 || string.IsNullOrWhiteSpace(sentence))
+        {
+            return Array.Empty<ScaffoldDictionaryMatch>();
+        }
+
+        MatchCollection tokens = EnglishLookupTokenRegex().Matches(sentence);
+        if (tokens.Count == 0)
+        {
+            return Array.Empty<ScaffoldDictionaryMatch>();
+        }
+
+        List<ScaffoldDictionaryMatch> matches = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        for (int start = 0; start < tokens.Count; start++)
+        {
+            int maximumLength = Math.Min(
+                _maximumEnglishScaffoldTokens,
+                tokens.Count - start);
+            bool matched = false;
+            for (int length = maximumLength; length >= 1 && !matched; length--)
+            {
+                string exactKey = NormalizeEnglish(string.Join(
+                    " ",
+                    Enumerable.Range(start, length).Select(index => tokens[index].Value)));
+                string rawPhrase = ExtractEnglishPhrase(sentence, tokens, start, length);
+                string rawKey = NormalizeEnglish(rawPhrase);
+                IEnumerable<string> lookupKeys = rawKey.Contains(' ') &&
+                                                 !string.Equals(
+                                                     rawKey,
+                                                     exactKey,
+                                                     StringComparison.Ordinal)
+                    ? new[] { rawKey, exactKey }
+                    : new[] { exactKey };
+
+                foreach (string lookupKey in lookupKeys.Concat(
+                             CanonicalEnglishPhraseCandidates(tokens, start, length, exactKey)))
+                {
+                    if (!_scaffoldEnglishTranslations.TryGetValue(
+                            lookupKey,
+                            out string? translation))
+                    {
+                        continue;
+                    }
+
+                    string occurrenceKey = lookupKey + "\u001f" + tokens[start].Index;
+                    if (seen.Add(occurrenceKey))
+                    {
+                        int characterLength =
+                            tokens[start + length - 1].Index +
+                            tokens[start + length - 1].Length -
+                            tokens[start].Index;
+                        matches.Add(new ScaffoldDictionaryMatch(
+                            TrimEnglishDisplayPunctuation(rawPhrase),
+                            lookupKey,
+                            translation,
+                            tokens[start].Index,
+                            characterLength));
+                    }
+
+                    start += length - 1;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+
+        return matches.Count == 0
+            ? Array.Empty<ScaffoldDictionaryMatch>()
+            : Array.AsReadOnly(matches.ToArray());
+    }
+
     internal bool IsUserEnglishKey(string source) =>
         _userEnglishKeys.Contains(NormalizeEnglish(source));
 
@@ -353,8 +450,10 @@ public sealed partial class LocalDictionaryService
         LoadedDictionary japanese = await japaneseTask;
         _english = english.Entries;
         _japanese = japanese.Entries;
+        _scaffoldEnglishTranslations = english.ScaffoldTranslations;
         _userEnglishKeys = english.UserKeys;
         _preferredEnglishSurfaceForms = english.PreferredSurfaceForms;
+        _softEnglishSurfaceForms = english.SoftSurfaceForms;
         _lexicalEnglishPhrases = english.LexicalPhrases;
         _dialogueEnglishTranslations = english.DialogueTranslations;
         _dialogueJapaneseTranslations = japanese.DialogueTranslations;
@@ -363,6 +462,11 @@ public sealed partial class LocalDictionaryService
         _maximumJapaneseLength = _japanese.Count == 0
             ? 1
             : Math.Min(32, _japanese.Keys.Max(key => key.Length));
+        _maximumEnglishScaffoldTokens = _scaffoldEnglishTranslations.Count == 0
+            ? 1
+            : Math.Min(
+                10,
+                _scaffoldEnglishTranslations.Keys.Max(key => key.Count(character => character == ' ') + 1));
     }
 
     private async Task LoadTrustedEnglishCoreAsync()
@@ -372,11 +476,16 @@ public sealed partial class LocalDictionaryService
 
         string[] files = DiscoverFiles(bundledDirectory, userDirectory, "eng-rus")
             .Where(path =>
-                string.Equals(
+            {
+                DictionaryFileRole role = GetDictionaryFileRole(path);
+                bool userLayer = string.Equals(
                     Path.GetDirectoryName(path),
                     userDirectory,
-                    StringComparison.OrdinalIgnoreCase) ||
-                Path.GetFileName(path).Contains("-vn.", StringComparison.OrdinalIgnoreCase))
+                    StringComparison.OrdinalIgnoreCase);
+                return role == DictionaryFileRole.VnHard ||
+                       userLayer &&
+                       (role is DictionaryFileRole.Broad or DictionaryFileRole.VnSoft);
+            })
             .ToArray();
         Dictionary<string, string> entries = new(StringComparer.Ordinal);
         HashSet<string> userKeys = new(StringComparer.Ordinal);
@@ -475,7 +584,9 @@ public sealed partial class LocalDictionaryService
         Dictionary<string, string> entries = new(StringComparer.Ordinal);
         HashSet<string> userKeys = new(StringComparer.Ordinal);
         HashSet<string> preferredSurfaceForms = new(StringComparer.Ordinal);
+        HashSet<string> softSurfaceForms = new(StringComparer.Ordinal);
         HashSet<string> lexicalPhrases = new(StringComparer.Ordinal);
+        Dictionary<string, string> scaffoldTranslations = new(StringComparer.Ordinal);
         Dictionary<string, string> dialogueTranslations = new(StringComparer.Ordinal);
         bool japaneseLayer = prefix.StartsWith("jpn", StringComparison.OrdinalIgnoreCase);
         foreach (string path in files)
@@ -485,20 +596,18 @@ public sealed partial class LocalDictionaryService
                 userDirectory,
                 StringComparison.OrdinalIgnoreCase);
             string fileName = Path.GetFileName(path);
-            bool curatedLayer = fileName
-                .Contains("-vn.", StringComparison.OrdinalIgnoreCase);
-            bool dialogueLayer = fileName
-                .Contains("-dialogue.", StringComparison.OrdinalIgnoreCase);
+            DictionaryFileRole role = GetDictionaryFileRole(fileName);
             await MergeFileAsync(
                 path,
                 entries,
                 userKeys,
                 preferredSurfaceForms,
+                softSurfaceForms,
                 lexicalPhrases,
+                scaffoldTranslations,
                 dialogueTranslations,
                 userLayer,
-                curatedLayer,
-                dialogueLayer,
+                role,
                 japaneseLayer);
         }
 
@@ -523,7 +632,9 @@ public sealed partial class LocalDictionaryService
             files.Count,
             userKeys,
             preferredSurfaceForms,
+            softSurfaceForms,
             lexicalPhrases,
+            scaffoldTranslations,
             dialogueTranslations,
             ComputeVersionToken(files));
     }
@@ -611,6 +722,41 @@ public sealed partial class LocalDictionaryService
                name.EndsWith("-senses.tsv.gz", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static DictionaryFileRole GetDictionaryFileRole(string path)
+    {
+        string name = Path.GetFileName(path);
+        if (IsSenseMetadataFile(name))
+        {
+            return DictionaryFileRole.SenseMetadata;
+        }
+
+        if (name.EndsWith("-scaffold.tsv", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("-scaffold.tsv.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return DictionaryFileRole.Scaffold;
+        }
+
+        if (name.EndsWith("-dialogue.tsv", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("-dialogue.tsv.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return DictionaryFileRole.ExactDialogue;
+        }
+
+        if (name.EndsWith("-vn-soft.tsv", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("-vn-soft.tsv.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return DictionaryFileRole.VnSoft;
+        }
+
+        if (name.EndsWith("-vn.tsv", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("-vn.tsv.gz", StringComparison.OrdinalIgnoreCase))
+        {
+            return DictionaryFileRole.VnHard;
+        }
+
+        return DictionaryFileRole.Broad;
+    }
+
     private static int DictionaryPriority(string path, string prefix)
     {
         string name = Path.GetFileName(path);
@@ -620,7 +766,12 @@ public sealed partial class LocalDictionaryService
             return 0;
         }
 
-        return name.Contains("-vn.", StringComparison.OrdinalIgnoreCase) ? 1 : 2;
+        return GetDictionaryFileRole(name) switch
+        {
+            DictionaryFileRole.VnHard => 1,
+            DictionaryFileRole.Scaffold => 1,
+            _ => 2
+        };
     }
 
     private static async Task MergeFileAsync(
@@ -628,11 +779,12 @@ public sealed partial class LocalDictionaryService
         Dictionary<string, string> entries,
         HashSet<string> userKeys,
         HashSet<string> preferredSurfaceForms,
+        HashSet<string> softSurfaceForms,
         HashSet<string> lexicalPhrases,
+        Dictionary<string, string> scaffoldTranslations,
         Dictionary<string, string> dialogueTranslations,
         bool userLayer,
-        bool curatedLayer,
-        bool dialogueLayer,
+        DictionaryFileRole role,
         bool japaneseLayer)
     {
         await using FileStream file = File.OpenRead(path);
@@ -654,7 +806,7 @@ public sealed partial class LocalDictionaryService
             // stored but never found.
             string key = japaneseLayer
                 ? NormalizeJapanese(line[..separator])
-                : dialogueLayer
+                : role == DictionaryFileRole.ExactDialogue
                     ? NormalizeEnglishSentenceKey(line[..separator])
                     : NormalizeEnglish(line[..separator]);
             if (key.Length == 0)
@@ -663,7 +815,7 @@ public sealed partial class LocalDictionaryService
             }
 
             string value = line[(separator + 1)..];
-            if (dialogueLayer)
+            if (role == DictionaryFileRole.ExactDialogue)
             {
                 // Dialogue rows are sentence context, never lexical phrases.
                 // Keeping them outside the main map prevents a short Tatoeba
@@ -672,9 +824,28 @@ public sealed partial class LocalDictionaryService
                 continue;
             }
 
+            if (role == DictionaryFileRole.Scaffold)
+            {
+                if (userLayer)
+                {
+                    scaffoldTranslations[key] = value;
+                }
+                else
+                {
+                    scaffoldTranslations.TryAdd(key, value);
+                }
+
+                continue;
+            }
+
             if (key.Contains(' '))
             {
                 lexicalPhrases.Add(key);
+            }
+
+            if (!userLayer && role == DictionaryFileRole.VnSoft)
+            {
+                softSurfaceForms.Add(key);
             }
 
             if (userLayer)
@@ -683,7 +854,7 @@ public sealed partial class LocalDictionaryService
                 userKeys.Add(key);
                 preferredSurfaceForms.Add(key);
             }
-            else if (curatedLayer)
+            else if (role == DictionaryFileRole.VnHard)
             {
                 if (!userKeys.Contains(key))
                 {
@@ -1019,7 +1190,7 @@ public sealed partial class LocalDictionaryService
                 dialogueTranslation);
         }
 
-        int maximumTokens = Math.Min(10, tokens.Count);
+        int maximumTokens = Math.Min(MaximumTrustedPhraseTokens, tokens.Count);
         for (int length = maximumTokens; length >= 2; length--)
         {
             int firstStart = Math.Max(0, tokenIndex - length + 1);
@@ -1090,12 +1261,35 @@ public sealed partial class LocalDictionaryService
 
         string word = hoveredToken.Value;
         bool preferredSurface = _preferredEnglishSurfaceForms.Contains(normalizedWord);
-        string[] candidates = EnglishCandidates(word, false).ToArray();
+        bool softSurface = _softEnglishSurfaceForms.Contains(normalizedWord);
+        // VN-hard rows are exact display repairs, not lemma declarations. Letting
+        // suffix heuristics derive them turns ordinary words such as "lolling"
+        // into the chat acronym "lol"; explicit user entries retain that authority.
+        string[] candidates = EnglishCandidates(word, false)
+            .Where(candidate =>
+                string.Equals(candidate, normalizedWord, StringComparison.Ordinal) ||
+                !_preferredEnglishSurfaceForms.Contains(candidate) ||
+                _userEnglishKeys.Contains(candidate))
+            .ToArray();
         string[] preferredLemmaCandidates = preferredSurface
             ? []
             : candidates
                 .Skip(1)
-                .Where(_preferredEnglishSurfaceForms.Contains)
+                .Where(candidate =>
+                    _preferredEnglishSurfaceForms.Contains(candidate) &&
+                    _userEnglishKeys.Contains(candidate))
+                .ToArray();
+        string[] softLemmaCandidates = preferredSurface || softSurface
+            ? []
+            : candidates
+                .Skip(1)
+                .Where(candidate =>
+                    _softEnglishSurfaceForms.Contains(candidate) &&
+                    CanPromoteSoftLemma(
+                        normalizedWord,
+                        candidate,
+                        tokens,
+                        tokenIndex))
                 .ToArray();
         IEnumerable<string> orderedCandidates;
         if (preferredLemmaCandidates.Length > 0)
@@ -1106,11 +1300,21 @@ public sealed partial class LocalDictionaryService
             orderedCandidates = preferredLemmaCandidates.Concat(
                 candidates.Where(candidate => !preferredLemmas.Contains(candidate)));
         }
+        else if (softLemmaCandidates.Length > 0)
+        {
+            HashSet<string> softLemmas = new(
+                softLemmaCandidates,
+                StringComparer.Ordinal);
+            orderedCandidates = softLemmaCandidates.Concat(
+                candidates.Where(candidate => !softLemmas.Contains(candidate)));
+        }
         else
         {
             bool preferLemma = !preferredSurface &&
                                ShouldPreferEnglishLemma(tokens, tokenIndex);
-            orderedCandidates = EnglishCandidates(word, preferLemma);
+            orderedCandidates = preferLemma && candidates.Length > 1
+                ? candidates.Skip(1).Concat(candidates.Take(1))
+                : candidates;
         }
 
         foreach (string candidate in orderedCandidates)
@@ -1337,6 +1541,35 @@ public sealed partial class LocalDictionaryService
         return progressive || perfect;
     }
 
+    private static bool CanPromoteSoftLemma(
+        string surface,
+        string lemma,
+        MatchCollection tokens,
+        int tokenIndex)
+    {
+        // Soft data may grow automatically, so it must not turn an ambiguous
+        // irregular homograph such as "saw" into "see" ahead of an exact broad
+        // entry. Only regular verbal morphology with explicit form evidence is
+        // safe enough to expose the reviewed lemma and its aligned senses.
+        if (IrregularEnglish.ContainsKey(surface))
+        {
+            return false;
+        }
+
+        if (surface.EndsWith("ing", StringComparison.Ordinal))
+        {
+            return ShouldPreferEnglishLemma(tokens, tokenIndex) &&
+                   EnglishCandidates(surface, false)
+                       .Skip(1)
+                       .Contains(lemma, StringComparer.Ordinal);
+        }
+
+        return EnglishContextLexicon.IsLikelyPastForm(surface) &&
+               EnglishCandidates(surface, false)
+                   .Skip(1)
+                   .Contains(lemma, StringComparer.Ordinal);
+    }
+
     private static IEnumerable<string> CandidateSequence(string word)
     {
         yield return word;
@@ -1504,6 +1737,11 @@ public sealed partial class LocalDictionaryService
         {
             SenseCandidates = senses,
             ContextTranslation = contextTranslation ?? string.Empty,
+            IsTrustedPhrase = isPhrase &&
+                              matchedEnglishKey is not null &&
+                              _preferredEnglishSurfaceForms.Contains(matchedEnglishKey),
+            HasMultipleMeanings =
+                NpuDictionarySelectorService.SplitMeanings(translation).Length > 1,
             MatchedEnglishKey = matchedEnglishKey ?? string.Empty
         };
     }
@@ -1538,7 +1776,19 @@ public sealed partial class LocalDictionaryService
         int SourceCount,
         HashSet<string> UserKeys,
         HashSet<string> PreferredSurfaceForms,
+        HashSet<string> SoftSurfaceForms,
         HashSet<string> LexicalPhrases,
+        Dictionary<string, string> ScaffoldTranslations,
         Dictionary<string, string> DialogueTranslations,
         string VersionToken);
+
+    private enum DictionaryFileRole
+    {
+        Broad,
+        VnSoft,
+        VnHard,
+        SenseMetadata,
+        Scaffold,
+        ExactDialogue
+    }
 }

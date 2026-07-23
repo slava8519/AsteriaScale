@@ -258,6 +258,25 @@ internal static class LocalDictionaryNormalizationTests
                 "mu\tмю"
             ]);
         await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-vn-scaffold.tsv"),
+            [
+                "lantern\tфонарь",
+                "on the verge of\tна грани",
+                "party was a total blast\tвечеринка",
+                "alpha\tальфа",
+                "beta\tбета",
+                "gamma\tгамма",
+                "delta\tдельта",
+                "epsilon\tэпсилон",
+                "zeta\tдзета",
+                "eta\tэта",
+                "theta\tтета",
+                "iota\tйота",
+                "kappa\tкаппа",
+                "lambda\tлямбда",
+                "mu\tмю"
+            ]);
+        await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus-senses.tsv"),
             [
                 "lantern\tфонарь\ta portable light protected by a case\tcommon\tnoun",

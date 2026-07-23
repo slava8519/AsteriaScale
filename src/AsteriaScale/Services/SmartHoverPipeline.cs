@@ -146,18 +146,24 @@ internal sealed class SmartHoverPipeline : IDisposable
                 recognized.CharacterIndex);
         string displaySource = targetSpan.Source;
         bool displayIsPhrase = lookup.IsPhrase || targetSpan.IsPhrase;
-        bool englishWord =
-            !lookup.IsPhrase &&
+        bool englishLookup =
             string.Equals(lookup.Language, "EN", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(
                 ResolveSmartSourceLanguage(lookup.Language),
                 "English",
                 StringComparison.Ordinal);
+        bool englishWord = !lookup.IsPhrase && englishLookup;
+        bool ambiguousBroadPhrase =
+            lookup.IsPhrase &&
+            englishLookup &&
+            !lookup.IsTrustedPhrase &&
+            lookup.HasMultipleMeanings;
+        bool rankableEnglishTarget = englishWord || ambiguousBroadPhrase;
 
         // Curated/flat entries have no aligned English glosses, but the cheap
         // context rules are still useful (for example teetering ... verge).
         // Run them before falling back to a multi-chip dictionary card.
-        if (englishWord && lookup.SenseCandidates.Count == 0)
+        if (rankableEnglishTarget && lookup.SenseCandidates.Count == 0)
         {
             string[] flatTranslations =
                 NpuDictionarySelectorService.SplitMeanings(lookup.Translation);
@@ -199,13 +205,13 @@ internal sealed class SmartHoverPipeline : IDisposable
             }
         }
 
-        // GlossBERT is an English single-word sense disambiguator. Curated
-        // phrases already contain their intended translation and must never be
-        // broken into an artificial word-level ranking request.
-        bool rankableEnglishWord =
-            englishWord &&
+        // Trusted phrases and clean one-meaning broad phrases are already final.
+        // Only an ambiguous broad phrase enters the same definition-aligned
+        // routing as a word; curated overrides must never be reinterpreted.
+        bool hasRankableEnglishSenses =
+            rankableEnglishTarget &&
             lookup.SenseCandidates.Count > 0;
-        if (!rankableEnglishWord)
+        if (!hasRankableEnglishSenses)
         {
             return LocalSmartResult(lookup, displaySource, displayIsPhrase);
         }

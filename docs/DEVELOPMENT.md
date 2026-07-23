@@ -47,8 +47,8 @@ Smoke-набор — консольная программа без тестов
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu]` | Бенчмарк GlossBERT через полный продакшн-конвейер |
 | `--translation-benchmark <set.json> [engine] [--ranker-base <dir>] [--dump <file>] [--benchmark-only]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность и scaffold/GlossBERT-диагностика. Требует живой Foundry Local; `--benchmark-only` не запускает default smoke/Magpie |
 
-`workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev) и `ranker-holdout-v2.json` (замороженный — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
-Команда завершается с ошибкой при отсутствии ранжируемых/размеченных решений или при точности принятых решений ниже `90 %`; это CI-gate результата, не дополнительный критерий воздержания модели.
+`workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev, 65 случаев) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
+Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
 
 Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 реплики) и `translation-holdout-v1.json` (замороженный, 30 реплик — правило то же). В dev-наборе 61 **term anchor**, а не 61 случай: chrF считается на всех 64 репликах, включая 15 реплик без терминологического якоря. Смоук-тест «Benchmark set schema» читает и проверяет только dev-наборы `ranker-benchmark.json` и `translation-benchmark.json`: default smoke никогда не открывает frozen holdout. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
 
@@ -100,6 +100,30 @@ python scripts/build-ru-morphology.py --output assets/Morphology/ru-morph.tsv.gz
 ## Регенерация словарей
 
 Скачайте источники в `tools/dictionary-source` (ссылки в [assets/Dictionaries/README.md](../assets/Dictionaries/README.md)) и выполните команду из того же README. Критично: `normalize_english` в генераторе и `NormalizeEnglish`/`NormalizeEnglishSentenceKey` в `LocalDictionaryService` обязаны давать одинаковую каноническую форму ключей — при изменении одной стороны меняйте вторую и добавляйте тест в `LocalDictionaryNormalizationTests`.
+
+VN-слой можно воспроизвести отдельно, не пересобирая многогигабайтные
+Wiktionary-источники:
+
+```powershell
+python scripts/build-dictionaries.py `
+  --curated-vn tools/dictionary-source/vn-lexicon.tsv `
+  --vn-source-lock tools/dictionary-source/vn-sources.lock.json `
+  --massive-archive tools/dictionary-source/amazon-massive-dataset-1.1.tar.gz `
+  --output assets/Dictionaries
+python scripts/test-build-dictionaries.py
+```
+
+Архив MASSIVE не хранится в git: его размер и SHA-256 закреплены в
+`vn-sources.lock.json`. Генератор сверяет lock до чтения, пишет gzip с
+фиксированным `mtime=0` и создаёт schema-v2 `vn-build-manifest.json` с хешами
+генератора, lock и каждого результата. Curated и MASSIVE передаются только
+вместе; набор сначала строится во временном каталоге, manifest заменяется
+последним, а ошибка или прерывание замены откатывает уже перенесённые файлы. Python-тест
+также сверяет текущие generator/curated/source-lock hashes с manifest. Source lock
+публикуется рядом с manifest. Для расширения сначала добавляйте записи в структурированный
+`vn-lexicon.tsv` с явной ролью `hard`, `soft` или `scaffold`; сгенерированные
+TSV вручную не редактируются. Frozen benchmark/holdout-файлы в эту сборку не
+входят.
 
 ## Стиль кода
 

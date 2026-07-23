@@ -175,10 +175,23 @@ try
             isolatedUserDictionaries);
         await dictionary.LoadAsync();
         loadTimer.Stop();
-        Assert(dictionary.EntryCount > 850_000,
+        Assert(dictionary.EntryCount > 880_000,
             "Expected the complete layered English and Japanese indexes.");
-        Assert(dictionary.SourceCount >= 8,
-            "Expected all base, Wiktionary, dialogue and visual-novel dictionaries.");
+        Assert(dictionary.SourceCount >= 11,
+            "Expected all base, Wiktionary, dialogue and role-separated VN dictionaries.");
+
+        IReadOnlyList<ScaffoldDictionaryMatch> packagedScaffold =
+            await dictionary.FindEnglishScaffoldMatchesAsync(
+                "He was on the verge of tears.");
+        Assert(packagedScaffold.Any(match =>
+                   match.MatchedEnglishKey == "on the verge of" &&
+                   match.Translation == "на грани"),
+            "The packaged VN scaffold asset was missing or not classified as scaffold-only.");
+
+        string? massiveDialogue = await dictionary.LookupExactEnglishDialogueAsync(
+            "Activate robot vacuum cleaner.");
+        Assert(massiveDialogue == "включи робот пылесос",
+            $"The packaged MASSIVE exact-dialogue layer was missing: {massiveDialogue}");
 
         DictionaryLookupResult layeredBank = await dictionary.LookupAsync(
             "The bank approved the loan.", "bank", 4);
@@ -330,8 +343,13 @@ try
 
         DictionaryLookupResult sighed = await dictionary.LookupAsync(
             "He shook his head and sighed.", "sighed", 25);
-        Assert(sighed.Found && sighed.Translation == "вздохнуть",
-            $"The VN dictionary must keep 'sighed' gender-neutral: {sighed.Translation}");
+        Assert(sighed.Found &&
+               sighed.Translation.StartsWith(
+                   "вздыхать; вздохнуть",
+                   StringComparison.Ordinal) &&
+               !NpuDictionarySelectorService.SplitMeanings(sighed.Translation)
+                   .Any(value => value is "вздохнул" or "вздохнула"),
+            $"The VN-soft layer must keep 'sighed' gender-neutral while preserving broad senses: {sighed.Translation}");
 
         DictionaryLookupResult teetering = await dictionary.LookupAsync(
             "He was teetering on the verge of utter confusion.", "teetering", 10);
@@ -379,33 +397,14 @@ try
         DictionaryLookupResult sighing = await dictionary.LookupAsync(
             "He was sighing all night.", "sighing", 7);
         Assert(sighing.Found &&
-               sighing.Translation.Contains("вздыхать", StringComparison.OrdinalIgnoreCase) &&
-               !sighing.Translation.Contains("ах", StringComparison.OrdinalIgnoreCase),
-            $"Lemma-level lookup must remove interjection noise from 'sighing': {sighing.Translation}");
-        SmartDictionaryHeuristicSelection? sighingFastPath =
-            SmartDictionaryHeuristicRanker.TrySelect(
-                "He was sighing all night.",
-                sighing.Source,
-                7,
-                NpuDictionarySelectorService.SplitMeanings(sighing.Translation),
-                "English");
-        Assert(sighingFastPath is { Translation: "вздыхать" },
-            $"The real dictionary output did not activate the progressive fast path: {sighingFastPath}");
+               sighing.Translation.Contains("вздыхать", StringComparison.OrdinalIgnoreCase),
+            $"Lemma-level lookup lost the conversational verb surface for 'sighing': {sighing.Translation}");
 
         DictionaryLookupResult teetered = await dictionary.LookupAsync(
             "He teetered on the brink of collapse.", "teetered", 3);
         Assert(teetered.Found &&
                teetered.Translation.Contains("грани", StringComparison.OrdinalIgnoreCase),
             $"Lemma-level lookup must expose the brink sense for 'teetered': {teetered.Translation}");
-        SmartDictionaryHeuristicSelection? teeteredFastPath =
-            SmartDictionaryHeuristicRanker.TrySelect(
-                "He teetered on the brink of collapse.",
-                teetered.Source,
-                3,
-                NpuDictionarySelectorService.SplitMeanings(teetered.Translation),
-                "English");
-        Assert(teeteredFastPath is { Translation: "быть на грани" },
-            $"The real dictionary output did not activate the brink fast path: {teeteredFastPath}");
 
         DictionaryLookupResult ohWell = await dictionary.LookupAsync(
             "Oh well...", "Oh well", 1);
@@ -475,6 +474,102 @@ try
                        "Translations",
                        StringComparison.OrdinalIgnoreCase)),
             "Kaikki section headings leaked into the aligned sense definitions.");
+
+        DictionaryLookupResult packagedSighSenses =
+            await dictionary.LookupWithSenseMetadataAsync(
+                "He was sighing all night.",
+                "sighing",
+                7);
+        Assert(packagedSighSenses.SenseCandidates.Any(candidate =>
+                   candidate.Translation == "вздыхать" &&
+                   candidate.PartOfSpeech == "verb") &&
+               packagedSighSenses.SenseCandidates.Any(candidate =>
+                   candidate.Translation == "вздох" &&
+                   candidate.PartOfSpeech == "noun"),
+            "The packaged VN-soft sigh inventory did not retain rankable verb/noun senses.");
+
+        SmartDictionarySenseInventory packagedSighInventory =
+            SmartDictionarySenseResolver.GroupCandidates(
+                "He was sighing all night.",
+                packagedSighSenses.Source,
+                7,
+                packagedSighSenses.SenseCandidates);
+        SmartDictionaryRankerPlan packagedSighPlan =
+            SmartDictionarySenseResolver.CreateRankerPlan(
+                "He was sighing all night.",
+                packagedSighSenses.Source,
+                7,
+                packagedSighInventory.Groups);
+        SmartDictionaryHeuristicSelection? packagedSighSelection =
+            SmartDictionaryHeuristicRanker.TrySelect(
+                "He was sighing all night.",
+                packagedSighSenses.Source,
+                7,
+                packagedSighPlan.Outcomes
+                    .Select(outcome => outcome.Translation)
+                    .ToArray(),
+                "English");
+        Assert(packagedSighInventory.InferredPartOfSpeech == "verb" &&
+               packagedSighPlan.Outcomes.All(outcome => outcome.Translation != "ах") &&
+               packagedSighSelection is { Translation: "вздыхать" },
+            $"The packaged sigh senses did not produce the safe progressive plan: {packagedSighSelection}");
+
+        const string packagedTeeterContext =
+            "He teetered on the brink of collapse.";
+        DictionaryLookupResult packagedTeeterSenses =
+            await dictionary.LookupWithSenseMetadataAsync(
+                packagedTeeterContext,
+                "teetered",
+                3);
+        Assert(packagedTeeterSenses.SenseCandidates.Any(candidate =>
+                   candidate.Translation == "быть на грани" &&
+                   candidate.EnglishDefinition.Contains(
+                       "undesirable state",
+                       StringComparison.Ordinal)) &&
+               packagedTeeterSenses.SenseCandidates.Any(candidate =>
+                   candidate.Translation == "качаться"),
+            "The packaged VN-soft teeter inventory did not expose both figurative and literal senses.");
+
+        SmartDictionarySenseInventory packagedTeeterInventory =
+            SmartDictionarySenseResolver.GroupCandidates(
+                packagedTeeterContext,
+                packagedTeeterSenses.Source,
+                3,
+                packagedTeeterSenses.SenseCandidates);
+        SmartDictionaryRankerPlan packagedTeeterPlan =
+            SmartDictionarySenseResolver.CreateRankerPlan(
+                packagedTeeterContext,
+                packagedTeeterSenses.Source,
+                3,
+                packagedTeeterInventory.Groups);
+        SmartDictionaryHeuristicSelection? packagedTeeterSelection =
+            SmartDictionaryHeuristicRanker.TrySelect(
+                packagedTeeterContext,
+                packagedTeeterSenses.Source,
+                3,
+                packagedTeeterPlan.Outcomes
+                    .Select(outcome => outcome.Translation)
+                    .ToArray(),
+                "English");
+        Assert(packagedTeeterInventory.InferredPartOfSpeech == "verb" &&
+               packagedTeeterSelection is { Translation: "быть на грани" },
+            $"The packaged teeter senses did not select the figurative brink plan: {packagedTeeterSelection}");
+
+        DictionaryLookupResult packagedLemming =
+            await dictionary.LookupWithSenseMetadataAsync(
+                "The lemming was small.",
+                "lemming",
+                4);
+        Assert(packagedLemming.Found &&
+               !packagedLemming.Translation.Contains(
+                   "дай",
+                   StringComparison.OrdinalIgnoreCase) &&
+               !packagedLemming.Translation.Contains(
+                   "позволь",
+                   StringComparison.OrdinalIgnoreCase) &&
+               packagedLemming.SenseCandidates.All(candidate =>
+                   candidate.Translation is not "дай мне" and not "позволь мне"),
+            $"The packaged VN-soft 'lemme' entry shadowed the exact noun 'lemming': {packagedLemming}");
 
         const string damagedArticleContext =
             "He felt like he was teetering on the ver utter confusion.";
@@ -1224,8 +1319,8 @@ try
         string repaired = await guard.ProtectAsync(
             "She gave him a sideways glance.",
             "Она поглядела sideways на него.");
-        Assert(repaired == "Она поглядела искоса на него.",
-            $"A trusted VN exact entry did not repair the residual word: {repaired}");
+        Assert(repaired == "Она поглядела sideways на него.",
+            $"An ambiguous VN-soft word was used for blind residual repair: {repaired}");
 
         string repairedPhrase = await guard.ProtectAsync(
             "She gave him a sideways glance.",
@@ -1915,6 +2010,18 @@ try
         () => TextHookSafetyTests.RunAsync(tempRoot));
 
     await RunAsync(
+        "Smart dictionary phrase routing",
+        () => SmartDictionaryPhraseRoutingTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Smart dictionary quality foundation",
+        SmartDictionaryQualityFoundationTests.RunAsync);
+
+    await RunAsync(
+        "VN dictionary data roles",
+        () => VnDictionaryLayerTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Dictionary key and sentence normalization",
         () => LocalDictionaryNormalizationTests.RunAsync(tempRoot));
 
@@ -1929,14 +2036,16 @@ try
     await RunAsync("Benchmark set schema", async () =>
     {
         TranslationBenchmark.VerifyMetrics();
-        RankerCalibrationBenchmark.VerifyMeasurementCounts(1, 1, 1, 1, 1);
-        foreach ((int cases, int ranked, int covered, int decided, int correct) in new[]
+        RankerCalibrationBenchmark.VerifyMeasurementCounts(20, 12, 10, 5, 5, 8, 5);
+        foreach ((int cases, int ranked, int covered, int decided, int correct,
+                     int deterministic, int deterministicCorrect) in new[]
                  {
-                     (0, 0, 0, 0, 0),
-                     (1, 0, 0, 0, 0),
-                     (1, 1, 0, 0, 0),
-                     (1, 1, 1, 0, 0),
-                     (1, 1, 1, 1, 2)
+                     (0, 0, 0, 0, 0, 0, 0),
+                     (20, 0, 0, 0, 0, 0, 0),
+                     (20, 10, 0, 0, 0, 0, 0),
+                     (20, 10, 8, 0, 0, 0, 0),
+                     (20, 10, 8, 4, 5, 0, 0),
+                     (20, 12, 10, 5, 5, 9, 5)
                  })
         {
             try
@@ -1946,7 +2055,9 @@ try
                     ranked,
                     covered,
                     decided,
-                    correct);
+                    correct,
+                    deterministic,
+                    deterministicCorrect);
                 throw new InvalidOperationException(
                     "A ranker benchmark without usable measurements passed its gate.");
             }
@@ -1956,16 +2067,34 @@ try
             }
         }
 
-        try
+        foreach ((int cases, int ranked, int covered, int decided, int correct,
+                     int deterministic, int deterministicCorrect) in new[]
+                 {
+                     (1, 1, 1, 1, 1, 0, 0),
+                     (20, 12, 10, 5, 4, 8, 6),
+                     (20, 12, 8, 4, 4, 8, 6),
+                     (20, 12, 10, 4, 4, 8, 6),
+                     (20, 12, 10, 5, 5, 8, 3)
+                 })
         {
-            RankerCalibrationBenchmark.VerifyMeasurementCounts(1, 1, 1, 1, 0);
-            throw new InvalidOperationException(
-                "An incorrect accepted ranker decision unexpectedly passed.");
-        }
-        catch (InvalidOperationException exception) when (
-            exception.Message.Contains("quality gate", StringComparison.Ordinal))
-        {
-            // Expected: non-empty measurements are not enough to pass quality CI.
+            try
+            {
+                RankerCalibrationBenchmark.VerifyMeasurementCounts(
+                    cases,
+                    ranked,
+                    covered,
+                    decided,
+                    correct,
+                    deterministic,
+                    deterministicCorrect);
+                throw new InvalidOperationException(
+                    "An under-covered ranker benchmark unexpectedly passed.");
+            }
+            catch (InvalidOperationException exception) when (
+                exception.Message.Contains("quality gate", StringComparison.Ordinal))
+            {
+                // Expected: precision alone is insufficient for quality CI.
+            }
         }
 
         string? repositoryRoot = AppContext.BaseDirectory;

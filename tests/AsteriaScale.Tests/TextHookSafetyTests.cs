@@ -1,10 +1,27 @@
+using AsteriaScale;
 using AsteriaScale.Models;
 using AsteriaScale.Services;
+using Drawing = System.Drawing;
 
 internal static class TextHookSafetyTests
 {
     public static async Task RunAsync(string tempRoot)
     {
+        string probeRoot = Path.Combine(tempRoot, "text-hook-probe");
+        string probeX86 = Path.Combine(probeRoot, "x86");
+        Directory.CreateDirectory(probeX86);
+        File.WriteAllText(Path.Combine(probeX86, "TextractorCLI.exe"), string.Empty);
+        Assert(string.Equals(
+                TextHookService.ProbeDefaultDirectory(
+                    [Path.Combine(tempRoot, "missing"), probeRoot]),
+                Path.GetFullPath(probeRoot),
+                StringComparison.OrdinalIgnoreCase),
+            "Textractor probing ignored a root-level install with an x86 CLI.");
+        Assert(TextHookService.IsTextractorDirectory(probeRoot),
+            "A valid x86 Textractor installation was rejected.");
+        Assert(TextHookService.DescribeInstallation(probeRoot).Contains("x86", StringComparison.Ordinal),
+            "Textractor diagnostics did not report the available architecture.");
+
         AppSettings settings = new();
         await using TextHookService hook = new(settings);
 
@@ -36,6 +53,36 @@ internal static class TextHookSafetyTests
                 "bank",
                 DateTime.UtcNow.AddSeconds(5)) is null,
             "A hook sentence older than the five-second relevance window was reused.");
+
+        HoverOcrResult ocrResult = new(
+            "bank and another bank",
+            "bank",
+            0,
+            Drawing.Rectangle.Empty);
+        Assert(ReferenceEquals(
+                ocrResult,
+                HoverTranslationService.ApplyTextHookMatch(ocrResult, match: null)),
+            "A missing hook match changed the pure OCR result.");
+        HoverOcrResult hookedResult = HoverTranslationService.ApplyTextHookMatch(
+            ocrResult,
+            new TextHookMatch("LongSpeaker: bank and another bank", 13));
+        Assert(hookedResult is
+            {
+                Text: "LongSpeaker: bank and another bank",
+                CharacterIndex: 13,
+                TextSource: HoverTextSource.TextHook
+            },
+            "A fresh hook match did not preserve explicit Textractor provenance.");
+        const string ocrBadge = "EN → RU  ·  CPU КОНТЕКСТ";
+        Assert(string.Equals(
+                HoverTranslationOverlay.AddTextSourceBadge(ocrBadge, HoverTextSource.Ocr),
+                ocrBadge,
+                StringComparison.Ordinal),
+            "Pure OCR unexpectedly gained a text-hook badge.");
+        Assert(HoverTranslationOverlay.AddTextSourceBadge(
+                ocrBadge,
+                HoverTextSource.TextHook).EndsWith("  ·  HOOK", StringComparison.Ordinal),
+            "A Textractor-backed hover card does not visibly report HOOK provenance.");
 
         string textractorRoot = Path.Combine(tempRoot, "text-hook-profile-detach");
         string cliDirectory = Path.Combine(textractorRoot, "x64");

@@ -473,6 +473,10 @@
                                     <TextBlock Text="Текст совместимых игр — напрямую из процесса; иначе всегда OCR"
                                                Foreground="{StaticResource SecondaryTextBrush}"
                                                FontSize="10" Margin="0,2,0,0" />
+                                    <TextBlock x:Name="TextHookStatusText"
+                                               Foreground="{StaticResource MintBrush}"
+                                               TextWrapping="Wrap"
+                                               FontSize="10" Margin="0,4,0,0" />
                                 </StackPanel>
                                 <TextBox x:Name="TextractorPathBox" Grid.Column="2" Height="34"
                                          VerticalContentAlignment="Center"

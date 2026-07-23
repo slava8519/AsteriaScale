@@ -6,27 +6,43 @@ They are data files loaded independently by Asteria Scale's optional fast dictio
 - `eng-rus.tsv.gz`: English → Russian entries derived from FreeDict/WikDict 2025.11.23.
   The source header identifies the data as CC BY-SA 3.0 and attributes Wiktionary and DBnary.
 - `eng-rus-wiktionary.tsv.gz`: full English → Russian lexical layer extracted from the
-  Russian Wiktionary through Kaikki/Wiktextract (2026.07.15). It contains 69,055 normalized
+  Russian Wiktionary through Kaikki/Wiktextract (2026.07.15). It contains 69,105 normalized
   headwords, inflected forms and phrases, including 4,449 multi-word expressions. All
   available Russian glosses are retained; conversational, slang, literary, obsolete and
   other register labels are preserved in square brackets.
 - `eng-rus-enwiktionary.tsv.gz`: complementary English → Russian translation-box layer
   extracted from the complete English Wiktionary Kaikki dump (English Wiktionary dump
-  2026.07.06, Kaikki extraction 2026.07.16). It contains 147,583 normalized headwords,
+  2026.07.06, Kaikki extraction 2026.07.16). It contains 148,019 normalized headwords,
   inflected forms and phrases. This is deliberately the complete layer rather than a
   compact frequency list, so rare, literary, conversational and domain-specific meanings
   remain available offline. The verified raw JSONL was 3,186,887,546 bytes with SHA-256
   `E491232E4AD314F825F025969AA1B1407A8B5FFA311711D49A83CC80E6204E71`.
 - `eng-rus-enwiktionary-senses.tsv.gz`: lazy smart-dictionary index aligned with the
-  preceding layer: 455,814 Russian translations paired with their full English sense
+  preceding layer: 447,097 Russian translations paired with their full English sense
   definition, register and part of speech. It is loaded only in Smart dictionary mode and
   lets the local ranker compare English context with English definitions without asking a
-  generative model to translate the whole sentence. 49,657 surfaces are borrowed from the
-  ru-Wiktionary layer: interjection senses with empty translation boxes gain matching
-  interjection glosses of the same headword, and senses whose translation stem-matches a
-  comma-separated ru-Wiktionary gloss gain that gloss's sibling synonyms.
-- `eng-rus-vn.tsv.gz`: curated visual-novel dialogue, contractions and chat abbreviations.
+  generative model to translate the whole sentence. 39,513 surfaces are borrowed from the
+  ru-Wiktionary layer. Enrichment is restricted to matching parts of speech, splits only
+  top-level comma siblings and rejects Latin, meta-only and structurally unbalanced
+  surfaces before they can enter a sense inventory.
+- `eng-rus-vn.tsv.gz`: 114 reviewed display-safe VN overrides. This is the only bundled
+  VN layer that can replace a broad dictionary value or participate in residual-English
+  repair. It no longer becomes a mandatory full-translation term merely by being curated.
+- `eng-rus-vn-soft.tsv.gz` and `eng-rus-vn-senses.tsv.gz`: 52 conversational keys and
+  102 definition-aligned Russian surfaces. They merge with broad dictionaries and stay
+  visible to GlossBERT instead of suppressing sense ranking.
+- `eng-rus-vn-scaffold.tsv.gz`: 21 separately reviewed terminology anchors used only by
+  the full-text scaffold. They are deliberately invisible to Smart Dictionary lookup.
 - `eng-rus-dialogue.tsv.gz`: short English → Russian sentence pairs from Tatoeba.
+- `eng-rus-massive-dialogue.tsv.gz`: 9,837 filtered exact EN → RU utterances from
+  Amazon MASSIVE 1.1. This low-priority layer is used only when the complete normalized
+  sentence matches; localized entities, weak judgments, long lines, Latin-containing
+  Russian output and conflicting normalized keys are excluded.
+- `vn-provenance.tsv.gz`, `vn-dialogue-provenance.tsv.gz` and
+  `vn-build-manifest.json`: deterministic record provenance, input/output hashes,
+  frozen transform parameters, generator hash and filter statistics for the
+  role-separated VN data. The source lock is published beside them as
+  `vn-sources.lock.json`.
 - `jpn-rus.tsv.gz`: Japanese → Russian entries extracted from the multilingual JMdict file.
   JMdict is copyright EDRDG and distributed under the JMdict/EDICT licence.
 - `jpn-rus-wiktionary.tsv.gz`: full Japanese → Russian lexical layer extracted from the
@@ -41,10 +57,10 @@ canonicalized at load time with the same normalization the lookup uses (lower ca
 straight apostrophes, collapsed whitespace; Japanese keys keep only Japanese characters),
 so hand-written user entries such as `Hello` or `don’t` remain reachable.
 
-Meanings from overlapping broad bundled layers are united in stable source order instead
-of using first-match-only semantics. Equivalent spellings (including Russian stress marks)
-are deduplicated. User entries remain authoritative, while the reviewed visual-novel layer
-continues to override broad dictionary noise.
+Meanings from overlapping broad bundled layers, including VN-soft, are united in stable
+source order instead of using first-match-only semantics. Equivalent spellings (including
+Russian stress marks) are deduplicated. The priority contract is user > VN-hard > merged
+broad/VN-soft > exact dialogue. Scaffold-only files are outside visible dictionary lookup.
 
 Sources:
 
@@ -56,13 +72,35 @@ Sources:
 - https://www.edrdg.org/edrdg/licence.html
 - https://tatoeba.org/downloads
 - https://downloads.tatoeba.org/exports/per_language/
+- https://github.com/alexa/massive
+- https://amazon-massive-nlu-dataset.s3.amazonaws.com/amazon-massive-dataset-1.1.tar.gz
 
 The ordinary generated TSV schema is one entry per line: normalized source, a tab, then
 semicolon-separated Russian translations. A `*-senses.tsv.gz` row contains normalized
 source, Russian translation, English definition, register and part of speech in five
 tab-separated columns. The loader remains compatible with older four-column user sidecars.
-The Kaikki layers keep every distinct gloss; smaller legacy layers retain their
-source-specific limits. Regenerate them with:
+The curated `vn-lexicon.tsv` input has nine columns: source ID, record ID, role, review
+tier, English, Russian, English definition, register and POS. Its source lock pins licenses,
+sizes and SHA-256 hashes. Canonical conflicts, malformed rows, Latin Russian surfaces and
+multi-valued or runtime-unreachable VN phrases stop the build instead of being silently
+merged. Curated and MASSIVE inputs are required together; all VN outputs are staged and
+the manifest is replaced last, with interruption-safe rollback and a repository manifest
+drift test. The Kaikki layers
+keep every distinct gloss; smaller legacy layers retain their source-specific limits.
+
+Regenerate only the role-separated VN data and MASSIVE pilot with:
+
+```powershell
+python scripts/build-dictionaries.py `
+  --curated-vn tools/dictionary-source/vn-lexicon.tsv `
+  --vn-source-lock tools/dictionary-source/vn-sources.lock.json `
+  --massive-archive tools/dictionary-source/amazon-massive-dataset-1.1.tar.gz `
+  --output assets/Dictionaries
+
+python scripts/test-build-dictionaries.py
+```
+
+Regenerate every available dictionary with:
 
 ```powershell
 python scripts/build-dictionaries.py `
@@ -71,7 +109,9 @@ python scripts/build-dictionaries.py `
   --kaikki-enwiktionary-russian tools/dictionary-source/kaikki.org-dictionary-English.jsonl `
   --kaikki-japanese tools/dictionary-source/kaikki.org-dictionary-Японский.jsonl `
   --jmdict tools/dictionary-source/JMdict.gz `
-  --curated-vn tools/dictionary-source/vn-dialogue.tsv `
+  --curated-vn tools/dictionary-source/vn-lexicon.tsv `
+  --vn-source-lock tools/dictionary-source/vn-sources.lock.json `
+  --massive-archive tools/dictionary-source/amazon-massive-dataset-1.1.tar.gz `
   --tatoeba-english tools/dictionary-source/eng_sentences.tsv.bz2 `
   --tatoeba-japanese tools/dictionary-source/jpn_sentences.tsv.bz2 `
   --tatoeba-russian tools/dictionary-source/rus_sentences.tsv.bz2 `

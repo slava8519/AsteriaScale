@@ -75,6 +75,8 @@ internal static partial class SmartDictionarySenseResolver
     private const string Adjective = "adj";
     private const string Adverb = "adv";
     private const string Interjection = "intj";
+    private const string Conjunction = "conj";
+    private const string Determiner = "det";
     private const string Unknown = "";
 
     private readonly record struct EnglishContextAnalysis(
@@ -85,7 +87,9 @@ internal static partial class SmartDictionarySenseResolver
         bool IsProgressive,
         bool IsHabitualOrDurative,
         bool IsPatientConstruction,
-        string GovernedPreposition);
+        string GovernedPreposition,
+        bool PreferDurationAgoSurface,
+        bool PreferStandaloneSaveSurface);
 
     private readonly record struct RussianSurfaceAnalysis(
         RussianPastForm PastForm,
@@ -151,6 +155,17 @@ internal static partial class SmartDictionarySenseResolver
         {
             "about", "along", "around", "away", "back", "down", "from", "in", "into",
             "off", "on", "out", "over", "through", "to", "up", "with"
+        };
+
+    private static readonly HashSet<string> TechnicalSurfaceTokens =
+        new(StringComparer.Ordinal)
+        {
+            "adj", "adjective", "adv", "adverb", "archaic", "colloquial",
+            "countable", "dialect", "f", "figurative", "formal", "impf",
+            "imperfective", "intransitive", "literary", "m", "n", "obsolete",
+            "off", "on", "on/off", "perfective", "pf", "pl", "plural", "rare",
+            "sg", "singular", "slang", "technical", "transitive", "uncountable",
+            "v", "verb", "vulgar", "with", "without"
         };
 
     private static readonly HashSet<string> DefinitionQualifierTokens =
@@ -355,6 +370,10 @@ internal static partial class SmartDictionarySenseResolver
             .Select(item => new
             {
                 item.Surface,
+                SurfaceQualityRank = SurfaceQualityRank(item.Surface.Translation),
+                ContextSurfaceRank = ContextSurfaceRank(
+                    english,
+                    item.Surface.Translation),
                 MorphologyRank = MorphologyRank(
                     item.Analysis,
                     expectedPast,
@@ -364,7 +383,11 @@ internal static partial class SmartDictionarySenseResolver
                     useCompletedAspect),
                 RegisterRank = RegisterRank(item.Surface.Register)
             })
-            .OrderBy(item => item.MorphologyRank)
+            // A malformed dictionary annotation must not beat a clean synonym,
+            // even when the malformed row happens to appear first in the source.
+            .OrderBy(item => item.SurfaceQualityRank)
+            .ThenBy(item => item.ContextSurfaceRank)
+            .ThenBy(item => item.MorphologyRank)
             .ThenBy(item => item.RegisterRank)
             .ThenBy(item => item.Surface.SourceIndex)
             .ToArray();
@@ -372,7 +395,27 @@ internal static partial class SmartDictionarySenseResolver
 
         string reason;
         double confidence;
-        if (usePastAgreement && best.MorphologyRank == 0)
+        if (english.PreferDurationAgoSurface &&
+            best.ContextSurfaceRank == 0 &&
+            NormalizeRussianSurface(best.Surface.Translation) == "назад")
+        {
+            reason = "duration-before-now construction";
+            confidence = 0.99;
+        }
+        else if (english.PreferStandaloneSaveSurface &&
+                 best.ContextSurfaceRank == 0 &&
+                 NormalizeRussianSurface(best.Surface.Translation) == "сохранить")
+        {
+            reason = "standalone save command";
+            confidence = 0.99;
+        }
+        else if (ranked.Any(item =>
+                     item.SurfaceQualityRank != best.SurfaceQualityRank))
+        {
+            reason = "cleaner Russian dictionary surface";
+            confidence = 0.98;
+        }
+        else if (usePastAgreement && best.MorphologyRank == 0)
         {
             reason = "Russian past-tense agreement";
             confidence = 0.99;
@@ -482,8 +525,8 @@ internal static partial class SmartDictionarySenseResolver
             "pron" or "pronoun" => "pron",
             "prep" or "preposition" => "prep",
             "prep_phrase" or "prepositional_phrase" => "prep_phrase",
-            "conj" or "conjunction" => "conj",
-            "det" or "determiner" or "article" => "det",
+            "conj" or "conjunction" => Conjunction,
+            "det" or "determiner" or "article" => Determiner,
             "phrase" => "phrase",
             "proverb" => "proverb",
             "particle" => "particle",
@@ -561,7 +604,9 @@ internal static partial class SmartDictionarySenseResolver
                 false,
                 false,
                 false,
-                string.Empty);
+                string.Empty,
+                false,
+                false);
         }
 
         string targetWord = targetTokens[0];
@@ -594,6 +639,13 @@ internal static partial class SmartDictionarySenseResolver
             isPatientConstruction && next is ("by" or "from")
                 ? next
                 : string.Empty;
+        bool preferDurationAgoSurface =
+            current == "ago" &&
+            IsDurationAgoContext(contextTokens, tokenIndex);
+        bool preferStandaloneSaveSurface =
+            current == "save" &&
+            tokenIndex == 0 &&
+            contextTokens.Length == 1;
 
         (string partOfSpeech, double confidence) = InferEnglishPartOfSpeech(
             current,
@@ -611,7 +663,9 @@ internal static partial class SmartDictionarySenseResolver
             isProgressive,
             isHabitualOrDurative,
             isPatientConstruction,
-            governedPreposition);
+            governedPreposition,
+            preferDurationAgoSurface,
+            preferStandaloneSaveSurface);
     }
 
     private static bool IsPatientConstruction(
@@ -641,10 +695,12 @@ internal static partial class SmartDictionarySenseResolver
             {
                 Surface = surface,
                 Word = SingleRussianInfinitive(surface.Translation),
+                SurfaceQualityRank = SurfaceQualityRank(surface.Translation),
                 RegisterRank = RegisterRank(surface.Register)
             })
             .Where(candidate => candidate.Word.Length > 0)
-            .OrderBy(candidate => candidate.RegisterRank)
+            .OrderBy(candidate => candidate.SurfaceQualityRank)
+            .ThenBy(candidate => candidate.RegisterRank)
             .ThenBy(candidate => candidate.Surface.SourceIndex)
             .ToArray();
         if (infinitives.Length == 0)
@@ -734,6 +790,32 @@ internal static partial class SmartDictionarySenseResolver
         bool isProgressive,
         bool isPast)
     {
+        if (word == "while")
+        {
+            if (IsWhileNounContext(previous, tokenIndex, tokens))
+            {
+                return (Noun, 0.99);
+            }
+
+            if (IsLikelyClauseAfterWhile(next))
+            {
+                return (Conjunction, 0.97);
+            }
+        }
+
+        if (word == "that")
+        {
+            if (IsThatConjunctionContext(previous, next))
+            {
+                return (Conjunction, 0.98);
+            }
+
+            if (IsThatDeterminerContext(previous, next, tokenIndex, tokens))
+            {
+                return (Determiner, 0.96);
+            }
+        }
+
         if (EnglishInterjections.Contains(word) &&
             IsClauseInitial(tokens, tokenIndex))
         {
@@ -849,6 +931,74 @@ internal static partial class SmartDictionarySenseResolver
         }
 
         return (Unknown, 0);
+    }
+
+    private static bool IsWhileNounContext(
+        string previous,
+        int tokenIndex,
+        IReadOnlyList<Match> tokens)
+    {
+        if (EnglishContextLexicon.Determiners.Contains(previous) ||
+            EnglishContextLexicon.Possessives.Contains(previous))
+        {
+            return true;
+        }
+
+        if (previous is not ("little" or "long" or "short") || tokenIndex < 2)
+        {
+            return false;
+        }
+
+        string beforeModifier = NormalizeEnglishToken(tokens[tokenIndex - 2].Value);
+        return EnglishContextLexicon.Determiners.Contains(beforeModifier) ||
+               EnglishContextLexicon.Possessives.Contains(beforeModifier);
+    }
+
+    private static bool IsLikelyClauseAfterWhile(string next) =>
+        EnglishContextLexicon.SubjectPronouns.Contains(next) ||
+        next == "there" ||
+        next.EndsWith("ing", StringComparison.Ordinal) && next.Length > 4;
+
+    private static bool IsThatConjunctionContext(string previous, string next) =>
+        previous == "so" ||
+        EnglishContextLexicon.SubjectPronouns.Contains(next) ||
+        next == "there";
+
+    private static bool IsThatDeterminerContext(
+        string previous,
+        string next,
+        int tokenIndex,
+        IReadOnlyList<Match> tokens)
+    {
+        if (next.Length == 0 ||
+            EnglishContextLexicon.SubjectPronouns.Contains(next) ||
+            EnglishContextLexicon.AuxiliaryBe.Contains(next) ||
+            EnglishContextLexicon.AuxiliaryHave.Contains(next) ||
+            EnglishContextLexicon.Modals.Contains(next) ||
+            IsLikelyFiniteVerb(next) ||
+            EnglishContextLexicon.DemonstrativePredicateFollowers.Contains(next))
+        {
+            return false;
+        }
+
+        if (EnglishContextLexicon.PrepositionsBeforeDeterminer.Contains(previous))
+        {
+            return true;
+        }
+
+        if (tokenIndex != 0)
+        {
+            return false;
+        }
+
+        if (tokens.Count == 2)
+        {
+            return true;
+        }
+
+        string afterNext = NormalizeEnglishToken(tokens[tokenIndex + 2].Value);
+        return IsLikelyFiniteVerb(afterNext) ||
+               EnglishContextLexicon.DemonstrativePredicateFollowers.Contains(afterNext);
     }
 
     private static bool IsLikelyFiniteVerb(string word) =>
@@ -998,6 +1148,108 @@ internal static partial class SmartDictionarySenseResolver
         }
 
         return 0;
+    }
+
+    private static bool IsDurationAgoContext(
+        IReadOnlyList<Match> tokens,
+        int tokenIndex)
+    {
+        if (tokenIndex <= 0)
+        {
+            return false;
+        }
+
+        string previous = NormalizeEnglishToken(tokens[tokenIndex - 1].Value);
+        return EnglishContextLexicon.DurationWordsBeforeAgo.Contains(previous);
+    }
+
+    private static int ContextSurfaceRank(
+        EnglishContextAnalysis english,
+        string translation)
+    {
+        string normalized = NormalizeRussianSurface(translation);
+        if (english.PreferDurationAgoSurface)
+        {
+            return normalized switch
+            {
+                "назад" => 0,
+                _ when normalized.EndsWith(" назад", StringComparison.Ordinal) => 1,
+                _ => 2
+            };
+        }
+
+        if (english.PreferStandaloneSaveSurface)
+        {
+            return normalized switch
+            {
+                "сохранить" => 0,
+                "сохранять" => 1,
+                _ => 2
+            };
+        }
+
+        return 0;
+    }
+
+    private static int SurfaceQualityRank(string translation)
+    {
+        string value = CollapseWhitespace(translation).Normalize(NormalizationForm.FormKC);
+        if (value.Length == 0)
+        {
+            return int.MaxValue;
+        }
+
+        int rank = HasBalancedSurfaceDelimiters(value) ? 0 : 100;
+        Match[] latinTokens = LatinSurfaceTokenRegex().Matches(value)
+            .Cast<Match>()
+            .ToArray();
+        if (latinTokens.Length == 0)
+        {
+            return rank;
+        }
+
+        bool hasCyrillic = value.Any(character =>
+            character is >= '\u0400' and <= '\u052f');
+        bool hasTechnicalFragment = latinTokens.Any(match =>
+        {
+            string token = match.Value.ToLowerInvariant();
+            return TechnicalSurfaceTokens.Contains(token) ||
+                   hasCyrillic && token.Contains('/');
+        });
+        return hasTechnicalFragment ? rank + 50 : rank;
+    }
+
+    private static bool HasBalancedSurfaceDelimiters(string value)
+    {
+        Stack<char> openings = new();
+        foreach (char character in value)
+        {
+            if (character is '(' or '[' or '{')
+            {
+                openings.Push(character);
+                continue;
+            }
+
+            if (character is not (')' or ']' or '}'))
+            {
+                continue;
+            }
+
+            if (openings.Count == 0)
+            {
+                return false;
+            }
+
+            char opening = openings.Pop();
+            if (character == ')' && opening != '(' ||
+                character == ']' && opening != '[' ||
+                character == '}' && opening != '{')
+            {
+                return false;
+            }
+        }
+
+        return openings.Count == 0;
     }
 
     private static int RegisterRank(string register)
@@ -1166,4 +1418,9 @@ internal static partial class SmartDictionarySenseResolver
     private static Regex EnglishTokenRegex() => EnglishContextLexicon.TokenRegex();
 
     private static Regex RussianTokenRegex() => RussianMorphology.TokenRegex();
+
+    [GeneratedRegex(
+        @"[A-Za-z]+(?:[/.-][A-Za-z]+)*",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex LatinSurfaceTokenRegex();
 }

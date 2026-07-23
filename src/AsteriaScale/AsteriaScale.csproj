@@ -47,6 +47,16 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest"
              ExcludeFromSingleFile="true" />
+    <Content Include="..\..\assets\Dictionaries\vn-build-manifest.json"
+             Link="Dictionaries\vn-build-manifest.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" />
+    <Content Include="..\..\tools\dictionary-source\vn-sources.lock.json"
+             Link="Dictionaries\vn-sources.lock.json"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" />
     <Content Include="..\..\THIRD_PARTY_NOTICES.md"
              Link="THIRD_PARTY_NOTICES.md"
              CopyToOutputDirectory="PreserveNewest"

@@ -132,7 +132,7 @@ CPU использует исходный динамический FP32 ONNX. П
 4. для японского ищется самое длинное словарное совпадение, пересекающее символ под курсором;
 5. при переходе в этот режим Qwen выгружается, а пустой сервер Foundry Local останавливается, чтобы не удерживать память модели.
 
-Восемь словарных слоёв дают около 871 тысячи индексированных английских и японских слов/выражений. В их числе полный, а не частотный English Wiktionary с отдельным definition-aligned слоем для умного режима. TSV-индексы сжаты gzip; подробные версии и лицензии источников перечислены в `THIRD_PARTY_NOTICES.md`. Источники: [FreeDict eng-rus](https://download.freedict.org/generated/eng-rus/), [Kaikki English Wiktionary](https://kaikki.org/dictionary/English/), [JMdict project](https://www.jmdict.org/), [EDRDG licence](https://www.edrdg.org/edrdg/licence.html), [Tatoeba downloads](https://tatoeba.org/downloads).
+Одиннадцать загружаемых словарных слоёв дают около 881 тысячи индексированных английских и японских слов/выражений. В их числе полный, а не частотный English Wiktionary с отдельным definition-aligned слоем для умного режима и точные MASSIVE-реплики, изолированные от лексического поиска. TSV-индексы сжаты gzip; подробные версии и лицензии источников перечислены в `THIRD_PARTY_NOTICES.md`. Источники: [FreeDict eng-rus](https://download.freedict.org/generated/eng-rus/), [Kaikki English Wiktionary](https://kaikki.org/dictionary/English/), [JMdict project](https://www.jmdict.org/), [EDRDG licence](https://www.edrdg.org/edrdg/licence.html), [Tatoeba downloads](https://tatoeba.org/downloads), [Amazon MASSIVE](https://github.com/alexa/massive).
 
 Для real-time апскейла NPU по-прежнему полезен только при наличии модели, скомпилированной/квантованной под VitisAI, и zero-copy пути между capture texture и tensor. Текущие лучшие VN-модели поставляются как HLSL и уже исполняются FP16 на GPU. Перенос GPU texture → CPU/NPU tensor → GPU texture в каждом кадре способен увеличить latency и энергозатраты.
 
@@ -423,6 +423,339 @@ Foundry 0.10.2 видит дубли `VitisAIExecutionProvider` /
 [несовместимость с ONNX Runtime 1.25+](https://github.com/microsoft/Foundry-Local/issues/871).
 Системные EP вручную не удалялись: Asteria явно выбирает рабочий CPU-вариант без скрытого
 provider fallback. После прогона модель выгрузилась, а пустой daemon остановился.
+
+## VN Layer 2.0 — безопасное расширение данных (22 июля 2026)
+
+Исследовательский вывод: массовое добавление пар `слово → перевод` в прежний
+авторитетный VN-файл ухудшило бы систему. Оно одновременно перекрыло бы broad
+словари, подавило definition-aligned ранжирование GlossBERT и превратило бы
+непроверенные поверхности в residual/full-text ограничения. Поэтому данные
+разделены по назначению, а не только по источнику:
+
+- `hard`: 103 вручную проверенных display/residual override;
+- `soft`: 52 ключа и 102 definition-aligned sense rows для карточки и
+  GlossBERT без авторитетного override;
+- `scaffold`: 21 отдельно проверенный full-text anchor, невидимый в карточке;
+- `exact dialogue`: 9 837 полных реплик, которые не участвуют в лексическом
+  поиске и имеют самый низкий приоритет.
+
+В структурированном curated-источнике 183 записи. Это 160 уникальных ключей и
+176 назначений ролей: 16 hard-выражений также отдельно подтверждены как
+scaffold, а семь soft-ключей имеют дополнительные смыслы. Runtime сохраняет
+контракт `user > hard > merged broad/soft > exact dialogue`; scaffold находится
+в отдельном индексе. Hard больше не становится mandatory автоматически.
+Инфлектированный scaffold возвращает фактический span предложения и уступает
+пересекающейся пользовательской фразе, даже когда та многозначна и ranker
+воздержался. Производные формы VN-hard исключены: exact broad `lolling` и
+`damning` не превращаются в `lol` и `damn`. Продвижение soft-леммы выше точного
+broad-слова ограничено регулярной глагольной морфологией; регрессии
+`saw → see` и реальная `lemming → lemme` закреплены отрицательными тестами.
+
+Для массового exact-слоя выбран официальный Amazon MASSIVE 1.1 (CC BY 4.0),
+потому что EN/ru-RU локали выровнены стабильным record ID и содержат judgments.
+Архив (`40 251 390` байт) и оба JSONL member закреплены размером и SHA-256 в
+source lock. Из 16 521 пар до конфликторазрешения прошли 9 915; 11 были
+эквивалентными дублями, итог — 9 837 ключей. Отброшено 6 673 записи:
+3 730 с локализованными slot values, 1 306 со слабыми judgments, 1 319 длиннее
+10 слов, 181 короче двух слов, 70 с латиницей в русском результате и 67 с
+конфликтующим нормализованным ключом. Числовые источники и строки без кириллицы
+в этой версии не добавили отдельных отклонений после более ранних фильтров.
+
+Transform из lock теперь проверяется как точный frozen-контракт. Curated и
+MASSIVE нельзя собирать по отдельности: семь gzip-результатов сначала создаются
+в staging-каталоге, затем заменяются с manifest-last и rollback. Manifest v2
+закрепляет generator/source-lock/input/output hashes, параметры transform,
+число строк и статистику фильтров; source lock входит в publish. Default smoke
+проверяет полный inventory, размеры, SHA-256 и число строк опубликованных
+файлов. Проверки после изменения: Python generator tests `7/7`, Release build
+без предупреждений/ошибок, полный smoke `34/34`. Фактическая загрузка:
+881 316 записей из 11 источников; lazy sense-index — 147 402 ключа и 455 543
+кандидата, в пределах прежних memory budgets.
+
+Same-build CPU-прогон `ranker-benchmark.json`: 44 случая, 38 ранжируемых,
+четыре phrase bypass и два auto-resolved; expected-label coverage `30/38`.
+Из размеченных решений приняты 20 и все `20/20` верны, 10 воздержаний;
+median margin `0,424`, median select latency `449` мс. Порог не подстраивался.
+
+Первый full-translation dev-прогон после механического разделения ролей дал
+chrF `0,579`, anchors `58/61`, residual English `0`, median `1503` мс.
+Сравнение с предыдущим dump показало два конкретных пропуска безопасной
+scaffold-роли: `kitten → котёнок` и `ceremony → церемония`. Они добавлены как
+отдельные reviewed anchors; неоднозначные `whaddya` и `sighed` обратно
+mandatory не переводились. Финальный production-прогон
+`qwen-scaffold-glossbert-cpu` прошёл gate `≥59/61`:
+
+- chrF mean/median/min — `0,589491` / `0,581765` / `0,064103`;
+- anchors — `60/61` (`98,361 %`), residual English — `0`, строк с латиницей
+  — `0`;
+- latency median/max — `1253/6037` мс;
+- deterministic terms — `21/24`, exact bypass — `4`, retries — `10`,
+  mandatory violations — `5 → 3`, sense conflicts — `6 → 3`;
+- structured review: `KEEP=3`, `FIX=0`, `rejected=2`, `failed=0`;
+- GlossBERT — `requests=156`, `selected=84`, `abstained=72`, `errors=0`,
+  `skipped=2`; neural `terms=0`, `hints=111`.
+
+Единственный пропущенный anchor — прежний `nice to meet you`: Qwen дважды
+выбрал «приятное знакомство» вместо обязательного «приятно познакомиться»;
+этот же случай был единственным промахом до VN Layer 2.0. Относительно
+strict-v3 chrF изменился `0,591288 → 0,589491`, но anchors и residual English
+сохранены, медиана остаётся внутри gate `+25 %` к Qwen baseline. Это принятый
+обмен: меньше непроверенных mandatory-терминов при сохранённом benchmark gate.
+Локальный исключённый из git dump:
+`artifacts/translation-vn-layer2-dev-final-2026-07-22.json`, SHA-256
+`5124A18ED7908C35F2DB6FA0BC779616E2CE85DADC9731103400C79419227E62`;
+dev-set SHA-256
+`7E1C20F47362328FABCCBC2125E1499FA5D92DBF620640C3FB252C2931C82B4A`.
+
+Margin-only критерий GlossBERT и замороженный порог `0.25` не менялись.
+`ranker-holdout*` и `translation-holdout-v1` при этой работе не открывались.
+
+## Полевой аудит Ever17 Himmel Edition — 22 июля 2026
+
+Десять снимков ручного прогона показали, что главная текущая потеря качества
+полного перевода происходит до Qwen: в пяти случаях модель получила не полную
+реплику, а OCR-фрагмент (`Er.`, хвост `things to watch out for`, середину
+`heme park and tell you a few`, только второе предложение). Даже при полном
+источнике остались независимые semantic-ошибки Qwen: `the other day → сегодня`,
+неестественное `told me a joke`, ошибка согласования в `let us inside` и
+неверная интерпретация `who cares`. Метки говорящего часто терялись, поэтому
+исчезали выбор `ты/вы` и род.
+
+Первопричина повреждённых реплик — не размер карточки: усечённый source уже
+попадал в историю. Sentence OCR ограничивал захват `2400×720`, тогда как
+ручной прогон шёл на экране шириной около 3200 пикселей; геометрическое
+объединение строк и выделение до первого `.?!` дополнительно ломали многоточия
+и составные реплики. Это отдельный обязательный этап **OCR utterance
+integrity** перед контекстной памятью №15: адаптивный захват текстового блока,
+сохранение speaker label и всей реплики, тесты на ellipsis/multi-sentence и
+явная provenance `OCR|HOOK` в карточке.
+
+Text-hook в этом прогоне фактически не участвовал. В сохранённых настройках
+`TextHookEnabled=false`, `TextractorDirectory` пуст, хотя у профиля
+`ever17PC_us` per-profile Hook был включён. После установки Textractor в
+`C:\Textractor` найдены оба CLI; Ever17 — 32-битный процесс и должен получать
+`x86\TextractorCLI.exe`. Исполняемый файл импортирует `TextOutA`, поэтому
+штатные GDI-hooks Textractor являются разумным первым путём; наличие полного
+текста подтверждается только фактическим свежим совпадением hook-предложения,
+а не успешным attach. Для этого карточке нужен видимый маркер `HOOK`; при
+отсутствии совпадения остаётся OCR. Специальный H-code для точной Himmel-сборки
+в проверенной базе не найден и должен добавляться только после живой проверки,
+а не угадываться по другой версии EXE.
+
+В `hover-translation.log` пользовательского прогона обнаружена одна настоящая
+ошибка в `16:01:00`: `GlossBertRankerException: The selected target does not
+occur in the source context`. Full-text pipeline корректно продолжил работу,
+но факт означает рассинхронизацию target/span после повреждения или
+нормализации OCR-контекста. Записи `synthetic neural scaffold failure` в том
+же файле созданы smoke-тестами намеренно и не относятся к ручному запуску.
+
+Регрессия масштабирования оказалась отдельной гонкой старта Magpie: Asteria
+считала скрытое pre-render окно `Magpie Scaling Window` уже активной сессией,
+увидела ещё не опубликованный `Magpie.SrcHWND == 0` и останавливала масштаб
+через примерно `145–170` мс. Ошибок GPU, capture или shader в циклах не было.
+Исправление должно считать сессию готовой только после видимости окна и
+совпадения `SrcHWND` с ожидаемым источником, а остановку посылать через hotkey
+активного fullscreen/windowed режима.
+
+Frozen ranker/translation holdout во время полевого аудита не открывались.
+
+## Smart Dictionary Quality Foundation, Magpie и Textractor — 22 июля 2026
+
+Фаза A выполнена по полевым дефектам Ever17. Trusted user/VN-hard и чистые
+однозначные фразы сохраняют быстрый bypass, а неоднозначные broad-фразы теперь
+попадают в definition-aligned разрешение смыслов. Выбор русской поверхности
+сначала отбрасывает Latin/meta/unbalanced мусор и только затем учитывает
+контекст, морфологию, регистр и источник. Добавлены консервативные fast-path
+для `while`, `that`, lexical/auxiliary `do`, `[duration] ago` и standalone
+`Save`; длинная фраза `I get that a lot` снова достижима через любую позицию
+курсора. Полевые слова и выражения Ever17 добавлены как dev-регрессии.
+
+Генератор теперь делит глоссы только по запятым верхнего уровня, отбрасывает
+поверхности без кириллицы, с латиницей, несбалансированными скобками или
+чистым meta-текстом и заимствует sibling-поверхности только внутри того же
+POS. После полной воспроизводимой регенерации English Wiktionary содержит
+`148 019` нормализованных headword/form/phrase и `447 097` sense rows;
+безопасное обогащение добавляет `39 513` поверхностей. Curated VN вырос до
+`194` записей: `114` hard, `52` soft keys / `102` sense rows и `21` scaffold;
+MASSIVE exact остаётся `9 837`. Runtime smoke загрузил `881 556` словарных
+записей из 11 источников и lazy sense-index на `147 840` ключей / `446 855`
+кандидатов. Python generator tests прошли `10/10`.
+
+Dev `ranker-benchmark.json` расширен с 44 до 65 случаев; frozen holdout не
+открывался. CPU-прогон: 45 ранжируемых случаев, 16 phrase bypass, три
+auto-resolved и один no-inventory; expected-label coverage `37/45` (`82,2 %`).
+Приняты все 21 размеченное решение и все `21/21` верны; 16 размеченных случаев
+воздержались. С учётом строгой проверки детерминированных ответов end-to-end
+correct coverage — `33/65` (`50,8 %`), median select latency `180` мс,
+large-inventory median `517` мс, median margin `0,305`. Quality gate усилен:
+минимум 20 случаев, accepted precision `90 %`, expected-inventory coverage
+`70 %`, decision coverage `45 %`, end-to-end correct coverage `45 %`.
+Runtime-критерий не менялся: воздержание остаётся строго margin-only с
+замороженным порогом `0,25`.
+
+Гонка масштабирования исправлена: скрытое pre-render окно больше не считается
+готовой сессией; старт ждёт видимое окно с `Magpie.SrcHWND`, равным исходному
+HWND, а остановка использует hotkey фактического fullscreen/windowed режима.
+Полный Release smoke после изменения прошёл `36/36`, включая реальный цикл
+Magpie start/stop; сборка завершилась без предупреждений и ошибок.
+
+Для text-hook добавлен auto-probe `C:\Textractor`, диагностика наличия x86/x64
+CLI и end-to-end provenance. Метка `HOOK` показывается только при свежем тексте
+Textractor, который действительно содержит OCR-якорь; успешный attach сам по
+себе больше не выглядит как доказательство работы хука. При отсутствии такого
+совпадения hover остаётся на безопасном OCR-fallback. H-code для точной
+Himmel-сборки не угадывался: его необходимость определяется живым прогоном.
+
+`ranker-holdout*` и `translation-holdout-v1` при этой реализации не
+открывались.
+
+## Нужен ли GlossBERT и Register/18+ audit — 23 июля 2026
+
+Проверка текущего `eng-rus-enwiktionary-senses.tsv.gz` показала, что adult и
+разговорные данные генератором не цензурируются. В sidecar находятся `6 428`
+строк с грубой маркировкой для `1 022` ключей, `13 301` строка с жаргонной маркировкой для
+`3 907` ключей, `6 460` разговорных строк для `1 784` ключей и `1 400`
+диалектных строк для `402` ключей; категории пересекаются. Эвристический поиск
+сексуальной семантики по key/definition нашёл `6 419` sense rows для `2 513`
+ключей — это оценка покрытия, не готовая классификация. Слова с обычным и
+adult-смыслом (`cock`, `pussy`, `horny` и подобные) имеют раздельные английские
+definitions, то есть definition-aware ranker принципиально может их различать.
+
+Обнаруженный архитектурный дефект — не отсутствие словаря, а смешение
+пригодности и регистра: `SmartDictionarySenseResolver.RegisterRank` ставит
+neutral выше colloquial/slang/vulgar даже внутри уже выбранного смысла.
+Full-text prompt также не требует сохранять эксплицитность. Поэтому данные
+покрывают класс, но production пока не гарантирует перевод без смягчения.
+Этому выделена фаза 14.2C с отдельными Smart/full-text dev-наборами и метриками
+semantic correctness, register fidelity, over-strengthening и censorship.
+
+[GlossBERT](https://aclanthology.org/D19-1355/) признан не незаменимой моделью,
+а корректным production baseline.
+Его полезная роль — независимо и детерминированно сравнить контекст с
+произвольными английскими Wiktionary definitions, вернуть стабильный GroupId и
+воздержаться по margin без генерации русского текста. Это хорошо совпадает с
+архитектурой Asteria и не заменяется обычным словарём или Qwen без потери
+контроля. Недостатки: BERT-base 2019, обучение на SemCor/WordNet, линейная
+стоимость cross-encoding и отсутствие VN/register-доменного обучения.
+
+Исследованные направления:
+
+- [gloss-informed bi-encoder BEM](https://aclanthology.org/2020.acl-main.95/)
+  улучшает редкие/невиданные смыслы и позволяет
+  предвычислить gloss vectors; в Asteria эта идея уже реализована как MiniLM
+  top-12 prefilter, но bi-encoder не должен единолично принимать тонкие решения;
+- [ESCHER](https://github.com/SapienzaNLP/esc) (ALL `80,7`) и
+  [ConSeC](https://github.com/SapienzaNLP/consec) (`82,0` SemCor, `83,2` с
+  WNGT) сильнее старого GlossBERT на стандартном WordNet WSD и показывают
+  пользу совместного чтения кандидатов/соседних смыслов. Их официальные
+  реализации имеют соответственно CC BY-NC 4.0 и CC BY-NC-SA 4.0, требуют
+  собственную PyTorch/WordNet обвязку и не являются допустимой прямой
+  зависимостью поставки;
+- [enhanced sense representations](https://aclanthology.org/2021.findings-emnlp.365/)
+  (definition + synonyms/examples/hypernyms) достигали `82,0 F1`, поэтому
+  качество sidecar-входа — самостоятельный рычаг;
+- [исследование ACL 2025](https://aclanthology.org/2025.acl-long.113/)
+  показывает преимущество DeBERTa-v3 среди проверенных encoder-only PLM для
+  разделения смыслов; официальный
+  [DeBERTa-v3-small](https://huggingface.co/microsoft/deberta-v3-small) имеет
+  MIT-лицензию и 6 слоёв.
+  [ModernBERT-base](https://huggingface.co/answerdotai/ModernBERT-base)
+  доступен под Apache-2.0, но его
+  архитектурные ops и реальная NPU-производительность требуют прототипа.
+
+Решение: не удалять GlossBERT и не переносить академическую SOTA-модель
+напрямую. №8 превращён в same-build bake-off текущего hybrid baseline,
+DeBERTa-v3-small cross-encoder и, при совместимости, ModernBERT-base с
+одинаковым domain fine-tune. Qwen используется только как необязательный
+офлайн-генератор черновых кандидатов.
+Замена происходит лишь при сохранении высокой precision, приросте end-to-end
+coverage, меньшем abstention и приемлемых CPU/NPU ресурсах; иначе production
+остаётся на GlossBERT. Frozen holdout при исследовании не открывался.
+
+### Gold/silver протокол для WSD и полного перевода — 23 июля 2026
+
+После уточнения роли учителя №8 и №19 переведены с Qwen-centric distillation на
+контролируемый gold/silver процесс. Codex отвечает за versioned annotation
+guide, ручную разметку сложного gold, исправление кандидатов и арбитраж всех
+расхождений. Это не означает прямой перенос возможностей Codex в веса:
+сохранённые решения становятся обычными обучающими примерами, после чего
+DeBERTa или переводчик обучается воспроизводимым локальным скриптом.
+
+Для WSD планируются 1 500–3 000 gold и 50–100 тыс. silver-пар. Приоритет silver
+отдан sense-linked примерам и distant supervision; локальная Qwen может только
+массово предложить три варианта. В train допускаются лишь единогласные ответы,
+прошедшие span/POS/inventory-проверки; остальные возвращаются Codex. Отдельные
+абляции `base → gold → gold+silver` не позволят скрыть ухудшение за объёмом
+псевдоразметки.
+
+Для полнотекстового en→ru перевода планируются 2 000–5 000 Codex-gold реплик и
+100–300 тыс. лицензированных silver-реплик. Единица данных сохраняет предыдущие
+ходы, говорящего, каркас, регистр, обязательные якоря, запрещённые смысловые
+сдвиги и несколько допустимых references. Qwen производит кандидатов, а не
+истину; неоднозначность, имена, местоимения, юмор и register/18+ входят в
+обязательную очередь ручного арбитража. Для decoder-студента предусмотрены SFT
+и preference-пары «исправленный вариант против конкретной ошибки».
+
+Внешний frontier API — отдельный опциональный источник кандидатов только после
+явного разрешения на сеть и стоимость. Пользовательские приватные скрипты по
+умолчанию наружу не отправляются. Dev и frozen holdout не показываются ни
+одному учителю и не входят в train. Полнотекстовый студент допускается в
+production лишь при сохранённой смысловой точности, anchors не хуже `60/61`,
+register fidelity не ниже `90 %`, нулевом residual English/цензурных заглушках
+и измеримом выигрыше CPU latency/памяти. Если gate не пройден, текущие
+GlossBERT и Qwen остаются production baseline. Frozen holdout при составлении
+этого плана не открывался.
+
+### Проверка новых моделей и коммерческих словарей — 23 июля 2026
+
+Проверена предложенная подборка на актуальном состоянии эталонной машины:
+`23,7 ГБ` общей RAM, Radeon 860M с `4 ГБ` заявленной adapter memory и Foundry
+Local 0.10.2. [Gemma 4 26B-A4B](https://ai.google.dev/gemma/docs/core)
+существует и действительно активирует около 4B параметров на токен, но Google
+оценивает Q4_0 footprint примерно в `14,4 ГБ`
+без KV cache и runtime и отдельно подчёркивает, что все 26B параметров должны
+быть загружены. Поэтому это не лёгкая live-модель для Asteria: она конкурирует
+за общую память с Windows, Magpie, OCR, словарями и ranker. Использовать её
+имеет смысл только как необязательного офлайн-учителя.
+
+В фактическом каталоге Foundry доступны `qwen3.5-9b` CPU (`7,9 ГБ`),
+`qwen3-14b` CPU (`9,3 ГБ`), а для `qwen3.5-2b-text` каталог показывает GPU
+вариант (`1,3 ГБ`), хотя production из-за provider-регрессии по-прежнему явно
+закреплён за CPU-вариантом;
+Gemma 4, TranslateGemma и Saiga отсутствуют. Наиболее интересный новый кандидат
+обнаружен вне исходного списка: официальный
+[`google/translategemma-4b-it`](https://huggingface.co/google/translategemma-4b-it) —
+специализированная модель Google Translate для 55 языков. Её нужно ставить в
+первый en→ru bake-off перед общей Gemma 4, но для интеграции потребуется свой
+worker/export и принятие Gemma terms. Модели при этом не скачивались.
+
+[Habr-результат `89,57`](https://habr.com/ru/articles/951416/) для
+`saiga_yandexgpt_8b` — настоящий опубликованный
+COMET-замер, но он получен на трёх независимых фрагментах одной главы HPMOR,
+без диалогового контекста, на RTX 4090/3090; автор сам отмечает возможное
+попадание текста в train. Это полезный кандидат-сигнал, но не переносимый
+benchmark Asteria. Кроме того,
+[custom-лицензия YandexGPT](https://huggingface.co/yandex/YandexGPT-5-Lite-8B-pretrain/blob/main/LICENSE)
+запрещает создание
+ряда оскорбительных и порнографических материалов, что несовместимо с нашим
+обязательным переводом исходного register/18+ без смягчения. Apache-2.0
+[`saiga_nemo_12b`](https://huggingface.co/IlyaGusev/saiga_nemo_12b) можно
+оставить только в GGUF research lane.
+
+Коммерческие онлайн-словари не превращаются в bundled layer от того, что ими
+можно бесплатно пользоваться в браузере. У
+[Multitran](https://www.multitran.com/m.exe?a=421) нет открытой лицензии на
+массовое копирование базы; [Reverso Context](https://context.reverso.net/translation/about)
+показывает данные из уже
+переведённых текстов без пригодной для нашей поставки открытой лицензии;
+[`WordReference`](https://www.wordreference.com/english/TermsOfService.aspx)
+прямо запрещает automated collection, derivative dictionaries, ML и
+использование как основы машинного перевода. Их допустимо применять для
+ручной проверки отдельных gold-примеров без копирования корпуса. English
+[`Wiktionary`](https://en.wiktionary.org/wiki/Wiktionary:Copyrights) остаётся
+правильным массовым источником при соблюдении CC BY-SA/GFDL; для дополнительных
+фраз нужны исходные открытые корпуса, а не выдача
+Reverso. Frozen holdout при этом исследовании не открывался.
 
 ## Журнал открытий frozen holdout
 

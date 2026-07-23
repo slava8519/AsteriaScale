@@ -506,23 +506,83 @@ public sealed partial class TextHookService : IAsyncDisposable
     /// <summary>Probes standard install locations to prefill the UI path.</summary>
     public static string? ProbeDefaultDirectory()
     {
+        string? systemDrive = Path.GetPathRoot(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows));
         string?[] roots =
         [
             Environment.GetEnvironmentVariable("ProgramFiles"),
             Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
         ];
-        return roots
+        IEnumerable<string> candidates = new[]
+            {
+                Environment.GetEnvironmentVariable("TEXTRACTOR_DIRECTORY"),
+                string.IsNullOrWhiteSpace(systemDrive)
+                    ? null
+                    : Path.Combine(systemDrive, "Textractor")
+            }
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Select(directory => directory!)
+            .Concat(roots
             .Where(root => !string.IsNullOrWhiteSpace(root))
             .SelectMany(root => new[]
             {
                 Path.Combine(root!, "Textractor"),
                 Path.Combine(root!, "Programs", "Textractor")
-            })
-            .FirstOrDefault(directory =>
-                File.Exists(Path.Combine(directory, "x86", "TextractorCLI.exe")) ||
-                File.Exists(Path.Combine(directory, "x64", "TextractorCLI.exe")) ||
-                File.Exists(Path.Combine(directory, "TextractorCLI.exe")));
+            }));
+        return ProbeDefaultDirectory(candidates);
+    }
+
+    internal static string? ProbeDefaultDirectory(IEnumerable<string> candidates) =>
+        candidates
+            .Where(directory => !string.IsNullOrWhiteSpace(directory))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(IsTextractorDirectory);
+
+    public static bool IsTextractorDirectory(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return false;
+        }
+
+        try
+        {
+            return File.Exists(Path.Combine(directory, "x86", "TextractorCLI.exe")) ||
+                   File.Exists(Path.Combine(directory, "x64", "TextractorCLI.exe")) ||
+                   File.Exists(Path.Combine(directory, "TextractorCLI.exe"));
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                          IOException or
+                                          NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    public static string DescribeInstallation(string? directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return "папка Textractor не указана";
+        }
+
+        bool x86 = File.Exists(Path.Combine(directory, "x86", "TextractorCLI.exe"));
+        bool x64 = File.Exists(Path.Combine(directory, "x64", "TextractorCLI.exe"));
+        bool flat = File.Exists(Path.Combine(directory, "TextractorCLI.exe"));
+        if (!x86 && !x64 && !flat)
+        {
+            return "TextractorCLI.exe не найден — используется OCR";
+        }
+
+        string architecture = (x86, x64, flat) switch
+        {
+            (true, true, _) => "x86 и x64",
+            (true, false, _) => "x86",
+            (false, true, _) => "x64",
+            _ => "универсальный CLI"
+        };
+        return $"Textractor готов ({architecture})";
     }
 
     /// <summary>

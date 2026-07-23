@@ -96,7 +96,9 @@ public partial class MainWindow : Window
         RunAtStartupCheckBox.IsChecked = _startup.IsEnabled();
         StartMinimizedCheckBox.IsChecked = _settings.StartMinimized;
         TextHookCheckBox.IsChecked = _settings.TextHookEnabled;
-        TextractorPathBox.Text = _settings.TextractorDirectory;
+        TextractorPathBox.Text = string.IsNullOrWhiteSpace(_settings.TextractorDirectory)
+            ? TextHookService.ProbeDefaultDirectory() ?? string.Empty
+            : _settings.TextractorDirectory;
         HoverTranslationCheckBox.IsChecked = _settings.HoverTranslationEnabled;
         TranslationModeComboBox.ItemsSource = TranslationModes;
         TranslationModeComboBox.SelectedItem = TranslationModes.First(option =>
@@ -117,6 +119,7 @@ public partial class MainWindow : Window
         HoverDelayComboBox.SelectedItem = HoverDelays.FirstOrDefault(
             option => option.Milliseconds == _settings.HoverTranslationDelayMs) ?? HoverDelays[1];
         UpdateTranslationModePresentation();
+        UpdateTextHookPresentation();
         RefreshProfiles();
         // Control event suppression is only needed while initial values are
         // assigned. Keeping it across asynchronous hardware discovery loses
@@ -631,6 +634,7 @@ public partial class MainWindow : Window
         }
 
         _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        UpdateTextHookPresentation();
         _hoverTranslation.ApplyTextHookSettings();
         await PersistSettingsAsync();
     }
@@ -643,8 +647,22 @@ public partial class MainWindow : Window
         }
 
         _settings.TextractorDirectory = TextractorPathBox.Text.Trim();
+        UpdateTextHookPresentation();
         _hoverTranslation.ApplyTextHookSettings();
         await PersistSettingsAsync();
+    }
+
+    private void UpdateTextHookPresentation()
+    {
+        string directory = TextractorPathBox.Text.Trim();
+        string installation = TextHookService.DescribeInstallation(directory);
+        TextHookStatusText.Text = TextHookCheckBox.IsChecked == true
+            ? TextHookService.IsTextractorDirectory(directory)
+                ? installation + "; подключение к разрешённой игре выполняется автоматически"
+                : installation
+            : TextHookService.IsTextractorDirectory(directory)
+                ? installation + "; включите text-hook, чтобы использовать его вместо OCR-контекста"
+                : "Text-hook выключен; используется OCR-контекст";
     }
 
     private async void OnProfileTextHookChanged(object sender, RoutedEventArgs e)

@@ -1,0 +1,128 @@
+{
+  "counts": {
+    "curatedVn": {
+      "hardKeys": 114,
+      "records": 194,
+      "recordsByRole": {
+        "hard": 114,
+        "scaffold": 21,
+        "soft": 59
+      },
+      "recordsBySource": {
+        "asteria-vn-curated-v2": 194
+      },
+      "recordsByTier": {
+        "gold": 135,
+        "silver": 59
+      },
+      "scaffoldKeys": 21,
+      "senseRows": 102,
+      "softKeys": 52
+    },
+    "massive": {
+      "acceptedRecordsBeforeConflicts": 9915,
+      "equivalentDuplicateRecords": 11,
+      "rawPairs": 16521,
+      "rejectedRecords": 6673,
+      "rejectionsByReason": {
+        "bad_judgments": 1306,
+        "conflicting_normalized_key": 67,
+        "latin_russian": 70,
+        "localized_slot": 3730,
+        "no_cyrillic": 0,
+        "numeric_source": 0,
+        "too_long": 1319,
+        "too_short": 181
+      },
+      "shippedKeys": 9837
+    }
+  },
+  "generator": {
+    "bytes": 77995,
+    "fileName": "build-dictionaries.py",
+    "sha256": "72EDD532E8F0B82CBC38D1E702C7DAD7130B54AB2A9C017471C2AF2CA9DAB66F"
+  },
+  "inputs": {
+    "curatedVn": {
+      "bytes": 24474,
+      "fileName": "vn-lexicon.tsv",
+      "sha256": "8ED3DE0D0F18DCD7101C9D1837893C3BDCF6A514DE2AD286D458CB99E4B1DC96"
+    },
+    "massiveArchive": {
+      "bytes": 40251390,
+      "fileName": "amazon-massive-dataset-1.1.tar.gz",
+      "sha256": "4CBA5FAA11C71437928E17CB1B9B3D8B8E727E7EA363A3A9A8045E19C0491577"
+    },
+    "sourceLock": {
+      "bytes": 2158,
+      "fileName": "vn-sources.lock.json",
+      "sha256": "DEA989B3ED0108AF9D8B9F368F856A89C57389DCFC5CFD32463DACCE6C6745F7"
+    }
+  },
+  "normalization": {
+    "lexical": "normalize_english-v1",
+    "sentence": "normalize_english_sentence_key-v1"
+  },
+  "outputs": [
+    {
+      "bytes": 217659,
+      "fileName": "eng-rus-massive-dialogue.tsv.gz",
+      "rows": 9837,
+      "sha256": "871362CD4CCCEF6AFD957AB2710228BBB05CFF3D904A1FC108973721261E219A"
+    },
+    {
+      "bytes": 499,
+      "fileName": "eng-rus-vn-scaffold.tsv.gz",
+      "rows": 21,
+      "sha256": "FE76E7D63BE3FB1C78BDFE19CE567569904CBA1D7AD68AAE5878F9FD2297D78E"
+    },
+    {
+      "bytes": 1657,
+      "fileName": "eng-rus-vn-senses.tsv.gz",
+      "rows": 102,
+      "sha256": "AE40581B6321D313FF0EC752B27175443EE7CEBD28671A7FAECF43FA8728F784"
+    },
+    {
+      "bytes": 814,
+      "fileName": "eng-rus-vn-soft.tsv.gz",
+      "rows": 52,
+      "sha256": "89FA8612F4114220B79DF8EC539B1F159A0BDAF6F78865F01ABBEA8ED8BAF732"
+    },
+    {
+      "bytes": 1975,
+      "fileName": "eng-rus-vn.tsv.gz",
+      "rows": 114,
+      "sha256": "7B0F8409245EA4997D1DA9C00EABE7E56038BBC7EA7B3D748AD018AF154D77FE"
+    },
+    {
+      "bytes": 124222,
+      "fileName": "vn-dialogue-provenance.tsv.gz",
+      "rows": 9837,
+      "sha256": "4C707995E9EC00B21D6C73D5778A0EC8140453EA3107F787C137A82E4A8968B3"
+    },
+    {
+      "bytes": 6162,
+      "fileName": "vn-provenance.tsv.gz",
+      "rows": 194,
+      "sha256": "AC599C75E8842C91A22A3709545B54844DA78E046C2607BE7D79AD1F1EBEC2E0"
+    }
+  ],
+  "schemaVersion": 2,
+  "transforms": {
+    "massive": {
+      "maximumWords": 10,
+      "minimumWords": 2,
+      "partitions": [
+        "train",
+        "dev",
+        "test"
+      ],
+      "pipeline": "massive-en-ru-exact-v1",
+      "rejectConflictingSentenceKeys": true,
+      "rejectLatinRussian": true,
+      "rejectLocalizedSlots": true,
+      "rejectNumericSource": true,
+      "requireMajorityPositiveJudgments": true
+    }
+  }
+}

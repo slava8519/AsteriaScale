@@ -37,7 +37,11 @@ public partial class HoverTranslationOverlay : Window
         SourceInitialized += OnSourceInitialized;
     }
 
-    internal void ShowLoading(string source, NativeMethods.Point cursor, string engine)
+    internal void ShowLoading(
+        string source,
+        NativeMethods.Point cursor,
+        string engine,
+        HoverTextSource textSource = HoverTextSource.Ocr)
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
@@ -52,7 +56,8 @@ public partial class HoverTranslationOverlay : Window
             normalizedSource,
             isPhrase: false,
             loading: true,
-            smartAccelerator: smartAccelerator);
+            smartAccelerator: smartAccelerator,
+            textSource: textSource);
         SourceText.Text = normalizedSource;
         SourceText.FontSize = SourceFontSize(normalizedSource);
         MeaningsPanel.Visibility = Visibility.Collapsed;
@@ -82,7 +87,8 @@ public partial class HoverTranslationOverlay : Window
         bool dictionaryFound = true,
         bool isPhrase = false,
         string? language = null,
-        double? confidence = null)
+        double? confidence = null,
+        HoverTextSource textSource = HoverTextSource.Ocr)
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
@@ -120,7 +126,8 @@ public partial class HoverTranslationOverlay : Window
                     ? $"{smartAccelerator} · НЕДОСТУПЕН"
                 : smartUsesTatoeba
                     ? "TATOEBA"
-                    : smartUsesFastPath ? "БЕЗ МОДЕЛИ" : smartUsesCache ? "КЭШ" : null);
+                    : smartUsesFastPath ? "БЕЗ МОДЕЛИ" : smartUsesCache ? "КЭШ" : null,
+            textSource: textSource);
 
         SourceText.Text = normalizedSource;
         SourceText.FontSize = SourceFontSize(normalizedSource);
@@ -272,18 +279,20 @@ public partial class HoverTranslationOverlay : Window
         bool dictionaryFound = true,
         double? confidence = null,
         string? smartAccelerator = null,
-        string? smartStage = null)
+        string? smartStage = null,
+        HoverTextSource textSource = HoverTextSource.Ocr)
     {
         string sourceLanguage = string.IsNullOrWhiteSpace(language)
             ? (ContainsJapanese(source) ? "JA" : "EN")
             : language.ToUpperInvariant();
         ModeText.Text = dictionaryMode ? "Словарь" : smartMode ? "Умный словарь" : "Локальный перевод";
         string acceleratorLabel = smartAccelerator ?? "МОДЕЛЬ";
-        MetaText.Text = dictionaryMode
+        string metaText = dictionaryMode
             ? $"{sourceLanguage} → RU  ·  {(loading ? "ПОИСК" : !dictionaryFound ? "НЕТ" : isPhrase ? "ВЫРАЖЕНИЕ" : "СЛОВО")}"
             : smartMode
                 ? $"{sourceLanguage} → RU  ·  {smartStage ?? (loading || confidence is null ? acceleratorLabel + " АНАЛИЗ" : acceleratorLabel + " КОНТЕКСТ")}"
                 : $"{sourceLanguage} → RU  ·  QWEN";
+        MetaText.Text = AddTextSourceBadge(metaText, textSource);
 
         SolidColorBrush accent = dictionaryMode ? DictionaryAccent : smartMode ? SmartAccent : NeuralAccent;
         Card.BorderBrush = dictionaryMode ? DictionaryBorder : smartMode ? SmartBorder : NeuralBorder;
@@ -292,6 +301,11 @@ public partial class HoverTranslationOverlay : Window
         MetaText.Foreground = accent;
         StatusDot.Fill = accent;
     }
+
+    internal static string AddTextSourceBadge(string metaText, HoverTextSource textSource) =>
+        textSource == HoverTextSource.TextHook
+            ? metaText + "  ·  HOOK"
+            : metaText;
 
     internal static string? SmartAccelerator(string engine)
     {

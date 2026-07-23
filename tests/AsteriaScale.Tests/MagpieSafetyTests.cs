@@ -171,7 +171,38 @@ internal static class MagpieSafetyTests
 
     private static void VerifyCursorLifecycleGuard()
     {
+        nint scalingWindow = new(24);
         nint sourceWindow = new(42);
+        Check(!MagpieEngineService.IsScalingWindowActiveState(
+                scalingWindow,
+                isVisible: false),
+            "A hidden Magpie initialization window was reported as active scaling.");
+        Check(MagpieEngineService.IsScalingWindowActiveState(
+                scalingWindow,
+                isVisible: true),
+            "A visible Magpie scaling window was not reported as active.");
+        Check(!MagpieEngineService.IsScalingWindowReadyForTargetState(
+                scalingWindow: scalingWindow,
+                isVisible: false,
+                sourceWindow: nint.Zero,
+                isSourceWindow: false,
+                expectedSourceWindow: sourceWindow),
+            "A pre-render Magpie window without source properties was reported as ready.");
+        Check(!MagpieEngineService.IsScalingWindowReadyForTargetState(
+                scalingWindow: scalingWindow,
+                isVisible: true,
+                sourceWindow: new nint(41),
+                isSourceWindow: true,
+                expectedSourceWindow: sourceWindow),
+            "A Magpie session for another source window was reported as ready.");
+        Check(MagpieEngineService.IsScalingWindowReadyForTargetState(
+                scalingWindow: scalingWindow,
+                isVisible: true,
+                sourceWindow: sourceWindow,
+                isSourceWindow: true,
+                expectedSourceWindow: sourceWindow),
+            "A visible Magpie session for the expected source was not reported as ready.");
+
         Check(MagpieEngineService.IsScalingSourceLostState(
                 nint.Zero,
                 isWindow: false,
@@ -202,6 +233,11 @@ internal static class MagpieSafetyTests
                 isIconic: false,
                 isCloaked: false),
             "A valid visible scaling source was treated as lost.");
+
+        Check(!MagpieEngineService.IsWindowedScalingModeState(nint.Zero),
+            "A fullscreen Magpie session selected the windowed stop action.");
+        Check(MagpieEngineService.IsWindowedScalingModeState(new nint(1)),
+            "A windowed Magpie session selected the fullscreen stop action.");
 
         Check(AutoScaleService.IsDesktopWindowClass("Progman") &&
               AutoScaleService.IsDesktopWindowClass("WorkerW") &&

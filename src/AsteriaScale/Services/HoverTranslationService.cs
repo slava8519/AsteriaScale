@@ -41,6 +41,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private long _overlayGeneration;
     private string? _lastReportedStatus;
     private SmartFallbackRequest? _lastSmartFallbackRequest;
+    private int _textHookDiagnosticProcessId;
+    private bool _textHookMatchReported;
 
     public HoverTranslationService(AppSettings settings, Func<bool>? isScaling = null)
     {
@@ -515,7 +517,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 request.Source,
                 FoundryTranslationService.EngineLabel,
                 cursor,
-                displayGeneration);
+                displayGeneration,
+                request.TextSource);
             (string source, string translation, string engine) = await TranslateSmartFallbackAsync(
                 request.Source,
                 cancellationToken);
@@ -537,7 +540,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 confidence: null,
                 context: request.Source,
                 displayGeneration: displayGeneration,
-                requireCursorNear: false);
+                requireCursorNear: false,
+                textSource: request.TextSource);
             ReportStatus("Полная реплика переведена по Alt+Shift+D");
             ScheduleSmartFallbackUnload();
         }
@@ -663,7 +667,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 IsSmartMode ? recognized.HoveredWord : recognized.Text,
                 currentEngine,
                 cursor,
-                displayGeneration);
+                displayGeneration,
+                recognized.TextSource);
             string source;
             string translation;
             string engine;
@@ -681,6 +686,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     cursor,
                     smartBackend,
                     cancellationToken);
+                if (_lastSmartFallbackRequest is { } fallbackRequest &&
+                    string.Equals(fallbackRequest.Source, recognized.Text, StringComparison.Ordinal))
+                {
+                    _lastSmartFallbackRequest = fallbackRequest with
+                    {
+                        TextSource = recognized.TextSource
+                    };
+                }
+
                 source = smartResult.Source;
                 translation = smartResult.Translation;
                 engine = smartResult.Engine;
@@ -732,7 +746,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 confidence,
                 recognized.Text,
                 displayGeneration,
-                requireCursorNear: true);
+                requireCursorNear: true,
+                textSource: recognized.TextSource);
             if (resultCacheRequest is not null && resultCacheSelection is not null)
             {
                 await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
@@ -793,6 +808,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
             }
 
             _textHook.EnsureAttached(processId);
+            if (_textHook.AttachedProcessId != processId)
+            {
+                return recognized;
+            }
+
+            if (_textHookDiagnosticProcessId != processId)
+            {
+                _textHookDiagnosticProcessId = processId;
+                _textHookMatchReported = false;
+                ReportStatus("Text-hook: Textractor запущен, совпадающий текст пока не получен");
+            }
+
             TextHookMatch? match = _textHook.TryGetSentenceContaining(
                 processId,
                 recognized.HoveredWord,
@@ -800,11 +827,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 recognized.CharacterIndex);
             if (match is not null)
             {
-                return recognized with
+                if (!_textHookMatchReported)
                 {
-                    Text = match.Text,
-                    CharacterIndex = match.CharacterIndex
-                };
+                    _textHookMatchReported = true;
+                    ReportStatus("Text-hook: используется текст Textractor (HOOK)");
+                }
+
+                return ApplyTextHookMatch(recognized, match);
             }
         }
         catch (Exception exception)
@@ -814,6 +843,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
         return recognized;
     }
+
+    internal static HoverOcrResult ApplyTextHookMatch(
+        HoverOcrResult recognized,
+        TextHookMatch? match) =>
+        match is null
+            ? recognized
+            : recognized with
+            {
+                Text = match.Text,
+                CharacterIndex = match.CharacterIndex,
+                TextSource = HoverTextSource.TextHook
+            };
 
     private static bool CursorIsNear(NativeMethods.Point expected) =>
         VisibleCursorService.TryGetPosition(out NativeMethods.Point current) &&
@@ -879,7 +920,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         string source,
         string engine,
         NativeMethods.Point cursor,
-        long displayGeneration) =>
+        long displayGeneration,
+        HoverTextSource textSource = HoverTextSource.Ocr) =>
         _dispatcher.BeginInvoke(
             () =>
             {
@@ -887,7 +929,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     _enabled &&
                     displayGeneration == Volatile.Read(ref _overlayGeneration))
                 {
-                    _overlay.ShowLoading(source, cursor, engine);
+                    _overlay.ShowLoading(source, cursor, engine, textSource);
                 }
             },
             DispatcherPriority.Normal);
@@ -903,7 +945,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         double? confidence,
         string context,
         long displayGeneration,
-        bool requireCursorNear)
+        bool requireCursorNear,
+        HoverTextSource textSource = HoverTextSource.Ocr)
     {
         _dispatcher.BeginInvoke(
             () =>
@@ -924,7 +967,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     dictionaryFound,
                     isPhrase,
                     language,
-                    confidence);
+                    confidence,
+                    textSource);
                 if (dictionaryFound)
                 {
                     _history.Record(source, translation, engine, context);
@@ -1133,7 +1177,12 @@ public sealed class HoverTranslationService : IAsyncDisposable
         cancellation?.Dispose();
     }
 
-    public void ApplyTextHookSettings() => _textHook.ApplySettings();
+    public void ApplyTextHookSettings()
+    {
+        _textHookDiagnosticProcessId = 0;
+        _textHookMatchReported = false;
+        _textHook.ApplySettings();
+    }
 
     private long BeginOverlayOperation() => Interlocked.Increment(ref _overlayGeneration);
 
@@ -1348,5 +1397,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private sealed record SmartFallbackRequest(
         string Source,
         NativeMethods.Point Cursor,
-        DateTime CreatedUtc);
+        DateTime CreatedUtc,
+        HoverTextSource TextSource = HoverTextSource.Ocr);
 }

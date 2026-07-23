@@ -55,13 +55,26 @@ public sealed class MagpieEngineService : IAsyncDisposable
             }
         }
     }
-    public bool IsScaling => FindOwnedWindow(ScalingWindowClass) != nint.Zero;
+    public bool IsScaling
+    {
+        get
+        {
+            nint scalingWindow = FindOwnedWindow(ScalingWindowClass);
+            // Magpie creates this HWND before renderer initialization and publishes
+            // source properties only immediately before showing the first frame.
+            return IsScalingWindowActiveState(
+                scalingWindow,
+                scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow));
+        }
+    }
     internal bool IsScalingSourceLost
     {
         get
         {
             nint scalingWindow = FindOwnedWindow(ScalingWindowClass);
-            if (scalingWindow == nint.Zero)
+            if (!IsScalingWindowActiveState(
+                    scalingWindow,
+                    scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow)))
             {
                 return false;
             }
@@ -116,7 +129,7 @@ public sealed class MagpieEngineService : IAsyncDisposable
             }
 
             if (!await WaitForStateAsync(
-                    () => IsScaling,
+                    () => IsScalingReadyForTarget(target.Handle),
                     expectedState: true,
                     TimeSpan.FromSeconds(5),
                     cancellationToken))
@@ -151,8 +164,12 @@ public sealed class MagpieEngineService : IAsyncDisposable
                 return;
             }
 
+            // WM_HOTKEY selects a mode-specific toggle, not a generic stop. Sending
+            // the active mode stops it; sending the other mode can switch modes.
+            bool activeWindowedMode = IsWindowedScalingModeState(
+                NativeMethods.GetProp(scalingWindow, "Magpie.Windowed"));
             if (!NativeMethods.TriggerMagpieAction(
-                    false,
+                    activeWindowedMode,
                     ownedProcessId,
                     allowKeyboardFallback: !HasExternalMagpieProcess()))
             {
@@ -551,6 +568,40 @@ public sealed class MagpieEngineService : IAsyncDisposable
         bool isIconic,
         bool isCloaked) =>
         sourceWindow == nint.Zero || !isWindow || isIconic || isCloaked;
+
+    internal static bool IsScalingWindowActiveState(
+        nint scalingWindow,
+        bool isVisible) =>
+        scalingWindow != nint.Zero && isVisible;
+
+    internal static bool IsScalingWindowReadyForTargetState(
+        nint scalingWindow,
+        bool isVisible,
+        nint sourceWindow,
+        bool isSourceWindow,
+        nint expectedSourceWindow) =>
+        IsScalingWindowActiveState(scalingWindow, isVisible) &&
+        sourceWindow != nint.Zero &&
+        isSourceWindow &&
+        sourceWindow == expectedSourceWindow;
+
+    internal static bool IsWindowedScalingModeState(nint windowedProperty) =>
+        windowedProperty != nint.Zero;
+
+    private bool IsScalingReadyForTarget(nint expectedSourceWindow)
+    {
+        nint scalingWindow = FindOwnedWindow(ScalingWindowClass);
+        bool isVisible = scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow);
+        nint sourceWindow = scalingWindow == nint.Zero
+            ? nint.Zero
+            : NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
+        return IsScalingWindowReadyForTargetState(
+            scalingWindow,
+            isVisible,
+            sourceWindow,
+            sourceWindow != nint.Zero && NativeMethods.IsWindow(sourceWindow),
+            expectedSourceWindow);
+    }
 
     private bool HasExternalMagpieProcess()
     {

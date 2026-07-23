@@ -1,0 +1,196 @@
+# VN Layer 2.0 curated source. Columns:
+# source_id, record_id, role, tier, English, Russian, English definition, register, POS.
+asteria-vn-curated-v2	h001	hard	gold	the	определённый артикль	the definite article	standard	det
+asteria-vn-curated-v2	h002	hard	gold	i get that a lot	я часто это слышу	a familiar response to a frequently heard remark	colloquial	phrase
+asteria-vn-curated-v2	h003	hard	gold	yep	ага; да	an informal affirmative response	colloquial	interj
+asteria-vn-curated-v2	h004	hard	gold	nope	не-а; нет	an informal negative response	colloquial	interj
+asteria-vn-curated-v2	h005	hard	gold	nah	не-а; нет	an informal negative response	colloquial	interj
+asteria-vn-curated-v2	h006	hard	gold	uh-huh	угу; да	an informal affirmative response	colloquial	interj
+asteria-vn-curated-v2	h007	hard	gold	uh-oh	ой-ой; что-то не так	an exclamation anticipating trouble	colloquial	interj
+asteria-vn-curated-v2	h008	hard	gold	whoa	ого; ничего себе	an exclamation of surprise	colloquial	interj
+asteria-vn-curated-v2	h009	hard	gold	jeez	боже; ну и ну	an exclamation of surprise or annoyance	colloquial	interj
+asteria-vn-curated-v2	h010	hard	gold	gosh	боже; надо же	a mild exclamation of surprise	colloquial	interj
+asteria-vn-curated-v2	h011	hard	gold	damn	чёрт; проклятье	an exclamation of anger or frustration	colloquial	interj
+asteria-vn-curated-v2	h012	hard	gold	damn it	чёрт возьми	an exclamation of anger or frustration	colloquial	phrase
+asteria-vn-curated-v2	h013	hard	gold	what the hell	какого чёрта	an emphatic expression of surprise or anger	colloquial	phrase
+asteria-vn-curated-v2	h014	hard	gold	no way	ни за что; не может быть	a refusal or expression of disbelief	colloquial	phrase
+asteria-vn-curated-v2	h015	hard	gold	come on	да ладно; ну же	an appeal, encouragement, or disbelief	colloquial	phrase
+asteria-vn-curated-v2	h016	hard	gold	hang on	подожди	an instruction to wait briefly	colloquial	phrase
+asteria-vn-curated-v2	h017	hard	gold	hold on	подожди	an instruction to wait briefly	colloquial	phrase
+asteria-vn-curated-v2	h018	hard	gold	wait up	подожди меня	an instruction to wait for the speaker	colloquial	phrase
+asteria-vn-curated-v2	h019	hard	gold	shut up	замолчи; да ладно	an instruction to be quiet or an expression of disbelief	colloquial	phrase
+asteria-vn-curated-v2	h020	hard	gold	knock it off	прекрати	an instruction to stop an annoying action	colloquial	phrase
+asteria-vn-curated-v2	h021	hard	gold	give me a break	дай мне передохнуть; да ладно	a request for relief or expression of disbelief	colloquial	phrase
+asteria-vn-curated-v2	h022	hard	gold	never mind	неважно; забудь	an instruction to disregard something	colloquial	phrase
+asteria-vn-curated-v2	h023	hard	gold	forget it	забудь; неважно	an instruction to disregard something	colloquial	phrase
+asteria-vn-curated-v2	h024	hard	gold	my bad	моя ошибка; виноват	an informal admission of fault	colloquial	phrase
+asteria-vn-curated-v2	h025	hard	gold	you bet	ещё бы; конечно	an emphatic affirmative response	colloquial	phrase
+asteria-vn-curated-v2	h026	hard	gold	all right	хорошо; всё в порядке	an expression of agreement or wellbeing	colloquial	phrase
+asteria-vn-curated-v2	h027	hard	gold	alright	хорошо; всё в порядке	an informal spelling of all right	colloquial	phrase
+asteria-vn-curated-v2	h028	hard	gold	right away	прямо сейчас; немедленно	without delay	standard	phrase
+asteria-vn-curated-v2	h029	hard	gold	no problem	без проблем	an assurance that something is acceptable	colloquial	phrase
+asteria-vn-curated-v2	h030	hard	gold	not really	не совсем	a qualified negative response	colloquial	phrase
+asteria-vn-curated-v2	h031	hard	gold	i guess	наверное; полагаю	an uncertain statement of opinion	colloquial	phrase
+asteria-vn-curated-v2	h032	hard	gold	i mean	я имею в виду	a phrase used to clarify a statement	colloquial	phrase
+asteria-vn-curated-v2	h033	hard	gold	you know	знаешь; понимаешь	a discourse marker appealing to shared understanding	colloquial	phrase
+asteria-vn-curated-v2	h034	hard	gold	as if	как будто; ещё чего	a comparison or sarcastic rejection	colloquial	phrase
+asteria-vn-curated-v2	h035	hard	gold	so what	и что с того	a dismissive response	colloquial	phrase
+asteria-vn-curated-v2	h036	hard	gold	for real	серьёзно; по-настоящему	genuinely or seriously	colloquial	phrase
+asteria-vn-curated-v2	h037	hard	gold	are you kidding	ты шутишь	a question expressing disbelief	colloquial	phrase
+asteria-vn-curated-v2	h038	hard	gold	you've got to be kidding	ты, должно быть, шутишь	a strong expression of disbelief	colloquial	phrase
+asteria-vn-curated-v2	h039	hard	gold	i can't believe it	не могу в это поверить	an expression of disbelief	colloquial	phrase
+asteria-vn-curated-v2	h040	hard	gold	what's going on	что происходит	a request to explain the current situation	colloquial	phrase
+asteria-vn-curated-v2	h041	hard	gold	what happened	что случилось	a request to explain a past event	standard	phrase
+asteria-vn-curated-v2	h042	hard	gold	what's wrong	что случилось; что не так	a request to explain a problem	colloquial	phrase
+asteria-vn-curated-v2	h043	hard	gold	take care	береги себя	a farewell expressing concern	colloquial	phrase
+asteria-vn-curated-v2	h044	hard	gold	see you	увидимся	an informal farewell	colloquial	phrase
+asteria-vn-curated-v2	h045	hard	gold	see ya	увидимся	an informal farewell	colloquial	phrase
+asteria-vn-curated-v2	h046	hard	gold	good luck	удачи	a wish for success	standard	phrase
+asteria-vn-curated-v2	h047	hard	gold	welcome back	с возвращением	a greeting on someone's return	standard	phrase
+asteria-vn-curated-v2	h048	hard	gold	i'm home	я дома	an announcement of arriving home	colloquial	phrase
+asteria-vn-curated-v2	h049	hard	gold	i'm back	я вернулся; я вернулась	an announcement of returning	colloquial	phrase
+asteria-vn-curated-v2	h050	hard	gold	here we go	ну, поехали; вот и всё	an expression used when beginning or completing something	colloquial	phrase
+asteria-vn-curated-v2	h051	hard	gold	let's go	пойдём; поехали	an invitation to leave or begin	colloquial	phrase
+asteria-vn-curated-v2	h052	hard	gold	let's do this	давай сделаем это	an invitation to begin an action	colloquial	phrase
+asteria-vn-curated-v2	h053	hard	gold	got it	понял; поняла	an acknowledgement of understanding	colloquial	phrase
+asteria-vn-curated-v2	h054	hard	gold	i see	понятно; вижу	an acknowledgement of understanding	colloquial	phrase
+asteria-vn-curated-v2	h055	hard	gold	i know	я знаю	a statement of knowing	standard	phrase
+asteria-vn-curated-v2	h056	hard	gold	i don't know	я не знаю	a statement of not knowing	standard	phrase
+asteria-vn-curated-v2	h057	hard	gold	beats me	понятия не имею	an informal statement of not knowing	colloquial	phrase
+asteria-vn-curated-v2	h058	hard	gold	makes sense	логично; понятно	an acknowledgement that something is reasonable	colloquial	phrase
+asteria-vn-curated-v2	h059	hard	gold	no wonder	неудивительно	an acknowledgement that something is unsurprising	standard	phrase
+asteria-vn-curated-v2	h060	hard	gold	that's enough	хватит; достаточно	a statement that no more is needed	colloquial	phrase
+asteria-vn-curated-v2	h061	hard	gold	that's fine	всё нормально	a statement that something is acceptable	colloquial	phrase
+asteria-vn-curated-v2	h062	hard	gold	that's okay	всё хорошо	a statement that something is acceptable	colloquial	phrase
+asteria-vn-curated-v2	h063	hard	gold	it's okay	всё хорошо	a reassurance that things are acceptable	colloquial	phrase
+asteria-vn-curated-v2	h064	hard	gold	don't worry	не волнуйся	a reassurance not to worry	colloquial	phrase
+asteria-vn-curated-v2	h065	hard	gold	leave me alone	оставь меня в покое	a demand not to be disturbed	colloquial	phrase
+asteria-vn-curated-v2	h066	hard	gold	calm down	успокойся	an instruction to become calm	colloquial	phrase
+asteria-vn-curated-v2	h067	hard	gold	hurry up	поторопись	an instruction to act faster	colloquial	phrase
+asteria-vn-curated-v2	h068	hard	gold	watch out	осторожно	a warning of danger	colloquial	phrase
+asteria-vn-curated-v2	h069	hard	gold	look out	осторожно	a warning of danger	colloquial	phrase
+asteria-vn-curated-v2	h070	hard	gold	get out	убирайся; выходи	an instruction to leave	colloquial	phrase
+asteria-vn-curated-v2	h071	hard	gold	get lost	проваливай	an insulting instruction to leave	colloquial	phrase
+asteria-vn-curated-v2	h072	hard	gold	excuse me	извините; простите	a polite request for attention or apology	standard	phrase
+asteria-vn-curated-v2	h073	hard	gold	lol	смешно; ха-ха	a chat abbreviation marking laughter	chat	interj
+asteria-vn-curated-v2	h074	hard	gold	lmao	очень смешно	a chat abbreviation marking strong laughter	chat	interj
+asteria-vn-curated-v2	h075	hard	gold	omg	боже мой	a chat abbreviation expressing surprise	chat	interj
+asteria-vn-curated-v2	h076	hard	gold	idk	не знаю	a chat abbreviation meaning the speaker does not know	chat	phrase
+asteria-vn-curated-v2	h077	hard	gold	imo	по-моему	a chat abbreviation introducing an opinion	chat	phrase
+asteria-vn-curated-v2	h078	hard	gold	imho	по моему скромному мнению	a chat abbreviation introducing a modest opinion	chat	phrase
+asteria-vn-curated-v2	h079	hard	gold	btw	кстати	a chat abbreviation introducing an aside	chat	adv
+asteria-vn-curated-v2	h080	hard	gold	brb	скоро вернусь	a chat abbreviation announcing a brief absence	chat	phrase
+asteria-vn-curated-v2	h081	hard	gold	ttyl	поговорим позже	a chat abbreviation used as a farewell	chat	phrase
+asteria-vn-curated-v2	h082	hard	gold	thx	спасибо	a chat abbreviation expressing thanks	chat	interj
+asteria-vn-curated-v2	h083	hard	gold	pls	пожалуйста	a chat abbreviation used in a request	chat	interj
+asteria-vn-curated-v2	h084	hard	gold	plz	пожалуйста	a chat abbreviation used in a request	chat	interj
+asteria-vn-curated-v2	h085	hard	gold	rly	правда; действительно	a chat abbreviation meaning really	chat	adv
+asteria-vn-curated-v2	h086	hard	gold	rlly	правда; действительно	a chat abbreviation meaning really	chat	adv
+asteria-vn-curated-v2	h087	hard	gold	nice to meet you	приятно познакомиться	a greeting used on first meeting	standard	phrase
+asteria-vn-curated-v2	h088	hard	gold	a shadow of doubt	тень сомнения	a small remaining uncertainty	standard	phrase
+asteria-vn-curated-v2	h089	hard	gold	summer dress	летнее платье	a dress intended for warm weather	standard	phrase
+asteria-vn-curated-v2	h090	hard	gold	on the verge of	на грани	very close to entering a state or event	standard	phrase
+asteria-vn-curated-v2	h091	hard	gold	yuki	Юки	a Japanese personal name	name	name
+asteria-vn-curated-v2	h092	hard	gold	tanaka	Танака	a Japanese family name	name	name
+asteria-vn-curated-v2	h093	hard	gold	kitten	котёнок	a young cat	standard	noun
+asteria-vn-curated-v2	h094	hard	gold	ceremony	церемония	a formal event performed on a special occasion	standard	noun
+asteria-vn-curated-v2	h095	hard	gold	oh well	что ж; ну ладно; ну и ладно	an expression of resignation or acceptance	colloquial	phrase
+asteria-vn-curated-v2	h096	hard	gold	get separated from	отделиться от	to become separated from someone or something	standard	phrase
+asteria-vn-curated-v2	h097	hard	gold	utter confusion	полное смятение	a state of complete confusion	standard	phrase
+asteria-vn-curated-v2	h098	hard	gold	beaming smile	лучезарная улыбка	a broad radiant smile	standard	phrase
+asteria-vn-curated-v2	h099	hard	gold	shining face	сияющее лицо	a face visibly radiant with happiness	standard	phrase
+asteria-vn-curated-v2	h100	hard	gold	prance around	скакать вприпрыжку; гарцевать	to move around with lively high steps	standard	phrase
+asteria-vn-curated-v2	h101	hard	gold	are you lost	Вы заблудились?	a question asking whether someone has lost their way	standard	phrase
+asteria-vn-curated-v2	h102	hard	gold	sideways glance	взгляд искоса; косой взгляд	a glance directed from the side	standard	phrase
+asteria-vn-curated-v2	h103	hard	gold	sidelong glance	взгляд искоса; косой взгляд	a glance directed from the side	standard	phrase
+asteria-vn-curated-v2	h104	hard	gold	first time	первый раз	the first occurrence of an event	standard	phrase
+asteria-vn-curated-v2	h105	hard	gold	ago	назад	before the present time	standard	postp
+asteria-vn-curated-v2	h106	hard	gold	the other day	на днях	a few days ago	standard	phrase
+asteria-vn-curated-v2	h107	hard	gold	do something	сделать что-нибудь	to perform an unspecified action	standard	phrase
+asteria-vn-curated-v2	h108	hard	gold	tug at	дёргать за; тянуть за	to pull repeatedly or with effort	standard	phrase
+asteria-vn-curated-v2	h109	hard	gold	who cares	кому какое дело; какая разница	an expression dismissing the importance of something	colloquial	phrase
+asteria-vn-curated-v2	h110	hard	gold	er	э-э	a hesitation sound	colloquial	interj
+asteria-vn-curated-v2	h111	hard	gold	tell a joke	рассказать шутку	to relate a humorous story	standard	phrase
+asteria-vn-curated-v2	h112	hard	gold	on behalf of	от имени	as a representative of someone or something	standard	phrase
+asteria-vn-curated-v2	h113	hard	gold	let us inside	впусти нас; пусти нас внутрь	an imperative request to admit the speakers indoors	colloquial	phrase
+asteria-vn-curated-v2	h114	hard	gold	any time soon	в ближайшее время	within the near future	standard	phrase
+asteria-vn-curated-v2	s001	soft	silver	ain't	не; не является; нет	a colloquial contraction used for several negative verb forms	colloquial	verb
+asteria-vn-curated-v2	s002	soft	silver	aren't	не являются; не	a contraction of are not	colloquial	verb
+asteria-vn-curated-v2	s003	soft	silver	can't	не мочь; нельзя	a contraction of cannot	colloquial	verb
+asteria-vn-curated-v2	s004	soft	silver	couldn't	не мочь	a contraction of could not	colloquial	verb
+asteria-vn-curated-v2	s005	soft	silver	didn't	не делать	a contraction of did not	colloquial	verb
+asteria-vn-curated-v2	s006	soft	silver	doesn't	не делать	a contraction of does not	colloquial	verb
+asteria-vn-curated-v2	s007	soft	silver	don't	не делать; не надо	a contraction of do not	colloquial	verb
+asteria-vn-curated-v2	s008	soft	silver	hadn't	не иметь; ещё не	a contraction of had not	colloquial	verb
+asteria-vn-curated-v2	s009	soft	silver	hasn't	не сделать; ещё не	a contraction of has not	colloquial	verb
+asteria-vn-curated-v2	s010	soft	silver	haven't	не сделать; ещё не	a contraction of have not	colloquial	verb
+asteria-vn-curated-v2	s011	soft	silver	isn't	не является; не	a contraction of is not	colloquial	verb
+asteria-vn-curated-v2	s012	soft	silver	mustn't	нельзя; не должен	a contraction of must not	colloquial	verb
+asteria-vn-curated-v2	s013	soft	silver	shouldn't	не следует; не должен	a contraction of should not	colloquial	verb
+asteria-vn-curated-v2	s014	soft	silver	wasn't	не был; не была	a contraction of was not	colloquial	verb
+asteria-vn-curated-v2	s015	soft	silver	weren't	не были	a contraction of were not	colloquial	verb
+asteria-vn-curated-v2	s016	soft	silver	won't	не буду; не станет	a contraction of will not	colloquial	verb
+asteria-vn-curated-v2	s017	soft	silver	wouldn't	не стал бы; не стала бы	a contraction of would not	colloquial	verb
+asteria-vn-curated-v2	s018	soft	silver	gonna	собираться; намереваться	a colloquial form of going to expressing intention or future	colloquial	verb
+asteria-vn-curated-v2	s019	soft	silver	gotta	нужно; должен	a colloquial form of got to expressing necessity	colloquial	verb
+asteria-vn-curated-v2	s020	soft	silver	wanna	хотеть	a colloquial form of want to	colloquial	verb
+asteria-vn-curated-v2	s021	soft	silver	kinda	вроде; типа; отчасти	a colloquial form of kind of meaning somewhat	colloquial	adv
+asteria-vn-curated-v2	s022	soft	silver	sorta	вроде; типа; отчасти	a colloquial form of sort of meaning somewhat	colloquial	adv
+asteria-vn-curated-v2	s023	soft	silver	lemme	дай мне; позволь мне	a colloquial form of let me	colloquial	verb
+asteria-vn-curated-v2	s024	soft	silver	gimme	дай мне	a colloquial form of give me	colloquial	verb
+asteria-vn-curated-v2	s025	soft	silver	dunno	не знаю	a colloquial form of do not know	colloquial	verb
+asteria-vn-curated-v2	s026	soft	silver	oughta	следовало бы	a colloquial form of ought to	colloquial	verb
+asteria-vn-curated-v2	s027	soft	silver	outta	из; прочь из	a colloquial form of out of	colloquial	phrase
+asteria-vn-curated-v2	s028	soft	silver	doin	делать	a colloquial spelling of doing	colloquial	verb
+asteria-vn-curated-v2	s029	soft	silver	ya	ты; тебя	a colloquial form of you	colloquial	pron
+asteria-vn-curated-v2	s030	soft	silver	gf	девушка; подруга	a chat abbreviation for girlfriend	chat	noun
+asteria-vn-curated-v2	s031	soft	silver	bf	парень; молодой человек	a chat abbreviation for boyfriend	chat	noun
+asteria-vn-curated-v2	s032	soft	silver	beaming	сияющий; лучезарный; сияющий от счастья	smiling with obvious happiness	standard	adj
+asteria-vn-curated-v2	s033	soft	silver	sighed	вздохнуть	past tense of sigh, to breathe out audibly	standard	verb
+asteria-vn-curated-v2	s034	soft	silver	teetering	балансировать; шататься	moving unsteadily as if about to fall	standard	verb
+asteria-vn-curated-v2	s035	soft	silver	teetering	быть на грани	being very close to an undesirable state	figurative	verb
+asteria-vn-curated-v2	s036	soft	silver	beam	балка; брус; перекладина; траверза	a long structural piece that supports weight	standard	noun
+asteria-vn-curated-v2	s037	soft	silver	beam	сиять; лучиться	to smile radiantly or emit light	figurative	verb
+asteria-vn-curated-v2	s038	soft	silver	sigh	вздох	a long audible breath expressing emotion	standard	noun
+asteria-vn-curated-v2	s039	soft	silver	sigh	вздыхать; вздохнуть	to breathe out audibly because of emotion	standard	verb
+asteria-vn-curated-v2	s040	soft	silver	teeter	качаться; колебаться	to move unsteadily as if about to fall	standard	verb
+asteria-vn-curated-v2	s041	soft	silver	teeter	быть на грани	to be very close to an undesirable state	figurative	verb
+asteria-vn-curated-v2	s042	soft	silver	sideways	боком; вбок; в сторону	from or toward one side	standard	adv
+asteria-vn-curated-v2	s043	soft	silver	sideways	искоса	directed from the side	standard	adj
+asteria-vn-curated-v2	s044	soft	silver	sidelong	искоса	directed or cast from the side	standard	adv
+asteria-vn-curated-v2	s045	soft	silver	sidelong	косой; направленный в сторону	directed toward one side	standard	adj
+asteria-vn-curated-v2	s046	soft	silver	whaddya	что ты; чего ты	a colloquial contraction beginning with what do you or what are you	colloquial	phrase
+asteria-vn-curated-v2	s047	soft	silver	whatcha	что ты; чего ты	a colloquial contraction beginning with what are you	colloquial	phrase
+asteria-vn-curated-v2	s048	soft	silver	whatta	что за	a colloquial contraction of what a	colloquial	phrase
+asteria-vn-curated-v2	s049	soft	silver	lotta	куча; много	a colloquial form of lot of	colloquial	phrase
+asteria-vn-curated-v2	s050	soft	silver	gotcha	попался	an exclamation used when catching someone	colloquial	interj
+asteria-vn-curated-v2	s051	soft	silver	gotcha	понял тебя	a colloquial acknowledgement of understanding	colloquial	phrase
+asteria-vn-curated-v2	s052	soft	silver	betcha	спорим; будь уверен	a colloquial contraction of bet you	colloquial	verb
+asteria-vn-curated-v2	s053	soft	silver	coulda	мог бы	a colloquial contraction of could have	colloquial	verb
+asteria-vn-curated-v2	s054	soft	silver	shoulda	должен был	a colloquial contraction of should have	colloquial	verb
+asteria-vn-curated-v2	s055	soft	silver	woulda	бы	a colloquial contraction of would have	colloquial	verb
+asteria-vn-curated-v2	s056	soft	silver	musta	должно быть	a colloquial contraction of must have	colloquial	verb
+asteria-vn-curated-v2	s057	soft	silver	c'mon	да ладно; давай	a colloquial contraction of come on	colloquial	interj
+asteria-vn-curated-v2	s058	soft	silver	'em	их	a colloquial contraction of them	colloquial	pron
+asteria-vn-curated-v2	s059	soft	silver	yer	твой; ты	a colloquial form of your or you are	colloquial	pron
+asteria-vn-curated-v2	a001	scaffold	gold	i get that a lot	я часто это слышу	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a002	scaffold	gold	nice to meet you	приятно познакомиться	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a003	scaffold	gold	a shadow of doubt	тень сомнения	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a004	scaffold	gold	summer dress	летнее платье	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a005	scaffold	gold	on the verge of	на грани	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a006	scaffold	gold	tell me	сказать	a reviewed semantic anchor for full translation	standard	phrase
+asteria-vn-curated-v2	a007	scaffold	gold	tell anyone about	рассказать	a reviewed semantic anchor for full translation	standard	phrase
+asteria-vn-curated-v2	a008	scaffold	gold	party was a total blast	вечеринка	a reviewed semantic anchor for full translation	standard	phrase
+asteria-vn-curated-v2	a009	scaffold	gold	yuki	Юки	a reviewed name anchor for full translation	name	name
+asteria-vn-curated-v2	a010	scaffold	gold	tanaka	Танака	a reviewed name anchor for full translation	name	name
+asteria-vn-curated-v2	a011	scaffold	gold	silence between them	тишина	a reviewed semantic anchor for full translation	standard	phrase
+asteria-vn-curated-v2	a012	scaffold	gold	heart skip a beat	сердце	a reviewed semantic anchor for full translation	standard	phrase
+asteria-vn-curated-v2	a013	scaffold	gold	get separated from	отделиться от	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a014	scaffold	gold	utter confusion	полное смятение	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a015	scaffold	gold	beaming smile	лучезарная улыбка	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a016	scaffold	gold	shining face	сияющее лицо	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a017	scaffold	gold	prance around	скакать вприпрыжку	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a018	scaffold	gold	sideways glance	взгляд искоса	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a019	scaffold	gold	sidelong glance	взгляд искоса	a reviewed full-translation anchor	standard	phrase
+asteria-vn-curated-v2	a020	scaffold	gold	kitten	котёнок	a reviewed stable noun anchor	standard	noun
+asteria-vn-curated-v2	a021	scaffold	gold	ceremony	церемония	a reviewed stable noun anchor	standard	noun

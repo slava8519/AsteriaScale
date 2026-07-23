@@ -20,6 +20,9 @@ internal static partial class EnglishContextLexicon
     public static readonly HashSet<string> AuxiliaryHave =
         new(StringComparer.Ordinal) { "have", "has", "had" };
 
+    public static readonly HashSet<string> AuxiliaryDo =
+        new(StringComparer.Ordinal) { "do", "does", "did" };
+
     public static readonly HashSet<string> Modals =
         new(StringComparer.Ordinal)
         {
@@ -42,6 +45,31 @@ internal static partial class EnglishContextLexicon
     public static readonly HashSet<string> SubjectPronouns =
         new(StringComparer.Ordinal) { "i", "you", "he", "she", "it", "we", "they" };
 
+    public static readonly HashSet<string> PrepositionsBeforeDeterminer =
+        new(StringComparer.Ordinal)
+        {
+            "about", "at", "behind", "beside", "by", "for", "from", "in", "into",
+            "near", "of", "on", "over", "through", "to", "under", "with", "without"
+        };
+
+    public static readonly HashSet<string> ComplementTakingVerbs =
+        new(StringComparer.Ordinal)
+        {
+            "believe", "believed", "feel", "felt", "guess", "guessed", "hear", "heard",
+            "hope", "hoped", "know", "knew", "notice", "noticed", "realize", "realized",
+            "remember", "remembered", "say", "said", "see", "saw", "tell", "told",
+            "think", "thought", "understand", "understood"
+        };
+
+    // These finite predicates make sentence-initial "that + noun + verb"
+    // demonstrative with high confidence. Keep the set narrow: a general
+    // suffix guess would misclassify discourse clauses such as "That said".
+    public static readonly HashSet<string> DemonstrativePredicateFollowers =
+        new(StringComparer.Ordinal)
+        {
+            "belongs", "contains", "costs", "depends", "fits", "matters", "seems", "works"
+        };
+
     public static readonly HashSet<string> LinkingVerbs =
         new(StringComparer.Ordinal)
         {
@@ -54,6 +82,14 @@ internal static partial class EnglishContextLexicon
         {
             "always", "often", "usually", "repeatedly", "continually", "constantly", "daily",
             "regularly", "kept", "continued", "hours", "minutes", "years"
+        };
+
+    public static readonly HashSet<string> DurationWordsBeforeAgo =
+        new(StringComparer.Ordinal)
+        {
+            "second", "seconds", "minute", "minutes", "hour", "hours", "day", "days",
+            "week", "weeks", "month", "months", "year", "years", "decade", "decades",
+            "moment", "moments", "time", "while", "long"
         };
 
     public static readonly IReadOnlyDictionary<string, string> IrregularPastToLemma =

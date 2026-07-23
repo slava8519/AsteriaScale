@@ -13,11 +13,18 @@ using AsteriaScale.Interop;
 
 namespace AsteriaScale.Services;
 
+internal enum HoverTextSource
+{
+    Ocr,
+    TextHook
+}
+
 internal sealed record HoverOcrResult(
     string Text,
     string HoveredWord,
     int CharacterIndex,
-    Drawing.Rectangle CaptureBounds);
+    Drawing.Rectangle CaptureBounds,
+    HoverTextSource TextSource = HoverTextSource.Ocr);
 
 internal sealed record HoverOcrDiagnostic(HoverOcrResult? Selection, string Details);
 

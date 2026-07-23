@@ -131,6 +131,23 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - License: Creative Commons Attribution 2.0 France (CC BY 2.0 FR)
 - Role: short dialogue and expression coverage for fast dictionary mode
 
+## Amazon MASSIVE English–Russian utterances
+
+- Project: https://github.com/alexa/massive
+- Dataset/version: MASSIVE 1.1
+- Archive: https://amazon-massive-nlu-dataset.s3.amazonaws.com/amazon-massive-dataset-1.1.tar.gz
+- Copyright: Amazon.com, Inc. or its affiliates
+- License: [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+- Upstream attribution: the English source utterances were derived from SLURP, also
+  distributed under CC BY 4.0; see the [MASSIVE NOTICE](https://github.com/alexa/massive/blob/main/NOTICE.md)
+  and the [SLURP project](https://github.com/pswietojanski/slurp) for full attribution
+- Changes: `en-US` and `ru-RU` were aligned by stable record ID; localized slots,
+  low-quality judgments, lines outside the 2–10 word bound, unsafe script mixtures and
+  conflicting normalized keys were removed; the remaining pairs were normalized into a
+  deterministic exact-dialogue TSV
+- Role: low-priority complete-sentence translation; never a lexical override, GlossBERT
+  sense, or mandatory scaffold term
+
 ## OpenCorpora Russian morphological dictionary
 
 - Project: https://opencorpora.org/ (consumed via the pymorphy3-dicts-ru distribution)

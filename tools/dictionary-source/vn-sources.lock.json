@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "curatedFile": {
+    "fileName": "vn-lexicon.tsv",
+    "bytes": 24474,
+    "sha256": "8ED3DE0D0F18DCD7101C9D1837893C3BDCF6A514DE2AD286D458CB99E4B1DC96"
+  },
+  "sources": [
+    {
+      "id": "asteria-vn-curated-v2",
+      "format": "vn-lexicon-v2",
+      "version": "2",
+      "license": {
+        "spdx": "MIT",
+        "attribution": "Asteria Scale contributors",
+        "licenseFile": "LICENSE"
+      }
+    },
+    {
+      "id": "amazon-massive-1.1-en-ru",
+      "format": "massive-1.1",
+      "version": "1.1",
+      "homepage": "https://github.com/alexa/massive",
+      "license": {
+        "spdx": "CC-BY-4.0",
+        "attribution": "MASSIVE Copyright Amazon.com, Inc. or its affiliates; English source utterances derived from SLURP",
+        "noticeUrl": "https://github.com/alexa/massive/blob/main/NOTICE.md",
+        "licenseUrl": "https://creativecommons.org/licenses/by/4.0/"
+      },
+      "archive": {
+        "url": "https://amazon-massive-nlu-dataset.s3.amazonaws.com/amazon-massive-dataset-1.1.tar.gz",
+        "fileName": "amazon-massive-dataset-1.1.tar.gz",
+        "bytes": 40251390,
+        "sha256": "4CBA5FAA11C71437928E17CB1B9B3D8B8E727E7EA363A3A9A8045E19C0491577"
+      },
+      "members": [
+        {
+          "path": "1.1/data/en-US.jsonl",
+          "locale": "en-US",
+          "records": 16521,
+          "bytes": 3904197,
+          "sha256": "C70F75C6A543A26E249EC383DF67733AD9B1066F6C0406C2E04A3F03356E407E"
+        },
+        {
+          "path": "1.1/data/ru-RU.jsonl",
+          "locale": "ru-RU",
+          "records": 16521,
+          "bytes": 13029758,
+          "sha256": "AF7367861EA21C1D69A084B290145815F7EAF82DCDC43B7AB572B993F9B2A69D"
+        }
+      ],
+      "transform": {
+        "pipeline": "massive-en-ru-exact-v1",
+        "partitions": [
+          "train",
+          "dev",
+          "test"
+        ],
+        "minimumWords": 2,
+        "maximumWords": 10,
+        "rejectNumericSource": true,
+        "rejectLocalizedSlots": true,
+        "requireMajorityPositiveJudgments": true,
+        "rejectLatinRussian": true,
+        "rejectConflictingSentenceKeys": true
+      }
+    }
+  ]
+}

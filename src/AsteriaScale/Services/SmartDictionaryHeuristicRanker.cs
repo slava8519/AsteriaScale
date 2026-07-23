@@ -46,6 +46,12 @@ internal static partial class SmartDictionaryHeuristicRanker
         bool IsProgressive,
         bool IsHabitualOrDurative);
 
+    private sealed record GrammarContext(
+        string Word,
+        int TokenIndex,
+        string[] Tokens,
+        bool IsQuestion);
+
     private sealed record SenseRule(
         string Lemma,
         string[] ContextCues,
@@ -205,6 +211,17 @@ internal static partial class SmartDictionaryHeuristicRanker
             return Selection(only, 1, "single dictionary meaning");
         }
 
+        GrammarContext grammar = AnalyzeGrammarContext(
+            context,
+            target,
+            characterIndex);
+        SmartDictionaryHeuristicSelection? grammarSelection =
+            SelectByGrammarContext(grammar, analyzedCandidates);
+        if (grammarSelection is not null)
+        {
+            return grammarSelection;
+        }
+
         EnglishAnalysis english = AnalyzeEnglish(context, target, characterIndex);
 
         SmartDictionaryHeuristicSelection? agreement =
@@ -277,6 +294,230 @@ internal static partial class SmartDictionaryHeuristicRanker
             ranked[0].Translation,
             0.995,
             "exact Tatoeba sentence alignment");
+    }
+
+    private static GrammarContext AnalyzeGrammarContext(
+        string context,
+        string target,
+        int characterIndex)
+    {
+        Match[] matches = EnglishTokenRegex().Matches(context ?? string.Empty)
+            .Cast<Match>()
+            .ToArray();
+        string targetWord = EnglishContextLexicon.NormalizeToken(
+            EnglishTokenRegex().Match(target ?? string.Empty).Value);
+        int tokenIndex = targetWord.Length == 0
+            ? -1
+            : EnglishContextLexicon.FindTargetToken(
+                matches,
+                targetWord,
+                characterIndex,
+                fallbackToNearest: false);
+        string[] tokens = matches
+            .Select(match => EnglishContextLexicon.NormalizeToken(match.Value))
+            .ToArray();
+        return new GrammarContext(
+            tokenIndex >= 0 ? tokens[tokenIndex] : string.Empty,
+            tokenIndex,
+            tokens,
+            (context ?? string.Empty).Contains('?'));
+    }
+
+    private static SmartDictionaryHeuristicSelection? SelectByGrammarContext(
+        GrammarContext grammar,
+        IReadOnlyList<CandidateAnalysis> candidates)
+    {
+        if (grammar.TokenIndex < 0)
+        {
+            return null;
+        }
+
+        if (grammar.Word == "while" && IsWhileNounContext(grammar))
+        {
+            return SelectPreferredExactCandidate(
+                candidates,
+                0.99,
+                "noun use of while",
+                "время",
+                "промежуток времени");
+        }
+
+        if (grammar.Word == "that")
+        {
+            if (IsPurposeThatContext(grammar))
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.99,
+                    "purpose-clause use of that",
+                    "чтобы");
+            }
+
+            if (IsComplementThatContext(grammar))
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.98,
+                    "content-clause use of that",
+                    "что");
+            }
+
+            if (IsThatDeterminerContext(grammar))
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.97,
+                    "demonstrative determiner use of that",
+                    "тот");
+            }
+        }
+
+        if (EnglishContextLexicon.AuxiliaryDo.Contains(grammar.Word))
+        {
+            string next = TokenAt(grammar, 1);
+            if (next == "not")
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.99,
+                    "negative auxiliary do",
+                    "не");
+            }
+
+            if (grammar.IsQuestion &&
+                grammar.TokenIndex == 0 &&
+                EnglishContextLexicon.SubjectPronouns.Contains(next))
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.98,
+                    "question auxiliary do",
+                    "ли");
+            }
+
+            if (IsLexicalWorkDoContext(grammar))
+            {
+                return SelectPreferredExactCandidate(
+                    candidates,
+                    0.97,
+                    "lexical do with a work object",
+                    "делать");
+            }
+        }
+
+        if (grammar.Word == "save" && grammar.Tokens.Length == 1)
+        {
+            return SelectPreferredExactCandidate(
+                candidates,
+                0.995,
+                "standalone save command",
+                "сохранить");
+        }
+
+        return null;
+    }
+
+    private static SmartDictionaryHeuristicSelection? SelectPreferredExactCandidate(
+        IReadOnlyList<CandidateAnalysis> candidates,
+        double confidence,
+        string reason,
+        params string[] preferredTranslations)
+    {
+        foreach (string preferred in preferredTranslations)
+        {
+            CandidateAnalysis[] matches = candidates
+                .Where(candidate => string.Equals(
+                    candidate.Normalized,
+                    preferred,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (matches.Length == 1)
+            {
+                return Selection(matches[0], confidence, reason);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsWhileNounContext(GrammarContext grammar)
+    {
+        string previous = TokenAt(grammar, -1);
+        if (EnglishContextLexicon.Determiners.Contains(previous) ||
+            EnglishContextLexicon.Possessives.Contains(previous))
+        {
+            return true;
+        }
+
+        if (previous is not ("little" or "long" or "short"))
+        {
+            return false;
+        }
+
+        string beforeModifier = TokenAt(grammar, -2);
+        return EnglishContextLexicon.Determiners.Contains(beforeModifier) ||
+               EnglishContextLexicon.Possessives.Contains(beforeModifier);
+    }
+
+    private static bool IsPurposeThatContext(GrammarContext grammar) =>
+        TokenAt(grammar, -1) == "so" &&
+        (EnglishContextLexicon.SubjectPronouns.Contains(TokenAt(grammar, 1)) ||
+         TokenAt(grammar, 1) == "there");
+
+    private static bool IsComplementThatContext(GrammarContext grammar)
+    {
+        string previous = TokenAt(grammar, -1);
+        string next = TokenAt(grammar, 1);
+        return EnglishContextLexicon.ComplementTakingVerbs.Contains(previous) &&
+               (EnglishContextLexicon.SubjectPronouns.Contains(next) || next == "there");
+    }
+
+    private static bool IsThatDeterminerContext(GrammarContext grammar)
+    {
+        string previous = TokenAt(grammar, -1);
+        string next = TokenAt(grammar, 1);
+        if (next.Length == 0 ||
+            EnglishContextLexicon.SubjectPronouns.Contains(next) ||
+            EnglishContextLexicon.AuxiliaryBe.Contains(next) ||
+            EnglishContextLexicon.AuxiliaryHave.Contains(next) ||
+            EnglishContextLexicon.Modals.Contains(next) ||
+            EnglishContextLexicon.AuxiliaryDo.Contains(next) ||
+            EnglishContextLexicon.IsLikelyPastForm(next) ||
+            EnglishContextLexicon.DemonstrativePredicateFollowers.Contains(next))
+        {
+            return false;
+        }
+
+        if (EnglishContextLexicon.PrepositionsBeforeDeterminer.Contains(previous))
+        {
+            return true;
+        }
+
+        return grammar.TokenIndex == 0 &&
+               (grammar.Tokens.Length == 2 ||
+                IsLikelyBoundaryFollower(TokenAt(grammar, 2)) ||
+                EnglishContextLexicon.IsLikelyPastForm(TokenAt(grammar, 2)) ||
+                EnglishContextLexicon.DemonstrativePredicateFollowers.Contains(
+                    TokenAt(grammar, 2)));
+    }
+
+    private static bool IsLexicalWorkDoContext(GrammarContext grammar)
+    {
+        string next = TokenAt(grammar, 1);
+        string objectHead =
+            EnglishContextLexicon.Determiners.Contains(next) ||
+            EnglishContextLexicon.Possessives.Contains(next)
+                ? TokenAt(grammar, 2)
+                : next;
+        return objectHead is "work" or "job" or "task" or "homework" or "chores";
+    }
+
+    private static string TokenAt(GrammarContext grammar, int relativeIndex)
+    {
+        int index = grammar.TokenIndex + relativeIndex;
+        return index >= 0 && index < grammar.Tokens.Length
+            ? grammar.Tokens[index]
+            : string.Empty;
     }
 
     private static int ContextTranslationScore(

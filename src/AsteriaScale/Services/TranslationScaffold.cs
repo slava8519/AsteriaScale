@@ -235,9 +235,45 @@ internal sealed class TranslationScaffoldBuilder
             }
 
             List<TermCandidate> candidates = [];
+            HashSet<SourceSpan> userEntrySpans = [];
             List<TranslationScaffoldNeuralDiagnostic> neuralDecisions = [];
             List<ScaffoldSenseHint> senseHints = [];
             HashSet<string> neuralSources = new(StringComparer.Ordinal);
+            HashSet<string> explicitScaffoldSources = new(StringComparer.Ordinal);
+            IReadOnlyList<ScaffoldDictionaryMatch> scaffoldMatches =
+                await _dictionary.FindEnglishScaffoldMatchesAsync(
+                    sentence,
+                    cancellationToken);
+            foreach (ScaffoldDictionaryMatch match in scaffoldMatches)
+            {
+                string source = NormalizeSource(match.Source);
+                string sourceKey = LocalDictionaryService.NormalizeEnglish(source);
+                string translation = NormalizeRussianTerm(match.Translation);
+                if (sourceKey.Length == 0 ||
+                    translation.Length == 0 ||
+                    _dictionary.IsUserEnglishKey(sourceKey) ||
+                    _dictionary.IsUserEnglishKey(match.MatchedEnglishKey))
+                {
+                    continue;
+                }
+
+                explicitScaffoldSources.Add(sourceKey);
+                candidates.Add(new TermCandidate(
+                    new ScaffoldTerm(
+                        source,
+                        translation,
+                        1,
+                        ScaffoldTermProvenance.Deterministic),
+                    source.Contains(' ')
+                        ? TermPriority.MultiWordExpression
+                        : TermPriority.Word,
+                    match.CharacterIndex,
+                    match.CharacterLength,
+                    IsProperName: false,
+                    IsUserEntry: false,
+                    IsExplicitScaffold: true));
+            }
+
             TranslationScaffoldNeuralSession effectiveNeuralSession =
                 neuralSession ?? new TranslationScaffoldNeuralSession();
             int neuralRequestCount = 0;
@@ -277,6 +313,19 @@ internal sealed class TranslationScaffoldBuilder
                 bool preferredEntry = _dictionary.IsPreferredEnglishKey(matchedEnglishKey);
                 bool matchedUserEntry = _dictionary.IsUserEnglishKey(matchedEnglishKey);
                 bool preferredPhrase = preferredEntry && lookup.IsPhrase;
+                if (matchedUserEntry || explicitUserToken)
+                {
+                    // A user entry owns its source span even when its multiple
+                    // meanings cannot be reduced to one mandatory translation.
+                    // Otherwise a lower-priority scaffold anchor could become a
+                    // constraint merely because the safer user result abstained.
+                    (int userIndex, int userLength) = FindSourceSpan(
+                        sentence,
+                        lookup.Source,
+                        token.Index);
+                    userEntrySpans.Add(new SourceSpan(userIndex, userLength));
+                }
+
                 string normalizedToken = EnglishContextLexicon.NormalizeToken(token.Value);
                 if (!explicitUserToken &&
                     !matchedUserEntry &&
@@ -293,7 +342,7 @@ internal sealed class TranslationScaffoldBuilder
                     sentence,
                     lookup,
                     token.Index,
-                    preferredEntry);
+                    matchedUserEntry || explicitUserToken);
                 SelectedTranslation? selected = attempt.Selection;
                 if (selected is null &&
                     _neuralRanker is not null &&
@@ -355,7 +404,10 @@ internal sealed class TranslationScaffoldBuilder
 
                 string source = NormalizeSource(lookup.Source);
                 string translation = NormalizeRussianTerm(selected.Translation);
-                if (source.Length == 0 || translation.Length == 0)
+                string sourceKey = LocalDictionaryService.NormalizeEnglish(source);
+                if (source.Length == 0 ||
+                    translation.Length == 0 ||
+                    explicitScaffoldSources.Contains(sourceKey))
                 {
                     continue;
                 }
@@ -363,6 +415,10 @@ internal sealed class TranslationScaffoldBuilder
                 bool userEntry = matchedUserEntry ||
                                   explicitUserToken;
                 bool properName = userEntry && LooksLikeProperName(source);
+                (int candidateIndex, int candidateLength) = FindSourceSpan(
+                    sentence,
+                    lookup.Source,
+                    token.Index);
                 TermPriority priority = lookup.IsPhrase ||
                                         EnglishContextLexicon.TokenRegex()
                                             .Matches(source)
@@ -378,13 +434,21 @@ internal sealed class TranslationScaffoldBuilder
                         selected.Confidence,
                         selected.Provenance),
                     priority,
-                    token.Index,
-                    properName));
+                    candidateIndex,
+                    candidateLength,
+                    properName,
+                    userEntry,
+                    IsExplicitScaffold: false));
             }
 
+            TermCandidate[] prioritizedCandidates = candidates
+                .Where(candidate =>
+                    !candidate.IsExplicitScaffold ||
+                    !userEntrySpans.Any(user => SpansOverlap(candidate, user)))
+                .ToArray();
             List<TermCandidate> eligibleCandidates = [];
             HashSet<string> seenSources = new(StringComparer.Ordinal);
-            HashSet<string> conflictingSources = candidates
+            HashSet<string> conflictingSources = prioritizedCandidates
                 .GroupBy(
                     candidate => LocalDictionaryService.NormalizeEnglish(candidate.Term.Source),
                     StringComparer.Ordinal)
@@ -395,7 +459,7 @@ internal sealed class TranslationScaffoldBuilder
                     .Any())
                 .Select(group => group.Key)
                 .ToHashSet(StringComparer.Ordinal);
-            foreach (TermCandidate candidate in candidates
+            foreach (TermCandidate candidate in prioritizedCandidates
                          .OrderBy(candidate => candidate.Priority)
                          .ThenBy(candidate => candidate.CharacterIndex))
             {
@@ -470,7 +534,7 @@ internal sealed class TranslationScaffoldBuilder
         string sentence,
         DictionaryLookupResult lookup,
         int characterIndex,
-        bool preferredEntry)
+        bool authoritativeEntry)
     {
         string[] outcomes;
         SmartDictionaryRankerPlan? plan = null;
@@ -543,12 +607,14 @@ internal sealed class TranslationScaffoldBuilder
         // A lone broad-dictionary translation is not automatically a lone
         // semantic sense (for example, archaic "shrine → рака"). Keep it as
         // a deterministic result below the mandatory-confidence floor unless
-        // it came from the user/VN priority layers.
+        // it came from the user layer. VN-hard controls visible dictionary and
+        // residual repair, but mandatory terms are declared independently in
+        // the scaffold layer so a bulk curated import cannot constrain Qwen.
         return new SelectionAttempt(
             outcomes.Length == 1
                 ? new SelectedTranslation(
                     outcomes[0],
-                    preferredEntry ? 1 : 0.85,
+                    authoritativeEntry ? 1 : 0.85,
                     ScaffoldTermProvenance.Deterministic)
                 : null,
             plan);
@@ -842,6 +908,41 @@ internal sealed class TranslationScaffoldBuilder
             .All(token => char.IsUpper(token.Value[0]));
     }
 
+    private static (int Index, int Length) FindSourceSpan(
+        string sentence,
+        string source,
+        int anchorIndex)
+    {
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            int searchIndex = 0;
+            while (searchIndex < sentence.Length)
+            {
+                int index = sentence.IndexOf(
+                    source,
+                    searchIndex,
+                    StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                if (anchorIndex >= index && anchorIndex < index + source.Length)
+                {
+                    return (index, source.Length);
+                }
+
+                searchIndex = index + 1;
+            }
+        }
+
+        return (anchorIndex, Math.Max(1, source.Length));
+    }
+
+    private static bool SpansOverlap(TermCandidate left, SourceSpan right) =>
+        left.CharacterIndex < right.CharacterIndex + right.CharacterLength &&
+        right.CharacterIndex < left.CharacterIndex + left.CharacterLength;
+
     private static bool IsAsciiLetter(char character) =>
         character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 
@@ -868,9 +969,16 @@ internal sealed class TranslationScaffoldBuilder
         IReadOnlyList<ScaffoldSenseHint> SenseHints,
         TranslationScaffoldNeuralDiagnostic Diagnostic);
 
+    private readonly record struct SourceSpan(
+        int CharacterIndex,
+        int CharacterLength);
+
     private sealed record TermCandidate(
         ScaffoldTerm Term,
         TermPriority Priority,
         int CharacterIndex,
-        bool IsProperName);
+        int CharacterLength,
+        bool IsProperName,
+        bool IsUserEntry,
+        bool IsExplicitScaffold);
 }
