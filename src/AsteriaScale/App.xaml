@@ -3,15 +3,20 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <Color x:Key="WindowBackgroundColor">#0A0E1A</Color>
-        <Color x:Key="SurfaceColor">#121829</Color>
-        <Color x:Key="SurfaceRaisedColor">#19223A</Color>
-        <Color x:Key="AccentColor">#7C5CFF</Color>
-        <Color x:Key="AccentHoverColor">#9278FF</Color>
-        <Color x:Key="MintColor">#27D7C4</Color>
-        <Color x:Key="PrimaryTextColor">#F5F7FF</Color>
-        <Color x:Key="SecondaryTextColor">#AAB3CC</Color>
-        <Color x:Key="BorderColor">#293452</Color>
+        <!-- ============================================================
+             ASTERIA SCALE — LIGHT "SANDY" THEME
+             Same resource KEYS as before, so all bindings resolve.
+             Only the values changed (dark -> pastel sand + sage accent).
+             ============================================================ -->
+        <Color x:Key="WindowBackgroundColor">#F4EEE2</Color>
+        <Color x:Key="SurfaceColor">#FBF8F1</Color>
+        <Color x:Key="SurfaceRaisedColor">#FCFAF4</Color>
+        <Color x:Key="AccentColor">#5F7A54</Color>
+        <Color x:Key="AccentHoverColor">#6E8A66</Color>
+        <Color x:Key="MintColor">#5C7A54</Color>
+        <Color x:Key="PrimaryTextColor">#35302A</Color>
+        <Color x:Key="SecondaryTextColor">#8B8064</Color>
+        <Color x:Key="BorderColor">#E1D7C4</Color>
 
         <SolidColorBrush x:Key="WindowBackgroundBrush" Color="{StaticResource WindowBackgroundColor}" />
         <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" />
@@ -23,6 +28,14 @@
         <SolidColorBrush x:Key="SecondaryTextBrush" Color="{StaticResource SecondaryTextColor}" />
         <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
 
+        <!-- Extra light-theme tints used by MainWindow.xaml -->
+        <SolidColorBrush x:Key="BorderStrongBrush" Color="#D3C7AF" />
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="#E4EBE0" />
+        <SolidColorBrush x:Key="PositiveTintBrush" Color="#EFF2E9" />
+        <SolidColorBrush x:Key="PositiveBorderBrush" Color="#CFDCC6" />
+        <SolidColorBrush x:Key="StepBadgeBrush" Color="#E8DFCC" />
+        <SolidColorBrush x:Key="StepBadgeTextBrush" Color="#7E6142" />
+
         <Style TargetType="Window">
             <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
             <Setter Property="Background" Value="{StaticResource WindowBackgroundBrush}" />
@@ -31,22 +44,22 @@
             <Setter Property="SnapsToDevicePixels" Value="True" />
         </Style>
 
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
-        </Style>
+        <!-- NOTE: the implicit TextBlock Foreground setter was removed so button
+             content can inherit the button's own Foreground (see Button template).
+             Normal text still inherits PrimaryTextBrush from Window.Foreground. -->
 
         <Style x:Key="CardStyle" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="16" />
-            <Setter Property="Padding" Value="18" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="16" />
         </Style>
 
         <Style TargetType="Button">
             <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
             <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="14,9" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -58,14 +71,15 @@
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="10" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#24304E" />
+                                <Setter TargetName="Root" Property="Background" Value="#F1E8D7" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Root" Property="Opacity" Value="0.78" />
+                                <Setter TargetName="Root" Property="Opacity" Value="0.8" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Root" Property="Opacity" Value="0.4" />
@@ -79,8 +93,14 @@
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
             <Setter Property="Padding" Value="18,12" />
             <Setter Property="FontSize" Value="14" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentHoverBrush}" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style TargetType="TextBox">
@@ -104,17 +124,15 @@
         </Style>
 
         <Style x:Key="ScrollThumbStyle" TargetType="Thumb">
-            <Setter Property="Background" Value="#465372" />
+            <Setter Property="Background" Value="#CDBFA6" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Thumb">
-                        <Border x:Name="ThumbRoot"
-                                Margin="2"
-                                Background="{TemplateBinding Background}"
-                                CornerRadius="5" />
+                        <Border x:Name="ThumbRoot" Margin="2"
+                                Background="{TemplateBinding Background}" CornerRadius="5" />
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ThumbRoot" Property="Background" Value="#637398" />
+                                <Setter TargetName="ThumbRoot" Property="Background" Value="#B7A98C" />
                             </Trigger>
                             <Trigger Property="IsDragging" Value="True">
                                 <Setter TargetName="ThumbRoot" Property="Background" Value="{StaticResource AccentBrush}" />
@@ -128,30 +146,22 @@
         <Style TargetType="ScrollBar">
             <Setter Property="Width" Value="12" />
             <Setter Property="MinWidth" Value="12" />
-            <Setter Property="Background" Value="#0D1323" />
+            <Setter Property="Background" Value="#EFE7D8" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ScrollBar">
-                        <Grid x:Name="ScrollRoot"
-                              Width="{TemplateBinding Width}"
-                              Height="{TemplateBinding Height}"
-                              Background="{TemplateBinding Background}"
-                              SnapsToDevicePixels="True">
-                            <Track x:Name="PART_Track"
-                                   Orientation="{TemplateBinding Orientation}"
-                                   IsDirectionReversed="True">
+                        <Grid x:Name="ScrollRoot" Width="{TemplateBinding Width}" Height="{TemplateBinding Height}"
+                              Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                            <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}" IsDirectionReversed="True">
                                 <Track.DecreaseRepeatButton>
-                                    <RepeatButton x:Name="DecreasePage"
-                                                  Command="{x:Static ScrollBar.PageUpCommand}"
+                                    <RepeatButton x:Name="DecreasePage" Command="{x:Static ScrollBar.PageUpCommand}"
                                                   Style="{StaticResource ScrollPageButtonStyle}" />
                                 </Track.DecreaseRepeatButton>
                                 <Track.Thumb>
-                                    <Thumb MinWidth="28" MinHeight="28"
-                                           Style="{StaticResource ScrollThumbStyle}" />
+                                    <Thumb MinWidth="28" MinHeight="28" Style="{StaticResource ScrollThumbStyle}" />
                                 </Track.Thumb>
                                 <Track.IncreaseRepeatButton>
-                                    <RepeatButton x:Name="IncreasePage"
-                                                  Command="{x:Static ScrollBar.PageDownCommand}"
+                                    <RepeatButton x:Name="IncreasePage" Command="{x:Static ScrollBar.PageDownCommand}"
                                                   Style="{StaticResource ScrollPageButtonStyle}" />
                                 </Track.IncreaseRepeatButton>
                             </Track>
@@ -195,8 +205,7 @@
                                           Background="{TemplateBinding Background}"
                                           BorderBrush="{TemplateBinding BorderBrush}"
                                           BorderThickness="{TemplateBinding BorderThickness}"
-                                          Focusable="False"
-                                          ClickMode="Press"
+                                          Focusable="False" ClickMode="Press"
                                           IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
                                 <ToggleButton.Template>
                                     <ControlTemplate TargetType="ToggleButton">
@@ -211,57 +220,34 @@
                             <ContentPresenter x:Name="SelectedContent"
                                               Margin="{TemplateBinding Padding}"
                                               HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="Center"
-                                              IsHitTestVisible="False"
+                                              VerticalAlignment="Center" IsHitTestVisible="False"
                                               RecognizesAccessKey="True"
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                               ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
                                               TextElement.Foreground="{TemplateBinding Foreground}" />
 
-                            <Border x:Name="ChevronPlate"
-                                    Width="30" Height="28"
-                                    Margin="0,0,5,0"
-                                    HorizontalAlignment="Right"
-                                    VerticalAlignment="Center"
-                                    Background="Transparent"
-                                    CornerRadius="7"
-                                    IsHitTestVisible="False">
-                                <Path x:Name="Chevron"
-                                      Width="10" Height="6"
-                                      HorizontalAlignment="Center"
-                                      VerticalAlignment="Center"
+                            <Border x:Name="ChevronPlate" Width="30" Height="28" Margin="0,0,5,0"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Background="Transparent" CornerRadius="7" IsHitTestVisible="False">
+                                <Path x:Name="Chevron" Width="10" Height="6"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
                                       Data="M 1,1 L 5,5 L 9,1"
-                                      Stroke="{StaticResource SecondaryTextBrush}"
-                                      StrokeThickness="1.7"
-                                      StrokeStartLineCap="Round"
-                                      StrokeEndLineCap="Round"
-                                      StrokeLineJoin="Round" />
+                                      Stroke="{StaticResource SecondaryTextBrush}" StrokeThickness="1.7"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
                             </Border>
 
-                            <Popup x:Name="PART_Popup"
-                                   AllowsTransparency="True"
-                                   Focusable="False"
-                                   IsOpen="{TemplateBinding IsDropDownOpen}"
-                                   Placement="Bottom"
-                                   PopupAnimation="Fade">
+                            <Popup x:Name="PART_Popup" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" PopupAnimation="Fade">
                                 <Grid MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                                      MaxHeight="{TemplateBinding MaxDropDownHeight}"
-                                      Margin="0,6,0,10">
-                                    <Border Background="#171F35"
-                                            BorderBrush="#3B4769"
-                                            BorderThickness="1"
-                                            CornerRadius="10"
-                                            Padding="4">
+                                      MaxHeight="{TemplateBinding MaxDropDownHeight}" Margin="0,6,0,10">
+                                    <Border Background="#FBF8F1" BorderBrush="#D3C7AF" BorderThickness="1"
+                                            CornerRadius="10" Padding="4">
                                         <Border.Effect>
-                                            <DropShadowEffect BlurRadius="18"
-                                                              ShadowDepth="6"
-                                                              Direction="270"
-                                                              Color="#000000"
-                                                              Opacity="0.42" />
+                                            <DropShadowEffect BlurRadius="18" ShadowDepth="6" Direction="270"
+                                                              Color="#5A4A2E" Opacity="0.22" />
                                         </Border.Effect>
-                                        <ScrollViewer x:Name="DropDownScrollViewer"
-                                                      SnapsToDevicePixels="True">
+                                        <ScrollViewer x:Name="DropDownScrollViewer" SnapsToDevicePixels="True">
                                             <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
                                         </ScrollViewer>
                                     </Border>
@@ -270,18 +256,18 @@
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="#4A587D" />
-                                <Setter TargetName="ChevronPlate" Property="Background" Value="#222D4C" />
+                                <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="#CBBE9F" />
+                                <Setter TargetName="ChevronPlate" Property="Background" Value="#EFE8DA" />
                                 <Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource PrimaryTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                 <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                             </Trigger>
                             <Trigger Property="IsDropDownOpen" Value="True">
-                                <Setter TargetName="DropDownToggle" Property="Background" Value="#1D2743" />
+                                <Setter TargetName="DropDownToggle" Property="Background" Value="#EDE4D2" />
                                 <Setter TargetName="DropDownToggle" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                <Setter TargetName="ChevronPlate" Property="Background" Value="#2A2454" />
-                                <Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource AccentHoverBrush}" />
+                                <Setter TargetName="ChevronPlate" Property="Background" Value="#E4EBE0" />
+                                <Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource AccentBrush}" />
                                 <Setter TargetName="Chevron" Property="RenderTransformOrigin" Value="0.5,0.5" />
                                 <Setter TargetName="Chevron" Property="RenderTransform">
                                     <Setter.Value>
@@ -309,28 +295,24 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="ItemRoot"
-                                Background="{TemplateBinding Background}"
-                                CornerRadius="7"
-                                Padding="{TemplateBinding Padding}"
-                                SnapsToDevicePixels="True">
+                        <Border x:Name="ItemRoot" Background="{TemplateBinding Background}" CornerRadius="7"
+                                Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="Center"
-                                              SnapsToDevicePixels="True" />
+                                              VerticalAlignment="Center" SnapsToDevicePixels="True" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="ItemRoot" Property="Background" Value="#282452" />
+                                <Setter TargetName="ItemRoot" Property="Background" Value="#EFE8DA" />
                             </Trigger>
                             <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="ItemRoot" Property="Background" Value="#3A2D78" />
+                                <Setter TargetName="ItemRoot" Property="Background" Value="#E1EADB" />
                             </Trigger>
                             <MultiTrigger>
                                 <MultiTrigger.Conditions>
                                     <Condition Property="IsSelected" Value="True" />
                                     <Condition Property="IsHighlighted" Value="True" />
                                 </MultiTrigger.Conditions>
-                                <Setter TargetName="ItemRoot" Property="Background" Value="#4B3A96" />
+                                <Setter TargetName="ItemRoot" Property="Background" Value="#D3E0CC" />
                             </MultiTrigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="ItemRoot" Property="Opacity" Value="0.4" />
@@ -349,51 +331,30 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
-                        <Grid x:Name="CheckRoot"
-                              MinHeight="24"
-                              Background="Transparent"
-                              SnapsToDevicePixels="True">
+                        <Grid x:Name="CheckRoot" MinHeight="24" Background="Transparent" SnapsToDevicePixels="True">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="20" />
                                 <ColumnDefinition Width="8" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
-
-                            <Border x:Name="CheckPlate"
-                                    Width="18" Height="18"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    Background="#0E1425"
-                                    BorderBrush="#526080"
-                                    BorderThickness="1"
-                                    CornerRadius="5">
+                            <Border x:Name="CheckPlate" Width="18" Height="18"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Background="#FCFAF4" BorderBrush="#C9BDA5" BorderThickness="1" CornerRadius="5">
                                 <Grid>
-                                    <Path x:Name="CheckMark"
-                                          Width="10" Height="8"
-                                          Data="M 1,4 L 4,7 L 9,1"
-                                          Stroke="White"
-                                          StrokeThickness="2"
-                                          StrokeStartLineCap="Round"
-                                          StrokeEndLineCap="Round"
-                                          StrokeLineJoin="Round"
+                                    <Path x:Name="CheckMark" Width="10" Height="8" Data="M 1,4 L 4,7 L 9,1"
+                                          Stroke="White" StrokeThickness="2"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                                           Visibility="Collapsed" />
-                                    <Border x:Name="IndeterminateMark"
-                                            Width="8" Height="2"
-                                            Background="White"
-                                            CornerRadius="1"
-                                            Visibility="Collapsed" />
+                                    <Border x:Name="IndeterminateMark" Width="8" Height="2"
+                                            Background="White" CornerRadius="1" Visibility="Collapsed" />
                                 </Grid>
                             </Border>
-
-                            <ContentPresenter Grid.Column="2"
-                                              HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                              VerticalAlignment="Center"
-                                              RecognizesAccessKey="True"
-                                              SnapsToDevicePixels="True" />
+                            <ContentPresenter Grid.Column="2" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" RecognizesAccessKey="True" SnapsToDevicePixels="True" />
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="CheckPlate" Property="Background" Value="#1C2540" />
+                                <Setter TargetName="CheckPlate" Property="Background" Value="#EFE8DA" />
                                 <Setter TargetName="CheckPlate" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
@@ -402,12 +363,12 @@
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
                                 <Setter TargetName="CheckPlate" Property="Background" Value="{StaticResource AccentBrush}" />
-                                <Setter TargetName="CheckPlate" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+                                <Setter TargetName="CheckPlate" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                                 <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="{x:Null}">
                                 <Setter TargetName="CheckPlate" Property="Background" Value="{StaticResource AccentBrush}" />
-                                <Setter TargetName="CheckPlate" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+                                <Setter TargetName="CheckPlate" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                                 <Setter TargetName="IndeterminateMark" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">

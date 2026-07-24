@@ -207,7 +207,8 @@ public partial class MainWindow : Window
     private void OnSourceInitialized(object? sender, EventArgs e)
     {
         nint handle = new WindowInteropHelper(this).Handle;
-        int darkMode = 1;
+        // Light "sandy" theme: keep the DWM title bar light, not dark.
+        int darkMode = 0;
         _ = NativeMethods.DwmSetWindowAttribute(handle, 20, ref darkMode, sizeof(int));
     }
 

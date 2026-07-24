@@ -7,11 +7,14 @@
         Focusable="False" IsHitTestVisible="False"
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display">
-    <Border x:Name="Card" Background="#F40A0F1D" BorderBrush="#765CFF"
+    <!-- Light "sandy" hover card. Per-mode accent/border/badge brushes and a couple of
+         text foregrounds are assigned in HoverTranslationOverlay.xaml.cs — see the
+         "Карточка перевода" section of HANDOFF.md for the exact C# swaps. -->
+    <Border x:Name="Card" Background="#F7F7F2E8" BorderBrush="#9DBE93"
             BorderThickness="1" CornerRadius="12" Padding="10,9,10,9"
             ClipToBounds="False">
         <Border.Effect>
-            <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.52" Color="#000000" />
+            <DropShadowEffect BlurRadius="20" ShadowDepth="5" Opacity="0.4" Color="#000000" />
         </Border.Effect>
         <Grid>
             <Grid.RowDefinitions>
@@ -27,26 +30,24 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="6" Height="6" Fill="#45DDC8"
-                             Margin="0,0,7,0" />
+                    <Ellipse x:Name="StatusDot" Width="6" Height="6" Fill="#5F7A54" Margin="0,0,7,0" />
                     <TextBlock x:Name="ModeText" Text="Словарь" FontSize="10.5"
-                               FontWeight="SemiBold" Foreground="#D6DAEA"
-                               TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center" />
+                               FontWeight="SemiBold" Foreground="#4A4436"
+                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                 </StackPanel>
 
-                <Border x:Name="MetaBadge" Grid.Column="1" Background="#142A2B"
-                        BorderBrush="#315B59" BorderThickness="1" CornerRadius="7"
+                <Border x:Name="MetaBadge" Grid.Column="1" Background="#E7EFE1"
+                        BorderBrush="#9DBE93" BorderThickness="1" CornerRadius="7"
                         Padding="7,2.5" Margin="10,0,0,0">
                     <TextBlock x:Name="MetaText" Text="EN → RU  ·  СЛОВО"
-                               Foreground="#59DDCC" FontSize="8.5"
+                               Foreground="#4E6E44" FontSize="8.5"
                                FontWeight="SemiBold" TextWrapping="NoWrap" />
                 </Border>
             </Grid>
 
             <TextBlock x:Name="SourceText" Grid.Row="1" Margin="0,6,0,0"
                        TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
-                       Foreground="#EEF1FB" FontSize="14" FontWeight="SemiBold"
+                       Foreground="#35302A" FontSize="14" FontWeight="SemiBold"
                        LineHeight="19" MaxHeight="57" />
 
             <Grid Grid.Row="2" Margin="0,6,0,0">
@@ -59,10 +60,10 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="#182036" CornerRadius="6"
-                                        BorderBrush="#293452" BorderThickness="1"
+                                <Border Background="#EFE8DA" CornerRadius="6"
+                                        BorderBrush="#E1D7C4" BorderThickness="1"
                                         Padding="6,3" Margin="0,0,4,4">
-                                    <TextBlock Text="{Binding}" Foreground="#F4F6FF"
+                                    <TextBlock Text="{Binding}" Foreground="#35302A"
                                                FontSize="12" FontWeight="Medium"
                                                TextWrapping="Wrap" MaxWidth="300" />
                                 </Border>
@@ -70,17 +71,16 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <TextBlock x:Name="MoreMeaningsText" Visibility="Collapsed"
-                               Margin="1,0,0,0" Foreground="#8F99B3"
-                               FontSize="9.5" />
+                               Margin="1,0,0,0" Foreground="#A0967F" FontSize="9.5" />
                 </StackPanel>
 
                 <StackPanel x:Name="TranslationPanel">
                     <TextBlock x:Name="TranslationText" Text="Ищу перевод…"
                                TextWrapping="Wrap" TextTrimming="CharacterEllipsis"
-                               Foreground="#F5F7FF" FontSize="14.5" FontWeight="SemiBold"
+                               Foreground="#2E2A22" FontSize="14.5" FontWeight="SemiBold"
                                LineHeight="20" MaxHeight="140" />
                     <TextBlock x:Name="HintText" Margin="0,5,0,0" Visibility="Collapsed"
-                               TextWrapping="Wrap" Foreground="#8F99B3" FontSize="9.5"
+                               TextWrapping="Wrap" Foreground="#A0967F" FontSize="9.5"
                                LineHeight="14" />
                 </StackPanel>
             </Grid>

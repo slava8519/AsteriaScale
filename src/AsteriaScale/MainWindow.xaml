@@ -5,163 +5,193 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="Asteria Scale"
-        Width="1080" Height="760" MinWidth="920" MinHeight="650"
+        Width="1180" Height="900" MinWidth="1040" MinHeight="760"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource WindowBackgroundBrush}"
         Closing="OnWindowClosing"
         StateChanged="OnWindowStateChanged">
-    <Grid Margin="26">
+    <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="18" />
+            <RowDefinition Height="14" />
             <RowDefinition Height="*" />
             <RowDefinition Height="14" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="14" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        <!-- ============ HERO STATUS STRIP ============ -->
+        <Border Grid.Row="0" CornerRadius="14" Padding="17,16" BorderThickness="1"
+                BorderBrush="{StaticResource BorderBrush}">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                    <GradientStop Color="#FBF8F1" Offset="0" />
+                    <GradientStop Color="#F0E7D5" Offset="1" />
+                </LinearGradientBrush>
+            </Border.Background>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
 
-            <Border Width="54" Height="54" CornerRadius="16">
-                <Border.Background>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                        <GradientStop Color="#9A7BFF" Offset="0" />
-                        <GradientStop Color="#5B3FD6" Offset="0.55" />
-                        <GradientStop Color="#1ED7C3" Offset="1" />
-                    </LinearGradientBrush>
-                </Border.Background>
-                <TextBlock Text="A" FontSize="27" FontWeight="Bold"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-            </Border>
-
-            <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                <TextBlock Text="Asteria Scale" FontSize="25" FontWeight="SemiBold" />
-                <TextBlock Text="Апскейл приложений и visual novel в реальном времени"
-                           Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" Margin="0,3,0,0" />
-            </StackPanel>
-
-            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Background="#182A35" BorderBrush="#245B58" BorderThickness="1"
-                        CornerRadius="10" Padding="11,7" Margin="0,0,8,0">
-                    <StackPanel Orientation="Horizontal">
-                        <Ellipse Width="7" Height="7" Fill="{StaticResource MintBrush}" Margin="0,0,7,0" />
-                        <TextBlock x:Name="EngineStatusText" Text="Проверка движка…" FontSize="12" />
-                    </StackPanel>
+                <Border Width="46" Height="46" CornerRadius="12">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#C7A987" Offset="0" />
+                            <GradientStop Color="#9C7A57" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <TextBlock Text="A" FontSize="24" FontWeight="Bold" Foreground="White"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}"
-                        BorderThickness="1" CornerRadius="10" Padding="11,7">
-                    <TextBlock x:Name="HardwareSummaryText" Text="Определение GPU…" FontSize="12"
-                               Foreground="{StaticResource SecondaryTextBrush}" />
-                </Border>
-            </StackPanel>
-        </Grid>
 
+                <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                    <TextBlock Text="Asteria Scale" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="Апскейл приложений и visual novel в реальном времени"
+                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="12.5" Margin="0,3,0,0" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="{StaticResource PositiveTintBrush}" BorderBrush="{StaticResource PositiveBorderBrush}"
+                            BorderThickness="1" CornerRadius="999" Padding="12,7" Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Fill="{StaticResource MintBrush}" VerticalAlignment="Center" Margin="0,0,7,0" />
+                            <TextBlock x:Name="EngineStatusText" Text="Проверка движка…" FontSize="12"
+                                       Foreground="#4E5A46" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="999" Padding="12,7">
+                        <TextBlock x:Name="HardwareSummaryText" Text="Определение GPU…" FontSize="12"
+                                   Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center" />
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============ BODY ============ -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="360" />
-                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="322" />
+                <ColumnDefinition Width="14" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
+            <!-- ==== LEFT: WINDOWS ==== -->
             <Border Grid.Column="0" Style="{StaticResource CardStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="10" />
+                        <RowDefinition Height="12" />
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="10" />
+                        <RowDefinition Height="12" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="12" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <Grid>
-                        <StackPanel>
-                            <TextBlock Text="1  Выберите окно" FontSize="17" FontWeight="SemiBold" />
-                            <TextBlock Text="Окно должно быть открыто и не свёрнуто"
-                                       Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" Margin="0,4,0,0" />
-                        </StackPanel>
-                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Padding="10,6"
+                    <Grid Grid.Row="0">
+                        <TextBlock Text="Окна" FontSize="14.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Button HorizontalAlignment="Right" VerticalAlignment="Center" Padding="8,6"
                                 ToolTip="Обновить список" Click="OnRefreshWindowsClick">
-                            <TextBlock Text="↻" FontSize="18" />
+                            <Path Width="15" Height="15" Stretch="Uniform"
+                                  Data="M21 12a9 9 0 1 1-2.64-6.36 M21 3v5h-5"
+                                  Stroke="{StaticResource SecondaryTextBrush}" StrokeThickness="2"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
                         </Button>
                     </Grid>
 
-                    <TextBox x:Name="WindowSearchBox" Grid.Row="2" Height="36"
+                    <TextBox x:Name="WindowSearchBox" Grid.Row="2" Height="38"
+                             VerticalContentAlignment="Center"
                              ToolTip="Поиск по заголовку или процессу"
                              TextChanged="OnWindowSearchChanged" />
 
-                    <ListBox x:Name="WindowsList" Grid.Row="4"
-                             Background="Transparent" BorderThickness="0"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             SelectionChanged="OnWindowSelectionChanged">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                <Setter Property="Padding" Value="0" />
-                                <Setter Property="Margin" Value="0,0,0,7" />
-                                <Setter Property="Background" Value="Transparent" />
-                                <Setter Property="BorderThickness" Value="0" />
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ListBoxItem">
-                                            <Border x:Name="ItemRoot" Background="{TemplateBinding Background}"
-                                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                                    CornerRadius="10" Padding="11,9">
-                                                <ContentPresenter />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="ItemRoot" Property="Background" Value="#19243B" />
-                                                </Trigger>
-                                                <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="ItemRoot" Property="Background" Value="#25214A" />
-                                                    <Setter TargetName="ItemRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel>
-                                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"
-                                               FontWeight="SemiBold" FontSize="13" />
-                                    <TextBlock Text="{Binding Details}" TextTrimming="CharacterEllipsis"
-                                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="11"
-                                               Margin="0,3,0,0" />
-                                </StackPanel>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                    <Grid Grid.Row="4">
+                        <ListBox x:Name="WindowsList" Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionChanged="OnWindowSelectionChanged">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0,0,0,7" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="0" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="ItemRoot" Background="{TemplateBinding Background}"
+                                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                        CornerRadius="10" Padding="12,10">
+                                                    <ContentPresenter />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="ItemRoot" Property="Background" Value="#F1E8D7" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="ItemRoot" Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                                        <Setter TargetName="ItemRoot" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"
+                                                   FontWeight="SemiBold" FontSize="13" />
+                                        <TextBlock Text="{Binding Details}" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{StaticResource SecondaryTextBrush}" FontSize="11"
+                                                   Margin="0,3,0,0" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
 
-                    <TextBlock x:Name="WindowsEmptyText" Grid.Row="4" Text="Подходящие окна не найдены"
-                               Foreground="{StaticResource SecondaryTextBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Visibility="Collapsed" />
+                        <TextBlock x:Name="WindowsEmptyText" Text="Подходящие окна не найдены"
+                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Visibility="Collapsed" />
+                    </Grid>
 
                     <Button x:Name="AddProfileButton" Grid.Row="6" Content="Добавить в автоматизацию"
                             IsEnabled="False" Click="OnAddProfileClick" />
                 </Grid>
             </Border>
 
+            <!-- ==== RIGHT COLUMN (scrolls as one when the window is too short) ==== -->
             <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled">
+                          HorizontalScrollBarVisibility="Disabled" Padding="0,0,4,0">
                 <StackPanel>
-                    <Border Style="{StaticResource CardStyle}">
-                        <StackPanel>
-                            <TextBlock Text="2  Качество масштабирования" FontSize="17" FontWeight="SemiBold" />
-                            <TextBlock Text="Ручной запуск и начальный режим для нового автопрофиля"
-                                       Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" Margin="0,4,0,14" />
 
-                            <ComboBox x:Name="PresetComboBox" Height="40"
+                <!-- top row: quality + automation -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="14" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- QUALITY -->
+                    <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="24" Height="24" CornerRadius="12" Background="{StaticResource StepBadgeBrush}">
+                                    <TextBlock Text="2" FontSize="12" FontWeight="Bold"
+                                               Foreground="{StaticResource StepBadgeTextBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <TextBlock Text="Качество" FontSize="14.5" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" Margin="10,0,0,0" />
+                            </StackPanel>
+
+                            <ComboBox x:Name="PresetComboBox" Height="40" Margin="0,13,0,0"
                                       SelectionChanged="OnPresetSelectionChanged">
                                 <ComboBox.ItemTemplate>
                                     <DataTemplate>
@@ -170,56 +200,54 @@
                                 </ComboBox.ItemTemplate>
                             </ComboBox>
 
-                            <Grid Margin="0,12,0,0">
+                            <Grid Margin="0,9,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="10" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="Частота обработки VN:" VerticalAlignment="Center"
+                                <TextBlock Text="Частота VN" VerticalAlignment="Center" FontSize="12"
                                            Foreground="{StaticResource SecondaryTextBrush}" />
-                                <ComboBox x:Name="VisualNovelFrameRateComboBox" Grid.Column="2" Height="36"
+                                <ComboBox x:Name="VisualNovelFrameRateComboBox" Grid.Column="2" Height="34"
                                           DisplayMemberPath="Name"
                                           SelectionChanged="OnVisualNovelFrameRateChanged" />
                             </Grid>
 
-                            <Border Background="#172436" CornerRadius="11"
-                                    BorderBrush="#28534F" BorderThickness="1"
-                                    Padding="13" Margin="0,12,0,0">
+                            <Border Background="{StaticResource PositiveTintBrush}" CornerRadius="10"
+                                    BorderBrush="{StaticResource PositiveBorderBrush}" BorderThickness="1"
+                                    Padding="12" Margin="0,10,0,0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="10" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel>
-                                        <TextBlock Text="DPI игры" FontWeight="SemiBold" />
+                                        <TextBlock Text="DPI игры" FontWeight="SemiBold" FontSize="12.5" />
                                         <TextBlock x:Name="DpiOptimizationStatusText"
-                                                   Text="Выберите окно игры слева"
-                                                   TextWrapping="Wrap"
-                                                   Foreground="{StaticResource SecondaryTextBrush}"
-                                                   FontSize="11" Margin="0,4,0,0" />
+                                                   Text="Выберите окно игры слева" TextWrapping="Wrap"
+                                                   Foreground="#6F7A66" FontSize="10.5" Margin="0,3,0,0" />
                                     </StackPanel>
                                     <Button x:Name="DpiOptimizationButton" Grid.Column="2"
-                                            Content="Оптимизировать" Padding="13,8"
+                                            Content="Оптимизировать" Padding="12,7"
                                             VerticalAlignment="Center" IsEnabled="False"
                                             ToolTip="Отключить предварительное DPI-растяжение Windows только для EXE игры"
                                             Click="OnDpiOptimizationClick" />
                                 </Grid>
                             </Border>
 
-                            <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="11"
+                            <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="10"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                    Padding="13" Margin="0,12,0,0">
+                                    Padding="12" Margin="0,10,0,0">
                                 <StackPanel>
-                                    <TextBlock x:Name="PresetDescriptionText" TextWrapping="Wrap" FontSize="13" />
+                                    <TextBlock x:Name="PresetDescriptionText" TextWrapping="Wrap" FontSize="12.5"
+                                               Foreground="#5E5644" />
                                     <TextBlock x:Name="PresetPerformanceText" TextWrapping="Wrap"
-                                               Foreground="{StaticResource MintBrush}" FontSize="11"
-                                               Margin="0,7,0,0" />
+                                               Foreground="{StaticResource MintBrush}" FontSize="11" Margin="0,7,0,0" />
                                 </StackPanel>
                             </Border>
 
-                            <Grid Margin="0,15,0,0">
+                            <Grid Margin="0,13,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="10" />
@@ -227,76 +255,79 @@
                                 </Grid.ColumnDefinitions>
                                 <Button x:Name="ScaleButton" Style="{StaticResource PrimaryButtonStyle}"
                                         Content="Запустить на весь экран" Click="OnScaleClick" />
-                                <Button Grid.Column="2" Content="В окне" Padding="18,12"
-                                        Click="OnWindowedScaleClick" />
+                                <Button Grid.Column="2" Content="В окне" Padding="16,12" Click="OnWindowedScaleClick" />
                             </Grid>
 
-                            <TextBlock Text="Alt + Shift + A — включить/выключить  •  Alt + Shift + Q — оконный режим"
+                            <TextBlock Text="Alt + Shift + A — переключить  •  Alt + Shift + Q — оконный режим"
                                        Foreground="{StaticResource SecondaryTextBrush}" FontSize="11"
                                        HorizontalAlignment="Center" Margin="0,10,0,0" />
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
+                    <!-- AUTOMATION -->
+                    <Border Grid.Column="2" Style="{StaticResource CardStyle}">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="12" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
+                                <RowDefinition Height="12" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <Grid>
-                                <StackPanel>
-                                    <TextBlock Text="3  Автономная работа" FontSize="17" FontWeight="SemiBold" />
-                                    <TextBlock Text="Для каждой программы можно выбрать свой режим масштабирования"
-                                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" Margin="0,4,0,0" />
+                            <Grid Grid.Row="0">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="24" Height="24" CornerRadius="12" Background="{StaticResource StepBadgeBrush}">
+                                        <TextBlock Text="3" FontSize="12" FontWeight="Bold"
+                                                   Foreground="{StaticResource StepBadgeTextBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Text="Автоматизация" FontSize="14.5" FontWeight="SemiBold"
+                                               VerticalAlignment="Center" Margin="10,0,0,0" />
                                 </StackPanel>
                                 <CheckBox x:Name="AutomationCheckBox" HorizontalAlignment="Right"
-                                          VerticalAlignment="Top" Content="Включена"
+                                          VerticalAlignment="Center" Content="Включена"
                                           Checked="OnAutomationChanged" Unchecked="OnAutomationChanged" />
                             </Grid>
 
-                            <Grid Grid.Row="2">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <CheckBox x:Name="RunAtStartupCheckBox" Content="Запускать с Windows"
+                            <StackPanel Grid.Row="2" Orientation="Horizontal">
+                                <CheckBox x:Name="RunAtStartupCheckBox" Content="С Windows" Margin="0,0,18,0"
                                           Checked="OnRunAtStartupChanged" Unchecked="OnRunAtStartupChanged" />
-                                <CheckBox x:Name="StartMinimizedCheckBox" Grid.Column="2" Content="Сразу сворачивать в трей"
+                                <CheckBox x:Name="StartMinimizedCheckBox" Content="Сразу в трей"
                                           Checked="OnStartMinimizedChanged" Unchecked="OnStartMinimizedChanged" />
-                            </Grid>
+                            </StackPanel>
 
-                            <Grid Grid.Row="4">
-                                <ListBox x:Name="ProfilesList" MaxHeight="180" MinHeight="58"
-                                         Background="Transparent" BorderThickness="0"
-                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                                    <ListBox.ItemContainerStyle>
-                                        <Style TargetType="ListBoxItem">
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        </Style>
-                                    </ListBox.ItemContainerStyle>
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Margin="0,4">
+                            <ListBox x:Name="ProfilesList" Grid.Row="4" MaxHeight="260" MinHeight="58"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{StaticResource WindowBackgroundBrush}"
+                                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                CornerRadius="10" Padding="11,9" Margin="0,3">
+                                            <Grid>
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="12" />
-                                                    <ColumnDefinition Width="210" />
+                                                    <ColumnDefinition Width="10" />
+                                                    <ColumnDefinition Width="180" />
                                                     <ColumnDefinition Width="10" />
                                                     <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="10" />
+                                                    <ColumnDefinition Width="8" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <StackPanel>
-                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                                                    <TextBlock Text="{Binding Details}" FontSize="11"
-                                                               Foreground="{StaticResource SecondaryTextBrush}" />
+                                                <StackPanel VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="12.5"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{Binding Details}" FontSize="10.5"
+                                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                                               TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
-                                                <ComboBox Grid.Column="2" Height="34"
+                                                <ComboBox Grid.Column="2" Height="32"
                                                           ToolTip="Режим масштабирования для этой программы"
                                                           ItemsSource="{Binding RelativeSource={RelativeSource AncestorType={x:Type Window}}, Path=AvailablePresets}"
                                                           DisplayMemberPath="Name"
@@ -308,228 +339,197 @@
                                                           IsChecked="{Binding TextHookEnabled, Mode=TwoWay}"
                                                           Checked="OnProfileTextHookChanged"
                                                           Unchecked="OnProfileTextHookChanged" />
-                                                <Button Grid.Column="6" Content="Удалить" Padding="11,7"
-                                                        VerticalAlignment="Center" Tag="{Binding}"
-                                                        Click="OnRemoveProfileClick" />
+                                                <Button Grid.Column="6" Padding="8,6" VerticalAlignment="Center"
+                                                        Tag="{Binding}" ToolTip="Удалить профиль"
+                                                        Click="OnRemoveProfileClick">
+                                                    <Path Width="14" Height="14" Stretch="Uniform"
+                                                          Data="M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6"
+                                                          Stroke="{StaticResource SecondaryTextBrush}" StrokeThickness="2"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+                                                </Button>
                                             </Grid>
-                                        </DataTemplate>
-                                    </ListBox.ItemTemplate>
-                                </ListBox>
-                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
                     </Border>
+                </Grid>
 
-                    <Border Style="{StaticResource CardStyle}" Margin="0,16,0,0">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="14" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-
+                <!-- TRANSLATION (wide) -->
+                <Border Style="{StaticResource CardStyle}" Margin="0,14,0,0">
+                    <StackPanel>
                             <Grid>
-                                <StackPanel Margin="0,0,145,0">
-                                    <TextBlock Text="4  Перевод текста" FontSize="17" FontWeight="SemiBold" />
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Grid.Column="0" Width="24" Height="24" CornerRadius="12"
+                                        VerticalAlignment="Top" Background="{StaticResource StepBadgeBrush}">
+                                    <TextBlock Text="4" FontSize="12" FontWeight="Bold"
+                                               Foreground="{StaticResource StepBadgeTextBrush}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Grid.Column="1" Margin="10,0,16,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Перевод текста" FontSize="14.5" FontWeight="SemiBold" />
                                     <TextBlock x:Name="TranslationDescriptionText"
-                                               Text="Задержите мышь над словом или репликой — перевод появится рядом"
+                                               Text="Наведите мышь на слово или реплику — перевод появится рядом"
                                                TextWrapping="Wrap"
-                                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" Margin="0,4,0,0" />
+                                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="12" Margin="0,3,0,0" />
                                 </StackPanel>
-                                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Top"
-                                            Orientation="Horizontal">
-                                    <Button Content="Мой словарь" Padding="12,6" Margin="0,0,12,0"
+                                <StackPanel Grid.Column="2" VerticalAlignment="Top" Orientation="Horizontal">
+                                    <Button Content="Мой словарь" Padding="12,7" Margin="0,0,12,0"
                                             ToolTip="Личные записи, история переводов и экспорт в Anki"
                                             Click="OnOpenUserDictionaryClick" />
-                                    <CheckBox x:Name="HoverTranslationCheckBox"
-                                              VerticalAlignment="Center" Content="Включён"
+                                    <CheckBox x:Name="HoverTranslationCheckBox" VerticalAlignment="Center"
+                                              Content="Включён"
                                               Checked="OnHoverTranslationChanged" Unchecked="OnHoverTranslationChanged" />
                                 </StackPanel>
                             </Grid>
 
-                            <Grid Grid.Row="2">
+                            <Grid Margin="0,14,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="12" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="Режим:" VerticalAlignment="Center"
+                                <TextBlock Text="Режим" VerticalAlignment="Center" FontSize="12.5"
                                            Foreground="{StaticResource SecondaryTextBrush}" />
-                                <ComboBox x:Name="TranslationModeComboBox" Grid.Column="2" Height="36"
+                                <ComboBox x:Name="TranslationModeComboBox" Grid.Column="2" Height="38"
                                           DisplayMemberPath="Name"
                                           SelectionChanged="OnTranslationModeChanged" />
                             </Grid>
 
-                            <Grid x:Name="HoverDelayPanel" Grid.Row="4">
+                            <Grid x:Name="HoverDelayPanel" Margin="0,10,0,0">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="12" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="Задержка:" VerticalAlignment="Center"
+                                <TextBlock Text="Задержка" VerticalAlignment="Center" FontSize="12.5"
                                            Foreground="{StaticResource SecondaryTextBrush}" />
                                 <ComboBox x:Name="HoverDelayComboBox" Grid.Column="2" Height="36"
                                           DisplayMemberPath="Name"
                                           SelectionChanged="OnHoverDelayChanged" />
                             </Grid>
 
-                            <Border x:Name="ScreenTranslationHint" Grid.Row="4" Visibility="Collapsed"
-                                    Background="#111D28" BorderBrush="#285A61" BorderThickness="1"
-                                    CornerRadius="10" Padding="12,9">
+                            <Border x:Name="ScreenTranslationHint" Visibility="Collapsed" Margin="0,10,0,0"
+                                    Background="{StaticResource PositiveTintBrush}" BorderBrush="{StaticResource PositiveBorderBrush}"
+                                    BorderThickness="1" CornerRadius="10" Padding="13,10">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Background="#DCE7D6" BorderBrush="#B4C9AA" BorderThickness="1"
+                                            CornerRadius="8" Padding="9,5" VerticalAlignment="Center">
+                                        <TextBlock Text="Alt + Shift + T" Foreground="#566E50"
+                                                   FontSize="12" FontWeight="Bold" />
+                                    </Border>
+                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" TextWrapping="Wrap"
+                                               Text="Распознать все реплики и заменить их переводом. Повторное нажатие обновляет подложки."
+                                               Foreground="#6F7A66" FontSize="12" />
+                                </Grid>
+                            </Border>
+
+                            <Border x:Name="SmartDictionarySettingsPanel" Visibility="Collapsed" Margin="0,12,0,0"
+                                    Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="12" Padding="14">
+                                <StackPanel>
+                                    <TextBlock Text="Настройки умного словаря" FontWeight="SemiBold" FontSize="13.5" />
+                                    <TextBlock Text="Модель выбирает подходящее словарное значение — не переписывает перевод."
+                                               TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="11" Margin="0,3,0,12" />
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="10" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <StackPanel Grid.Row="0" Grid.Column="0">
+                                            <TextBlock Text="Ускоритель" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <ComboBox x:Name="SmartBackendComboBox" Height="34"
+                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="0" Grid.Column="2">
+                                            <TextBlock Text="Язык оригинала" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <ComboBox x:Name="SmartSourceLanguageComboBox" Height="34"
+                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="0">
+                                            <TextBlock Text="Если перевода нет" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <ComboBox x:Name="SmartFallbackComboBox" Height="34"
+                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2">
+                                            <TextBlock Text="Готовность модели" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <ComboBox x:Name="SmartMemoryPolicyComboBox" Height="34"
+                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <TextBlock x:Name="SmartDictionarySettingsHint" TextWrapping="Wrap"
+                                               Foreground="{StaticResource MintBrush}" FontSize="10.5" Margin="0,10,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+                                    Margin="0,14,0,0" Padding="0,14,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="16" />
+                                        <ColumnDefinition Width="300" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <CheckBox x:Name="TextHookCheckBox" Content="Text-hook (Textractor)"
+                                                  FontWeight="SemiBold"
+                                                  Checked="OnTextHookChanged" Unchecked="OnTextHookChanged" />
+                                        <TextBlock Text="Текст совместимых игр — напрямую из процесса; иначе всегда OCR"
+                                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                                   FontSize="10.5" Margin="28,2,0,0" />
+                                        <TextBlock x:Name="TextHookStatusText" Foreground="{StaticResource MintBrush}"
+                                                   TextWrapping="Wrap" FontSize="10.5" Margin="28,4,0,0" />
+                                    </StackPanel>
+                                    <TextBox x:Name="TextractorPathBox" Grid.Column="2" Height="34"
+                                             VerticalContentAlignment="Center" VerticalAlignment="Top"
+                                             ToolTip="Папка Textractor (содержит x86/x64 TextractorCLI.exe)"
+                                             LostFocus="OnTextractorPathChanged" />
+                                </Grid>
+                            </Border>
+
+                            <Border Background="{StaticResource PositiveTintBrush}" BorderBrush="{StaticResource PositiveBorderBrush}"
+                                    BorderThickness="1" CornerRadius="12" Padding="13" Margin="0,12,0,0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="10" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Background="#213A38" BorderBrush="#34786F" BorderThickness="1"
-                                            CornerRadius="7" Padding="8,3" VerticalAlignment="Center">
-                                        <TextBlock Text="Alt + Shift + T" Foreground="{StaticResource MintBrush}"
-                                                   FontSize="11" FontWeight="SemiBold" />
+                                    <Border Background="#DCE7D6" BorderBrush="#B4C9AA" BorderThickness="1"
+                                            CornerRadius="8" Padding="8,3" VerticalAlignment="Top">
+                                        <TextBlock Text="NPU" Foreground="#566E50" FontWeight="Bold" FontSize="11" />
                                     </Border>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" TextWrapping="Wrap"
-                                               Text="Распознать все реплики и заменить их переводом. Повторное нажатие обновляет подложки."
-                                               Foreground="{StaticResource SecondaryTextBrush}" FontSize="11" />
+                                    <TextBlock x:Name="NpuExplanationText" Grid.Column="2" TextWrapping="Wrap"
+                                               Foreground="#6F7A66" FontSize="11" Text="Проверка NPU…" />
                                 </Grid>
                             </Border>
-
-                            <Border x:Name="SmartDictionarySettingsPanel" Grid.Row="6"
-                                    Visibility="Collapsed"
-                                    Background="#111A2C" BorderBrush="#2A3A61" BorderThickness="1"
-                                    CornerRadius="10" Padding="13,11">
-                                <StackPanel>
-                                    <TextBlock Text="Настройки умного словаря"
-                                               FontWeight="SemiBold" FontSize="13" />
-                                    <TextBlock Text="Модель используется только для выбора подходящего словарного значения."
-                                               TextWrapping="Wrap"
-                                               Foreground="{StaticResource SecondaryTextBrush}"
-                                               FontSize="11" Margin="0,3,0,10" />
-
-                                    <Grid Margin="0,0,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="280" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="Ускоритель" FontWeight="SemiBold" />
-                                            <TextBlock Text="Авто выбирает рекомендуемый CPU"
-                                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                                       FontSize="10" />
-                                        </StackPanel>
-                                        <ComboBox x:Name="SmartBackendComboBox" Grid.Column="2" Height="34"
-                                                  DisplayMemberPath="Name"
-                                                  SelectionChanged="OnSmartDictionarySettingChanged" />
-                                    </Grid>
-
-                                    <Grid Margin="0,0,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="280" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="Язык оригинала" FontWeight="SemiBold" />
-                                            <TextBlock Text="Фиксированный язык сокращает работу модели"
-                                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                                       FontSize="10" />
-                                        </StackPanel>
-                                        <ComboBox x:Name="SmartSourceLanguageComboBox" Grid.Column="2" Height="34"
-                                                  DisplayMemberPath="Name"
-                                                  SelectionChanged="OnSmartDictionarySettingChanged" />
-                                    </Grid>
-
-                                    <Grid Margin="0,0,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="280" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="Если перевода нет" FontWeight="SemiBold" />
-                                            <TextBlock Text="Ручной fallback: Alt+Shift+D после наведения"
-                                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                                       FontSize="10" />
-                                        </StackPanel>
-                                        <ComboBox x:Name="SmartFallbackComboBox" Grid.Column="2" Height="34"
-                                                  DisplayMemberPath="Name"
-                                                  SelectionChanged="OnSmartDictionarySettingChanged" />
-                                    </Grid>
-
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="12" />
-                                            <ColumnDefinition Width="280" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel VerticalAlignment="Center">
-                                            <TextBlock Text="Готовность модели" FontWeight="SemiBold" />
-                                            <TextBlock Text="Быстрый ответ или меньше занятой памяти"
-                                                       Foreground="{StaticResource SecondaryTextBrush}"
-                                                       FontSize="10" />
-                                        </StackPanel>
-                                        <ComboBox x:Name="SmartMemoryPolicyComboBox" Grid.Column="2" Height="34"
-                                                  DisplayMemberPath="Name"
-                                                  SelectionChanged="OnSmartDictionarySettingChanged" />
-                                    </Grid>
-
-                                    <TextBlock x:Name="SmartDictionarySettingsHint"
-                                               TextWrapping="Wrap"
-                                               Foreground="{StaticResource MintBrush}"
-                                               FontSize="10" Margin="0,10,0,0" />
-                                </StackPanel>
-                            </Border>
-
-                            <Grid Grid.Row="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="12" />
-                                    <ColumnDefinition Width="280" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel VerticalAlignment="Center">
-                                    <CheckBox x:Name="TextHookCheckBox" Content="Text-hook (Textractor)"
-                                              FontWeight="SemiBold"
-                                              Checked="OnTextHookChanged" Unchecked="OnTextHookChanged" />
-                                    <TextBlock Text="Текст совместимых игр — напрямую из процесса; иначе всегда OCR"
-                                               Foreground="{StaticResource SecondaryTextBrush}"
-                                               FontSize="10" Margin="0,2,0,0" />
-                                    <TextBlock x:Name="TextHookStatusText"
-                                               Foreground="{StaticResource MintBrush}"
-                                               TextWrapping="Wrap"
-                                               FontSize="10" Margin="0,4,0,0" />
-                                </StackPanel>
-                                <TextBox x:Name="TextractorPathBox" Grid.Column="2" Height="34"
-                                         VerticalContentAlignment="Center"
-                                         ToolTip="Папка Textractor (содержит x86/x64 TextractorCLI.exe)"
-                                         LostFocus="OnTextractorPathChanged" />
-                            </Grid>
-                        </Grid>
-                    </Border>
-
-                    <Border Background="#111D28" BorderBrush="#244B56" BorderThickness="1"
-                            CornerRadius="12" Padding="14" Margin="0,16,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="10" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="NPU" Foreground="{StaticResource MintBrush}" FontWeight="Bold"
-                                       VerticalAlignment="Top" />
-                            <TextBlock x:Name="NpuExplanationText" Grid.Column="2" TextWrapping="Wrap"
-                                       Foreground="{StaticResource SecondaryTextBrush}" FontSize="11"
-                                       Text="Проверка NPU…" />
-                        </Grid>
-                    </Border>
+                    </StackPanel>
+                </Border>
                 </StackPanel>
             </ScrollViewer>
         </Grid>
 
+        <!-- ============ FOOTER ============ -->
         <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
@@ -540,8 +540,8 @@
             <Ellipse Width="8" Height="8" Fill="{StaticResource MintBrush}" VerticalAlignment="Center" />
             <TextBlock x:Name="StatusText" Grid.Column="2" Text="Готово"
                        Foreground="{StaticResource SecondaryTextBrush}" FontSize="12"
-                       TextTrimming="CharacterEllipsis" />
-            <Button Grid.Column="3" Content="Открыть настройки движка" Padding="10,5"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="3" Content="Открыть настройки движка" Padding="12,6"
                     FontSize="11" Click="OnOpenEngineClick" />
         </Grid>
     </Grid>

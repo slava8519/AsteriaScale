@@ -20,15 +20,17 @@ public partial class HoverTranslationOverlay : Window
         FontStyles.Normal,
         FontWeights.SemiBold,
         FontStretches.Normal);
-    private static readonly SolidColorBrush DictionaryAccent = Brush(0x45, 0xDD, 0xC8);
-    private static readonly SolidColorBrush DictionaryBorder = Brush(0x2F, 0x91, 0x84);
-    private static readonly SolidColorBrush DictionaryBadge = Brush(0x14, 0x2A, 0x2B);
-    private static readonly SolidColorBrush NeuralAccent = Brush(0xB8, 0xA9, 0xFF);
-    private static readonly SolidColorBrush NeuralBorder = Brush(0x76, 0x5C, 0xFF);
-    private static readonly SolidColorBrush NeuralBadge = Brush(0x20, 0x1A, 0x3B);
-    private static readonly SolidColorBrush SmartAccent = Brush(0x67, 0xE4, 0xD4);
-    private static readonly SolidColorBrush SmartBorder = Brush(0x55, 0x74, 0xDD);
-    private static readonly SolidColorBrush SmartBadge = Brush(0x13, 0x2B, 0x35);
+    // Light "sandy" theme: per-mode accent/border/badge brushes tuned for the
+    // light hover card (see HANDOFF.md). Badge fills are pale, borders mid-tone.
+    private static readonly SolidColorBrush DictionaryAccent = Brush(0x3E, 0x8C, 0x7E);
+    private static readonly SolidColorBrush DictionaryBorder = Brush(0x7F, 0xB8, 0xAC);
+    private static readonly SolidColorBrush DictionaryBadge = Brush(0xE2, 0xF0, 0xEC);
+    private static readonly SolidColorBrush NeuralAccent = Brush(0x7A, 0x5E, 0xA6);
+    private static readonly SolidColorBrush NeuralBorder = Brush(0xB7, 0xA6, 0xD6);
+    private static readonly SolidColorBrush NeuralBadge = Brush(0xEC, 0xE6, 0xF5);
+    private static readonly SolidColorBrush SmartAccent = Brush(0x5F, 0x7A, 0x54);
+    private static readonly SolidColorBrush SmartBorder = Brush(0x9D, 0xBE, 0x93);
+    private static readonly SolidColorBrush SmartBadge = Brush(0xE7, 0xEF, 0xE1);
     private nint _handle;
 
     public HoverTranslationOverlay()
@@ -68,7 +70,7 @@ public partial class HoverTranslationOverlay : Window
             : smartMode ? "Сверяю значения с контекстом…" : "Перевожу локально…";
         TranslationText.FontSize = 11.5;
         TranslationText.FontWeight = FontWeights.Normal;
-        TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0xA8, 0xB1, 0xC9));
+        TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0x91, 0x87, 0x70));
         HintText.Visibility = Visibility.Collapsed;
         Width = PreferredWidth(
             normalizedSource,
@@ -167,7 +169,7 @@ public partial class HoverTranslationOverlay : Window
             TranslationPanel.Visibility = Visibility.Visible;
             TranslationText.FontSize = dictionaryMode ? 13.5 : smartMode ? 15 : 14.5;
             TranslationText.FontWeight = FontWeights.SemiBold;
-            TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0xF5, 0xF7, 0xFF));
+            TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0x2E, 0x2A, 0x22));
             TranslationText.Text = dictionaryMode ? "Перевод не найден" : normalizedTranslation;
             HintText.Text = dictionaryMode
                 ? "Полный перевод можно разрешить в настройках умного словаря."
