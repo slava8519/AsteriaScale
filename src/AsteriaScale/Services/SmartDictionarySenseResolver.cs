@@ -21,7 +21,14 @@ internal sealed record SmartDictionarySenseGroup(
     int SourceIndex,
     string EnglishDefinition,
     string PartOfSpeech,
-    IReadOnlyList<SmartDictionarySenseSurface> Surfaces);
+    IReadOnlyList<SmartDictionarySenseSurface> Surfaces)
+{
+    /// <summary>
+    /// Register of the English sense itself, inherited by its surfaces. Surface
+    /// choice must preserve it rather than drift toward the blandest wording.
+    /// </summary>
+    public SenseRegister Register { get; init; } = SenseRegister.Neutral;
+}
 
 internal sealed record SmartDictionarySenseInventory(
     IReadOnlyList<SmartDictionarySenseGroup> Groups,
@@ -116,8 +123,21 @@ internal static partial class SmartDictionarySenseResolver
         public string PartOfSpeech { get; }
         public List<SmartDictionarySenseSurface> Surfaces { get; } = [];
 
+        /// <summary>
+        /// Strongest marker seen on this sense's rows. Near-equivalent
+        /// definitions are merged into one group, so a coarse reading folded in
+        /// with a plain one must not lose its marking.
+        /// </summary>
+        public SenseRegister Register { get; private set; } = SenseRegister.Neutral;
+
         public void AddSurface(int sourceIndex, string translation, string register)
         {
+            SenseRegister parsed = SenseRegisters.Parse(register);
+            if (parsed > Register)
+            {
+                Register = parsed;
+            }
+
             string normalized = NormalizeRussianSurface(translation);
             if (normalized.Length == 0 || !_normalizedSurfaces.Add(normalized))
             {
@@ -131,7 +151,10 @@ internal static partial class SmartDictionarySenseResolver
         }
 
         public SmartDictionarySenseGroup Build() =>
-            new(SourceIndex, Definition, PartOfSpeech, Surfaces.ToArray());
+            new(SourceIndex, Definition, PartOfSpeech, Surfaces.ToArray())
+            {
+                Register = Register
+            };
     }
 
     private static readonly HashSet<string> EnglishGetForms =
@@ -316,7 +339,8 @@ internal static partial class SmartDictionarySenseResolver
             SmartDictionarySurfaceSelection? patient =
                 SelectPatientConstructionSurface(
                     selectedSense.Surfaces,
-                    english.GovernedPreposition);
+                    english.GovernedPreposition,
+                    selectedSense.Register);
             if (patient is not null)
             {
                 return patient;
@@ -381,7 +405,9 @@ internal static partial class SmartDictionarySenseResolver
                     usePastAgreement,
                     useProgressiveAspect,
                     useCompletedAspect),
-                RegisterRank = RegisterRank(item.Surface.Register)
+                RegisterRank = RegisterMatchRank(
+                    selectedSense.Register,
+                    item.Surface.Register)
             })
             // A malformed dictionary annotation must not beat a clean synonym,
             // even when the malformed row happens to appear first in the source.
@@ -432,7 +458,7 @@ internal static partial class SmartDictionarySenseResolver
         }
         else if (ranked.Any(item => item.RegisterRank != best.RegisterRank))
         {
-            reason = "safer dictionary register";
+            reason = "matching sense register";
             confidence = 0.9;
         }
         else
@@ -710,7 +736,8 @@ internal static partial class SmartDictionarySenseResolver
 
     private static SmartDictionarySurfaceSelection? SelectPatientConstructionSurface(
         IReadOnlyList<SmartDictionarySenseSurface> surfaces,
-        string governedPreposition)
+        string governedPreposition,
+        SenseRegister expectedRegister)
     {
         var infinitives = surfaces
             .Select(surface => new
@@ -718,7 +745,7 @@ internal static partial class SmartDictionarySenseResolver
                 Surface = surface,
                 Word = SingleRussianInfinitive(surface.Translation),
                 SurfaceQualityRank = SurfaceQualityRank(surface.Translation),
-                RegisterRank = RegisterRank(surface.Register)
+                RegisterRank = RegisterMatchRank(expectedRegister, surface.Register)
             })
             .Where(candidate => candidate.Word.Length > 0)
             .OrderBy(candidate => candidate.SurfaceQualityRank)
@@ -1274,52 +1301,18 @@ internal static partial class SmartDictionarySenseResolver
         return openings.Count == 0;
     }
 
-    private static int RegisterRank(string register)
-    {
-        string normalized = CollapseWhitespace(register).ToLowerInvariant();
-        if (normalized.Length == 0)
-        {
-            return 0;
-        }
-
-        if (ContainsAny(normalized, "диал", "dialect"))
-        {
-            return 10;
-        }
-
-        if (ContainsAny(normalized, "устар", "archaic", "obsolete"))
-        {
-            return 9;
-        }
-
-        if (ContainsAny(normalized, "груб", "vulgar", "offensive"))
-        {
-            return 8;
-        }
-
-        if (ContainsAny(normalized, "жарг", "slang"))
-        {
-            return 7;
-        }
-
-        if (ContainsAny(normalized, "прост", "colloq", "разг"))
-        {
-            return 2;
-        }
-
-        if (ContainsAny(normalized, "лит", "literary", "poetic"))
-        {
-            return 1;
-        }
-
-        // Domain and figurative labels describe the selected sense rather than
-        // making its Russian surface unsafe.
-        return 0;
-    }
-
-    private static bool ContainsAny(string value, params string[] fragments) =>
-        fragments.Any(fragment =>
-            value.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// Keeps the bluntness of the sense the ranker chose (roadmap #14.2C).
+    ///
+    /// The previous policy ranked surfaces by "safety", so a coarse or slang
+    /// marker was a penalty and the blandest wording won. Because the sidecar's
+    /// register describes the **English sense**, that systematically softened
+    /// the original: choosing "рассердиться" for a sense explicitly tagged
+    /// vulgar is a mistranslation of register, not a safe default. Domain and
+    /// figurative labels still carry no register and rank as neutral.
+    /// </summary>
+    private static int RegisterMatchRank(SenseRegister expected, string register) =>
+        SenseRegisters.MatchRank(expected, SenseRegisters.Parse(register));
 
     private static string NormalizeEnglishDefinition(string value) =>
         CollapseWhitespace(value)

@@ -732,8 +732,13 @@ public sealed class FoundryTranslationService : IAsyncDisposable
                 senseHints);
         }
 
+        // Roadmap #14.2C: register fidelity is symmetric. Softening a blunt line
+        // and spicing up a plain one are both mistranslations, and a model left
+        // without the rule reliably drifts toward the polite reading.
         StringBuilder prompt = new(
-            "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n");
+            "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n" +
+            "Сохрани уровень грубости, разговорности и откровенности оригинала: не смягчай, " +
+            "не цензурируй и не добавляй того, чего в оригинале нет.\n");
         if (violatedTerms is { Count: > 0 })
         {
             foreach (ScaffoldTerm term in violatedTerms)
@@ -863,6 +868,8 @@ public sealed class FoundryTranslationService : IAsyncDisposable
         string json = JsonSerializer.Serialize(input, BatchPromptJsonOptions);
         return
             "Переведи каждую реплику из JSON на естественный русский. Только перевод, без пояснений. " +
+            "Сохрани уровень грубости, разговорности и откровенности оригинала: не смягчай, " +
+            "не цензурируй и не добавляй того, чего в оригинале нет. " +
             "Поле terminology содержит обязательные термины только для реплики с тем же id. " +
             "Не объединяй и не пропускай реплики. Верни только JSON строго в форме: " +
             "{\"translations\":[{\"id\":0,\"text\":\"русский перевод\"}]}. " +

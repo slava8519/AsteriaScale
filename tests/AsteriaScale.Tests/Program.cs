@@ -958,11 +958,15 @@ try
                 "face",
                 4,
                 registerVariants);
+        // The sense itself carries no marker, so the unmarked surface is the
+        // faithful one: roadmap #14.2C forbids strengthening as well as
+        // softening. A vulgar sense over the same inventory is covered by
+        // SmartDictionaryQualityFoundationTests.
         Assert(safeRegister is
                {
                    SourceIndex: 2,
                    Translation: "лицо",
-                   Reason: "safer dictionary register"
+                   Reason: "matching sense register"
                },
             $"A marked literary/slang form outranked the neutral form: {safeRegister}");
 
@@ -1459,8 +1463,15 @@ try
         string emptyPrompt = FoundryTranslationService.BuildTranslationPrompt(
             "Please wait.",
             TranslationScaffold.Empty);
+        // The register rule is mandatory in every full-text prompt (roadmap
+        // #14.2C): without it the model drifts toward the polite reading, and
+        // fidelity is symmetric — neither soften nor spice up the original.
+        const string registerRule =
+            "Сохрани уровень грубости, разговорности и откровенности оригинала: не смягчай, " +
+            "не цензурируй и не добавляй того, чего в оригинале нет.\n";
         Assert(emptyPrompt ==
                "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n" +
+               registerRule +
                "Реплика: Please wait.",
             $"The empty scaffold prompt changed unexpectedly: {emptyPrompt}");
         Assert(!emptyPrompt.Contains("Обязательная терминология", StringComparison.Ordinal),

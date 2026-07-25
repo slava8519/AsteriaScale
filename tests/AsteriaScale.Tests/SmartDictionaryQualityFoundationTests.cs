@@ -5,6 +5,8 @@ internal static class SmartDictionaryQualityFoundationTests
     public static Task RunAsync()
     {
         VerifySurfaceQualityPreference();
+        VerifyRegisterNormalization();
+        VerifyRegisterFidelity();
         VerifyDurationAgoSurfacePreference();
         VerifyStandaloneSaveSurfacePreference();
         VerifyWhileGrammar();
@@ -83,6 +85,95 @@ internal static class SmartDictionaryQualityFoundationTests
                 balancedAnnotation);
         Check(balancedSelection is { Translation: "сберегать (деньги)" },
             "A balanced explanatory surface was incorrectly treated as malformed.");
+    }
+
+    /// <summary>
+    /// The sidecar packs several markers into one column, so the parser must
+    /// resolve to the strongest and must not invent a register from a semantic
+    /// label. Vocabulary is taken from the shipped English sidecar, which uses
+    /// exactly seven markers.
+    /// </summary>
+    private static void VerifyRegisterNormalization()
+    {
+        Check(SenseRegisters.Parse("груб.") == SenseRegister.Vulgar,
+            "The vulgar marker was not recognized.");
+        Check(SenseRegisters.Parse("жарг.") == SenseRegister.Slang,
+            "The slang marker was not recognized.");
+        Check(SenseRegisters.Parse("разг.") == SenseRegister.Colloquial,
+            "The colloquial marker was not recognized.");
+        Check(SenseRegisters.Parse("устар.") == SenseRegister.Archaic,
+            "The archaic marker was not recognized.");
+        Check(SenseRegisters.Parse("диал.") == SenseRegister.Dialect,
+            "The dialect marker was not recognized.");
+        Check(SenseRegisters.Parse("жарг. груб.") == SenseRegister.Vulgar,
+            "A combined label did not resolve to its strongest marker.");
+        Check(SenseRegisters.Parse("перен.") == SenseRegister.Neutral,
+            "A figurative label was misread as a register.");
+        Check(SenseRegisters.Parse("") == SenseRegister.Neutral &&
+              SenseRegisters.Parse(null) == SenseRegister.Neutral &&
+              SenseRegisters.Parse("мед.") == SenseRegister.Neutral,
+            "An unmarked or domain-only label must stay neutral.");
+        Check(SenseRegisters.DisplayLabel(SenseRegister.Vulgar) == "ГРУБ." &&
+              SenseRegisters.DisplayLabel(SenseRegister.Neutral) is null,
+            "Register display labels are wrong.");
+    }
+
+    /// <summary>
+    /// Roadmap #14.2C: the register belongs to the English sense, so the chosen
+    /// surface must keep it. The previous policy ranked a coarse marker as a
+    /// defect, which softened a sense that Wiktionary had explicitly tagged.
+    /// </summary>
+    private static void VerifyRegisterFidelity()
+    {
+        SmartDictionarySenseGroup vulgar = new(
+            0,
+            "To become extremely angry.",
+            "verb",
+            [
+                new SmartDictionarySenseSurface(0, "рассердиться", ""),
+                new SmartDictionarySenseSurface(1, "взбеситься", "груб.")
+            ])
+        {
+            Register = SenseRegister.Vulgar
+        };
+        SmartDictionarySurfaceSelection? kept =
+            SmartDictionarySenseResolver.SelectSurfaceForm(
+                "He was about to lose it.",
+                "lose",
+                16,
+                vulgar);
+        Check(kept is { Translation: "взбеситься" },
+            $"A vulgar sense was softened to a neutral surface: {kept}");
+
+        // The same inventory under a neutral sense must not be strengthened.
+        SmartDictionarySenseGroup neutral = vulgar with
+        {
+            Register = SenseRegister.Neutral
+        };
+        SmartDictionarySurfaceSelection? plain =
+            SmartDictionarySenseResolver.SelectSurfaceForm(
+                "He was about to lose it.",
+                "lose",
+                16,
+                neutral);
+        Check(plain is { Translation: "рассердиться" },
+            $"A neutral sense was strengthened to a coarse surface: {plain}");
+
+        // Grouping must carry the strongest marker of the rows it merged.
+        SmartDictionarySenseInventory inventory =
+            SmartDictionarySenseResolver.GroupCandidates(
+                "He was about to lose it.",
+                "lose",
+                16,
+                [
+                    new DictionarySenseCandidate(
+                        "рассердиться", "To become extremely angry.", "", "verb"),
+                    new DictionarySenseCandidate(
+                        "взбеситься", "To become extremely angry.", "груб.", "verb")
+                ]);
+        Check(inventory.Groups.Count == 1 &&
+              inventory.Groups[0].Register == SenseRegister.Vulgar,
+            "A merged sense lost the register marking of its rows.");
     }
 
     private static void VerifyDurationAgoSurfacePreference()
