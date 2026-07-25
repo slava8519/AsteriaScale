@@ -39,7 +39,24 @@ internal static class RegisterFidelityBenchmark
         bool Strengthened,
         string Selected,
         SenseRegister SelectedRegister,
-        SenseRegister ExpectedRegister);
+        SenseRegister ExpectedRegister)
+    {
+        /// <summary>
+        /// Distinct visible translations the plan offered. One means the model
+        /// was never consulted.
+        /// </summary>
+        public int OutcomeCount { get; init; }
+
+        /// <summary>
+        /// Which stage produced the answer. A wrong sense decided without the
+        /// model is a routing defect and is cheap to fix; the same wrong sense
+        /// decided by the ranker is model quality and belongs to the bake-off.
+        /// Telling them apart is the whole point of recording this.
+        /// </summary>
+        public string Route { get; init; } = "unresolved";
+
+        public double? Margin { get; init; }
+    }
 
     public static async Task RunAsync(
         string setPath,
@@ -132,9 +149,12 @@ internal static class RegisterFidelityBenchmark
         }
 
         SmartDictionaryRankerOutcome? selected;
+        string route;
+        double? margin = null;
         if (plan.Outcomes.Count == 1)
         {
             selected = plan.Outcomes[0];
+            route = "single-outcome";
         }
         else
         {
@@ -163,10 +183,17 @@ internal static class RegisterFidelityBenchmark
                     Strengthened: false,
                     Selected: string.Empty,
                     SenseRegister.Neutral,
-                    expectedRegister);
+                    expectedRegister)
+                {
+                    OutcomeCount = plan.Outcomes.Count,
+                    Route = "abstained",
+                    Margin = ranked.Margin
+                };
             }
 
             selected = plan.Outcomes.First(outcome => outcome.GroupId == groupId);
+            route = "model";
+            margin = ranked.Margin;
         }
 
         // SourceIndex points back into the sense inventory the plan was built
@@ -193,7 +220,12 @@ internal static class RegisterFidelityBenchmark
             Strengthened: selectedRegister > expectedRegister,
             selected.Translation,
             selectedRegister,
-            expectedRegister);
+            expectedRegister)
+        {
+            OutcomeCount = plan.Outcomes.Count,
+            Route = route,
+            Margin = margin
+        };
     }
 
     private static CaseOutcome Unresolved(
