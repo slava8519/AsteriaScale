@@ -346,10 +346,16 @@ internal sealed class SmartHoverPipeline : IDisposable
             // full-text scaffold for this word in this line is reusable here.
             // Warm-up above already validated provider and model identity — a
             // cache hit may skip inference, never that validation.
-            string decisionKey = CreateDecisionKey(
+            // One window feeds both the key and the worker (roadmap #14.2B), so
+            // the key can no longer describe a wider context than the model saw.
+            TargetCenteredContext rankerContext = TargetCenteredContextBuilder.Build(
                 recognized.Text,
                 lookup.Source,
-                recognized.CharacterIndex,
+                recognized.CharacterIndex);
+            string decisionKey = CreateDecisionKey(
+                rankerContext.Text,
+                lookup.Source,
+                rankerContext.CharacterIndex,
                 plan,
                 provider,
                 modelVersion);
@@ -400,9 +406,9 @@ internal sealed class SmartHoverPipeline : IDisposable
             string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
             GlossBertDictionarySelection ranked = sharedDecision is null
                 ? await _glossBertSelector.SelectAsync(
-                    recognized.Text,
+                    rankerContext.Text,
                     lookup.Source,
-                    recognized.CharacterIndex,
+                    rankerContext.CharacterIndex,
                     plan.CandidateGlosses,
                     plan.CandidateGroupIds,
                     "English",

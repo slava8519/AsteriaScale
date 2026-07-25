@@ -32,9 +32,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
 
     private const int SchemaVersion = 2;
     private const int MaximumCandidates = 128;
-    private const int ContextWordRadius = 5;
-    private const int ContextCharacterRadius = 96;
-    private const int MaximumContextCharacters = 384;
     private const int MaximumStoredTextLength = 1_024;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
@@ -218,6 +215,12 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
     internal static string CreateKeyFingerprint(SmartDictionaryCacheRequest request) =>
         NormalizeRequest(request).Key;
 
+    /// <summary>
+    /// The window this key describes is the same one the ranker receives
+    /// (roadmap #14.2B). Before that it was narrower than the model's input, so
+    /// two replies sharing a neighbourhood could reuse each other's verdict —
+    /// a deliberate trade for hit rate that no longer has to be made.
+    /// </summary>
     internal static string CreateLocalContextWindow(
         string context,
         string target,
@@ -229,42 +232,20 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         }
 
         string rawTarget = target.Trim();
-        int occurrence = FindClosestOccurrence(context, rawTarget, characterIndex);
-        int anchor = occurrence >= 0
-            ? occurrence
-            : Math.Clamp(characterIndex, 0, Math.Max(0, context.Length - 1));
-        int targetLength = occurrence >= 0 ? rawTarget.Length : 0;
-
-        MatchCollection words = WordTokenRegex().Matches(context);
-        int start;
-        int end;
-        if (words.Count > 1)
-        {
-            int anchorWord = Enumerable.Range(0, words.Count)
-                .MinBy(index => DistanceToMatch(words[index], anchor));
-            int firstWord = Math.Max(0, anchorWord - ContextWordRadius);
-            int lastWord = Math.Min(words.Count - 1, anchorWord + ContextWordRadius);
-            start = words[firstWord].Index;
-            end = words[lastWord].Index + words[lastWord].Length;
-        }
-        else
-        {
-            start = Math.Max(0, anchor - ContextCharacterRadius);
-            end = Math.Min(context.Length, anchor + Math.Max(1, targetLength) + ContextCharacterRadius);
-        }
-
-        if (end - start > MaximumContextCharacters)
-        {
-            int desiredStart = Math.Max(start, anchor - MaximumContextCharacters / 2);
-            start = Math.Min(desiredStart, end - MaximumContextCharacters);
-            end = start + MaximumContextCharacters;
-        }
-
-        string window = context[start..end];
-        int localTarget = occurrence - start;
+        TargetCenteredContext centered = TargetCenteredContextBuilder.Build(
+            context,
+            rawTarget,
+            characterIndex);
+        string window = centered.Text;
+        int localTarget = centered.CharacterIndex;
+        int targetLength = rawTarget.Length;
         if (targetLength > 0 &&
             localTarget >= 0 &&
-            localTarget + targetLength <= window.Length)
+            localTarget + targetLength <= window.Length &&
+            string.Equals(
+                window.Substring(localTarget, targetLength),
+                rawTarget,
+                StringComparison.OrdinalIgnoreCase))
         {
             window = window.Insert(localTarget + targetLength, "</target>")
                 .Insert(localTarget, "<target>");
@@ -669,47 +650,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         entry.Confidence is >= 0 and <= 1 &&
         entry.LastAccess >= 0;
 
-    private static int FindClosestOccurrence(string context, string target, int characterIndex)
-    {
-        if (target.Length == 0 || target.Length > context.Length)
-        {
-            return -1;
-        }
-
-        int closest = -1;
-        int closestDistance = int.MaxValue;
-        for (int start = 0; start <= context.Length - target.Length;)
-        {
-            int index = context.IndexOf(target, start, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-            {
-                break;
-            }
-
-            int distance = Math.Abs(index - characterIndex);
-            if (distance < closestDistance)
-            {
-                closest = index;
-                closestDistance = distance;
-            }
-
-            start = index + Math.Max(1, target.Length);
-        }
-
-        return closest;
-    }
-
-    private static int DistanceToMatch(Match match, int anchor)
-    {
-        if (anchor < match.Index)
-        {
-            return match.Index - anchor;
-        }
-
-        int end = match.Index + match.Length;
-        return anchor <= end ? 0 : anchor - end;
-    }
-
     private static string NormalizeLanguage(string? value)
     {
         string language = NormalizeIdentifier(value);
@@ -796,10 +736,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 
-    [GeneratedRegex(
-        @"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex WordTokenRegex();
 
     private sealed record NormalizedRequest(string Key, string[] Candidates);
 

@@ -53,13 +53,13 @@ internal static class SmartDictionaryResultCacheTests
             context,
             "bank",
             ["банк", "берег"]);
+        // Same sentence, only spelling of the request metadata differs.
+        const string equivalentContext =
+            "alpha beta gamma delta epsilon zeta  one  two three four five BANK six seven eight nine ten.";
         SmartDictionaryCacheRequest equivalent = request with
         {
-            Context =
-                "OMEGA SIGMA THETA KAPPA LAMBDA ZETA  one  two three four five BANK six seven eight nine ten.",
-            CharacterIndex =
-                "OMEGA SIGMA THETA KAPPA LAMBDA ZETA  one  two three four five BANK six seven eight nine ten."
-                    .IndexOf("BANK", StringComparison.Ordinal),
+            Context = equivalentContext,
+            CharacterIndex = equivalentContext.IndexOf("BANK", StringComparison.Ordinal),
             SourceLanguage = "EN",
             Backend = " NPU ",
             ModelId = request.ModelId.ToUpperInvariant(),
@@ -70,7 +70,52 @@ internal static class SmartDictionaryResultCacheTests
         string first = SmartDictionaryResultCache.CreateKeyFingerprint(request);
         string second = SmartDictionaryResultCache.CreateKeyFingerprint(equivalent);
         Check(first == second,
-            "Equivalent language names, casing, whitespace and distant context must share a key.");
+            "Equivalent language names, casing and whitespace must share a key.");
+
+        // Roadmap #14.2B changed this contract deliberately. The window now
+        // matches the ranker's own input, so context the model can see must
+        // separate keys: previously a +-5 word radius let two different replies
+        // reuse each other's verdict while the model had scored both in full.
+        SmartDictionaryCacheRequest differentOpening = request with
+        {
+            Context =
+                "OMEGA SIGMA THETA KAPPA LAMBDA ZETA one two three four five bank six seven eight nine ten.",
+            CharacterIndex =
+                "OMEGA SIGMA THETA KAPPA LAMBDA ZETA one two three four five bank six seven eight nine ten."
+                    .IndexOf("bank", StringComparison.Ordinal)
+        };
+        Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(differentOpening),
+            "Context inside the ranker's own window must separate cache keys.");
+
+        // Beyond the window the model genuinely cannot see the difference, so
+        // those requests still share a key. "Distant" is now defined by the
+        // token budget instead of an arbitrary radius.
+        // Half the budget on each side of the target, so the window is filled
+        // entirely from the shared middle and the differing opening lies beyond
+        // it whichever way the symmetric expansion resolves.
+        int flank = TargetCenteredContextBuilder.MaximumWords / 2;
+        string near = string.Join(
+            " ",
+            Enumerable.Range(0, flank).Select(index => "near" + index));
+        string after = string.Join(
+            " ",
+            Enumerable.Range(0, flank).Select(index => "after" + index));
+        string shared = near + " bank " + after + ".";
+        string longContext = "alpha beta gamma delta " + shared;
+        string longVariant = "omega sigma theta kappa " + shared;
+        SmartDictionaryCacheRequest longRequest = request with
+        {
+            Context = longContext,
+            CharacterIndex = longContext.IndexOf("bank", StringComparison.Ordinal)
+        };
+        SmartDictionaryCacheRequest longVariantRequest = request with
+        {
+            Context = longVariant,
+            CharacterIndex = longVariant.IndexOf("bank", StringComparison.Ordinal)
+        };
+        Check(SmartDictionaryResultCache.CreateKeyFingerprint(longRequest) ==
+              SmartDictionaryResultCache.CreateKeyFingerprint(longVariantRequest),
+            "Context outside the ranker's window must not separate cache keys.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { Backend = "gpu" }),
             "Backend must participate in the cache key.");
@@ -93,8 +138,21 @@ internal static class SmartDictionaryResultCacheTests
             request.CharacterIndex);
         Check(window.Contains("<target>bank</target>", StringComparison.Ordinal),
             "The selected occurrence must be marked inside the local context window.");
-        Check(!window.Contains("alpha", StringComparison.Ordinal),
-            "Distant dialogue must not inflate or invalidate the local-context key.");
+
+        // A reply within the budget is keyed whole, exactly as the ranker reads
+        // it; only a reply past the budget is trimmed, and then around the
+        // target rather than from the right.
+        string trimmedWindow = SmartDictionaryResultCache.CreateLocalContextWindow(
+            longContext,
+            "bank",
+            longContext.IndexOf("bank", StringComparison.Ordinal));
+        Check(trimmedWindow.Contains("<target>bank</target>", StringComparison.Ordinal),
+            "The target must survive trimming of an over-budget reply.");
+        Check(!trimmedWindow.Contains("alpha", StringComparison.Ordinal),
+            "An over-budget reply must be trimmed away from the target.");
+        Check(trimmedWindow.Contains("near" + (flank - 1), StringComparison.Ordinal) &&
+              trimmedWindow.Contains("after0", StringComparison.Ordinal),
+            "Trimming must keep the words immediately around the target.");
         return Task.CompletedTask;
     }
 

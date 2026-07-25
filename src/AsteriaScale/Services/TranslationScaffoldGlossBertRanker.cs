@@ -58,8 +58,17 @@ internal sealed class TranslationScaffoldGlossBertRanker
         string modelIdentity = _selector.ActiveModelVersion
             ?? throw new InvalidOperationException(
                 "GlossBERT did not report a model identity after warm-up.");
-        string cacheKey = CreateCacheKey(
-            request,
+        // One window feeds both the key and the worker, so a cached verdict can
+        // never describe a context the model did not actually receive.
+        TargetCenteredContext rankerContext = TargetCenteredContextBuilder.Build(
+            request.Sentence,
+            request.Target,
+            request.CharacterIndex);
+        string cacheKey = GlossBertDecisionCache.CreateFingerprint(
+            rankerContext.Text,
+            request.Target,
+            rankerContext.CharacterIndex,
+            request.Plan,
             provider,
             modelIdentity,
             dictionaryVersion);
@@ -85,9 +94,9 @@ internal sealed class TranslationScaffoldGlossBertRanker
         }
 
         GlossBertDictionarySelection selection = await _selector.SelectAsync(
-            request.Sentence,
+            rankerContext.Text,
             request.Target,
-            request.CharacterIndex,
+            rankerContext.CharacterIndex,
             request.Plan.CandidateGlosses,
             request.Plan.CandidateGroupIds,
             "English",

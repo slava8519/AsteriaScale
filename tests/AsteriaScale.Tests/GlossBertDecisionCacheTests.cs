@@ -16,6 +16,7 @@ internal static class GlossBertDecisionCacheTests
         Directory.CreateDirectory(root);
 
         VerifyFingerprintSharing();
+        VerifyTargetSurvivesTrimming();
         VerifyScaffoldAndHoverAgree();
         VerifyAbstentionThresholdIsKeyed();
         VerifyFingerprintSeparation();
@@ -60,6 +61,60 @@ internal static class GlossBertDecisionCacheTests
     /// dictionary version, both paths keep working and silently stop sharing —
     /// a regression with no visible symptom other than doubled inference.
     /// </summary>
+    /// <summary>
+    /// The defect roadmap #14.2B fixes. The worker's pair tokenizer truncates
+    /// from the right, so on a reply longer than the sequence budget a target
+    /// sitting late in the line was cut before the model saw it — the ranker
+    /// then scored glosses against a context missing the very word being
+    /// disambiguated. The dev benchmark cannot catch this: its longest context
+    /// is 12 words, and no case puts the target past word 30.
+    /// </summary>
+    private static void VerifyTargetSurvivesTrimming()
+    {
+        int budget = TargetCenteredContextBuilder.MaximumWords;
+        string lead = string.Join(
+            " ",
+            Enumerable.Range(0, budget * 2).Select(index => "lead" + index));
+        string tail = string.Join(
+            " ",
+            Enumerable.Range(0, 4).Select(index => "tail" + index));
+        string sentence = lead + " " + Target + " " + tail + ".";
+        int rawIndex = sentence.IndexOf(Target, StringComparison.Ordinal);
+
+        TargetCenteredContext centered = TargetCenteredContextBuilder.Build(
+            sentence,
+            Target,
+            rawIndex);
+        Check(centered.Trimmed,
+            "An over-budget reply was not trimmed.");
+        Check(centered.CharacterIndex >= 0 &&
+              centered.CharacterIndex + Target.Length <= centered.Text.Length &&
+              string.Equals(
+                  centered.Text.Substring(centered.CharacterIndex, Target.Length),
+                  Target,
+                  StringComparison.Ordinal),
+            $"The target did not survive trimming at its reported index: '{centered.Text}'");
+        Check(!centered.Text.Contains("lead0", StringComparison.Ordinal),
+            "Trimming kept the far end of the reply instead of the target's neighbourhood.");
+        Check(centered.Text.Contains("tail0", StringComparison.Ordinal),
+            "Trimming dropped context following the target.");
+        Check(centered.Text.Split(' ').Length <= budget + 1,
+            $"Trimming exceeded its word budget: '{centered.Text}'");
+
+        // A target at the very start must still get a full-width window, with
+        // the unused left side spent on the right.
+        string leading = Target + " " + lead + ".";
+        TargetCenteredContext atStart = TargetCenteredContextBuilder.Build(
+            leading,
+            Target,
+            0);
+        Check(atStart.CharacterIndex == 0 &&
+              atStart.Text.StartsWith(Target, StringComparison.Ordinal),
+            $"A leading target lost its position: '{atStart.Text}'");
+        Check(atStart.Text.Split(' ').Length >= budget - 1,
+            "A leading target did not receive the remaining budget on its right.");
+    }
+
     private static void VerifyScaffoldAndHoverAgree()
     {
         SmartDictionaryRankerPlan plan = CreatePlan();
