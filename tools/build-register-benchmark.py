@@ -244,10 +244,20 @@ def main() -> None:
     counts = collections.Counter(case["bucket"] for case in good)
     for bucket, count in sorted(counts.items()):
         print(f"  {bucket}: {count}")
-    ROOT / "assets/Ranker/ranker-register-benchmark.cases.json".write_text(
-        json.dumps({"version": 1, "cases": good}, ensure_ascii=False, indent=2),
+    if bad:
+        raise SystemExit(
+            f"{len(bad)} case(s) are not supported by the shipped dictionary; "
+            "fix them before regenerating the set."
+        )
+
+    target = ROOT / "assets/Ranker/ranker-register-benchmark.json"
+    document = json.loads(target.read_text(encoding="utf-8"))
+    document["cases"] = good
+    target.write_text(
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    print(f"wrote {target.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
