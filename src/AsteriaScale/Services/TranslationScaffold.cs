@@ -246,9 +246,14 @@ internal sealed class TranslationScaffoldBuilder
             List<ScaffoldSenseHint> senseHints = [];
             HashSet<string> neuralSources = new(StringComparer.Ordinal);
             HashSet<string> explicitScaffoldSources = new(StringComparer.Ordinal);
+            // One token scan and one sentence key for the whole reply: this
+            // loop probes the dictionary once per token, and rebuilding both
+            // each time was ~80% of the builder's cost (roadmap audit A8).
+            LocalDictionaryService.EnglishLookupContext lookupContext =
+                _dictionary.CreateEnglishLookupContext(sentence);
             IReadOnlyList<ScaffoldDictionaryMatch> scaffoldMatches =
                 await _dictionary.FindEnglishScaffoldMatchesAsync(
-                    sentence,
+                    lookupContext,
                     cancellationToken);
             foreach (ScaffoldDictionaryMatch match in scaffoldMatches)
             {
@@ -290,7 +295,7 @@ internal sealed class TranslationScaffoldBuilder
                 bool explicitUserToken = _dictionary.IsUserEnglishKey(token.Value);
                 DictionaryLookupResult lookup =
                     await _dictionary.LookupWithSenseMetadataAsync(
-                        sentence,
+                        lookupContext,
                         token.Value,
                         token.Index,
                         cancellationToken);

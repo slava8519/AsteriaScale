@@ -358,6 +358,83 @@ public sealed partial class LocalDictionaryService
         await EnsureSenseMetadataLoadedAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Per-sentence work shared by every lookup into the same reply: the token
+    /// scan and the dialogue sentence key. A caller that probes one reply once
+    /// per token — the full-text scaffold builder does exactly that — would
+    /// otherwise redo both for every token.
+    /// </summary>
+    internal sealed class EnglishLookupContext
+    {
+        internal EnglishLookupContext(string text)
+        {
+            Text = text ?? string.Empty;
+            Tokens = EnglishLookupTokenRegex().Matches(Text);
+            SentenceKey = NormalizeEnglishSentenceKey(Text);
+            // The phrase search normalizes the same token text once per
+            // (start, length) pair and once more per canonical candidate, which
+            // is thousands of repeats of an identical result per reply.
+            NormalizedTokens = new string[Tokens.Count];
+            for (int index = 0; index < Tokens.Count; index++)
+            {
+                NormalizedTokens[index] = NormalizeEnglish(Tokens[index].Value);
+            }
+        }
+
+        public string Text { get; }
+        public MatchCollection Tokens { get; }
+        public string SentenceKey { get; }
+        public string[] NormalizedTokens { get; }
+
+        private Dictionary<string, string[]>? _lemmas;
+
+        /// <summary>
+        /// Lemma candidates for one already normalized token. The phrase search
+        /// asks for the same token's lemmas once per (start, length) pair, and
+        /// each miss allocated a HashSet and a List to rebuild an identical
+        /// answer. Scoped to one reply, so it cannot go stale.
+        /// </summary>
+        public string[] LemmasFor(string normalizedToken)
+        {
+            _lemmas ??= new Dictionary<string, string[]>(StringComparer.Ordinal);
+            if (!_lemmas.TryGetValue(normalizedToken, out string[]? lemmas))
+            {
+                lemmas = EnglishCandidates(normalizedToken, false)
+                    .Skip(1)
+                    .Take(3)
+                    .ToArray();
+                _lemmas[normalizedToken] = lemmas;
+            }
+
+            return lemmas;
+        }
+    }
+
+    internal EnglishLookupContext CreateEnglishLookupContext(string text) => new(text);
+
+    /// <summary>
+    /// Lookup that reuses an already built per-sentence context. Sense metadata
+    /// is still loaded on demand, so the caller cannot skip that step by
+    /// holding a context.
+    /// </summary>
+    internal async Task<DictionaryLookupResult> LookupWithSenseMetadataAsync(
+        EnglishLookupContext context,
+        string hoveredWord,
+        int characterIndex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        await LoadAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (ContainsJapanese(context.Text) || ContainsJapanese(hoveredWord))
+        {
+            return LookupJapanese(context.Text, hoveredWord, characterIndex);
+        }
+
+        await EnsureSenseMetadataLoadedAsync(cancellationToken);
+        return LookupEnglish(context, hoveredWord, characterIndex, true);
+    }
+
     private async Task<DictionaryLookupResult> LookupCoreAsync(
         string text,
         string hoveredWord,
@@ -376,7 +453,11 @@ public sealed partial class LocalDictionaryService
 
         return japanese
             ? LookupJapanese(text, hoveredWord, characterIndex)
-            : LookupEnglish(text, hoveredWord, characterIndex, includeSenseMetadata);
+            : LookupEnglish(
+                new EnglishLookupContext(text),
+                hoveredWord,
+                characterIndex,
+                includeSenseMetadata);
     }
 
     private async Task EnsureSenseMetadataLoadedAsync(CancellationToken cancellationToken)
@@ -423,20 +504,30 @@ public sealed partial class LocalDictionaryService
             : null;
     }
 
-    internal async Task<IReadOnlyList<ScaffoldDictionaryMatch>>
+    internal Task<IReadOnlyList<ScaffoldDictionaryMatch>>
         FindEnglishScaffoldMatchesAsync(
             string sentence,
+            CancellationToken cancellationToken = default) =>
+        FindEnglishScaffoldMatchesAsync(
+            CreateEnglishLookupContext(sentence ?? string.Empty),
+            cancellationToken);
+
+    internal async Task<IReadOnlyList<ScaffoldDictionaryMatch>>
+        FindEnglishScaffoldMatchesAsync(
+            EnglishLookupContext context,
             CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(context);
         await LoadAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
+        string sentence = context.Text;
         if (_scaffoldEnglishTranslations.Count == 0 || string.IsNullOrWhiteSpace(sentence))
         {
             return Array.Empty<ScaffoldDictionaryMatch>();
         }
 
-        MatchCollection tokens = EnglishLookupTokenRegex().Matches(sentence);
+        MatchCollection tokens = context.Tokens;
         if (tokens.Count == 0)
         {
             return Array.Empty<ScaffoldDictionaryMatch>();
@@ -466,7 +557,11 @@ public sealed partial class LocalDictionaryService
                     : new[] { exactKey };
 
                 foreach (string lookupKey in lookupKeys.Concat(
-                             CanonicalEnglishPhraseCandidates(tokens, start, length, exactKey)))
+                             CanonicalEnglishPhraseCandidates(
+                                 context,
+                                 start,
+                                 length,
+                                 exactKey)))
                 {
                     if (!_scaffoldEnglishTranslations.TryGetValue(
                             lookupKey,
@@ -1229,7 +1324,7 @@ public sealed partial class LocalDictionaryService
     }
 
     private DictionaryLookupResult LookupEnglish(
-        string text,
+        EnglishLookupContext context,
         string hoveredWord,
         int characterIndex,
         bool includeSenseMetadata)
@@ -1237,21 +1332,22 @@ public sealed partial class LocalDictionaryService
         // Lookup anchors include numbers even though dialogue sentence keys do
         // not. Otherwise valid lexical keys such as "101", "24/7" and
         // "3d printer" are loaded canonically but can never be reached.
-        MatchCollection tokens = EnglishLookupTokenRegex().Matches(text);
+        string text = context.Text;
+        MatchCollection tokens = context.Tokens;
         if (tokens.Count == 0)
         {
             return Missing(hoveredWord, "EN");
         }
 
         int tokenIndex = FindClosestToken(tokens, characterIndex, hoveredWord);
-        string normalizedSentence = NormalizeEnglishSentenceKey(text);
+        string normalizedSentence = context.SentenceKey;
         _dialogueEnglishTranslations.TryGetValue(
             normalizedSentence,
             out string? dialogueTranslation);
 
         Match hoveredToken = tokens[tokenIndex];
         string lexicalSurface = ExtractEnglishLexeme(text, hoveredToken);
-        string normalizedWord = NormalizeEnglish(hoveredToken.Value);
+        string normalizedWord = context.NormalizedTokens[tokenIndex];
         string lexicalSurfaceKey = NormalizeEnglish(lexicalSurface);
         if (!string.Equals(lexicalSurfaceKey, normalizedWord, StringComparison.Ordinal) &&
             _english.TryGetValue(lexicalSurfaceKey, out string? lexicalSurfaceTranslation))
@@ -1327,7 +1423,7 @@ public sealed partial class LocalDictionaryService
                 }
 
                 foreach (string canonicalKey in CanonicalEnglishPhraseCandidates(
-                             tokens,
+                             context,
                              start,
                              length,
                              key))
@@ -1572,15 +1668,17 @@ public sealed partial class LocalDictionaryService
     }
 
     private static IEnumerable<string> CanonicalEnglishPhraseCandidates(
-        MatchCollection tokens,
+        EnglishLookupContext context,
         int start,
         int length,
         string exactKey)
     {
-        string[] canonical = Enumerable.Range(start, length)
-            .Select(index => NormalizeEnglish(tokens[index].Value))
-            .Select(NormalizeEnglishPossessive)
-            .ToArray();
+        string[] canonical = new string[length];
+        for (int offset = 0; offset < length; offset++)
+        {
+            canonical[offset] =
+                NormalizeEnglishPossessive(context.NormalizedTokens[start + offset]);
+        }
         HashSet<string> yielded = new(StringComparer.Ordinal) { exactKey };
 
         string possessiveNormalized = string.Join(" ", canonical);
@@ -1595,11 +1693,7 @@ public sealed partial class LocalDictionaryService
         // exponential number of sentence guesses.
         for (int tokenOffset = 0; tokenOffset < canonical.Length; tokenOffset++)
         {
-            foreach (string lemma in EnglishCandidates(
-                         canonical[tokenOffset],
-                         preferLemma: false)
-                     .Skip(1)
-                     .Take(3))
+            foreach (string lemma in context.LemmasFor(canonical[tokenOffset]))
             {
                 string original = canonical[tokenOffset];
                 canonical[tokenOffset] = lemma;
@@ -1761,6 +1855,15 @@ public sealed partial class LocalDictionaryService
     // and mirror canonical_casefold in build-dictionaries.py.
     private static string FoldEnglishCase(string value)
     {
+        // Every expanding fold below is non-ASCII, so ordinary English text
+        // needs none of the twelve scans. This is the hottest string operation
+        // in the project — it runs per token and per phrase candidate — so the
+        // common case gets a single pass instead of thirteen.
+        if (IsAscii(value))
+        {
+            return LowerInvariant(value);
+        }
+
         string expanded = value
             .Replace("ß", "ss", StringComparison.Ordinal)
             .Replace("ẞ", "ss", StringComparison.Ordinal)
@@ -1774,8 +1877,37 @@ public sealed partial class LocalDictionaryService
             .Replace("ﬄ", "ffl", StringComparison.Ordinal)
             .Replace("ﬅ", "st", StringComparison.Ordinal)
             .Replace("ﬆ", "st", StringComparison.Ordinal);
-        return new string(expanded.Select(char.ToLowerInvariant).ToArray());
+        return LowerInvariant(expanded);
     }
+
+    private static bool IsAscii(string value)
+    {
+        foreach (char character in value)
+        {
+            if (character > 0x7F)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Per-character invariant lowering, identical to the previous
+    /// <c>Select(char.ToLowerInvariant)</c> but without the enumerator and the
+    /// intermediate array. Deliberately not <c>string.ToLowerInvariant()</c>:
+    /// that applies full case mapping, which is not one-to-one and would change
+    /// canonical keys (invariant 1).
+    /// </summary>
+    private static string LowerInvariant(string value) =>
+        string.Create(value.Length, value, static (destination, source) =>
+        {
+            for (int index = 0; index < source.Length; index++)
+            {
+                destination[index] = char.ToLowerInvariant(source[index]);
+            }
+        });
 
     private static (string Text, int Anchor) NormalizeJapaneseWithAnchor(string value, int characterIndex)
     {
