@@ -746,18 +746,30 @@ prompt не требует сохранять степень грубости и
 - распространённые masked spellings (`f*ck`, `sh!t`-класс) обрабатываются
   только как lookup-кандидаты с сохранением исходного span. Глобальная
   `NormalizeEnglish` и sentence keys не меняются;
-- создать `ranker-register-benchmark.json` минимум на 120 оригинальных CC0
-  случаев: 30 neutral↔vulgar ambiguity, 30 sexual↔ordinary senses, 30
-  slang/contractions/просторечие, 30 masked/euphemistic forms. Отдельный
-  `translation-register-benchmark.json` содержит минимум 40 полных реплик;
+- ~~создать `ranker-register-benchmark.json`~~ — **выполнено:** 135 случаев
+  (neutral↔vulgar 30, sexual↔ordinary 34, slang/просторечие 30,
+  masked/euphemistic 41). Каждый ожидаемый перевод и регистр взят из
+  поставляемого инвентаря и проверяется `tools/build-register-benchmark.py`.
+  `translation-register-benchmark.json` — **выполнено:** 40 реплик, по 10 на
+  корзину, `tools/build-translation-register-benchmark.py`. Регистр в свободном
+  переводе судится по stem-якорям (`faithfulAnchors` / `softenedMarkers` /
+  `strengthenedMarkers`), а не по совпадению строк: у реплики много допустимых
+  реализаций;
 - gates: semantic accepted precision `≥90 %`, register fidelity `≥90 %`,
   отсутствие необоснованного усиления `≥95 %`, пустых ответов/отказов/цензурных
   заглушек — `0`; все метрики считаются отдельно по четырём корзинам.
 
 **Definition of Done фазы C.** UI показывает register provenance, Smart и
-full-text проходят оба dev-набора, настройки позволяют выбрать `Точно как в
-оригинале` (default) или `Смягчать`; пользовательский словарь остаётся высшим
+full-text проходят оба dev-набора; пользовательский словарь остаётся высшим
 приоритетом. Frozen ranker/translation holdout для настройки не открывается.
+
+**Решение владельца (25 июля 2026): режима `Смягчать` не будет.** Настройка
+выбора убрана из DoD, точность регистра безусловна. Обоснование: смягчение —
+это в точности тот дефект, ради устранения которого делалась фаза C, и
+делать его опцией значит поставлять known-bad поведение под видом
+предпочтения. Кода это не требует: политика выбора поверхности и правило в
+промтах уже безусловны, добавлять было бы нечего — только переключатель,
+который их отключает.
 
 **Definition of Done.** Release/smoke и generator tests зелёные; dev
 `--ranker-benchmark` проходит без изменения frozen margin `0.25`; отдельно

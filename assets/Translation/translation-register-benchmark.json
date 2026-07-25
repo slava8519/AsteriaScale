@@ -1,0 +1,818 @@
+{
+  "name": "Asteria Scale EN-RU full-text register fidelity set",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original replies written for Asteria Scale; no corpus lines were copied. Register is judged by stem anchors rather than string equality, because a reply has many valid renderings. Ethnic and sexuality slurs are deliberately excluded.",
+  "cases": [
+    {
+      "id": "reg-v-01",
+      "bucket": "neutral-vulgar",
+      "source": "Fuck off and don't come back.",
+      "sourceLanguage": "en",
+      "reference": "Отъебись и не возвращайся.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "отъеб",
+        "иди на",
+        "пошёл на",
+        "пошел на",
+        "съеб",
+        "отвали"
+      ],
+      "softenedMarkers": [
+        "уйди",
+        "оставь меня",
+        "прошу"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-02",
+      "bucket": "neutral-vulgar",
+      "source": "That bastard took the last of my money.",
+      "sourceLanguage": "en",
+      "reference": "Этот ублюдок забрал последние мои деньги.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "ублюд",
+        "сволоч",
+        "мерзав",
+        "гад",
+        "подон"
+      ],
+      "softenedMarkers": [
+        "человек",
+        "господин"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-03",
+      "bucket": "neutral-vulgar",
+      "source": "What the hell is wrong with you?",
+      "sourceLanguage": "en",
+      "reference": "Какого чёрта с тобой не так?",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "чёрт",
+        "черт",
+        "хрен",
+        "хера"
+      ],
+      "softenedMarkers": [
+        "что случилось",
+        "извини"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-04",
+      "bucket": "neutral-vulgar",
+      "source": "This is complete bullshit and you know it.",
+      "sourceLanguage": "en",
+      "reference": "Это полное дерьмо, и ты это знаешь.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "дерьм",
+        "хрень",
+        "чушь",
+        "херн",
+        "брехн"
+      ],
+      "softenedMarkers": [
+        "неправда",
+        "ошибка"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-05",
+      "bucket": "neutral-vulgar",
+      "source": "Shut your damn mouth for once.",
+      "sourceLanguage": "en",
+      "reference": "Закрой уже свой поганый рот.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "поган",
+        "чёртов",
+        "чертов",
+        "долба",
+        "хренов"
+      ],
+      "softenedMarkers": [
+        "пожалуйста",
+        "будьте добры"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-06",
+      "bucket": "neutral-vulgar",
+      "source": "He is a lazy piece of shit.",
+      "sourceLanguage": "en",
+      "reference": "Он ленивый кусок дерьма.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "дерьм",
+        "говн",
+        "мраз"
+      ],
+      "softenedMarkers": [
+        "неприятный",
+        "ленивый человек"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-07",
+      "bucket": "neutral-vulgar",
+      "source": "I don't give a damn what they think.",
+      "sourceLanguage": "en",
+      "reference": "Мне плевать, что они думают.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "плева",
+        "насра",
+        "похер",
+        "пофиг"
+      ],
+      "softenedMarkers": [
+        "не важно",
+        "безразлично мне"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-08",
+      "bucket": "neutral-vulgar",
+      "source": "Get your ass over here right now.",
+      "sourceLanguage": "en",
+      "reference": "Тащи свою задницу сюда немедленно.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "задниц",
+        "жопу",
+        "жоп"
+      ],
+      "softenedMarkers": [
+        "подойди",
+        "пожалуйста"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-09",
+      "bucket": "neutral-vulgar",
+      "source": "The whole plan went to hell.",
+      "sourceLanguage": "en",
+      "reference": "Весь план полетел к чёрту.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "к чёрт",
+        "к черт",
+        "коту под хвост",
+        "псу под хвост"
+      ],
+      "softenedMarkers": [
+        "не удался",
+        "провалился"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-v-10",
+      "bucket": "neutral-vulgar",
+      "source": "Stop being such an idiot about it.",
+      "sourceLanguage": "en",
+      "reference": "Хватит вести себя как идиот.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "идиот",
+        "дурак",
+        "болван",
+        "придур"
+      ],
+      "softenedMarkers": [
+        "неразумно"
+      ],
+      "strengthenedMarkers": [
+        "мудак",
+        "хуйл",
+        "долбоёб"
+      ],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-01",
+      "bucket": "sexual-ordinary",
+      "source": "She wanted him inside her.",
+      "sourceLanguage": "en",
+      "reference": "Она хотела его в себе.",
+      "expectedRegister": "sexual-domain",
+      "faithfulAnchors": [
+        "в себе",
+        "внутри",
+        "войти"
+      ],
+      "softenedMarkers": [
+        "обнять",
+        "быть рядом",
+        "поцелов"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-02",
+      "bucket": "sexual-ordinary",
+      "source": "They slept together after the festival.",
+      "sourceLanguage": "en",
+      "reference": "После фестиваля они переспали.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "переспал",
+        "спали вместе",
+        "провели ночь"
+      ],
+      "softenedMarkers": [
+        "подружились",
+        "поговорили"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-03",
+      "bucket": "sexual-ordinary",
+      "source": "He could not stop staring at her breasts.",
+      "sourceLanguage": "en",
+      "reference": "Он не мог оторвать взгляд от её груди.",
+      "expectedRegister": "neutral",
+      "faithfulAnchors": [
+        "груд",
+        "бюст"
+      ],
+      "softenedMarkers": [
+        "лицо",
+        "глаза"
+      ],
+      "strengthenedMarkers": [
+        "сиськ",
+        "буфер"
+      ],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-04",
+      "bucket": "sexual-ordinary",
+      "source": "I want to fuck you right here.",
+      "sourceLanguage": "en",
+      "reference": "Я хочу трахнуть тебя прямо здесь.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "трахн",
+        "трахат",
+        "выеб",
+        "отыме"
+      ],
+      "softenedMarkers": [
+        "любить",
+        "быть с тобой",
+        "обнять"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-05",
+      "bucket": "sexual-ordinary",
+      "source": "She came with a shudder and went quiet.",
+      "sourceLanguage": "en",
+      "reference": "Она кончила, вздрогнув, и затихла.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "кончил",
+        "оргазм",
+        "спустил"
+      ],
+      "softenedMarkers": [
+        "уснула",
+        "успокоилась",
+        "пришла"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-06",
+      "bucket": "sexual-ordinary",
+      "source": "His hand slid under her skirt.",
+      "sourceLanguage": "en",
+      "reference": "Его рука скользнула ей под юбку.",
+      "expectedRegister": "neutral",
+      "faithfulAnchors": [
+        "под юбк",
+        "юбку"
+      ],
+      "softenedMarkers": [
+        "за руку",
+        "по плечу"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-07",
+      "bucket": "sexual-ordinary",
+      "source": "We were naked before the door closed.",
+      "sourceLanguage": "en",
+      "reference": "Мы были голыми ещё до того, как закрылась дверь.",
+      "expectedRegister": "neutral",
+      "faithfulAnchors": [
+        "гол",
+        "раздет",
+        "нагими"
+      ],
+      "softenedMarkers": [
+        "одеты",
+        "готовы"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-08",
+      "bucket": "sexual-ordinary",
+      "source": "He paid a whore in the next town.",
+      "sourceLanguage": "en",
+      "reference": "Он заплатил шлюхе в соседнем городе.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "шлюх",
+        "проститут",
+        "блядь",
+        "потаску"
+      ],
+      "softenedMarkers": [
+        "девушке",
+        "женщине",
+        "знакомой"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-09",
+      "bucket": "sexual-ordinary",
+      "source": "That was the best sex of my life.",
+      "sourceLanguage": "en",
+      "reference": "Это был лучший секс в моей жизни.",
+      "expectedRegister": "neutral",
+      "faithfulAnchors": [
+        "секс",
+        "близост"
+      ],
+      "softenedMarkers": [
+        "вечер",
+        "свидание",
+        "время"
+      ],
+      "strengthenedMarkers": [
+        "еб",
+        "трах"
+      ],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-s-10",
+      "bucket": "sexual-ordinary",
+      "source": "She kissed him on the cheek and left.",
+      "sourceLanguage": "en",
+      "reference": "Она поцеловала его в щёку и ушла.",
+      "expectedRegister": "neutral",
+      "faithfulAnchors": [
+        "поцелов",
+        "щёк",
+        "щек"
+      ],
+      "softenedMarkers": [],
+      "strengthenedMarkers": [
+        "трах",
+        "переспал",
+        "еб"
+      ],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-01",
+      "bucket": "slang-colloquial",
+      "source": "Gonna grab some grub, wanna come?",
+      "sourceLanguage": "en",
+      "reference": "Схожу перекусить, пойдёшь?",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "перекус",
+        "пожрат",
+        "пойдёшь",
+        "пойдешь",
+        "хаваем"
+      ],
+      "softenedMarkers": [
+        "не желаете ли",
+        "приглашаю вас"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-02",
+      "bucket": "slang-colloquial",
+      "source": "That party was a total blast.",
+      "sourceLanguage": "en",
+      "reference": "Вечеринка была просто улёт.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "улёт",
+        "улет",
+        "отпад",
+        "огонь",
+        "круто",
+        "класс"
+      ],
+      "softenedMarkers": [
+        "мероприятие прошло успешно"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-03",
+      "bucket": "slang-colloquial",
+      "source": "Dude, chill out, it's not a big deal.",
+      "sourceLanguage": "en",
+      "reference": "Чувак, расслабься, дело житейское.",
+      "expectedRegister": "slang",
+      "faithfulAnchors": [
+        "чувак",
+        "мужик",
+        "братан",
+        "расслаб",
+        "остынь"
+      ],
+      "softenedMarkers": [
+        "уважаемый",
+        "сударь",
+        "успокойтесь"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-04",
+      "bucket": "slang-colloquial",
+      "source": "He blew all his dough on that car.",
+      "sourceLanguage": "en",
+      "reference": "Он спустил все бабки на эту тачку.",
+      "expectedRegister": "slang",
+      "faithfulAnchors": [
+        "бабки",
+        "бабл",
+        "тачк",
+        "спустил",
+        "просад"
+      ],
+      "softenedMarkers": [
+        "денежные средства",
+        "автомобиль"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-05",
+      "bucket": "slang-colloquial",
+      "source": "Ain't nobody got time for that.",
+      "sourceLanguage": "en",
+      "reference": "Ни у кого нет на это времени.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "ни у кого",
+        "некогда",
+        "нет времени"
+      ],
+      "softenedMarkers": [
+        "не располагаем возможностью"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-06",
+      "bucket": "slang-colloquial",
+      "source": "Quit messing around and help me.",
+      "sourceLanguage": "en",
+      "reference": "Хватит валять дурака, помоги мне.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "валять дурак",
+        "дурить",
+        "балда",
+        "хватит"
+      ],
+      "softenedMarkers": [
+        "прекратите",
+        "будьте любезны"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-07",
+      "bucket": "slang-colloquial",
+      "source": "My folks are coming over tonight.",
+      "sourceLanguage": "en",
+      "reference": "Мои предки сегодня приедут.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "предки",
+        "родител",
+        "наши"
+      ],
+      "softenedMarkers": [
+        "родственники прибудут"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-08",
+      "bucket": "slang-colloquial",
+      "source": "That guy is seriously creepy.",
+      "sourceLanguage": "en",
+      "reference": "Этот тип реально жуткий.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "тип",
+        "мужик",
+        "жутк",
+        "стрём",
+        "стрем"
+      ],
+      "softenedMarkers": [
+        "данный господин",
+        "неприятен"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-09",
+      "bucket": "slang-colloquial",
+      "source": "We crashed at his crib after the show.",
+      "sourceLanguage": "en",
+      "reference": "После концерта мы завалились к нему на хату.",
+      "expectedRegister": "slang",
+      "faithfulAnchors": [
+        "хату",
+        "хате",
+        "завалил",
+        "переночев"
+      ],
+      "softenedMarkers": [
+        "в его квартире",
+        "разместились"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-c-10",
+      "bucket": "slang-colloquial",
+      "source": "I'm beat, let's call it a night.",
+      "sourceLanguage": "en",
+      "reference": "Я вымотался, давай закругляться.",
+      "expectedRegister": "colloquial",
+      "faithfulAnchors": [
+        "вымот",
+        "устал",
+        "закругл",
+        "по домам"
+      ],
+      "softenedMarkers": [
+        "утомлён",
+        "предлагаю завершить"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-01",
+      "bucket": "masked-euphemistic",
+      "source": "What the f*ck was that noise?",
+      "sourceLanguage": "en",
+      "reference": "Что это, блядь, был за шум?",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "блядь",
+        "бля",
+        "чёрт",
+        "черт",
+        "хрен",
+        "какого хера"
+      ],
+      "softenedMarkers": [
+        "что это было"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-02",
+      "bucket": "masked-euphemistic",
+      "source": "This is complete bulls**t.",
+      "sourceLanguage": "en",
+      "reference": "Это полная херня.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "херн",
+        "дерьм",
+        "чушь",
+        "хрень"
+      ],
+      "softenedMarkers": [
+        "неверно",
+        "ошибочно"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-03",
+      "bucket": "masked-euphemistic",
+      "source": "He called her a b*tch and walked out.",
+      "sourceLanguage": "en",
+      "reference": "Он назвал её сукой и ушёл.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "сук",
+        "стерв",
+        "тварь"
+      ],
+      "softenedMarkers": [
+        "грубо",
+        "нехорошо"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-04",
+      "bucket": "masked-euphemistic",
+      "source": "Get the f**k out of my house.",
+      "sourceLanguage": "en",
+      "reference": "Убирайся на хер из моего дома.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "на хер",
+        "нахер",
+        "вон",
+        "проваливай",
+        "убирайся"
+      ],
+      "softenedMarkers": [
+        "покиньте",
+        "пожалуйста"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-05",
+      "bucket": "masked-euphemistic",
+      "source": "That was a sh*tty thing to do.",
+      "sourceLanguage": "en",
+      "reference": "Это было дерьмовым поступком.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "дерьмов",
+        "паскуд",
+        "подл",
+        "хренов"
+      ],
+      "softenedMarkers": [
+        "некрасиво",
+        "неправильно"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-06",
+      "bucket": "masked-euphemistic",
+      "source": "I don't care what the f*ck he thinks.",
+      "sourceLanguage": "en",
+      "reference": "Мне насрать, что он там думает.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "насра",
+        "плева",
+        "похер",
+        "пофиг"
+      ],
+      "softenedMarkers": [
+        "не важно",
+        "безразлично"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-07",
+      "bucket": "masked-euphemistic",
+      "source": "She is one hell of a b*tch when angry.",
+      "sourceLanguage": "en",
+      "reference": "В гневе она та ещё стерва.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "стерв",
+        "сук",
+        "мегер"
+      ],
+      "softenedMarkers": [
+        "раздражительна",
+        "неприятна"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-08",
+      "bucket": "masked-euphemistic",
+      "source": "You look like sh*t this morning.",
+      "sourceLanguage": "en",
+      "reference": "Ты сегодня выглядишь дерьмово.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "дерьмов",
+        "херов",
+        "погано",
+        "хреново"
+      ],
+      "softenedMarkers": [
+        "неважно",
+        "устало"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-09",
+      "bucket": "masked-euphemistic",
+      "source": "The whole f*cking building shook.",
+      "sourceLanguage": "en",
+      "reference": "Всё чёртово здание тряхнуло.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "чёртов",
+        "чертов",
+        "долбан",
+        "хренов",
+        "ёбан"
+      ],
+      "softenedMarkers": [],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    },
+    {
+      "id": "reg-m-10",
+      "bucket": "masked-euphemistic",
+      "source": "He is a complete a**hole about it.",
+      "sourceLanguage": "en",
+      "reference": "Он ведёт себя как полный мудак.",
+      "expectedRegister": "vulgar",
+      "faithfulAnchors": [
+        "муда",
+        "козёл",
+        "козел",
+        "урод",
+        "гнид"
+      ],
+      "softenedMarkers": [
+        "невежлив",
+        "неприятен"
+      ],
+      "strengthenedMarkers": [],
+      "termAnchors": []
+    }
+  ]
+}
