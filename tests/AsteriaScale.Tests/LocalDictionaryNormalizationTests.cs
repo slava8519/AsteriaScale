@@ -192,6 +192,20 @@ internal static class LocalDictionaryNormalizationTests
                   chunk.StartsWith("длинное-значение-", StringComparison.Ordinal) &&
                   chunk.EndsWith("-внутри", StringComparison.Ordinal)),
             $"A long meaning list must truncate at a boundary without partial candidates: {truncated.Translation}");
+        Check(truncated.Translation.Length <=
+              LocalDictionaryService.MaximumDisplayedValueLength,
+            $"A displayed value exceeded its ceiling: {truncated.Translation.Length}");
+
+        // The merge budget must stay strictly above the display ceiling. If the
+        // two were equal, Limit could never truncate and never append the
+        // ellipsis, so a cut meaning list would look complete to the user.
+        Check(LocalDictionaryService.MergeBundledMeanings(
+                  string.Join("; ", Enumerable.Range(0, 40).Select(
+                      index => $"значение-{index}-достаточно-длинное-чтобы-переполнить-бюджет")),
+                  "хвост-низкоприоритетного-слоя")
+              .Length > LocalDictionaryService.MaximumDisplayedValueLength,
+            "The merge budget no longer exceeds the display ceiling, so a truncated " +
+            "meaning list would lose its continuation marker.");
 
         await VerifyTranslationScaffoldAsync(root);
     }
@@ -298,6 +312,25 @@ internal static class LocalDictionaryNormalizationTests
             neuralCapKeys.SelectMany(key => new[]
             {
                 $"{key}\tальфа\tthe first synthetic sense of {key}\tcommon\tnoun",
+                $"{key}\tомега\tthe second synthetic sense of {key}\tcommon\tnoun"
+            }));
+        // Two unrelated definitions that resolve to one visible surface: they
+        // stay separate glosses inside a single outcome, so one accepted
+        // request emits two hints and the hint cap is reachable below the
+        // per-sentence request cap.
+        string[] senseHintCapKeys =
+        [
+            "opal", "quartz", "raven", "sable", "topaz", "umber", "viola"
+        ];
+        await File.AppendAllLinesAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            senseHintCapKeys.Select(key => $"{key}\tальфа; омега"));
+        await File.AppendAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-senses.tsv"),
+            senseHintCapKeys.SelectMany(key => new[]
+            {
+                $"{key}\tальфа\ta mineral prized by collectors near {key}\tcommon\tnoun",
+                $"{key}\tальфа\tloud brass music played during {key} festivals\tcommon\tnoun",
                 $"{key}\tомега\tthe second synthetic sense of {key}\tcommon\tnoun"
             }));
         await File.WriteAllLinesAsync(
@@ -517,6 +550,45 @@ internal static class LocalDictionaryNormalizationTests
                   decision.Status == TranslationScaffoldNeuralStatus.Skipped &&
                   decision.ErrorCode == "sentence-request-limit") == 1,
             "The per-sentence neural request cap was not enforced.");
+
+        int hintCapNeuralCalls = 0;
+        TranslationScaffoldBuilder hintCapBuilder = new(
+            dictionary,
+            (request, _) =>
+            {
+                hintCapNeuralCalls++;
+                return Task.FromResult(new TranslationScaffoldNeuralResult(
+                    request.Plan.Outcomes.Single(
+                        outcome => outcome.Translation == "альфа").GroupId,
+                    Abstained: false,
+                    Margin: 0.5,
+                    Score: 0.7,
+                    Confidence: 0.7,
+                    GlossBertRankerProvider.Cpu,
+                    GlossBertDictionarySelectorService.CpuExecutionProvider,
+                    "CPU",
+                    "test-model",
+                    "cross",
+                    ElapsedMilliseconds: 1));
+            });
+        TranslationScaffold hintCapped = await hintCapBuilder.BuildAsync(
+            string.Join(' ', senseHintCapKeys) + ".");
+        Check(hintCapNeuralCalls == senseHintCapKeys.Length &&
+              hintCapNeuralCalls < TranslationScaffoldBuilder.MaximumNeuralRequestCount,
+            "The sense-hint cap case must stay below the neural request cap: " +
+            $"{hintCapNeuralCalls} call(s).");
+        Check(hintCapped.SenseHints.Count ==
+              TranslationScaffoldBuilder.MaximumSenseHintCount,
+            "Sense hints were not capped: " +
+            $"{hintCapped.SenseHints.Count} hint(s) from {hintCapNeuralCalls} request(s).");
+        Check(hintCapped.SenseHints
+                .Select(hint => hint.Source)
+                .Distinct(StringComparer.Ordinal)
+                .SequenceEqual(
+                    senseHintCapKeys.Take(
+                        TranslationScaffoldBuilder.MaximumSenseHintCount / 2),
+                    StringComparer.Ordinal),
+            "Capped sense hints lost their stable sentence order.");
 
         TranslationScaffoldBuilder abstainingNeuralBuilder = new(
             dictionary,

@@ -23,11 +23,16 @@ internal sealed record SmartHoverResult(
 /// </summary>
 internal sealed class SmartHoverPipeline : IDisposable
 {
-    private const string SmartRankingPipelineVersion = "smart-sense-v8-bicross";
+    // Same epoch as the shared decision cache: both caches must be invalidated
+    // by one bump, otherwise a stale hover result could outlive the sense
+    // resolution that produced it.
+    private const string SmartRankingPipelineVersion =
+        GlossBertDecisionCache.SenseRankingEpoch;
     private readonly AppSettings _settings;
     private readonly LocalDictionaryService _dictionary;
     private readonly GlossBertDictionarySelectorService _glossBertSelector;
     private readonly SmartDictionaryResultCache _smartResultCache;
+    private readonly GlossBertDecisionCache _decisionCache;
     private readonly Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> _translateFallback;
     private readonly Action<string> _reportStatus;
     private readonly Action<string, NativeMethods.Point> _onDemandFallbackObserved;
@@ -39,6 +44,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         LocalDictionaryService dictionary,
         GlossBertDictionarySelectorService glossBertSelector,
         SmartDictionaryResultCache smartResultCache,
+        GlossBertDecisionCache decisionCache,
         Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> translateFallback,
         Action<string> reportStatus,
         Action<string, NativeMethods.Point> onDemandFallbackObserved)
@@ -47,6 +53,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         _dictionary = dictionary;
         _glossBertSelector = glossBertSelector;
         _smartResultCache = smartResultCache;
+        _decisionCache = decisionCache;
         _translateFallback = translateFallback;
         _reportStatus = reportStatus;
         _onDemandFallbackObserved = onDemandFallbackObserved;
@@ -218,18 +225,12 @@ internal sealed class SmartHoverPipeline : IDisposable
 
         try
         {
-            SmartDictionarySenseInventory inventory =
-                SmartDictionarySenseResolver.GroupCandidates(
-                    recognized.Text,
-                    lookup.Source,
-                    recognized.CharacterIndex,
-                    lookup.SenseCandidates);
             SmartDictionaryRankerPlan plan =
                 SmartDictionarySenseResolver.CreateRankerPlan(
                     recognized.Text,
                     lookup.Source,
                     recognized.CharacterIndex,
-                    inventory.Groups);
+                    lookup.SenseCandidates);
             if (plan.Outcomes.Count == 0)
             {
                 return LocalSmartResult(lookup, displaySource, displayIsPhrase);
@@ -339,12 +340,65 @@ internal sealed class SmartHoverPipeline : IDisposable
                     UsedFullFallback: false);
             }
 
+            // Second chance before inference: the shared decision cache keys on
+            // exactly what reaches the worker, so a verdict earned by the
+            // full-text scaffold for this word in this line is reusable here.
+            // Warm-up above already validated provider and model identity — a
+            // cache hit may skip inference, never that validation.
+            string decisionKey = CreateDecisionKey(
+                recognized.Text,
+                lookup.Source,
+                recognized.CharacterIndex,
+                plan,
+                provider,
+                modelVersion);
+            GlossBertDecision? sharedDecision = await TryGetSharedDecisionSafeAsync(
+                decisionKey,
+                plan.Outcomes.Count,
+                cancellationToken);
+            if (sharedDecision is { Abstained: false, SelectedGroupId: { } sharedGroupId })
+            {
+                SmartDictionaryRankerOutcome sharedOutcome = plan.Outcomes
+                    .First(outcome => outcome.GroupId == sharedGroupId);
+                // Also promote the verdict into the hover cache. Its key is the
+                // wider one (a context window rather than the exact worker
+                // input), so returning early without promoting would keep
+                // re-resolving the plan for neighbouring cursor positions that
+                // the hover cache alone would have answered.
+                SmartDictionarySelection promoted = new(
+                    sharedOutcome.GroupId,
+                    sharedOutcome.Translation,
+                    sharedDecision.Confidence ?? 0,
+                    string.Empty);
+                return new SmartHoverResult(
+                    displaySource,
+                    sharedOutcome.Translation,
+                    SmartDictionaryResultCache.EngineLabel,
+                    DictionaryFound: true,
+                    displayIsPhrase,
+                    lookup.Language,
+                    promoted.Confidence,
+                    UsedFullFallback: false,
+                    // Keyed on the model and pipeline that actually produced the
+                    // verdict, exactly as the non-cached path below does.
+                    CreateSmartCacheRequest(
+                        recognized.Text,
+                        lookup.Source,
+                        recognized.CharacterIndex,
+                        visibleTranslations,
+                        "English",
+                        smartBackend,
+                        sharedDecision.ModelVersion,
+                        sharedDecision.Pipeline),
+                    promoted);
+            }
+
             // No intermediate candidate card: the overlay keeps its loading
             // state until the ranker delivers the final verdict, so the card
             // renders exactly once instead of flashing candidates first.
             string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
-            GlossBertDictionarySelection ranked =
-                await _glossBertSelector.SelectAsync(
+            GlossBertDictionarySelection ranked = sharedDecision is null
+                ? await _glossBertSelector.SelectAsync(
                     recognized.Text,
                     lookup.Source,
                     recognized.CharacterIndex,
@@ -352,7 +406,35 @@ internal sealed class SmartHoverPipeline : IDisposable
                     plan.CandidateGroupIds,
                     "English",
                     provider,
-                    cancellationToken);
+                    cancellationToken)
+                // A cached abstention is as deterministic as a cached selection:
+                // repeating the inference would return the same shrug.
+                : new GlossBertDictionarySelection(
+                    Index: null,
+                    Abstained: true,
+                    sharedDecision.Margin,
+                    sharedDecision.Score,
+                    sharedDecision.Confidence,
+                    provider,
+                    sharedDecision.ExecutionProvider,
+                    sharedDecision.Device,
+                    sharedDecision.ModelVersion,
+                    sharedDecision.Pipeline);
+            if (sharedDecision is null)
+            {
+                await StoreSharedDecisionSafeAsync(
+                    decisionKey,
+                    new GlossBertDecision(
+                        ranked.SelectedGroupId,
+                        ranked.Abstained,
+                        ranked.Margin,
+                        ranked.Score,
+                        ranked.Confidence,
+                        ranked.ExecutionProvider,
+                        ranked.Device,
+                        ranked.ModelVersion,
+                        ranked.Pipeline));
+            }
             cacheRequest = CreateSmartCacheRequest(
                 recognized.Text,
                 lookup.Source,
@@ -571,6 +653,67 @@ internal sealed class SmartHoverPipeline : IDisposable
             StringComparison.Ordinal)
             ? "bi+cross"
             : "cross";
+
+    private string CreateDecisionKey(
+        string context,
+        string target,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        GlossBertRankerProvider provider,
+        string modelVersion) =>
+        GlossBertDecisionCache.CreateFingerprint(
+            context,
+            target,
+            characterIndex,
+            plan,
+            provider,
+            modelVersion,
+            // Exactly what the scaffold ranker passes: the epoch is folded in
+            // by the fingerprint itself, so the two paths share one entry.
+            _dictionary.VersionToken);
+
+    private async Task<GlossBertDecision?> TryGetSharedDecisionSafeAsync(
+        string fingerprint,
+        int outcomeCount,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _decisionCache.TryGetAsync(
+                fingerprint,
+                outcomeCount,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A cache is an optimization; hover must degrade to inference.
+            LogError(ex);
+            return null;
+        }
+    }
+
+    private async Task StoreSharedDecisionSafeAsync(
+        string fingerprint,
+        GlossBertDecision decision)
+    {
+        try
+        {
+            // The verdict is already being rendered. Persisting it must neither
+            // delay the card nor be discarded because the cursor moved.
+            await _decisionCache.StoreAsync(
+                fingerprint,
+                decision,
+                CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            LogError(ex);
+        }
+    }
 
     private async Task<SmartDictionarySelection?> TryGetSmartSelectionSafeAsync(
         SmartDictionaryCacheRequest request,

@@ -13,6 +13,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly GlossBertDictionarySelectorService _glossBertSelector = new();
     private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
     private readonly SmartDictionaryResultCache _smartResultCache = new();
+    // Shared by the hover pipeline and the full-text scaffold: both ask the
+    // worker the same question, so neither may pay for the other's inference.
+    private readonly GlossBertDecisionCache _decisionCache = new();
     private readonly HoverTranslationOverlay _overlay;
     private readonly ScreenTranslationOverlay _screenOverlay;
     private readonly GlobalHotkeyService _hotkeys;
@@ -51,6 +54,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _dictionary = new LocalDictionaryService();
         _scaffoldGlossBertRanker = new(
             _glossBertSelector,
+            _decisionCache,
             ResolveGlossBertProvider,
             () => _dictionary.VersionToken);
         _translator = new FoundryTranslationService(
@@ -71,6 +75,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _dictionary,
             _glossBertSelector,
             _smartResultCache,
+            _decisionCache,
             TranslateSmartFallbackAsync,
             ReportStatus,
             (text, cursor) => _lastSmartFallbackRequest =
@@ -1379,6 +1384,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         await _translator.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();
+        await _decisionCache.DisposeAsync();
         _smartPipeline.Dispose();
         modeCancellation?.Dispose();
         lock (_lifecycleLock)

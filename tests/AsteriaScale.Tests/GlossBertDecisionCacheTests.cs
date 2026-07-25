@@ -1,0 +1,395 @@
+using AsteriaScale.Services;
+
+/// <summary>
+/// The shared GlossBERT decision cache is the single place where a hover
+/// lookup and the full-text scaffold can reuse each other's inference. Its two
+/// obligations pull in opposite directions: the fingerprint must merge requests
+/// the worker would answer identically (otherwise nothing is ever shared), and
+/// it must never merge requests the worker would answer differently.
+/// </summary>
+internal static class GlossBertDecisionCacheTests
+{
+    public static async Task RunAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "glossbert-decision-cache");
+        Directory.CreateDirectory(root);
+
+        VerifyFingerprintSharing();
+        VerifyScaffoldAndHoverAgree();
+        VerifyFingerprintSeparation();
+        await VerifyRoundTripAndPersistenceAsync(root);
+        await VerifyRejectedDecisionsAsync(root);
+        await VerifyStaleGroupIdAsync(root);
+        await VerifyCorruptFileRecoveryAsync(root);
+    }
+
+    private const string Sentence = "She sat on the bank and watched the water.";
+    private const string Target = "bank";
+
+    /// <summary>
+    /// The whole point of A4: hover passes a cursor position inside the word,
+    /// the scaffold passes the token start. Both must reach one entry.
+    /// </summary>
+    private static void VerifyFingerprintSharing()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        string scaffoldKey = Fingerprint(Sentence, tokenStart, plan);
+        for (int offset = 0; offset < Target.Length; offset++)
+        {
+            Check(Fingerprint(Sentence, tokenStart + offset, plan) == scaffoldKey,
+                $"A cursor {offset} character(s) into the target changed the shared key.");
+        }
+
+        Check(scaffoldKey.Length == 64 && scaffoldKey.All(Uri.IsHexDigit),
+            "The decision fingerprint is not a SHA-256 hex digest.");
+
+        // Whitespace-only differences reach the worker identically.
+        Check(Fingerprint(
+                  "She sat on the  bank\tand watched the water.",
+                  tokenStart,
+                  plan) == scaffoldKey,
+            "Collapsible whitespace produced a different decision key.");
+    }
+
+    /// <summary>
+    /// The scaffold reaches the cache through its own request-shaped wrapper.
+    /// If that wrapper and the hover call ever pass a differently composed
+    /// dictionary version, both paths keep working and silently stop sharing —
+    /// a regression with no visible symptom other than doubled inference.
+    /// </summary>
+    private static void VerifyScaffoldAndHoverAgree()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        const string dictionaryVersion = "dictionary-v1";
+
+        string scaffoldKey = TranslationScaffoldGlossBertRanker.CreateCacheKey(
+            new TranslationScaffoldNeuralRequest(Sentence, Target, tokenStart, plan),
+            GlossBertRankerProvider.Cpu,
+            "model-v1",
+            dictionaryVersion);
+        string hoverKey = GlossBertDecisionCache.CreateFingerprint(
+            Sentence,
+            Target,
+            // Hover anchors on the cursor, which lands inside the word.
+            tokenStart + 2,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            "model-v1",
+            dictionaryVersion);
+        Check(scaffoldKey == hoverKey,
+            "The scaffold and hover paths compute different decision keys for " +
+            "the same worker call.");
+    }
+
+    private static void VerifyFingerprintSeparation()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        string baseline = Fingerprint(Sentence, tokenStart, plan);
+
+        Check(baseline != Fingerprint(
+                Sentence,
+                tokenStart,
+                plan,
+                provider: GlossBertRankerProvider.Npu),
+            "The decision key ignored the execution provider.");
+        Check(baseline != Fingerprint(
+                Sentence,
+                tokenStart,
+                plan,
+                modelIdentity: "model-v2"),
+            "The decision key ignored the model identity.");
+        Check(baseline != Fingerprint(
+                Sentence,
+                tokenStart,
+                plan,
+                dictionaryVersion: "dictionary-v2"),
+            "The decision key ignored the dictionary version.");
+        Check(baseline != Fingerprint(
+                "He crossed the bank of the river.",
+                "He crossed the bank of the river.".IndexOf(
+                    Target,
+                    StringComparison.Ordinal),
+                plan),
+            "The decision key ignored the sentence.");
+
+        SmartDictionaryRankerPlan reorderedOutcomes = new(
+            [
+                new SmartDictionaryRankerOutcome(0, 1, "берег"),
+                new SmartDictionaryRankerOutcome(1, 0, "банк")
+            ],
+            plan.CandidateGlosses,
+            plan.CandidateGroupIds);
+        Check(baseline != Fingerprint(Sentence, tokenStart, reorderedOutcomes),
+            "The decision key ignored the GroupId-to-translation mapping.");
+
+        SmartDictionaryRankerPlan regroupedGlosses = new(
+            plan.Outcomes,
+            plan.CandidateGlosses,
+            [1, 0]);
+        Check(baseline != Fingerprint(Sentence, tokenStart, regroupedGlosses),
+            "The decision key ignored the gloss-to-group assignment.");
+
+        SmartDictionaryRankerPlan otherGlosses = new(
+            plan.Outcomes,
+            ["a financial institution", "sloping ground beside water"],
+            plan.CandidateGroupIds);
+        Check(baseline != Fingerprint(Sentence, tokenStart, otherGlosses),
+            "The decision key ignored the candidate glosses.");
+
+        // Two standalone occurrences are two different anchors for the worker.
+        const string repeated = "The bank near the other bank was closed.";
+        int first = repeated.IndexOf(Target, StringComparison.Ordinal);
+        int second = repeated.IndexOf(Target, first + 1, StringComparison.Ordinal);
+        Check(Fingerprint(repeated, first, plan) !=
+              Fingerprint(repeated, second, plan),
+            "Two occurrences of the target collapsed onto one decision key.");
+    }
+
+    private static async Task VerifyRoundTripAndPersistenceAsync(string root)
+    {
+        string path = Path.Combine(root, "round-trip.json");
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        string scaffoldKey = Fingerprint(Sentence, tokenStart, plan);
+        GlossBertDecision selected = new(
+            SelectedGroupId: 1,
+            Abstained: false,
+            Margin: 0.42,
+            Score: 0.81,
+            Confidence: 0.81,
+            GlossBertDictionarySelectorService.CpuExecutionProvider,
+            "CPU",
+            "model-v1",
+            "cross");
+        GlossBertDecision abstained = new(
+            SelectedGroupId: null,
+            Abstained: true,
+            Margin: 0.12,
+            Score: 0.55,
+            Confidence: 0.55,
+            GlossBertDictionarySelectorService.CpuExecutionProvider,
+            "CPU",
+            "model-v1",
+            "cross");
+        string abstainedKey = Fingerprint(
+            "I opened an account at the bank today.",
+            "I opened an account at the bank today.".IndexOf(
+                Target,
+                StringComparison.Ordinal),
+            plan);
+
+        await using (GlossBertDecisionCache cache = new(path))
+        {
+            Check(await cache.StoreAsync(scaffoldKey, selected),
+                "A valid selection was rejected.");
+            Check(await cache.StoreAsync(abstainedKey, abstained),
+                "A calibrated abstention was rejected.");
+            await cache.FlushAsync();
+        }
+
+        // A fresh instance stands in for the next application launch: the
+        // scaffold's in-memory cache used to lose every decision on restart.
+        await using (GlossBertDecisionCache reopened = new(path))
+        {
+            // The hover pipeline asks with a cursor offset, not a token start.
+            GlossBertDecision? hoverHit = await reopened.TryGetAsync(
+                Fingerprint(Sentence, tokenStart + 2, plan),
+                plan.Outcomes.Count);
+            Check(hoverHit is
+                {
+                    Abstained: false,
+                    SelectedGroupId: 1,
+                    Margin: 0.42,
+                    Confidence: 0.81,
+                    ModelVersion: "model-v1",
+                    Pipeline: "cross"
+                },
+                $"A scaffold decision did not survive a restart for hover: {hoverHit}");
+
+            GlossBertDecision? abstainedHit = await reopened.TryGetAsync(
+                abstainedKey,
+                plan.Outcomes.Count);
+            Check(abstainedHit is { Abstained: true, SelectedGroupId: null },
+                $"A persisted abstention lost its shape: {abstainedHit}");
+
+            Check(await reopened.TryGetAsync(
+                    Fingerprint(Sentence, tokenStart, plan, modelIdentity: "model-v2"),
+                    plan.Outcomes.Count) is null,
+                "A decision was served across a model identity change.");
+            Check(await reopened.TryGetAsync(
+                    Fingerprint(
+                        Sentence,
+                        tokenStart,
+                        plan,
+                        dictionaryVersion: "dictionary-v2"),
+                    plan.Outcomes.Count) is null,
+                "A decision was served across a dictionary version change.");
+            Check(await reopened.TryGetAsync(
+                    Fingerprint(
+                        Sentence,
+                        tokenStart,
+                        plan,
+                        provider: GlossBertRankerProvider.Npu),
+                    plan.Outcomes.Count) is null,
+                "A CPU decision was served for an NPU request.");
+        }
+    }
+
+    private static async Task VerifyRejectedDecisionsAsync(string root)
+    {
+        string path = Path.Combine(root, "rejected.json");
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        string key = Fingerprint(
+            Sentence,
+            Sentence.IndexOf(Target, StringComparison.Ordinal),
+            plan);
+
+        await using GlossBertDecisionCache cache = new(path);
+        Check(!await cache.StoreAsync(
+                key,
+                new GlossBertDecision(
+                    SelectedGroupId: null,
+                    Abstained: false,
+                    0.4,
+                    0.8,
+                    0.8,
+                    "CPUExecutionProvider",
+                    "CPU",
+                    "model-v1",
+                    "cross")),
+            "A selection without a GroupId was stored.");
+        Check(!await cache.StoreAsync(
+                key,
+                new GlossBertDecision(
+                    SelectedGroupId: 1,
+                    Abstained: false,
+                    0.4,
+                    0.8,
+                    0.8,
+                    "CPUExecutionProvider",
+                    "CPU",
+                    ModelVersion: "   ",
+                    "cross")),
+            "A decision without a model identity was stored.");
+        Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is null,
+            "A rejected decision became readable.");
+
+        // An abstention carrying a GroupId is a protocol violation upstream;
+        // normalizing it to a pure abstention keeps invariant 2 intact.
+        Check(await cache.StoreAsync(
+                key,
+                new GlossBertDecision(
+                    SelectedGroupId: 3,
+                    Abstained: true,
+                    0.1,
+                    0.5,
+                    0.5,
+                    "CPUExecutionProvider",
+                    "CPU",
+                    "model-v1",
+                    "cross")),
+            "A normalizable abstention was rejected outright.");
+        Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is
+            { Abstained: true, SelectedGroupId: null },
+            "A stored abstention kept a group id.");
+    }
+
+    private static async Task VerifyStaleGroupIdAsync(string root)
+    {
+        string path = Path.Combine(root, "stale-group.json");
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        string key = Fingerprint(
+            Sentence,
+            Sentence.IndexOf(Target, StringComparison.Ordinal),
+            plan);
+
+        await using GlossBertDecisionCache cache = new(path);
+        Check(await cache.StoreAsync(
+                key,
+                new GlossBertDecision(
+                    SelectedGroupId: 1,
+                    Abstained: false,
+                    0.4,
+                    0.8,
+                    0.8,
+                    "CPUExecutionProvider",
+                    "CPU",
+                    "model-v1",
+                    "cross")),
+            "A valid selection was rejected.");
+
+        // GroupId is an index into the caller's outcomes. A plan that can no
+        // longer address it must miss instead of returning a foreign sense.
+        Check(await cache.TryGetAsync(key, outcomeCount: 1) is null,
+            "A GroupId outside the current plan was served.");
+        Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is null,
+            "An unaddressable entry was served after being dropped.");
+    }
+
+    private static async Task VerifyCorruptFileRecoveryAsync(string root)
+    {
+        string path = Path.Combine(root, "corrupt.json");
+        await File.WriteAllTextAsync(path, "{\"version\":1,\"entries\":[{\"key\":");
+
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        string key = Fingerprint(
+            Sentence,
+            Sentence.IndexOf(Target, StringComparison.Ordinal),
+            plan);
+        await using GlossBertDecisionCache cache = new(path);
+        Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is null,
+            "A truncated cache file produced a decision.");
+        Check(await cache.StoreAsync(
+                key,
+                new GlossBertDecision(
+                    SelectedGroupId: 0,
+                    Abstained: false,
+                    0.4,
+                    0.8,
+                    0.8,
+                    "CPUExecutionProvider",
+                    "CPU",
+                    "model-v1",
+                    "cross")),
+            "A cache recovered from a corrupt file refused to store.");
+        Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is
+            { SelectedGroupId: 0 },
+            "A cache recovered from a corrupt file lost the new decision.");
+    }
+
+    private static SmartDictionaryRankerPlan CreatePlan() =>
+        new(
+            [
+                new SmartDictionaryRankerOutcome(0, 0, "банк"),
+                new SmartDictionaryRankerOutcome(1, 1, "берег")
+            ],
+            ["a financial institution", "land alongside a river"],
+            [0, 1]);
+
+    private static string Fingerprint(
+        string sentence,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        GlossBertRankerProvider provider = GlossBertRankerProvider.Cpu,
+        string modelIdentity = "model-v1",
+        string dictionaryVersion = "dictionary-v1") =>
+        GlossBertDecisionCache.CreateFingerprint(
+            sentence,
+            Target,
+            characterIndex,
+            plan,
+            provider,
+            modelIdentity,
+            dictionaryVersion);
+
+    private static void Check(bool condition, string message)
+    {
+        if (!condition)
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+}

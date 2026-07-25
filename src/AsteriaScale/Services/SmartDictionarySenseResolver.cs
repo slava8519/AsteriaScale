@@ -449,6 +449,28 @@ internal static partial class SmartDictionarySenseResolver
     }
 
     /// <summary>
+    /// Grouping and plan construction as one step, for the two production
+    /// consumers that always perform both with the same arguments: the hover
+    /// pipeline and the full-text scaffold. Passing different arguments to the
+    /// two stages, or applying one without the other, produces a plan whose
+    /// GroupIds no longer describe the ranked senses — so the pair is not
+    /// something a caller should be able to get half right.
+    ///
+    /// The two-stage form stays public: tests assert on the inventory's POS
+    /// inference, which no production path consumes.
+    /// </summary>
+    public static SmartDictionaryRankerPlan CreateRankerPlan(
+        string context,
+        string target,
+        int characterIndex,
+        IReadOnlyList<DictionarySenseCandidate> candidates) =>
+        CreateRankerPlan(
+            context,
+            target,
+            characterIndex,
+            GroupCandidates(context, target, characterIndex, candidates).Groups);
+
+    /// <summary>
     /// Resolves morphology and register before neural ranking, then merges
     /// senses that would produce the same visible Russian result. This keeps
     /// the model's abstention margin semantically meaningful.

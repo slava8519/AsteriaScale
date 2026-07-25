@@ -6,7 +6,9 @@ offline (NPU OCR → layered dictionaries → GlossBERT sense ranking → option
 local Qwen). Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before touching
 translation code; it lists the load-bearing invariants. Build/test/release
 mechanics live in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Ready-made task
-prompts (in Russian) are in [docs/PROMPTS.md](docs/PROMPTS.md).
+prompts (in Russian) are in [docs/PROMPTS.md](docs/PROMPTS.md). Planned work is
+in [docs/ROADMAP.md](docs/ROADMAP.md); known defects and documentation debt
+found by audit are in [docs/AUDIT-ROADMAP.md](docs/AUDIT-ROADMAP.md).
 
 ## Commands
 
@@ -33,7 +35,9 @@ or `--smart-live` unless explicitly asked.
    (resolver / cache / worker). Do not add or change deduplication in one place
    only.
 3. **No silent provider fallback.** An NPU request runs on NPU or fails loudly.
-   The host validates the worker's reported provider/device/model version.
+   The host validates the worker's reported provider/device/model version. Both
+   consumers share one `GlossBertDecisionCache`; a cache hit may skip inference
+   but never the warm-up that establishes provider and model identity.
 4. **Abstention is margin-only** (threshold `0.25`, frozen on the dev set). Any
    change to acceptance criteria requires a `--ranker-benchmark` run on
    `assets/Ranker/ranker-benchmark.json` and a note in `docs/RESEARCH.md`.

@@ -41,8 +41,16 @@ public sealed partial class LocalDictionaryService
     private const int MaximumGeneralPhraseTokens = 3;
     private const int MaximumLexicalPhraseTokens = 6;
     private const int MaximumTrustedPhraseTokens = 10;
-    // The merged value only feeds a 380-character tooltip and an
-    // eight-candidate SplitMeanings ranking, so a deeper tail is dead weight.
+    // Every merged value reaches its consumers through Limit, which cuts at
+    // MaximumDisplayedValueLength on a meaning boundary and marks the cut with
+    // an ellipsis. The merge budget is therefore deliberately *larger* than the
+    // display ceiling rather than equal to it: if merging stopped at exactly
+    // what fits, Limit would never truncate, never append the ellipsis, and a
+    // cut list would look complete to the user. The headroom is what makes the
+    // "there is more" signal honest, not stored value the user can reach.
+    // Overflow always drops the tail, and the tail is the lowest-priority
+    // layer: merge order follows DictionaryPriority (invariant: layer order).
+    internal const int MaximumDisplayedValueLength = 380;
     private const int MaximumMergedMeaningCount = 32;
     private const int MaximumMergedValueLength = 4 * 1024;
     private const int MaximumSenseCountPerKey = 128;
@@ -1751,14 +1759,15 @@ public sealed partial class LocalDictionaryService
 
     private static string Limit(string value)
     {
-        if (value.Length <= 380)
+        if (value.Length <= MaximumDisplayedValueLength)
         {
             return value;
         }
 
         // Never cut inside a meaning: a partial chunk would otherwise look
         // like a real dictionary variant to SplitMeanings-based rankers.
-        string truncated = value[..377];
+        // The three reserved characters are the "; …" continuation marker.
+        string truncated = value[..(MaximumDisplayedValueLength - 3)];
         int boundary = truncated.LastIndexOf("; ", StringComparison.Ordinal);
         return boundary > 0
             ? truncated[..boundary] + "; …"

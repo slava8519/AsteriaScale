@@ -70,7 +70,8 @@ internal static class VnDictionaryLayerTests
             [
                 "moon oath\tлунная клятва",
                 "get separated from\tотделиться от",
-                "get pulled away from\tоторваться от"
+                "get pulled away from\tоторваться от",
+                "prancing\tскачущий"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus-massive-dialogue.tsv"),
@@ -90,7 +91,8 @@ internal static class VnDictionaryLayerTests
                 "Evelyn\tЭвелин",
                 "got separated from\tрасстались с",
                 "got pulled away\tвариант один; вариант два",
-                "wait\tожидать"
+                "wait\tожидать",
+                "prance\tгарцевать"
             ]);
 
         LocalDictionaryService dictionary = new(bundled, user);
@@ -310,6 +312,43 @@ internal static class VnDictionaryLayerTests
         Check(!ambiguousOverride.Terms.Any(term =>
                   term.Translation == "оторваться от"),
             "A scaffold anchor survived an overlapping user phrase after user abstention.");
+
+        // The scaffold surface and the user key are different strings at load
+        // time ("prancing" against the lemma "prance"), so neither layer sees a
+        // conflict. They only collide on the sentence surface, where the user
+        // entry must win instead of both candidates cancelling each other out.
+        const string lemmaCollisionSource = "She was prancing about.";
+        DictionaryLookupResult lemmaCollisionLookup = await dictionary.LookupAsync(
+            lemmaCollisionSource,
+            "prancing",
+            lemmaCollisionSource.IndexOf("prancing", StringComparison.Ordinal));
+        Check(lemmaCollisionLookup is
+            {
+                Found: true,
+                Source: "prancing",
+                MatchedEnglishKey: "prance",
+                Translation: "гарцевать"
+            },
+            "The lemma-collision regression did not exercise a user lemma behind " +
+            $"an inflected scaffold surface: {lemmaCollisionLookup}");
+        Check((await dictionary.FindEnglishScaffoldMatchesAsync(lemmaCollisionSource))
+                .Any(match => match.MatchedEnglishKey == "prancing"),
+            "The lemma-collision regression did not exercise a scaffold surface.");
+
+        TranslationScaffold lemmaCollision =
+            await new TranslationScaffoldBuilder(dictionary).BuildAsync(
+                lemmaCollisionSource);
+        Check(lemmaCollision.Terms.Any(term =>
+                  term.Source == "prancing" &&
+                  term.Translation == "гарцевать" &&
+                  term.Confidence >= TranslationScaffoldBuilder.MinimumConfidence),
+            "A user entry lost its mandatory term to a colliding scaffold surface: " +
+            string.Join(
+                ", ",
+                lemmaCollision.Terms.Select(term =>
+                    term.Source + " -> " + term.Translation)));
+        Check(!lemmaCollision.Terms.Any(term => term.Translation == "скачущий"),
+            "A scaffold surface overrode an overlapping user lemma.");
     }
 
     private static async Task VerifyDialogueIsolationAsync(

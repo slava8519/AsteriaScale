@@ -152,6 +152,12 @@ internal sealed class TranslationScaffoldBuilder
     internal const double MinimumConfidence = 0.9;
     internal const int MaximumTermCount = 12;
     internal const int MaximumNeuralRequestCount = 12;
+    // One accepted request contributes up to two glosses, so an uncapped list
+    // reaches twice the request cap. Every hint is copied into the semantic
+    // review prompt and into the final translation cache key: past this many
+    // the hypothesis block starts to outweigh the review task itself, and each
+    // extra hint fragments the cache key for no additional signal.
+    internal const int MaximumSenseHintCount = MaximumTermCount;
     // Mandatory prompt constraints are stricter than hover suggestions. The
     // 0.90-0.94 heuristic band includes reproducible false senses such as
     // "saw" -> "пилить" and "fifth" -> "квинта" in ordinary sentences.
@@ -405,15 +411,20 @@ internal sealed class TranslationScaffoldBuilder
                 string source = NormalizeSource(lookup.Source);
                 string translation = NormalizeRussianTerm(selected.Translation);
                 string sourceKey = LocalDictionaryService.NormalizeEnglish(source);
+                bool userEntry = matchedUserEntry || explicitUserToken;
+                // A user entry outranks a scaffold-only anchor by layer priority,
+                // so it must not be deduplicated away by one. Both keys can differ
+                // at load time and still collide here (user lemma "prance" against
+                // scaffold surface "prancing"), and the scaffold candidate is then
+                // dropped below for overlapping this token's user span — suppressing
+                // the user candidate too would leave no mandatory term at all.
                 if (source.Length == 0 ||
                     translation.Length == 0 ||
-                    explicitScaffoldSources.Contains(sourceKey))
+                    !userEntry && explicitScaffoldSources.Contains(sourceKey))
                 {
                     continue;
                 }
 
-                bool userEntry = matchedUserEntry ||
-                                  explicitUserToken;
                 bool properName = userEntry && LooksLikeProperName(source);
                 (int candidateIndex, int candidateLength) = FindSourceSpan(
                     sentence,
@@ -502,8 +513,14 @@ internal sealed class TranslationScaffoldBuilder
 
             IReadOnlyList<TranslationScaffoldNeuralDiagnostic> immutableNeuralDecisions =
                 Array.AsReadOnly(neuralDecisions.ToArray());
+            // Truncation keeps sentence order rather than ranking by margin:
+            // margin is reported by the model, so ordering by it would make the
+            // scaffold — and therefore the translation cache key — depend on
+            // which provider answered.
             IReadOnlyList<ScaffoldSenseHint> immutableSenseHints =
-                Array.AsReadOnly(senseHints.ToArray());
+                Array.AsReadOnly(senseHints
+                    .Take(MaximumSenseHintCount)
+                    .ToArray());
             return terms.Length == 0 &&
                    exactSentenceTranslation is null &&
                    immutableNeuralDecisions.Count == 0 &&
@@ -540,18 +557,12 @@ internal sealed class TranslationScaffoldBuilder
         SmartDictionaryRankerPlan? plan = null;
         if (lookup.SenseCandidates.Count > 0)
         {
-            SmartDictionarySenseInventory inventory =
-                SmartDictionarySenseResolver.GroupCandidates(
-                    sentence,
-                    lookup.Source,
-                    characterIndex,
-                    lookup.SenseCandidates);
             plan =
                 SmartDictionarySenseResolver.CreateRankerPlan(
                     sentence,
                     lookup.Source,
                     characterIndex,
-                    inventory.Groups);
+                    lookup.SenseCandidates);
             outcomes = plan.Outcomes
                 .OrderBy(outcome => outcome.GroupId)
                 .Select(outcome => outcome.Translation)

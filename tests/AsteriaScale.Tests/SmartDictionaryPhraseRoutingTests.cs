@@ -152,6 +152,8 @@ internal static class SmartDictionaryPhraseRoutingTests
             Path.GetDirectoryName(cachePath)!,
             TimeSpan.FromMinutes(1));
         await using SmartDictionaryResultCache cache = new(cachePath);
+        await using GlossBertDecisionCache decisionCache = new(
+            cachePath + ".decisions.json");
         using SmartHoverPipeline pipeline = new(
             new AppSettings
             {
@@ -162,6 +164,7 @@ internal static class SmartDictionaryPhraseRoutingTests
             dictionary,
             selector,
             cache,
+            decisionCache,
             static (_, _) => Task.FromException<(string Source, string Translation, string Engine)>(
                 new InvalidOperationException("The phrase-routing regression used full fallback.")),
             static _ => { },

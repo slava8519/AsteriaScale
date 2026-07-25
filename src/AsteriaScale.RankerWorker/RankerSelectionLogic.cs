@@ -1,5 +1,4 @@
-using System.Globalization;
-using System.Text;
+using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.RankerWorker;
 
@@ -47,86 +46,12 @@ internal static class RankerSelectionLogic
             .ToHashSet();
     }
 
+    // The host canonicalizes decision cache keys with the same resolution, so
+    // the implementation is shared through the protocol assembly rather than
+    // duplicated on each side of the process boundary.
     public static int FindClosestTargetOccurrence(
         string context,
         string target,
-        int characterIndex)
-    {
-        if (target.Length == 0 || target.Length > context.Length)
-        {
-            return -1;
-        }
-
-        int closest = -1;
-        int closestDistance = int.MaxValue;
-        for (int start = 0; start <= context.Length - target.Length;)
-        {
-            int index = context.IndexOf(
-                target,
-                start,
-                StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-            {
-                break;
-            }
-
-            int end = index + target.Length;
-            if (IsEnglishTokenCharacterBefore(context, index) ||
-                IsEnglishTokenCharacterAt(context, end))
-            {
-                start = index + Math.Max(1, target.Length);
-                continue;
-            }
-
-            int distance = characterIndex >= index && characterIndex <= end
-                ? 0
-                : Math.Min(
-                    Math.Abs(characterIndex - index),
-                    Math.Abs(characterIndex - end));
-            if (distance < closestDistance)
-            {
-                closest = index;
-                closestDistance = distance;
-            }
-
-            start = index + Math.Max(1, target.Length);
-        }
-
-        return closest;
-    }
-
-    private static bool IsEnglishTokenCharacterBefore(string value, int index)
-    {
-        if (index <= 0)
-        {
-            return false;
-        }
-
-        int scalarStart = index - 1;
-        if (char.IsLowSurrogate(value[scalarStart]) &&
-            scalarStart > 0 &&
-            char.IsHighSurrogate(value[scalarStart - 1]))
-        {
-            scalarStart--;
-        }
-
-        return Rune.TryGetRuneAt(value, scalarStart, out Rune rune) &&
-               IsEnglishTokenCharacter(rune);
-    }
-
-    private static bool IsEnglishTokenCharacterAt(string value, int index) =>
-        index < value.Length &&
-        Rune.TryGetRuneAt(value, index, out Rune rune) &&
-        IsEnglishTokenCharacter(rune);
-
-    private static bool IsEnglishTokenCharacter(Rune value)
-    {
-        UnicodeCategory category = Rune.GetUnicodeCategory(value);
-        return Rune.IsLetterOrDigit(value) ||
-               category is UnicodeCategory.NonSpacingMark or
-                   UnicodeCategory.SpacingCombiningMark or
-                   UnicodeCategory.EnclosingMark or
-                   UnicodeCategory.DashPunctuation ||
-               value.Value is '\'' or '\u2019' or '\u02BC';
-    }
+        int characterIndex) =>
+        RankerTargetAnchor.FindClosestOccurrence(context, target, characterIndex);
 }

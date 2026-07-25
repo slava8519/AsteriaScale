@@ -2220,6 +2220,10 @@ try
         () => GlossBertDictionarySelectorServiceTests.RunAsync(tempRoot));
 
     await RunAsync(
+        "Shared GlossBERT decision cache",
+        () => GlossBertDecisionCacheTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Ranker worker fail-open and target anchoring",
         RankerWorkerRegressionTests.RunAsync);
 

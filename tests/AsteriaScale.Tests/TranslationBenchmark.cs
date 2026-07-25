@@ -141,6 +141,10 @@ internal static class TranslationBenchmark
             "translation-benchmark-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(isolatedUserDirectory);
         GlossBertDictionarySelectorService? rankerSelector = null;
+        // The benchmark must neither read nor grow the user's decision cache:
+        // a warm cache would silently replace the ranker under measurement.
+        await using GlossBertDecisionCache benchmarkDecisionCache = new(
+            Path.Combine(isolatedUserDirectory, "glossbert-decisions.v1.json"));
         try
         {
             LocalDictionaryService dictionary = new(
@@ -156,6 +160,7 @@ internal static class TranslationBenchmark
                 rankerSelector.ConfigureKeepWarm(true);
                 TranslationScaffoldGlossBertRanker ranker = new(
                     rankerSelector,
+                    benchmarkDecisionCache,
                     () => provider,
                     () => dictionary.VersionToken);
                 neuralRanker = ranker.RankAsync;

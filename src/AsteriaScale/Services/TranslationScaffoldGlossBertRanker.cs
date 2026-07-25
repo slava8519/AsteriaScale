@@ -1,7 +1,4 @@
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
-using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.Services;
 
@@ -13,33 +10,24 @@ namespace AsteriaScale.Services;
 /// </summary>
 internal sealed class TranslationScaffoldGlossBertRanker
 {
-    private const int DefaultCacheCapacity = 512;
-
     private readonly GlossBertDictionarySelectorService _selector;
+    private readonly GlossBertDecisionCache _decisionCache;
     private readonly Func<GlossBertRankerProvider> _providerResolver;
     private readonly Func<string> _dictionaryVersionResolver;
-    private readonly int _cacheCapacity;
-    private readonly object _cacheLock = new();
-    private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.Ordinal);
-    private long _accessSequence;
 
     public TranslationScaffoldGlossBertRanker(
         GlossBertDictionarySelectorService selector,
+        GlossBertDecisionCache decisionCache,
         Func<GlossBertRankerProvider> providerResolver,
-        Func<string> dictionaryVersionResolver,
-        int cacheCapacity = DefaultCacheCapacity)
+        Func<string> dictionaryVersionResolver)
     {
         _selector = selector ?? throw new ArgumentNullException(nameof(selector));
+        _decisionCache = decisionCache ??
+                         throw new ArgumentNullException(nameof(decisionCache));
         _providerResolver = providerResolver ??
                             throw new ArgumentNullException(nameof(providerResolver));
         _dictionaryVersionResolver = dictionaryVersionResolver ??
                                      throw new ArgumentNullException(nameof(dictionaryVersionResolver));
-        if (cacheCapacity < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(cacheCapacity));
-        }
-
-        _cacheCapacity = cacheCapacity;
     }
 
     public async Task<TranslationScaffoldNeuralResult> RankAsync(
@@ -75,13 +63,25 @@ internal sealed class TranslationScaffoldGlossBertRanker
             provider,
             modelIdentity,
             dictionaryVersion);
-        if (TryGetCached(cacheKey, out TranslationScaffoldNeuralResult cached))
+        GlossBertDecision? cached = await _decisionCache.TryGetAsync(
+            cacheKey,
+            request.Plan.Outcomes.Count,
+            cancellationToken);
+        if (cached is not null)
         {
-            return cached with
-            {
-                ElapsedMilliseconds = elapsed.ElapsedMilliseconds,
-                FromCache = true
-            };
+            return new TranslationScaffoldNeuralResult(
+                cached.SelectedGroupId,
+                cached.Abstained,
+                cached.Margin,
+                cached.Score,
+                cached.Confidence,
+                provider,
+                cached.ExecutionProvider,
+                cached.Device,
+                cached.ModelVersion,
+                cached.Pipeline,
+                elapsed.ElapsedMilliseconds,
+                FromCache: true);
         }
 
         GlossBertDictionarySelection selection = await _selector.SelectAsync(
@@ -110,10 +110,27 @@ internal sealed class TranslationScaffoldGlossBertRanker
         // model identity and GroupId. Both selected decisions and calibrated
         // abstentions are deterministic reusable results; exceptions never get
         // here and therefore never enter the cache.
-        StoreCached(cacheKey, result);
+        await _decisionCache.StoreAsync(
+            cacheKey,
+            new GlossBertDecision(
+                selection.SelectedGroupId,
+                selection.Abstained,
+                selection.Margin,
+                selection.Score,
+                selection.Confidence,
+                selection.ExecutionProvider,
+                selection.Device,
+                selection.ModelVersion,
+                selection.Pipeline),
+            cancellationToken);
         return result;
     }
 
+    /// <summary>
+    /// The scaffold-shaped view of the shared decision key. Both this ranker and
+    /// the hover pipeline must produce the same fingerprint for the same worker
+    /// call, so the canonical form lives in <see cref="GlossBertDecisionCache"/>.
+    /// </summary>
     internal static string CreateCacheKey(
         TranslationScaffoldNeuralRequest request,
         GlossBertRankerProvider provider,
@@ -121,110 +138,13 @@ internal sealed class TranslationScaffoldGlossBertRanker
         string dictionaryVersion)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
-        ArgumentException.ThrowIfNullOrWhiteSpace(dictionaryVersion);
-
-        StringBuilder canonical = new();
-        Append(canonical, "asteria-translation-scaffold-glossbert-cache-v1");
-        Append(canonical, RankerProtocolV2.Version);
-        Append(canonical, provider.ToString());
-        Append(canonical, modelIdentity);
-        Append(canonical, dictionaryVersion);
-        Append(canonical, NormalizeText(request.Sentence));
-        Append(canonical, NormalizeText(request.Target));
-        Append(
-            canonical,
-            request.CharacterIndex.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-        foreach (SmartDictionaryRankerOutcome outcome in request.Plan.Outcomes)
-        {
-            Append(canonical, "outcome");
-            Append(canonical, outcome.GroupId.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-            Append(canonical, outcome.SourceIndex.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-            Append(canonical, NormalizeText(outcome.Translation));
-        }
-
-        for (int index = 0; index < request.Plan.CandidateGlosses.Count; index++)
-        {
-            Append(canonical, "candidate");
-            Append(canonical, NormalizeText(request.Plan.CandidateGlosses[index]));
-            Append(canonical, request.Plan.CandidateGroupIds[index].ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-        }
-
-        return Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes(canonical.ToString())));
-    }
-
-    private bool TryGetCached(
-        string key,
-        out TranslationScaffoldNeuralResult result)
-    {
-        lock (_cacheLock)
-        {
-            if (!_cache.TryGetValue(key, out CacheEntry? entry))
-            {
-                result = null!;
-                return false;
-            }
-
-            entry.LastAccess = NextAccessSequenceLocked();
-            result = entry.Result;
-            return true;
-        }
-    }
-
-    private void StoreCached(string key, TranslationScaffoldNeuralResult result)
-    {
-        lock (_cacheLock)
-        {
-            _cache[key] = new CacheEntry(result, NextAccessSequenceLocked());
-            while (_cache.Count > _cacheCapacity)
-            {
-                string oldest = _cache.MinBy(pair => pair.Value.LastAccess).Key;
-                _cache.Remove(oldest);
-            }
-        }
-    }
-
-    private long NextAccessSequenceLocked()
-    {
-        if (_accessSequence == long.MaxValue)
-        {
-            long sequence = 0;
-            foreach (CacheEntry entry in _cache.Values.OrderBy(entry => entry.LastAccess))
-            {
-                entry.LastAccess = ++sequence;
-            }
-
-            _accessSequence = sequence;
-        }
-
-        return ++_accessSequence;
-    }
-
-    private static string NormalizeText(string value) =>
-        string.Join(
-                " ",
-                (value ?? string.Empty).Normalize(NormalizationForm.FormKC)
-                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-            .Trim();
-
-    private static void Append(StringBuilder builder, string value)
-    {
-        builder.Append(value.Length);
-        builder.Append(':');
-        builder.Append(value);
-        builder.Append('|');
-    }
-
-    private sealed class CacheEntry(
-        TranslationScaffoldNeuralResult result,
-        long lastAccess)
-    {
-        public TranslationScaffoldNeuralResult Result { get; } = result;
-        public long LastAccess { get; set; } = lastAccess;
+        return GlossBertDecisionCache.CreateFingerprint(
+            request.Sentence,
+            request.Target,
+            request.CharacterIndex,
+            request.Plan,
+            provider,
+            modelIdentity,
+            dictionaryVersion);
     }
 }
