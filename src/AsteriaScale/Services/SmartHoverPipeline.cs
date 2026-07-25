@@ -241,6 +241,15 @@ internal sealed class SmartHoverPipeline : IDisposable
                 .OrderBy(outcome => outcome.GroupId)
                 .Select(outcome => outcome.Translation)
                 .ToArray();
+            // Two senses may now render to the same surface and differ only in
+            // register. The heuristics below must keep reading clean Russian,
+            // but the candidate card and the cache key need the labelled form:
+            // the cache validates a stored GroupId against this list, and a
+            // duplicate entry would silently break that alignment.
+            string[] labelledTranslations = plan.Outcomes
+                .OrderBy(outcome => outcome.GroupId)
+                .Select(outcome => outcome.Describe())
+                .ToArray();
             SmartDictionaryHeuristicSelection? tatoebaSelection =
                 SmartDictionaryHeuristicRanker.TrySelectFromContextTranslation(
                     lookup.ContextTranslation,
@@ -303,13 +312,13 @@ internal sealed class SmartHoverPipeline : IDisposable
                 ?? GlossBertDictionarySelectorService.GetModelCacheId(provider);
             string expectedPipeline = ExpectedRankingPipeline(
                 provider,
-                visibleTranslations.Length,
+                labelledTranslations.Length,
                 modelVersion);
             SmartDictionaryCacheRequest cacheRequest = CreateSmartCacheRequest(
                 recognized.Text,
                 lookup.Source,
                 recognized.CharacterIndex,
-                visibleTranslations,
+                labelledTranslations,
                 "English",
                 smartBackend,
                 modelVersion,
@@ -392,7 +401,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                         recognized.Text,
                         lookup.Source,
                         recognized.CharacterIndex,
-                        visibleTranslations,
+                        labelledTranslations,
                         "English",
                         smartBackend,
                         sharedDecision.ModelVersion,
@@ -403,7 +412,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             // No intermediate candidate card: the overlay keeps its loading
             // state until the ranker delivers the final verdict, so the card
             // renders exactly once instead of flashing candidates first.
-            string visibleCandidates = FormatVisibleOutcomes(visibleTranslations);
+            string visibleCandidates = FormatVisibleOutcomes(labelledTranslations);
             GlossBertDictionarySelection ranked = sharedDecision is null
                 ? await _glossBertSelector.SelectAsync(
                     rankerContext.Text,
@@ -446,7 +455,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 recognized.Text,
                 lookup.Source,
                 recognized.CharacterIndex,
-                visibleTranslations,
+                labelledTranslations,
                 "English",
                 smartBackend,
                 ranked.ModelVersion,

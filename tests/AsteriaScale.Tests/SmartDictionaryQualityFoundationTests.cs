@@ -7,6 +7,7 @@ internal static class SmartDictionaryQualityFoundationTests
         VerifySurfaceQualityPreference();
         VerifyRegisterNormalization();
         VerifyRegisterFidelity();
+        VerifyRegisterSeparatesOutcomes();
         VerifyDurationAgoSurfacePreference();
         VerifyStandaloneSaveSurfacePreference();
         VerifyWhileGrammar();
@@ -174,6 +175,69 @@ internal static class SmartDictionaryQualityFoundationTests
         Check(inventory.Groups.Count == 1 &&
               inventory.Groups[0].Register == SenseRegister.Vulgar,
             "A merged sense lost the register marking of its rows.");
+    }
+
+    /// <summary>
+    /// Two senses that render to the same Russian surface are interchangeable
+    /// only if their register matches. Merging on the surface alone made the
+    /// outcome inherit the register of whichever sense was added first, so
+    /// "осёл" the animal could be reported as coarse — the right word with the
+    /// wrong bluntness, invisible in the answer text and visible only in the
+    /// label. Found by the phase-C register benchmark.
+    /// </summary>
+    private static void VerifyRegisterSeparatesOutcomes()
+    {
+        const string context = "The old ass carried water from the well.";
+        int index = context.IndexOf("ass", StringComparison.Ordinal);
+        SmartDictionaryRankerPlan plan =
+            SmartDictionarySenseResolver.CreateRankerPlan(
+                context,
+                "ass",
+                index,
+                [
+                    new DictionarySenseCandidate(
+                        "осёл", "animal, see also donkey", "", "noun"),
+                    new DictionarySenseCandidate(
+                        "осёл", "A stupid or inconsiderate person.", "груб.", "noun")
+                ]);
+
+        Check(plan.Outcomes.Count == 2,
+            "Senses sharing a surface but differing in register were merged: " +
+            string.Join(", ", plan.Outcomes.Select(outcome =>
+                $"{outcome.GroupId}:{outcome.Translation}:{outcome.Register}")));
+        Check(plan.Outcomes.Select(outcome => outcome.Register)
+                .OrderBy(register => register)
+                .SequenceEqual([SenseRegister.Neutral, SenseRegister.Vulgar]),
+            "The split outcomes did not carry their own registers.");
+
+        // GroupId stays the index into the outcome list (invariant 2).
+        Check(plan.Outcomes.Select((outcome, position) => outcome.GroupId == position)
+                .All(match => match),
+            "Splitting by register broke the GroupId-is-index invariant.");
+
+        // The candidate list must stay distinct: the hover cache validates a
+        // stored GroupId against it, and a duplicate would break that.
+        string[] described = plan.Outcomes.Select(outcome => outcome.Describe()).ToArray();
+        Check(described.Distinct(StringComparer.Ordinal).Count() == described.Length,
+            $"Candidate labels are not distinct: {string.Join(" | ", described)}");
+        Check(described.Any(label => label.Contains("ГРУБ.", StringComparison.Ordinal)),
+            $"The coarse outcome lost its label: {string.Join(" | ", described)}");
+
+        // Same surface, same register still merges - the split is about
+        // register, not about disabling deduplication.
+        SmartDictionaryRankerPlan merged =
+            SmartDictionarySenseResolver.CreateRankerPlan(
+                context,
+                "ass",
+                index,
+                [
+                    new DictionarySenseCandidate(
+                        "осёл", "animal, see also donkey", "", "noun"),
+                    new DictionarySenseCandidate(
+                        "осёл", "A hoofed mammal of the horse family.", "", "noun")
+                ]);
+        Check(merged.Outcomes.Count == 1,
+            "Equivalent senses with one register stopped merging.");
     }
 
     private static void VerifyDurationAgoSurfacePreference()

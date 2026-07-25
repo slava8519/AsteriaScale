@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -49,7 +50,26 @@ internal sealed record SmartDictionarySurfaceSelection(
 internal sealed record SmartDictionaryRankerOutcome(
     int GroupId,
     int SourceIndex,
-    string Translation);
+    string Translation)
+{
+    /// <summary>
+    /// Register of the sense this outcome came from. Two senses that render to
+    /// the same Russian surface are only interchangeable when their register
+    /// matches too, so this participates in outcome identity (roadmap #14.2C).
+    /// </summary>
+    public SenseRegister Register { get; init; } = SenseRegister.Neutral;
+
+    /// <summary>
+    /// Text for candidate lists and cache keys. A marked outcome carries its
+    /// label so that two senses sharing a surface stay distinguishable: the
+    /// hover cache validates a stored GroupId against its candidate list, and
+    /// a duplicated entry there would silently break that alignment.
+    /// </summary>
+    public string Describe() =>
+        SenseRegisters.DisplayLabel(Register) is { } label
+            ? Translation + " (" + label + ")"
+            : Translation;
+}
 
 /// <summary>
 /// GlossBERT input aligned with stable, distinct visible translations. The
@@ -537,14 +557,25 @@ internal static partial class SmartDictionarySenseResolver
                 continue;
             }
 
-            if (!groupByTranslation.TryGetValue(translationKey, out int groupId))
+            // Register is part of outcome identity. Merging on the surface
+            // alone made a merged outcome inherit the register of whichever
+            // sense happened to be added first, so "осёл" the animal could be
+            // reported as coarse and "щель" the anatomical term as neutral —
+            // right word, wrong bluntness, invisible in the answer text.
+            string outcomeKey = translationKey + "" +
+                                ((int)sense.Register).ToString(
+                                    CultureInfo.InvariantCulture);
+            if (!groupByTranslation.TryGetValue(outcomeKey, out int groupId))
             {
                 groupId = outcomes.Count;
-                groupByTranslation.Add(translationKey, groupId);
+                groupByTranslation.Add(outcomeKey, groupId);
                 outcomes.Add(new SmartDictionaryRankerOutcome(
                     groupId,
                     surface.SourceIndex,
-                    surface.Translation));
+                    surface.Translation)
+                {
+                    Register = sense.Register
+                });
             }
 
             glosses.Add(gloss);
