@@ -1,0 +1,1266 @@
+{
+  "name": "Asteria Scale EN-RU register fidelity regression set",
+  "version": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "Original examples written for Asteria Scale; no corpus sentences were copied. Every expectedTranslation and expectedRegister is taken from the shipped sense inventory, never invented. Ethnic and sexuality slurs present in the source dictionary are deliberately excluded: they exercise nothing the coarse and sexual vocabulary here does not already exercise.",
+  "buckets": {
+    "neutral-vulgar": "a coarse reading competing with a plain one",
+    "sexual-ordinary": "a sexual sense competing with an everyday one",
+    "slang-colloquial": "slang, colloquial and archaic readings of ordinary words",
+    "masked-euphemistic": "masked spellings such as f*ck and s**t as lookup candidates"
+  },
+  "cases": [
+    {
+      "id": "hell-place",
+      "bucket": "neutral-vulgar",
+      "context": "The priest spoke of hell and judgement.",
+      "target": "hell",
+      "characterIndex": 20,
+      "expectedTranslation": "ад",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "hell-curse",
+      "bucket": "neutral-vulgar",
+      "context": "Oh, hell! I forgot the keys again.",
+      "target": "hell",
+      "characterIndex": 4,
+      "expectedTranslation": "чёрт",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "damn-condemn",
+      "bucket": "neutral-vulgar",
+      "context": "The court will damn him for his crimes.",
+      "target": "damn",
+      "characterIndex": 15,
+      "expectedTranslation": "проклинать",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "damn-curse",
+      "bucket": "neutral-vulgar",
+      "context": "Damn! The engine died on the bridge.",
+      "target": "damn",
+      "characterIndex": 0,
+      "expectedTranslation": "чёрт побери",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "crap-junk",
+      "bucket": "neutral-vulgar",
+      "context": "He threw all that crap into a box.",
+      "target": "crap",
+      "characterIndex": 18,
+      "expectedTranslation": "фигня",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "crap-nonsense",
+      "bucket": "neutral-vulgar",
+      "context": "That is complete crap and you know it.",
+      "target": "crap",
+      "characterIndex": 17,
+      "expectedTranslation": "чепуха",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "ass-animal",
+      "bucket": "neutral-vulgar",
+      "context": "The old ass carried water from the well.",
+      "target": "ass",
+      "characterIndex": 8,
+      "expectedTranslation": "осёл",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "ass-body",
+      "bucket": "neutral-vulgar",
+      "context": "He landed flat on his ass in the mud.",
+      "target": "ass",
+      "characterIndex": 22,
+      "expectedTranslation": "жопа",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "bugger-person",
+      "bucket": "neutral-vulgar",
+      "context": "The word bugger once named a sodomite.",
+      "target": "bugger",
+      "characterIndex": 9,
+      "expectedTranslation": "содомит",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bugger-ruin",
+      "bucket": "neutral-vulgar",
+      "context": "Do not bugger the machine any further.",
+      "target": "bugger",
+      "characterIndex": 7,
+      "expectedTranslation": "ломать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "git-fetch",
+      "bucket": "neutral-vulgar",
+      "context": "Go git the rope from the shed.",
+      "target": "git",
+      "characterIndex": 3,
+      "expectedTranslation": "приносить",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "git-insult",
+      "bucket": "neutral-vulgar",
+      "context": "That lazy git never answers the door.",
+      "target": "git",
+      "characterIndex": 10,
+      "expectedTranslation": "мерзавец",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "balls-sport",
+      "bucket": "neutral-vulgar",
+      "context": "The children lost two balls in the river.",
+      "target": "balls",
+      "characterIndex": 22,
+      "expectedTranslation": "мяч",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "balls-anatomy",
+      "bucket": "neutral-vulgar",
+      "context": "The kick caught him right in the balls.",
+      "target": "balls",
+      "characterIndex": 33,
+      "expectedTranslation": "яйца",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bread-food",
+      "bucket": "neutral-vulgar",
+      "context": "She baked bread for the whole village.",
+      "target": "bread",
+      "characterIndex": 10,
+      "expectedTranslation": "хлеб",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bread-money",
+      "bucket": "neutral-vulgar",
+      "context": "He blew all his bread on that car.",
+      "target": "bread",
+      "characterIndex": 16,
+      "expectedTranslation": "бабки",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "dope-drug",
+      "bucket": "neutral-vulgar",
+      "context": "The police found dope in the trunk.",
+      "target": "dope",
+      "characterIndex": 17,
+      "expectedTranslation": "наркотик",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "dope-cool",
+      "bucket": "neutral-vulgar",
+      "context": "That new track is absolutely dope.",
+      "target": "dope",
+      "characterIndex": 29,
+      "expectedTranslation": "клёвый",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "beef-meat",
+      "bucket": "neutral-vulgar",
+      "context": "The stew needs more beef and salt.",
+      "target": "beef",
+      "characterIndex": 20,
+      "expectedTranslation": "говядина",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "gut-belly",
+      "bucket": "neutral-vulgar",
+      "context": "He patted his gut and laughed.",
+      "target": "gut",
+      "characterIndex": 14,
+      "expectedTranslation": "брюхо",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "guts-courage",
+      "bucket": "neutral-vulgar",
+      "context": "She had the guts to say it aloud.",
+      "target": "guts",
+      "characterIndex": 12,
+      "expectedTranslation": "храбрость",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "guts-entrails",
+      "bucket": "neutral-vulgar",
+      "context": "The fisherman pulled out the guts.",
+      "target": "guts",
+      "characterIndex": 29,
+      "expectedTranslation": "кишки",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "dude-man",
+      "bucket": "neutral-vulgar",
+      "context": "Some dude was waiting by the gate.",
+      "target": "dude",
+      "characterIndex": 5,
+      "expectedTranslation": "мужик",
+      "expectedRegister": "colloquial"
+    },
+    {
+      "id": "dude-address",
+      "bucket": "neutral-vulgar",
+      "context": "Dude, you have to see this.",
+      "target": "dude",
+      "characterIndex": 0,
+      "expectedTranslation": "чувак",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "bro-sibling",
+      "bucket": "neutral-vulgar",
+      "context": "My bro is two years older than me.",
+      "target": "bro",
+      "characterIndex": 3,
+      "expectedTranslation": "братан",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "crib-bed",
+      "bucket": "neutral-vulgar",
+      "context": "The baby slept in a wooden crib.",
+      "target": "crib",
+      "characterIndex": 27,
+      "expectedTranslation": "детская кроватка",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "crib-home",
+      "bucket": "neutral-vulgar",
+      "context": "Come by my crib after the show.",
+      "target": "crib",
+      "characterIndex": 11,
+      "expectedTranslation": "хата",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "grass-lawn",
+      "bucket": "neutral-vulgar",
+      "context": "The grass needs cutting again.",
+      "target": "grass",
+      "characterIndex": 4,
+      "expectedTranslation": "трава",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "grass-drug",
+      "bucket": "neutral-vulgar",
+      "context": "They were smoking grass behind the shed.",
+      "target": "grass",
+      "characterIndex": 18,
+      "expectedTranslation": "травка",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "dough-baking",
+      "bucket": "neutral-vulgar",
+      "context": "Knead the dough until it is smooth.",
+      "target": "dough",
+      "characterIndex": 10,
+      "expectedTranslation": "тесто",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "come-move",
+      "bucket": "sexual-ordinary",
+      "context": "Please come closer to the fire.",
+      "target": "come",
+      "characterIndex": 7,
+      "expectedTranslation": "приходить",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "come-arrive",
+      "bucket": "sexual-ordinary",
+      "context": "They come to the village every spring.",
+      "target": "come",
+      "characterIndex": 5,
+      "expectedTranslation": "прибывать",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "come-orgasm",
+      "bucket": "sexual-ordinary",
+      "context": "She felt him come inside her.",
+      "target": "come",
+      "characterIndex": 13,
+      "expectedTranslation": "кончать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "blow-air",
+      "bucket": "sexual-ordinary",
+      "context": "Blow gently on the hot soup.",
+      "target": "blow",
+      "characterIndex": 0,
+      "expectedTranslation": "дуть",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "blow-hit",
+      "bucket": "sexual-ordinary",
+      "context": "The blow knocked him off his feet.",
+      "target": "blow",
+      "characterIndex": 4,
+      "expectedTranslation": "удар",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "blow-oral",
+      "bucket": "sexual-ordinary",
+      "context": "She offered to blow him in the car.",
+      "target": "blow",
+      "characterIndex": 15,
+      "expectedTranslation": "сосать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "blow-squander",
+      "bucket": "sexual-ordinary",
+      "context": "Do not blow your savings on that.",
+      "target": "blow",
+      "characterIndex": 7,
+      "expectedTranslation": "продувать",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "bang-noise",
+      "bucket": "sexual-ordinary",
+      "context": "The door shut with a loud bang.",
+      "target": "bang",
+      "characterIndex": 26,
+      "expectedTranslation": "удар",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bang-hair",
+      "bucket": "sexual-ordinary",
+      "context": "Her bang covered half her forehead.",
+      "target": "bang",
+      "characterIndex": 4,
+      "expectedTranslation": "чёлка",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bang-sex",
+      "bucket": "sexual-ordinary",
+      "context": "He bragged about who he would bang.",
+      "target": "bang",
+      "characterIndex": 30,
+      "expectedTranslation": "трахать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "box-container",
+      "bucket": "sexual-ordinary",
+      "context": "Put the letters back in the box.",
+      "target": "box",
+      "characterIndex": 28,
+      "expectedTranslation": "коробка",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "box-theatre",
+      "bucket": "sexual-ordinary",
+      "context": "They watched from the upper box.",
+      "target": "box",
+      "characterIndex": 28,
+      "expectedTranslation": "ложа",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "box-anatomy",
+      "bucket": "sexual-ordinary",
+      "context": "His hand slid toward her box.",
+      "target": "box",
+      "characterIndex": 25,
+      "expectedTranslation": "манда",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "bush-plant",
+      "bucket": "sexual-ordinary",
+      "context": "A rabbit hid under the bush.",
+      "target": "bush",
+      "characterIndex": 23,
+      "expectedTranslation": "куст",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bush-hair",
+      "bucket": "sexual-ordinary",
+      "context": "She had not trimmed her bush in weeks.",
+      "target": "bush",
+      "characterIndex": 24,
+      "expectedTranslation": "волосня",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "crack-fissure",
+      "bucket": "sexual-ordinary",
+      "context": "A crack ran across the ceiling.",
+      "target": "crack",
+      "characterIndex": 2,
+      "expectedTranslation": "трещина",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "crack-joke",
+      "bucket": "sexual-ordinary",
+      "context": "He made a crack about her hat.",
+      "target": "crack",
+      "characterIndex": 10,
+      "expectedTranslation": "острота",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "crack-anatomy",
+      "bucket": "sexual-ordinary",
+      "context": "He stared at the crack between her legs.",
+      "target": "crack",
+      "characterIndex": 17,
+      "expectedTranslation": "щель",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "muff-warmer",
+      "bucket": "sexual-ordinary",
+      "context": "She warmed her hands in a fur muff.",
+      "target": "muff",
+      "characterIndex": 30,
+      "expectedTranslation": "муфта",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "muff-anatomy",
+      "bucket": "sexual-ordinary",
+      "context": "His mouth moved down to her muff.",
+      "target": "muff",
+      "characterIndex": 28,
+      "expectedTranslation": "мохнатка",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "spunk-courage",
+      "bucket": "sexual-ordinary",
+      "context": "The girl showed real spunk today.",
+      "target": "spunk",
+      "characterIndex": 21,
+      "expectedTranslation": "отвага",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "spunk-semen",
+      "bucket": "sexual-ordinary",
+      "context": "There was spunk on the sheets.",
+      "target": "spunk",
+      "characterIndex": 10,
+      "expectedTranslation": "конча",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "sucker-fish",
+      "bucket": "sexual-ordinary",
+      "context": "The sucker clung to the glass wall.",
+      "target": "sucker",
+      "characterIndex": 4,
+      "expectedTranslation": "сосун",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "sucker-fool",
+      "bucket": "sexual-ordinary",
+      "context": "They played him for a sucker.",
+      "target": "sucker",
+      "characterIndex": 22,
+      "expectedTranslation": "дурить",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "heat-warmth",
+      "bucket": "sexual-ordinary",
+      "context": "The heat of the stove filled the room.",
+      "target": "heat",
+      "characterIndex": 4,
+      "expectedTranslation": "тепло",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "heat-estrus",
+      "bucket": "sexual-ordinary",
+      "context": "The mare came into heat that week.",
+      "target": "heat",
+      "characterIndex": 19,
+      "expectedTranslation": "течка",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "heat-arouse",
+      "bucket": "sexual-ordinary",
+      "context": "Her voice alone could heat him.",
+      "target": "heat",
+      "characterIndex": 22,
+      "expectedTranslation": "возбуждать",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "head-body",
+      "bucket": "sexual-ordinary",
+      "context": "He rested his head on the table.",
+      "target": "head",
+      "characterIndex": 14,
+      "expectedTranslation": "голова",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "head-leader",
+      "bucket": "sexual-ordinary",
+      "context": "The head of the guild refused.",
+      "target": "head",
+      "characterIndex": 4,
+      "expectedTranslation": "директор",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "ass-sex",
+      "bucket": "sexual-ordinary",
+      "context": "He only ever thinks about ass.",
+      "target": "ass",
+      "characterIndex": 26,
+      "expectedTranslation": "ебля",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "cool-temp",
+      "bucket": "slang-colloquial",
+      "context": "The evening air felt cool and damp.",
+      "target": "cool",
+      "characterIndex": 21,
+      "expectedTranslation": "прохладный",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "cool-calm",
+      "bucket": "slang-colloquial",
+      "context": "He stayed cool through the whole mess.",
+      "target": "cool",
+      "characterIndex": 10,
+      "expectedTranslation": "хладнокровный",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "cool-fashion",
+      "bucket": "slang-colloquial",
+      "context": "That jacket is really cool.",
+      "target": "cool",
+      "characterIndex": 22,
+      "expectedTranslation": "крутой",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "cool-audacious",
+      "bucket": "slang-colloquial",
+      "context": "It was a cool piece of impudence.",
+      "target": "cool",
+      "characterIndex": 9,
+      "expectedTranslation": "дерзкий",
+      "expectedRegister": "archaic"
+    },
+    {
+      "id": "fly-insect",
+      "bucket": "slang-colloquial",
+      "context": "A fly kept circling the lamp.",
+      "target": "fly",
+      "characterIndex": 2,
+      "expectedTranslation": "муха",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "fly-travel",
+      "bucket": "slang-colloquial",
+      "context": "We fly to the coast tomorrow.",
+      "target": "fly",
+      "characterIndex": 3,
+      "expectedTranslation": "летать",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "fly-sharp",
+      "bucket": "slang-colloquial",
+      "context": "That kid is fly and knows it.",
+      "target": "fly",
+      "characterIndex": 12,
+      "expectedTranslation": "сообразительный",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "fly-work",
+      "bucket": "slang-colloquial",
+      "context": "That excuse will not fly here.",
+      "target": "fly",
+      "characterIndex": 21,
+      "expectedTranslation": "проходить",
+      "expectedRegister": "colloquial"
+    },
+    {
+      "id": "buck-deer",
+      "bucket": "slang-colloquial",
+      "context": "A buck stepped out of the treeline.",
+      "target": "buck",
+      "characterIndex": 2,
+      "expectedTranslation": "самец",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "buck-money",
+      "bucket": "slang-colloquial",
+      "context": "It only cost me a buck.",
+      "target": "buck",
+      "characterIndex": 18,
+      "expectedTranslation": "бакс",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "buck-dandy",
+      "bucket": "slang-colloquial",
+      "context": "The old buck wore a velvet coat.",
+      "target": "buck",
+      "characterIndex": 8,
+      "expectedTranslation": "щёголь",
+      "expectedRegister": "archaic"
+    },
+    {
+      "id": "buck-resist",
+      "bucket": "slang-colloquial",
+      "context": "He will buck any order he dislikes.",
+      "target": "buck",
+      "characterIndex": 8,
+      "expectedTranslation": "сопротивляться",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "ice-frozen",
+      "bucket": "slang-colloquial",
+      "context": "The ice cracked under his boot.",
+      "target": "ice",
+      "characterIndex": 4,
+      "expectedTranslation": "лёд",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "ice-drug",
+      "bucket": "slang-colloquial",
+      "context": "They were selling ice on that corner.",
+      "target": "ice",
+      "characterIndex": 18,
+      "expectedTranslation": "айс",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "gig-concert",
+      "bucket": "slang-colloquial",
+      "context": "The band has a gig on Friday.",
+      "target": "gig",
+      "characterIndex": 15,
+      "expectedTranslation": "концерт",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "gig-oddjob",
+      "bucket": "slang-colloquial",
+      "context": "He took a gig driving at night.",
+      "target": "gig",
+      "characterIndex": 10,
+      "expectedTranslation": "халтура",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "hustle-hurry",
+      "bucket": "slang-colloquial",
+      "context": "You had better hustle to the station.",
+      "target": "hustle",
+      "characterIndex": 15,
+      "expectedTranslation": "спешить",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "hustle-swindle",
+      "bucket": "slang-colloquial",
+      "context": "They tried to hustle the old man.",
+      "target": "hustle",
+      "characterIndex": 14,
+      "expectedTranslation": "обманывать",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "dig-earth",
+      "bucket": "slang-colloquial",
+      "context": "They dig a trench along the fence.",
+      "target": "dig",
+      "characterIndex": 5,
+      "expectedTranslation": "копать",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "gal-girl",
+      "bucket": "slang-colloquial",
+      "context": "A young gal answered the door.",
+      "target": "gal",
+      "characterIndex": 8,
+      "expectedTranslation": "девушка",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "guy-man",
+      "bucket": "slang-colloquial",
+      "context": "That guy fixed the roof for us.",
+      "target": "guy",
+      "characterIndex": 5,
+      "expectedTranslation": "парень",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "guy-people",
+      "bucket": "slang-colloquial",
+      "context": "Come on, guys, we are late.",
+      "target": "guys",
+      "characterIndex": 9,
+      "expectedTranslation": "люди",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "bloke-man",
+      "bucket": "slang-colloquial",
+      "context": "Some bloke asked about you.",
+      "target": "bloke",
+      "characterIndex": 5,
+      "expectedTranslation": "мужик",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "buddy-address",
+      "bucket": "slang-colloquial",
+      "context": "Easy there, buddy.",
+      "target": "buddy",
+      "characterIndex": 12,
+      "expectedTranslation": "дружок",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "chap-man",
+      "bucket": "slang-colloquial",
+      "context": "A quiet chap moved in downstairs.",
+      "target": "chap",
+      "characterIndex": 8,
+      "expectedTranslation": "мужик",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "chap-skin",
+      "bucket": "slang-colloquial",
+      "context": "The cold will chap your hands.",
+      "target": "chap",
+      "characterIndex": 14,
+      "expectedTranslation": "трескаться",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "chap-jaw",
+      "bucket": "slang-colloquial",
+      "context": "He struck him under the chap.",
+      "target": "chap",
+      "characterIndex": 24,
+      "expectedTranslation": "челюсть",
+      "expectedRegister": "archaic"
+    },
+    {
+      "id": "folks-people",
+      "bucket": "slang-colloquial",
+      "context": "The folks of that valley kept to themselves.",
+      "target": "folks",
+      "characterIndex": 4,
+      "expectedTranslation": "народ",
+      "expectedRegister": "archaic"
+    },
+    {
+      "id": "gas-fuel",
+      "bucket": "slang-colloquial",
+      "context": "We need gas before the pass.",
+      "target": "gas",
+      "characterIndex": 8,
+      "expectedTranslation": "бензин",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "gas-state",
+      "bucket": "slang-colloquial",
+      "context": "The gas escaped through the valve.",
+      "target": "gas",
+      "characterIndex": 4,
+      "expectedTranslation": "газ",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-fck-verb",
+      "bucket": "masked-euphemistic",
+      "context": "He told them to f*ck off.",
+      "target": "f*ck",
+      "characterIndex": 16,
+      "expectedTranslation": "трахать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fck-act",
+      "bucket": "masked-euphemistic",
+      "context": "It was a quick f*ck and nothing more.",
+      "target": "f*ck",
+      "characterIndex": 15,
+      "expectedTranslation": "ебля",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fck-person",
+      "bucket": "masked-euphemistic",
+      "context": "That f*ck stole my wallet.",
+      "target": "f*ck",
+      "characterIndex": 5,
+      "expectedTranslation": "долбоёб",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fck-intj",
+      "bucket": "masked-euphemistic",
+      "context": "F*ck, the door is locked.",
+      "target": "f*ck",
+      "characterIndex": 0,
+      "expectedTranslation": "блядь",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fkk-verb",
+      "bucket": "masked-euphemistic",
+      "context": "Do not f**k with the wiring.",
+      "target": "f**k",
+      "characterIndex": 7,
+      "expectedTranslation": "трахать",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fkk-partner",
+      "bucket": "masked-euphemistic",
+      "context": "She was just a f**k to him.",
+      "target": "f**k",
+      "characterIndex": 15,
+      "expectedTranslation": "ёбарь",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-cnt",
+      "bucket": "masked-euphemistic",
+      "context": "He used the word c*nt without thinking.",
+      "target": "c*nt",
+      "characterIndex": 17,
+      "expectedTranslation": "пизда",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-bollocks-anatomy",
+      "bucket": "masked-euphemistic",
+      "context": "The dog bit him in the b****cks.",
+      "target": "b****cks",
+      "characterIndex": 23,
+      "expectedTranslation": "яйца",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-bollocks-nonsense",
+      "bucket": "masked-euphemistic",
+      "context": "That report is complete b****cks.",
+      "target": "b****cks",
+      "characterIndex": 24,
+      "expectedTranslation": "ерунда",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-bollocks-idiot",
+      "bucket": "masked-euphemistic",
+      "context": "The b****cks forgot the tickets.",
+      "target": "b****cks",
+      "characterIndex": 4,
+      "expectedTranslation": "придурок",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-bloody-blood",
+      "bucket": "masked-euphemistic",
+      "context": "His bl**dy shirt lay on the floor.",
+      "target": "bl**dy",
+      "characterIndex": 4,
+      "expectedTranslation": "окровавленный",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-bloody-battle",
+      "bucket": "masked-euphemistic",
+      "context": "It was a bl**dy campaign.",
+      "target": "bl**dy",
+      "characterIndex": 9,
+      "expectedTranslation": "кровавый",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-bloody-intens",
+      "bucket": "masked-euphemistic",
+      "context": "Where is my bl**dy coat?",
+      "target": "bl**dy",
+      "characterIndex": 12,
+      "expectedTranslation": "чёртовый",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-dogshit",
+      "bucket": "masked-euphemistic",
+      "context": "He stepped in dogs**t on the path.",
+      "target": "dogs**t",
+      "characterIndex": 14,
+      "expectedTranslation": "собачье дерьмо",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-god",
+      "bucket": "masked-euphemistic",
+      "context": "The scribe wrote g*d instead of the name.",
+      "target": "g*d",
+      "characterIndex": 17,
+      "expectedTranslation": "Б-г",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-shit-feces",
+      "bucket": "masked-euphemistic",
+      "context": "There was s**t all over the floor.",
+      "target": "s**t",
+      "characterIndex": 10,
+      "expectedTranslation": "дерьмо",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shit-junk",
+      "bucket": "masked-euphemistic",
+      "context": "Clear this s**t off the table.",
+      "target": "s**t",
+      "characterIndex": 11,
+      "expectedTranslation": "хлам",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shit-stuff",
+      "bucket": "masked-euphemistic",
+      "context": "Pack your s**t and go.",
+      "target": "s**t",
+      "characterIndex": 10,
+      "expectedTranslation": "шмотки",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shit-best",
+      "bucket": "masked-euphemistic",
+      "context": "That record is the s**t.",
+      "target": "s**t",
+      "characterIndex": 19,
+      "expectedTranslation": "класс",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shit-nonsense",
+      "bucket": "masked-euphemistic",
+      "context": "Everything he said was s**t.",
+      "target": "s**t",
+      "characterIndex": 23,
+      "expectedTranslation": "чушь",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shit-person",
+      "bucket": "masked-euphemistic",
+      "context": "That s**t left without paying.",
+      "target": "s**t",
+      "characterIndex": 5,
+      "expectedTranslation": "гнида",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shithead",
+      "bucket": "masked-euphemistic",
+      "context": "The s**thead cut me off again.",
+      "target": "s**thead",
+      "characterIndex": 4,
+      "expectedTranslation": "мудак",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-shithole",
+      "bucket": "masked-euphemistic",
+      "context": "They live in a s**thole near the docks.",
+      "target": "s**thole",
+      "characterIndex": 15,
+      "expectedTranslation": "жопа",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-twat-idiot",
+      "bucket": "masked-euphemistic",
+      "context": "Some tw*t parked across two spaces.",
+      "target": "tw*t",
+      "characterIndex": 5,
+      "expectedTranslation": "идиот",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-twat-anatomy",
+      "bucket": "masked-euphemistic",
+      "context": "He wrote the word tw*t on the wall.",
+      "target": "tw*t",
+      "characterIndex": 18,
+      "expectedTranslation": "манда",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-wanker-idiot",
+      "bucket": "masked-euphemistic",
+      "context": "That w**ker never returns a call.",
+      "target": "w**ker",
+      "characterIndex": 5,
+      "expectedTranslation": "мудак",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-wanker-poser",
+      "bucket": "masked-euphemistic",
+      "context": "He is a w**ker who loves an audience.",
+      "target": "w**ker",
+      "characterIndex": 8,
+      "expectedTranslation": "позёр",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-whore-prostitute",
+      "bucket": "masked-euphemistic",
+      "context": "She played a wh*re in the second act.",
+      "target": "wh*re",
+      "characterIndex": 13,
+      "expectedTranslation": "проститутка",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-motherfucker",
+      "bucket": "masked-euphemistic",
+      "context": "The motherf**ker took my seat.",
+      "target": "motherf**ker",
+      "characterIndex": 4,
+      "expectedTranslation": "мудак",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-cunt-alt",
+      "bucket": "masked-euphemistic",
+      "context": "He shouted c**t across the yard.",
+      "target": "c**t",
+      "characterIndex": 11,
+      "expectedTranslation": "пизда",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fuck-alt-verb",
+      "bucket": "masked-euphemistic",
+      "context": "They would fu*k until dawn.",
+      "target": "fu*k",
+      "characterIndex": 11,
+      "expectedTranslation": "трахаться",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-fuck-alt-intj",
+      "bucket": "masked-euphemistic",
+      "context": "Oh fu*k, the roof is leaking.",
+      "target": "fu*k",
+      "characterIndex": 3,
+      "expectedTranslation": "блядь",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "masked-slut-untidy",
+      "bucket": "masked-euphemistic",
+      "context": "The old word sl*t meant a slovenly woman.",
+      "target": "sl*t",
+      "characterIndex": 13,
+      "expectedTranslation": "неряха",
+      "expectedRegister": "archaic"
+    },
+    {
+      "id": "masked-slut-promiscuous",
+      "bucket": "masked-euphemistic",
+      "context": "They called her a sl*t behind her back.",
+      "target": "sl*t",
+      "characterIndex": 18,
+      "expectedTranslation": "шлюха",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-porn",
+      "bucket": "masked-euphemistic",
+      "context": "The laptop was full of p*rn.",
+      "target": "p*rn",
+      "characterIndex": 23,
+      "expectedTranslation": "порно",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-sex-act",
+      "bucket": "masked-euphemistic",
+      "context": "They never talked about s*x.",
+      "target": "s*x",
+      "characterIndex": 24,
+      "expectedTranslation": "секс",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-sex-category",
+      "bucket": "masked-euphemistic",
+      "context": "The form asked for s*x and age.",
+      "target": "s*x",
+      "characterIndex": 19,
+      "expectedTranslation": "пол",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-job-task",
+      "bucket": "masked-euphemistic",
+      "context": "The j*b took all afternoon.",
+      "target": "j*b",
+      "characterIndex": 4,
+      "expectedTranslation": "работа",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-job-surgery",
+      "bucket": "masked-euphemistic",
+      "context": "She had a nose j*b last spring.",
+      "target": "j*b",
+      "characterIndex": 15,
+      "expectedTranslation": "пластическая операция",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-kink-bend",
+      "bucket": "masked-euphemistic",
+      "context": "There is a k*nk in the hose.",
+      "target": "k*nk",
+      "characterIndex": 11,
+      "expectedTranslation": "перегиб",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "masked-kink-taste",
+      "bucket": "masked-euphemistic",
+      "context": "Everyone has some k*nk or other.",
+      "target": "k*nk",
+      "characterIndex": 18,
+      "expectedTranslation": "заскок",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "damn-intj",
+      "bucket": "neutral-vulgar",
+      "context": "Well, damn, that was fast.",
+      "target": "damn",
+      "characterIndex": 6,
+      "expectedTranslation": "чёрт побери",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "damn-intens",
+      "bucket": "neutral-vulgar",
+      "context": "It is damn cold out there.",
+      "target": "damn",
+      "characterIndex": 6,
+      "expectedTranslation": "чертовски",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "crap-adj",
+      "bucket": "neutral-vulgar",
+      "context": "The food there is crap.",
+      "target": "crap",
+      "characterIndex": 18,
+      "expectedTranslation": "дерьмовый",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "balls-vulgar",
+      "bucket": "neutral-vulgar",
+      "context": "The kick caught him right in the balls.",
+      "target": "balls",
+      "characterIndex": 33,
+      "expectedTranslation": "муде",
+      "expectedRegister": "vulgar"
+    },
+    {
+      "id": "blow-breath",
+      "bucket": "sexual-ordinary",
+      "context": "Just blow on the embers.",
+      "target": "blow",
+      "characterIndex": 5,
+      "expectedTranslation": "дуть",
+      "expectedRegister": "neutral"
+    },
+    {
+      "id": "dude-vocative",
+      "bucket": "sexual-ordinary",
+      "context": "Hey dude, wait for me.",
+      "target": "dude",
+      "characterIndex": 4,
+      "expectedTranslation": "чувак",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "box-slang",
+      "bucket": "sexual-ordinary",
+      "context": "He stared at the box in the corner.",
+      "target": "box",
+      "characterIndex": 17,
+      "expectedTranslation": "ящик",
+      "expectedRegister": "slang"
+    },
+    {
+      "id": "crack-vagina",
+      "bucket": "sexual-ordinary",
+      "context": "The word crack can mean the vagina.",
+      "target": "crack",
+      "characterIndex": 9,
+      "expectedTranslation": "щель",
+      "expectedRegister": "vulgar"
+    }
+  ]
+}
