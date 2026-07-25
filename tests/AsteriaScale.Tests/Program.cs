@@ -2862,6 +2862,33 @@ try
                 reportPath));
     }
 
+    int registerBenchmarkArgument = Array.FindIndex(args, arg =>
+        string.Equals(arg, "--register-benchmark", StringComparison.OrdinalIgnoreCase));
+    if (registerBenchmarkArgument >= 0)
+    {
+        Assert(args.Length > registerBenchmarkArgument + 2,
+            "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> [cpu|npu]");
+        GlossBertRankerProvider registerProvider =
+            args.Length > registerBenchmarkArgument + 3 &&
+            string.Equals(args[registerBenchmarkArgument + 3], "npu", StringComparison.OrdinalIgnoreCase)
+                ? GlossBertRankerProvider.Npu
+                : GlossBertRankerProvider.Cpu;
+        int registerReportArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--register-report", StringComparison.OrdinalIgnoreCase));
+        Assert(registerReportArgument < 0 ||
+               args.Length > registerReportArgument + 1 &&
+               !args[registerReportArgument + 1].StartsWith("--", StringComparison.Ordinal),
+            "--register-report requires a file path.");
+        await RunAsync($"Register fidelity benchmark ({registerProvider})", () =>
+            RegisterFidelityBenchmark.RunAsync(
+                args[registerBenchmarkArgument + 1],
+                args[registerBenchmarkArgument + 2],
+                registerProvider,
+                registerReportArgument >= 0
+                    ? args[registerReportArgument + 1]
+                    : null));
+    }
+
     if (args.Any(arg => string.Equals(arg, "--live", StringComparison.OrdinalIgnoreCase)))
     {
         await RunAsync("Live scaling handshake", async () =>

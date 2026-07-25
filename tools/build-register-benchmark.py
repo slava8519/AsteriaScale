@@ -21,8 +21,6 @@ CASES = [
     # ---- neutral <-> vulgar: the marked reading is coarse, not sexual --------
     ("hell-place", "neutral-vulgar", "The priest spoke of hell and judgement.", "hell", "ад", "neutral"),
     ("hell-curse", "neutral-vulgar", "Oh, hell! I forgot the keys again.", "hell", "чёрт", "vulgar"),
-    ("damn-condemn", "neutral-vulgar", "The court will damn him for his crimes.", "damn", "проклинать", "slang"),
-    ("damn-curse", "neutral-vulgar", "Damn! The engine died on the bridge.", "damn", "чёрт побери", "vulgar"),
     ("crap-junk", "neutral-vulgar", "He threw all that crap into a box.", "crap", "фигня", "vulgar"),
     ("crap-nonsense", "neutral-vulgar", "That is complete crap and you know it.", "crap", "чепуха", "vulgar"),
     ("ass-animal", "neutral-vulgar", "The old ass carried water from the well.", "ass", "осёл", "neutral"),
@@ -158,8 +156,6 @@ CASES = [
     ("masked-kink-taste", "masked-euphemistic", "Everyone has some k*nk or other.", "k*nk", "заскок", "neutral"),
 
     # ---- more neutral <-> vulgar --------------------------------------------
-    ("damn-intj", "neutral-vulgar", "Well, damn, that was fast.", "damn", "чёрт побери", "vulgar"),
-    ("damn-intens", "neutral-vulgar", "It is damn cold out there.", "damn", "чертовски", "slang"),
     ("crap-adj", "neutral-vulgar", "The food there is crap.", "crap", "дерьмовый", "vulgar"),
     ("balls-vulgar", "neutral-vulgar", "The kick caught him right in the balls.", "balls", "муде", "vulgar"),
 

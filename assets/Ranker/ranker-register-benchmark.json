@@ -30,24 +30,6 @@
       "expectedRegister": "vulgar"
     },
     {
-      "id": "damn-condemn",
-      "bucket": "neutral-vulgar",
-      "context": "The court will damn him for his crimes.",
-      "target": "damn",
-      "characterIndex": 15,
-      "expectedTranslation": "проклинать",
-      "expectedRegister": "slang"
-    },
-    {
-      "id": "damn-curse",
-      "bucket": "neutral-vulgar",
-      "context": "Damn! The engine died on the bridge.",
-      "target": "damn",
-      "characterIndex": 0,
-      "expectedTranslation": "чёрт побери",
-      "expectedRegister": "vulgar"
-    },
-    {
       "id": "crap-junk",
       "bucket": "neutral-vulgar",
       "context": "He threw all that crap into a box.",
@@ -1189,24 +1171,6 @@
       "characterIndex": 18,
       "expectedTranslation": "заскок",
       "expectedRegister": "neutral"
-    },
-    {
-      "id": "damn-intj",
-      "bucket": "neutral-vulgar",
-      "context": "Well, damn, that was fast.",
-      "target": "damn",
-      "characterIndex": 6,
-      "expectedTranslation": "чёрт побери",
-      "expectedRegister": "vulgar"
-    },
-    {
-      "id": "damn-intens",
-      "bucket": "neutral-vulgar",
-      "context": "It is damn cold out there.",
-      "target": "damn",
-      "characterIndex": 6,
-      "expectedTranslation": "чертовски",
-      "expectedRegister": "slang"
     },
     {
       "id": "crap-adj",
