@@ -25,6 +25,11 @@ They are data files loaded independently by Asteria Scale's optional fast dictio
   ru-Wiktionary layer. Enrichment is restricted to matching parts of speech, splits only
   top-level comma siblings and rejects Latin, meta-only and structurally unbalanced
   surfaces before they can enter a sense inventory.
+  The register column describes **one sense**, not the whole article. Kaikki attaches
+  most translation boxes to the entry, so a label is applied to those rows only when
+  every sense of the entry agrees on it; a mixed entry ships them unmarked. Marking an
+  ordinary reading with a coarse sibling's label is worse than leaving it blank, because
+  surface selection trusts the register. 27,403 of the 447,097 rows carry a label.
 - `eng-rus-phrasal.tsv.gz`: 806 hand-curated common English phrasal and prepositional
   verbs (`give up`, `burst out`, `look forward to`, `put up with`, `come up with`, …) with
   Russian meanings, most frequent sense first.

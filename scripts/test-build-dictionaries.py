@@ -230,6 +230,92 @@ class SenseEnrichmentTests(unittest.TestCase):
         )
 
 
+class RegisterLabelTests(unittest.TestCase):
+    """Register labels must describe one sense, not the whole article.
+
+    Kaikki attaches most English translation boxes to the entry rather than to
+    a sense. Concatenating every sense's label onto those rows marked ordinary
+    readings as coarse - `come` "to move nearer" shipped as `жарг. груб.` - and
+    surface selection now trusts the register (roadmap #14.2C).
+    """
+
+    @staticmethod
+    def _sense(gloss: str, tags: list[str] | None = None) -> dict:
+        return {"glosses": [gloss], "tags": tags or []}
+
+    def test_mixed_entry_yields_no_entry_level_register(self) -> None:
+        senses = [
+            self._sense("To move nearer to the point of perspective.", ["intransitive"]),
+            self._sense("To arrive.", ["intransitive"]),
+            self._sense(
+                "To achieve orgasm.", ["intransitive", "slang", "vulgar"]
+            ),
+        ]
+        self.assertEqual(builder._entry_level_register(senses), "")
+
+    def test_uniformly_marked_entry_keeps_its_register(self) -> None:
+        senses = [
+            self._sense("A coarse insult.", ["vulgar"]),
+            self._sense("Another coarse insult.", ["vulgar", "slang"]),
+        ]
+        self.assertEqual(builder._entry_level_register(senses), "груб.")
+
+    def test_entry_level_register_never_repeats_a_token(self) -> None:
+        senses = [
+            self._sense("One.", ["slang", "vulgar"]),
+            self._sense("Two.", ["vulgar", "slang"]),
+        ]
+        register = builder._entry_level_register(senses)
+        self.assertEqual(register.split(), list(dict.fromkeys(register.split())))
+        self.assertEqual(set(register.split()), {"жарг.", "груб."})
+
+    def test_empty_entry_has_no_register(self) -> None:
+        self.assertEqual(builder._entry_level_register([]), "")
+
+    def test_per_sense_register_is_unaffected(self) -> None:
+        neutral = self._sense("To move nearer.", ["intransitive"])
+        coarse = self._sense("To achieve orgasm.", ["slang", "vulgar"])
+        self.assertEqual(builder._kaikki_style_prefix(neutral), "")
+        self.assertEqual(
+            set(builder._kaikki_style_prefix(coarse).split()), {"жарг.", "груб."}
+        )
+
+    def test_ordinary_sense_of_a_mixed_entry_ships_unmarked(self) -> None:
+        """End-to-end guard on the exact row that exposed the defect."""
+        item = {
+            "word": "come",
+            "lang_code": "en",
+            "pos": "verb",
+            "senses": [
+                {
+                    "glosses": ["To move nearer to the point of perspective."],
+                    "tags": ["intransitive"],
+                },
+                {
+                    "glosses": ["To achieve orgasm; to cum; to ejaculate."],
+                    "tags": ["intransitive", "slang", "vulgar"],
+                },
+            ],
+            "translations": [
+                {"code": "ru", "word": "приходить", "sense": "to move nearer"}
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "en.jsonl"
+            source.write_text(
+                json.dumps(item, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            _, sense_entries, _ = builder.parse_kaikki_enwiktionary_russian(source)
+
+        rows = sense_entries[builder.normalize_english("come")]
+        marked = [row for row in rows if row[2].strip()]
+        self.assertEqual(
+            marked,
+            [],
+            f"An ordinary sense inherited the article's coarse labels: {marked}",
+        )
+
+
 class GeneratorPublicationTests(unittest.TestCase):
     def test_keyboard_interrupt_restores_previous_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

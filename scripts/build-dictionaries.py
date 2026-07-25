@@ -384,6 +384,37 @@ def _kaikki_style_prefix(sense: dict) -> str:
     return " ".join(labels)
 
 
+def _entry_level_register(source_senses: list[dict]) -> str:
+    """Register for translations attached to the whole entry, not to a sense.
+
+    Kaikki hangs most English translation boxes off the entry, so these rows
+    have no sense of their own. Concatenating the labels of every sense — as
+    this once did — marked the ordinary readings with the labels of the coarse
+    ones: `come` "to move nearer" shipped as `жарг. груб.` while its source
+    sense carries only `intransitive`. That is worse than no label at all,
+    because surface selection now trusts the register (roadmap #14.2C).
+
+    A label is therefore kept only when **every** sense agrees on it. An entry
+    whose readings are uniformly coarse keeps its marker; one that mixes a
+    coarse reading with a plain one yields nothing, since an unlabelled sense
+    is positive evidence that the entry is not uniformly marked.
+    """
+    if not source_senses:
+        return ""
+
+    shared: set[str] | None = None
+    for sense in source_senses:
+        labels = set(_kaikki_style_prefix(sense).split())
+        shared = labels if shared is None else shared & labels
+        if not shared:
+            return ""
+
+    # Emit in the canonical order of KAIKKI_STYLE_TAGS so the column stays
+    # stable across runs regardless of set iteration order.
+    ordered = list(dict.fromkeys(KAIKKI_STYLE_TAGS.values()))
+    return " ".join(label for label in ordered if label in (shared or set()))
+
+
 def _kaikki_glosses(sense: dict) -> list[str]:
     if "no-gloss" in sense.get("tags", []):
         return []
@@ -567,14 +598,9 @@ def parse_kaikki_enwiktionary_russian(
                         (fallback_definition, sense_register, part_of_speech)
                     )
 
-            style_prefixes = [
-                prefix
-                for sense in source_senses
-                if (prefix := _kaikki_style_prefix(sense))
-            ]
             collect_translations(
                 item.get("translations", []),
-                " ".join(dict.fromkeys(style_prefixes)),
+                _entry_level_register(source_senses),
             )
 
             # Items without any Russian translation still matter: their
