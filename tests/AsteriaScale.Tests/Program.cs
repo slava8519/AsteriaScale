@@ -2862,6 +2862,28 @@ try
                 reportPath));
     }
 
+    // Live Qwen through Foundry Local: gated behind its own flag, like the other
+    // live modes, because AGENTS.md forbids invoking it unasked.
+    int translationRegisterArgument = Array.FindIndex(args, arg =>
+        string.Equals(arg, "--translation-register-benchmark", StringComparison.OrdinalIgnoreCase));
+    if (translationRegisterArgument >= 0)
+    {
+        Assert(args.Length > translationRegisterArgument + 1,
+            "Usage: --translation-register-benchmark <register-replies.json> [--translation-register-report <path>]");
+        int translationRegisterReport = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--translation-register-report", StringComparison.OrdinalIgnoreCase));
+        Assert(translationRegisterReport < 0 ||
+               args.Length > translationRegisterReport + 1 &&
+               !args[translationRegisterReport + 1].StartsWith("--", StringComparison.Ordinal),
+            "--translation-register-report requires a file path.");
+        await RunAsync("Full-text register fidelity", () =>
+            TranslationRegisterBenchmark.RunAsync(
+                args[translationRegisterArgument + 1],
+                translationRegisterReport >= 0
+                    ? args[translationRegisterReport + 1]
+                    : null));
+    }
+
     int registerBenchmarkArgument = Array.FindIndex(args, arg =>
         string.Equals(arg, "--register-benchmark", StringComparison.OrdinalIgnoreCase));
     if (registerBenchmarkArgument >= 0)
