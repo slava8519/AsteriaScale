@@ -154,6 +154,74 @@ public sealed partial class LocalDictionaryService
             ["shaken"] = "shake"
         };
 
+    /// <summary>
+    /// Common censored spellings mapped to the word they stand for
+    /// (roadmap #14.2C). This is a curated table on purpose: restoring the
+    /// hidden letters by substitution is unsafe, because it silently lands on a
+    /// *different real word* and the result is then confidently mistranslated.
+    /// Measured against the shipped dictionary, a single-letter guess turns
+    /// "b*stard" into "bustard" (a bird), "h*ll" into "hill", "b*llocks" into
+    /// "bullocks" (oxen), "d*ck" into "dock" and "sh*t" into "shat".
+    ///
+    /// These are lookup candidates only. NormalizeEnglish and sentence keys are
+    /// untouched, and the card keeps showing the masked form as it was written,
+    /// because the entry is reached through the candidate sequence rather than
+    /// by rewriting the source span.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> MaskedEnglish =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["f*ck"] = "fuck",
+            ["f**k"] = "fuck",
+            ["fu*k"] = "fuck",
+            ["f*cked"] = "fucked",
+            ["f**ked"] = "fucked",
+            ["f*cking"] = "fucking",
+            ["f**king"] = "fucking",
+            ["fuck!ng"] = "fucking",
+            ["sh*t"] = "shit",
+            ["sh!t"] = "shit",
+            ["s**t"] = "shit",
+            ["sh*tty"] = "shitty",
+            ["sh!tty"] = "shitty",
+            ["sh*thole"] = "shithole",
+            ["sh!thole"] = "shithole",
+            ["b*tch"] = "bitch",
+            ["b!tch"] = "bitch",
+            ["b*tches"] = "bitches",
+            ["b!tches"] = "bitches",
+            ["a**hole"] = "asshole",
+            ["a*shole"] = "asshole",
+            ["assh*le"] = "asshole",
+            ["a**holes"] = "assholes",
+            ["d*mn"] = "damn",
+            ["d*mmit"] = "dammit",
+            ["b*llocks"] = "bollocks",
+            ["b****cks"] = "bollocks",
+            ["bl**dy"] = "bloody",
+            ["bl*ody"] = "bloody",
+            ["p*ss"] = "piss",
+            ["p!ss"] = "piss",
+            ["cr*p"] = "crap",
+            ["cr*ppy"] = "crappy",
+            ["d*ck"] = "dick",
+            ["d!ck"] = "dick",
+            ["pr*ck"] = "prick",
+            ["b*stard"] = "bastard",
+            ["b*stards"] = "bastards",
+            ["h*ll"] = "hell",
+            ["w*nker"] = "wanker",
+            ["w**ker"] = "wanker",
+            ["c*nt"] = "cunt",
+            ["c**t"] = "cunt",
+            ["wh*re"] = "whore",
+            ["sl*t"] = "slut",
+            ["tw*t"] = "twat",
+            ["m*therfucker"] = "motherfucker",
+            ["motherf**ker"] = "motherfucker",
+            ["motherf****r"] = "motherfucker"
+        };
+
     public int EntryCount =>
         _english.Count + _japanese.Count +
         _scaffoldEnglishTranslations.Count +
@@ -1198,6 +1266,23 @@ public sealed partial class LocalDictionaryService
                 dialogueTranslation);
         }
 
+        // A masked spelling is split by the token regex ("b*stard" becomes "b"
+        // and "stard"), so the curated table has to be consulted on the whole
+        // whitespace-delimited lexeme rather than on the anchor token. The
+        // displayed source stays the masked form the user actually saw.
+        if (MaskedEnglish.TryGetValue(lexicalSurfaceKey, out string? unmaskedLexeme) &&
+            _english.TryGetValue(unmaskedLexeme, out string? unmaskedTranslation))
+        {
+            return Found(
+                TrimEnglishDisplayPunctuation(lexicalSurface),
+                unmaskedTranslation,
+                false,
+                "EN",
+                unmaskedLexeme,
+                includeSenseMetadata,
+                dialogueTranslation);
+        }
+
         int maximumTokens = Math.Min(MaximumTrustedPhraseTokens, tokens.Count);
         for (int length = maximumTokens; length >= 2; length--)
         {
@@ -1581,6 +1666,14 @@ public sealed partial class LocalDictionaryService
     private static IEnumerable<string> CandidateSequence(string word)
     {
         yield return word;
+
+        // After the exact form: a dictionary that carries the masked spelling
+        // itself (Wiktionary has "f*ck", "s**t" and others) keeps winning, and
+        // the unmasked word is only a fallback for the spellings it lacks.
+        if (MaskedEnglish.TryGetValue(word, out string? unmasked))
+        {
+            yield return unmasked;
+        }
 
         if (IrregularEnglish.TryGetValue(word, out string? irregular))
         {

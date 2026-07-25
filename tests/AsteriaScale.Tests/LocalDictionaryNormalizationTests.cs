@@ -31,6 +31,16 @@ internal static class LocalDictionaryNormalizationTests
                 "24/7\tкруглосуточно",
                 "1 chronicles\tпервая книга паралипоменон",
                 "3d printer\tтрёхмерный принтер",
+                // Masked-spelling fixtures: the plain words a censored form
+                // stands for, plus the real words a letter-substitution guess
+                // would land on instead.
+                "shit\tдерьмо",
+                "shat\tиспражнялся",
+                "bastard\tублюдок",
+                "bustard\tдрофа",
+                "hell\tад",
+                "hill\tхолм",
+                "s**t\tмаскированное дерьмо",
                 $"verbose\t{longMeanings}"
             ]);
         await File.WriteAllLinesAsync(
@@ -207,7 +217,64 @@ internal static class LocalDictionaryNormalizationTests
             "The merge budget no longer exceeds the display ceiling, so a truncated " +
             "meaning list would lose its continuation marker.");
 
+        await VerifyMaskedSpellingsAsync(dictionary);
+
         await VerifyTranslationScaffoldAsync(root);
+    }
+
+    /// <summary>
+    /// Masked spellings resolve through a curated table, never by guessing the
+    /// hidden letters (roadmap #14.2C). Measured against the shipped
+    /// dictionary, a single-letter substitution turns "b*stard" into "bustard"
+    /// (a bird) and "h*ll" into "hill" — a confident mistranslation is worse
+    /// than no result, so the guess must not exist at all.
+    /// </summary>
+    private static async Task VerifyMaskedSpellingsAsync(LocalDictionaryService dictionary)
+    {
+        const string masked = "You are a real b*stard, you know that?";
+        DictionaryLookupResult bastard = await dictionary.LookupAsync(
+            masked,
+            "b*stard",
+            masked.IndexOf("b*stard", StringComparison.Ordinal));
+        Check(bastard is { Found: true, Translation: "ублюдок" },
+            $"A masked spelling did not reach its curated word: {bastard}");
+        Check(bastard.Source.Contains('*', StringComparison.Ordinal),
+            $"The card lost the masked span the user actually saw: '{bastard.Source}'");
+        Check(bastard.Translation != "дрофа",
+            "A masked spelling was resolved by letter substitution to a different real word.");
+
+        const string hellLine = "What the h*ll happened here?";
+        DictionaryLookupResult hell = await dictionary.LookupAsync(
+            hellLine,
+            "h*ll",
+            hellLine.IndexOf("h*ll", StringComparison.Ordinal));
+        Check(hell is { Found: true, Translation: "ад" },
+            $"'h*ll' did not resolve to its curated word: {hell}");
+        Check(hell.Translation != "холм",
+            "'h*ll' was resolved by substitution to 'hill'.");
+
+        // A dictionary that carries the masked spelling itself must keep
+        // winning: the exact form is tried before the curated fallback.
+        const string ownEntry = "This is complete s**t.";
+        DictionaryLookupResult own = await dictionary.LookupAsync(
+            ownEntry,
+            "s**t",
+            ownEntry.IndexOf("s**t", StringComparison.Ordinal));
+        Check(own is { Found: true, Translation: "маскированное дерьмо" },
+            $"An exact masked entry lost to the curated fallback: {own}");
+
+        // An unlisted masked form stays unresolved rather than being guessed.
+        const string unlisted = "That was a m*ss of an evening.";
+        DictionaryLookupResult unknown = await dictionary.LookupAsync(
+            unlisted,
+            "m*ss",
+            unlisted.IndexOf("m*ss", StringComparison.Ordinal));
+        Check(!unknown.Found,
+            $"An unlisted masked spelling was guessed instead of skipped: {unknown}");
+
+        // Normalization itself is untouched (invariant 1).
+        Check(LocalDictionaryService.NormalizeEnglish("b*stard") == "b*stard",
+            "Masked-spelling support changed the canonical key form.");
     }
 
     private static async Task VerifyTranslationScaffoldAsync(string root)
