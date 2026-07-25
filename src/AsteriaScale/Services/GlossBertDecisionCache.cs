@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -50,53 +49,30 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTextLength = 256;
-    private static readonly TimeSpan PersistenceDebounce = TimeSpan.FromMilliseconds(650);
 
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web) { WriteIndented = false };
 
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly string _cachePath;
-    private readonly int _capacity;
-    private readonly long _maximumFileBytes;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly SemaphoreSlim _fileLock;
-    private readonly Dictionary<string, PersistedEntry> _entries = new(StringComparer.Ordinal);
-    private long _accessSequence;
-    private bool _loaded;
-    private bool _dirty;
-    private bool _disposed;
-    private Task? _backgroundPersistTask;
-    private long _mutationVersion;
-    private long _lastCommittedVersion;
+    private readonly PersistentLruStore<PersistedEntry> _store;
 
     public GlossBertDecisionCache(
         string? cachePath = null,
         int capacity = DefaultCapacity,
         long maximumFileBytes = DefaultMaximumFileBytes)
     {
-        if (capacity < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(capacity));
-        }
-
-        if (maximumFileBytes < 1_024)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
-        }
-
-        _cachePath = Path.GetFullPath(cachePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "glossbert-decisions.v1.json"));
-        _capacity = capacity;
-        _maximumFileBytes = maximumFileBytes;
-        _fileLock = FileLocks.GetOrAdd(_cachePath, static _ => new SemaphoreSlim(1, 1));
+        _store = new PersistentLruStore<PersistedEntry>(
+            cachePath ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AsteriaScale",
+                "glossbert-decisions.v1.json"),
+            SchemaVersion,
+            capacity,
+            maximumFileBytes,
+            IsStructurallyValid,
+            JsonOptions);
     }
 
-    public string CachePath => _cachePath;
+    public string CachePath => _store.CachePath;
 
     /// <summary>
     /// Builds the shared decision key. <paramref name="characterIndex"/> is
@@ -196,18 +172,15 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     /// no longer addressable in the current plan is dropped rather than served:
     /// GroupId is an index into the caller's outcomes (invariant 2).
     /// </summary>
-    public async Task<GlossBertDecision?> TryGetAsync(
+    public Task<GlossBertDecision?> TryGetAsync(
         string fingerprint,
         int outcomeCount,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fingerprint);
-        await _gate.WaitAsync(cancellationToken);
-        try
+        return _store.UseAsync(access =>
         {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            if (!_entries.TryGetValue(fingerprint, out PersistedEntry? entry))
+            if (!access.Entries.TryGetValue(fingerprint, out PersistedEntry? entry))
             {
                 return null;
             }
@@ -217,15 +190,13 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
                  groupId < 0 ||
                  groupId >= outcomeCount))
             {
-                _entries.Remove(fingerprint);
-                _dirty = true;
-                _mutationVersion++;
+                access.Entries.Remove(fingerprint);
+                access.MarkDirty();
                 return null;
             }
 
-            entry.LastAccess = NextAccessSequenceLocked();
-            _dirty = true;
-            _mutationVersion++;
+            entry.LastAccess = access.Touch();
+            access.MarkDirty();
             return new GlossBertDecision(
                 entry.Abstained ? null : entry.SelectedGroupId,
                 entry.Abstained,
@@ -236,18 +207,14 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
                 entry.Device,
                 entry.ModelVersion,
                 entry.Pipeline);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken);
     }
 
     /// <summary>
     /// Stores a completed decision. Returns false for a structurally impossible
     /// verdict instead of persisting it; errors are never stored by contract.
     /// </summary>
-    public async Task<bool> StoreAsync(
+    public Task<bool> StoreAsync(
         string fingerprint,
         GlossBertDecision decision,
         CancellationToken cancellationToken = default)
@@ -270,365 +237,28 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         };
         if (!IsStructurallyValid(candidate))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
-        await _gate.WaitAsync(cancellationToken);
-        try
+        return _store.UseAsync(access =>
         {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            candidate.LastAccess = NextAccessSequenceLocked();
-            _entries[fingerprint] = candidate;
-            _dirty = true;
-            _mutationVersion++;
-            EvictToCapacityLocked();
-            SchedulePersistLocked();
+            candidate.LastAccess = access.Touch();
+            access.Entries[fingerprint] = candidate;
+            access.MarkDirty();
             return true;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken);
     }
 
-    public async Task ClearAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            _entries.Clear();
-            _dirty = true;
-            _mutationVersion++;
-            await PersistLockedAsync(cancellationToken);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+    public Task ClearAsync(CancellationToken cancellationToken = default) =>
+        _store.ClearAsync(cancellationToken);
 
-    public async Task FlushAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            ThrowIfDisposed();
-            if (_loaded && _dirty)
-            {
-                await PersistLockedAsync(cancellationToken);
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+    public Task FlushAsync(CancellationToken cancellationToken = default) =>
+        _store.FlushAsync(cancellationToken);
 
-    internal int Count
-    {
-        get
-        {
-            _gate.Wait();
-            try
-            {
-                return _entries.Count;
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        }
-    }
+    internal int Count =>
+        _store.UseAsync(access => access.Entries.Count).GetAwaiter().GetResult();
 
-    private async Task EnsureLoadedLockedAsync(CancellationToken cancellationToken)
-    {
-        if (_loaded)
-        {
-            return;
-        }
-
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (!File.Exists(_cachePath))
-            {
-                _loaded = true;
-                return;
-            }
-
-            FileInfo file = new(_cachePath);
-            if (file.Length > _maximumFileBytes)
-            {
-                _loaded = true;
-                _dirty = true;
-                _mutationVersion++;
-                return;
-            }
-
-            try
-            {
-                await using FileStream stream = new(
-                    _cachePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read | FileShare.Delete,
-                    16 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
-                CacheDocument? document =
-                    await JsonSerializer.DeserializeAsync<CacheDocument>(
-                        stream,
-                        JsonOptions,
-                        cancellationToken);
-                if (document?.Version == SchemaVersion)
-                {
-                    foreach (PersistedEntry entry in document.Entries ?? [])
-                    {
-                        if (!IsStructurallyValid(entry))
-                        {
-                            continue;
-                        }
-
-                        if (!_entries.TryGetValue(entry.Key, out PersistedEntry? existing) ||
-                            entry.LastAccess > existing.LastAccess)
-                        {
-                            _entries[entry.Key] = entry;
-                            _accessSequence = Math.Max(_accessSequence, entry.LastAccess);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) when (
-                ex is IOException or JsonException or UnauthorizedAccessException)
-            {
-                // A partial or corrupt file is disposable optimization state.
-                _entries.Clear();
-                _accessSequence = 0;
-                _dirty = true;
-                _mutationVersion++;
-            }
-
-            EvictToCapacityLocked();
-            _loaded = true;
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
-    }
-
-    private void SchedulePersistLocked()
-    {
-        if (_backgroundPersistTask is { IsCompleted: false })
-        {
-            return;
-        }
-
-        _backgroundPersistTask = Task.Run(PersistAfterDebounceAsync);
-    }
-
-    private async Task PersistAfterDebounceAsync()
-    {
-        await Task.Delay(PersistenceDebounce);
-        CacheDocument? snapshot = null;
-        long snapshotVersion = 0;
-        bool persistenceFailed = false;
-        await _gate.WaitAsync();
-        try
-        {
-            if (_disposed)
-            {
-                _backgroundPersistTask = null;
-                return;
-            }
-
-            if (_loaded && _dirty)
-            {
-                snapshot = CreateSnapshotLocked();
-                snapshotVersion = _mutationVersion;
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        try
-        {
-            if (snapshot is not null)
-            {
-                byte[] payload = SerializeWithinBudget(snapshot);
-                await PersistPayloadAsync(payload, snapshotVersion, CancellationToken.None);
-            }
-        }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            // Persistence is an optimization: keep the in-memory entries and try
-            // again on the next store instead of delaying or failing a hover.
-            System.Diagnostics.Debug.WriteLine(
-                "GlossBERT decision cache background write failed: " + ex.Message);
-            persistenceFailed = true;
-        }
-
-        await _gate.WaitAsync();
-        try
-        {
-            if (snapshot is not null && snapshotVersion == _mutationVersion)
-            {
-                _dirty = false;
-            }
-
-            _backgroundPersistTask = null;
-            if (_dirty && !_disposed && !persistenceFailed)
-            {
-                SchedulePersistLocked();
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private async Task PersistLockedAsync(CancellationToken cancellationToken)
-    {
-        if (!_dirty)
-        {
-            return;
-        }
-
-        byte[] payload = SerializeWithinBudget(CreateSnapshotLocked());
-        await PersistPayloadAsync(payload, _mutationVersion, cancellationToken);
-        _dirty = false;
-    }
-
-    private async Task PersistPayloadAsync(
-        byte[] payload,
-        long version,
-        CancellationToken cancellationToken)
-    {
-        string? directory = Path.GetDirectoryName(_cachePath);
-        if (directory is not null)
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        string temporaryPath = _cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (version < _lastCommittedVersion)
-            {
-                return;
-            }
-
-            try
-            {
-                await using (FileStream stream = new(
-                    temporaryPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    16 * 1024,
-                    FileOptions.Asynchronous | FileOptions.WriteThrough))
-                {
-                    await stream.WriteAsync(payload, cancellationToken);
-                    await stream.FlushAsync(cancellationToken);
-                    stream.Flush(flushToDisk: true);
-                }
-
-                File.Move(temporaryPath, _cachePath, overwrite: true);
-                _lastCommittedVersion = version;
-            }
-            finally
-            {
-                try
-                {
-                    File.Delete(temporaryPath);
-                }
-                catch (IOException)
-                {
-                    // The completed destination is already durable.
-                }
-            }
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
-    }
-
-    private CacheDocument CreateSnapshotLocked() =>
-        new()
-        {
-            Version = SchemaVersion,
-            Entries = _entries.Values
-                .OrderByDescending(entry => entry.LastAccess)
-                .Select(entry => new PersistedEntry
-                {
-                    Key = entry.Key,
-                    SelectedGroupId = entry.SelectedGroupId,
-                    Abstained = entry.Abstained,
-                    Margin = entry.Margin,
-                    Score = entry.Score,
-                    Confidence = entry.Confidence,
-                    ExecutionProvider = entry.ExecutionProvider,
-                    Device = entry.Device,
-                    ModelVersion = entry.ModelVersion,
-                    Pipeline = entry.Pipeline,
-                    LastAccess = entry.LastAccess
-                })
-                .ToList()
-        };
-
-    private byte[] SerializeWithinBudget(CacheDocument snapshot)
-    {
-        List<PersistedEntry> entries = snapshot.Entries ?? [];
-        while (true)
-        {
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
-            if (payload.LongLength <= _maximumFileBytes || entries.Count == 0)
-            {
-                return payload;
-            }
-
-            entries.RemoveAt(entries.Count - 1);
-        }
-    }
-
-    private void EvictToCapacityLocked()
-    {
-        while (_entries.Count > _capacity)
-        {
-            string? oldest = _entries.MinBy(pair => pair.Value.LastAccess).Key;
-            if (oldest is null)
-            {
-                return;
-            }
-
-            _entries.Remove(oldest);
-            _dirty = true;
-        }
-    }
-
-    private long NextAccessSequenceLocked()
-    {
-        if (_accessSequence == long.MaxValue)
-        {
-            long sequence = 0;
-            foreach (PersistedEntry entry in _entries.Values.OrderBy(entry => entry.LastAccess))
-            {
-                entry.LastAccess = ++sequence;
-            }
-
-            _accessSequence = sequence;
-        }
-
-        return ++_accessSequence;
-    }
+    public ValueTask DisposeAsync() => _store.DisposeAsync();
 
     private static bool IsStructurallyValid(PersistedEntry entry) =>
         entry.Key.Length == 64 &&
@@ -674,49 +304,7 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         builder.Append('|');
     }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
-    public async ValueTask DisposeAsync()
-    {
-        Task? pendingPersistence = null;
-        await _gate.WaitAsync();
-        try
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            if (_loaded && _dirty)
-            {
-                await PersistLockedAsync(CancellationToken.None);
-            }
-
-            _disposed = true;
-            pendingPersistence = _backgroundPersistTask;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        if (pendingPersistence is not null)
-        {
-            await pendingPersistence;
-        }
-
-        // The semaphore stays alive on purpose: a request queued before disposal
-        // must still acquire it, observe _disposed and release without racing an
-        // ObjectDisposedException.
-    }
-
-    private sealed class CacheDocument
-    {
-        public int Version { get; set; }
-        public List<PersistedEntry>? Entries { get; set; }
-    }
-
-    private sealed class PersistedEntry
+    private sealed class PersistedEntry : IPersistentLruEntry
     {
         public string Key { get; set; } = string.Empty;
         public int? SelectedGroupId { get; set; }

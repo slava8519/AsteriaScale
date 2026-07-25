@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -35,103 +34,71 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
     private const int MaximumStoredTextLength = 1_024;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
-    private static readonly TimeSpan PersistenceDebounce = TimeSpan.FromMilliseconds(650);
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = false
     };
 
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private readonly string _cachePath;
-    private readonly int _capacity;
-    private readonly long _maximumFileBytes;
-    private readonly SemaphoreSlim _gate = new(1, 1);
-    private readonly SemaphoreSlim _fileLock;
-    private readonly Dictionary<string, PersistedEntry> _entries = new(StringComparer.Ordinal);
-    private long _accessSequence;
-    private bool _loaded;
-    private bool _dirty;
-    private bool _disposed;
-    private Task? _backgroundPersistTask;
-    private long _mutationVersion;
-    private long _lastCommittedVersion;
+    private readonly PersistentLruStore<PersistedEntry> _store;
 
     public SmartDictionaryResultCache(
         string? cachePath = null,
         int capacity = DefaultCapacity,
         long maximumFileBytes = DefaultMaximumFileBytes)
     {
-        if (capacity < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(capacity));
-        }
-
-        if (maximumFileBytes < 1_024)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumFileBytes));
-        }
-
-        _cachePath = Path.GetFullPath(cachePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "smart-dictionary-cache.v2.json"));
-        _capacity = capacity;
-        _maximumFileBytes = maximumFileBytes;
-        _fileLock = FileLocks.GetOrAdd(_cachePath, static _ => new SemaphoreSlim(1, 1));
+        _store = new PersistentLruStore<PersistedEntry>(
+            cachePath ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AsteriaScale",
+                "smart-dictionary-cache.v2.json"),
+            SchemaVersion,
+            capacity,
+            maximumFileBytes,
+            IsStructurallyValid,
+            JsonOptions);
     }
 
-    public string CachePath => _cachePath;
+    public string CachePath => _store.CachePath;
 
     /// <summary>
     /// Returns a cached result only when its index and translation still match the
     /// candidates supplied by the current dictionary lookup.
     /// </summary>
-    public async Task<SmartDictionarySelection?> TryGetAsync(
+    public Task<SmartDictionarySelection?> TryGetAsync(
         SmartDictionaryCacheRequest request,
         CancellationToken cancellationToken = default)
     {
         NormalizedRequest normalized = NormalizeRequest(request);
-        await _gate.WaitAsync(cancellationToken);
-        try
+        return _store.UseAsync(access =>
         {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            if (!_entries.TryGetValue(normalized.Key, out PersistedEntry? entry))
+            if (!access.Entries.TryGetValue(normalized.Key, out PersistedEntry? entry))
             {
                 return null;
             }
 
             if (!EntryMatchesCandidates(entry, normalized.Candidates))
             {
-                _entries.Remove(normalized.Key);
-                _dirty = true;
-                _mutationVersion++;
+                access.Entries.Remove(normalized.Key);
+                access.MarkDirty();
                 return null;
             }
 
-            entry.LastAccess = NextAccessSequence();
-            _dirty = true;
-            _mutationVersion++;
+            entry.LastAccess = access.Touch();
+            access.MarkDirty();
             return new SmartDictionarySelection(
                 entry.Index,
                 normalized.Candidates[entry.Index],
                 entry.Confidence,
                 entry.ContextTranslation);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken);
     }
 
     /// <summary>
     /// Stores a completed selection. Returns false instead of caching an answer
     /// that is not one of the current dictionary candidates.
     /// </summary>
-    public async Task<bool> StoreAsync(
+    public Task<bool> StoreAsync(
         SmartDictionaryCacheRequest request,
         SmartDictionarySelection selection,
         CancellationToken cancellationToken = default)
@@ -144,73 +111,43 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
                 normalized.Candidates[selection.Index],
                 StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return Task.FromResult(false);
         }
 
-        await _gate.WaitAsync(cancellationToken);
-        try
+        return _store.UseAsync(access =>
         {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            _entries[normalized.Key] = new PersistedEntry
+            access.Entries[normalized.Key] = new PersistedEntry
             {
                 Key = normalized.Key,
                 Index = selection.Index,
                 Translation = normalized.Candidates[selection.Index],
                 Confidence = NormalizeConfidence(selection.Confidence),
                 ContextTranslation = Truncate(NormalizeText(selection.ContextTranslation)),
-                LastAccess = NextAccessSequence()
+                LastAccess = access.Touch()
             };
-            _dirty = true;
-            _mutationVersion++;
-            EvictToCapacityLocked();
-            SchedulePersistLocked();
+            access.MarkDirty();
             return true;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        }, cancellationToken);
     }
 
-    public async Task ClearAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            ThrowIfDisposed();
-            await EnsureLoadedLockedAsync(cancellationToken);
-            _entries.Clear();
-            _dirty = true;
-            _mutationVersion++;
-            await PersistLockedAsync(cancellationToken);
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+    public Task ClearAsync(CancellationToken cancellationToken = default) =>
+        _store.ClearAsync(cancellationToken);
 
     /// <summary>
     /// Persists pending entries and LRU touches immediately. Normal stores are
     /// debounced so disk I/O never remains in the hover critical path.
     /// </summary>
-    public async Task FlushAsync(CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            ThrowIfDisposed();
-            if (_loaded && _dirty)
-            {
-                await PersistLockedAsync(cancellationToken);
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+    public Task FlushAsync(CancellationToken cancellationToken = default) =>
+        _store.FlushAsync(cancellationToken);
+
+    public ValueTask DisposeAsync() => _store.DisposeAsync();
+
+    /// <summary>
+    /// Entries currently held. Exists so a test can prove that a cache file
+    /// written by an earlier build still loads (audit card A9).
+    /// </summary>
+    internal Task<int> CountAsync(CancellationToken cancellationToken = default) =>
+        _store.UseAsync(access => access.Entries.Count, cancellationToken);
 
     internal static string CreateKeyFingerprint(SmartDictionaryCacheRequest request) =>
         NormalizeRequest(request).Key;
@@ -322,315 +259,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         return new NormalizedRequest(Convert.ToHexString(digest), candidates);
     }
 
-    private async Task EnsureLoadedLockedAsync(CancellationToken cancellationToken)
-    {
-        if (_loaded)
-        {
-            return;
-        }
-
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (!File.Exists(_cachePath))
-            {
-                _loaded = true;
-                return;
-            }
-
-            FileInfo file = new(_cachePath);
-            if (file.Length > _maximumFileBytes)
-            {
-                _loaded = true;
-                _dirty = true;
-                _mutationVersion++;
-                return;
-            }
-
-            try
-            {
-                await using FileStream stream = new(
-                    _cachePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read | FileShare.Delete,
-                    16 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
-                CacheDocument? document = await JsonSerializer.DeserializeAsync<CacheDocument>(
-                    stream,
-                    JsonOptions,
-                    cancellationToken);
-                if (document?.Version == SchemaVersion)
-                {
-                    foreach (PersistedEntry entry in document.Entries ?? [])
-                    {
-                        if (!IsStructurallyValid(entry))
-                        {
-                            continue;
-                        }
-
-                        if (!_entries.TryGetValue(entry.Key, out PersistedEntry? existing) ||
-                            entry.LastAccess > existing.LastAccess)
-                        {
-                            _entries[entry.Key] = entry;
-                            _accessSequence = Math.Max(_accessSequence, entry.LastAccess);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
-            {
-                // A partial/corrupt cache is disposable optimization state. Start clean.
-                _entries.Clear();
-                _accessSequence = 0;
-                _dirty = true;
-                _mutationVersion++;
-            }
-
-            EvictToCapacityLocked();
-            _loaded = true;
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
-    }
-
-    private void SchedulePersistLocked()
-    {
-        if (_backgroundPersistTask is { IsCompleted: false })
-        {
-            return;
-        }
-
-        _backgroundPersistTask = Task.Run(PersistAfterDebounceAsync);
-    }
-
-    private async Task PersistAfterDebounceAsync()
-    {
-        await Task.Delay(PersistenceDebounce);
-        CacheDocument? snapshot = null;
-        long snapshotVersion = 0;
-        bool persistenceFailed = false;
-        await _gate.WaitAsync();
-        try
-        {
-            if (_disposed)
-            {
-                _backgroundPersistTask = null;
-                return;
-            }
-
-            if (_loaded && _dirty)
-            {
-                snapshot = CreateSnapshotLocked();
-                snapshotVersion = _mutationVersion;
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        try
-        {
-            if (snapshot is not null)
-            {
-                byte[] payload = SerializeSnapshotWithinBudget(snapshot);
-                await PersistPayloadAsync(
-                    payload,
-                    snapshotVersion,
-                    CancellationToken.None);
-            }
-        }
-        catch (Exception ex) when (
-            ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            // Cache persistence is an optimization. Keep the in-memory entry and
-            // retry on the next store/flush instead of delaying or failing hover.
-            System.Diagnostics.Debug.WriteLine(
-                "Smart Dictionary cache background write failed: " + ex.Message);
-            persistenceFailed = true;
-        }
-
-        await _gate.WaitAsync();
-        try
-        {
-            if (snapshot is not null && snapshotVersion == _mutationVersion)
-            {
-                _dirty = false;
-            }
-
-            _backgroundPersistTask = null;
-            if (_dirty && !_disposed && !persistenceFailed)
-            {
-                SchedulePersistLocked();
-            }
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    private async Task PersistLockedAsync(CancellationToken cancellationToken)
-    {
-        if (!_dirty)
-        {
-            return;
-        }
-
-        byte[] payload = SerializeWithinBudgetLocked();
-        await PersistPayloadAsync(payload, _mutationVersion, cancellationToken);
-        _dirty = false;
-    }
-
-    private async Task PersistPayloadAsync(
-        byte[] payload,
-        long version,
-        CancellationToken cancellationToken)
-    {
-        string? directory = Path.GetDirectoryName(_cachePath);
-        if (directory is not null)
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        string temporaryPath = _cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        await _fileLock.WaitAsync(cancellationToken);
-        try
-        {
-            if (version < _lastCommittedVersion)
-            {
-                return;
-            }
-
-            try
-            {
-                await using (FileStream stream = new(
-                    temporaryPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    16 * 1024,
-                    FileOptions.Asynchronous | FileOptions.WriteThrough))
-                {
-                    await stream.WriteAsync(payload, cancellationToken);
-                    await stream.FlushAsync(cancellationToken);
-                    stream.Flush(flushToDisk: true);
-                }
-
-                File.Move(temporaryPath, _cachePath, overwrite: true);
-                _lastCommittedVersion = version;
-            }
-            finally
-            {
-                try
-                {
-                    File.Delete(temporaryPath);
-                }
-                catch (IOException)
-                {
-                    // The completed destination is already durable.
-                }
-            }
-        }
-        finally
-        {
-            _fileLock.Release();
-        }
-    }
-
-    private CacheDocument CreateSnapshotLocked() =>
-        new()
-        {
-            Version = SchemaVersion,
-            Entries = _entries.Values
-                .OrderByDescending(entry => entry.LastAccess)
-                .Select(entry => new PersistedEntry
-                {
-                    Key = entry.Key,
-                    Index = entry.Index,
-                    Translation = entry.Translation,
-                    Confidence = entry.Confidence,
-                    ContextTranslation = entry.ContextTranslation,
-                    LastAccess = entry.LastAccess
-                })
-                .ToList()
-        };
-
-    private byte[] SerializeSnapshotWithinBudget(CacheDocument snapshot)
-    {
-        List<PersistedEntry> entries = snapshot.Entries ?? [];
-        while (true)
-        {
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonOptions);
-            if (payload.LongLength <= _maximumFileBytes || entries.Count == 0)
-            {
-                return payload;
-            }
-
-            entries.RemoveAt(entries.Count - 1);
-        }
-    }
-
-    private byte[] SerializeWithinBudgetLocked()
-    {
-        while (true)
-        {
-            CacheDocument document = new()
-            {
-                Version = SchemaVersion,
-                Entries = _entries.Values
-                    .OrderByDescending(entry => entry.LastAccess)
-                    .ToList()
-            };
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
-            if (payload.LongLength <= _maximumFileBytes || _entries.Count == 0)
-            {
-                return payload;
-            }
-
-            RemoveLeastRecentlyUsedLocked();
-        }
-    }
-
-    private void EvictToCapacityLocked()
-    {
-        while (_entries.Count > _capacity)
-        {
-            RemoveLeastRecentlyUsedLocked();
-        }
-    }
-
-    private void RemoveLeastRecentlyUsedLocked()
-    {
-        string? oldest = _entries
-            .MinBy(pair => pair.Value.LastAccess)
-            .Key;
-        if (oldest is not null)
-        {
-            _entries.Remove(oldest);
-            _dirty = true;
-        }
-    }
-
-    private long NextAccessSequence()
-    {
-        if (_accessSequence == long.MaxValue)
-        {
-            long sequence = 0;
-            foreach (PersistedEntry entry in _entries.Values.OrderBy(entry => entry.LastAccess))
-            {
-                entry.LastAccess = ++sequence;
-            }
-
-            _accessSequence = sequence;
-        }
-
-        return ++_accessSequence;
-    }
-
     private static bool EntryMatchesCandidates(PersistedEntry entry, IReadOnlyList<string> candidates) =>
         entry.Index >= 0 &&
         entry.Index < candidates.Count &&
@@ -697,42 +325,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         builder.Append('|');
     }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
-    public async ValueTask DisposeAsync()
-    {
-        Task? pendingPersistence = null;
-        await _gate.WaitAsync();
-        try
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            if (_loaded && _dirty)
-            {
-                await PersistLockedAsync(CancellationToken.None);
-            }
-
-            _disposed = true;
-            pendingPersistence = _backgroundPersistTask;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
-        if (pendingPersistence is not null)
-        {
-            await pendingPersistence;
-        }
-
-        // Do not dispose the semaphore: a request that was already queued before
-        // disposal must still be able to acquire it, observe _disposed and release
-        // it without racing ObjectDisposedException.
-    }
-
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespaceRegex();
 
@@ -745,7 +337,7 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         public List<PersistedEntry>? Entries { get; set; }
     }
 
-    private sealed class PersistedEntry
+    private sealed class PersistedEntry : IPersistentLruEntry
     {
         public string Key { get; set; } = string.Empty;
         public int Index { get; set; }
