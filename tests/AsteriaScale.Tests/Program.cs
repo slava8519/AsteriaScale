@@ -2831,12 +2831,24 @@ try
         string? dumpPath = dumpArgument >= 0 && args.Length > dumpArgument + 1
             ? args[dumpArgument + 1]
             : null;
+        // Roadmap #8 compares candidates same-build. The report is the artifact
+        // that makes that comparison mechanical instead of narrative.
+        int reportArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--ranker-report", StringComparison.OrdinalIgnoreCase));
+        Assert(reportArgument < 0 ||
+               args.Length > reportArgument + 1 &&
+               !args[reportArgument + 1].StartsWith("--", StringComparison.Ordinal),
+            "--ranker-report requires a file path.");
+        string? reportPath = reportArgument >= 0
+            ? args[reportArgument + 1]
+            : null;
         await RunAsync($"GlossBERT calibration benchmark ({benchmarkProvider})", () =>
             RankerCalibrationBenchmark.RunAsync(
                 args[rankerBenchmarkArgument + 1],
                 args[rankerBenchmarkArgument + 2],
                 benchmarkProvider,
-                dumpPath));
+                dumpPath,
+                reportPath));
     }
 
     if (args.Any(arg => string.Equals(arg, "--live", StringComparison.OrdinalIgnoreCase)))

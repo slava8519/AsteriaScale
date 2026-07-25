@@ -317,10 +317,17 @@ same-build сравнения, а не более новым названием 
 
 **Архитектура.**
 
-- **Зафиксировать baseline:** 65-case dev, register/18+ dev из №14.2C,
-  latency по малым/большим инвентарям, peak working set, размер артефакта,
-  accepted precision, decision и end-to-end correct coverage. Margin `0.25`
-  текущего GlossBERT до выбора победителя не меняется.
+- **Зафиксировать baseline** — *семантическая часть выполнена 25 июля 2026.*
+  `--ranker-benchmark --ranker-report <path>` пишет единую JSON-схему, которую
+  обязан выдавать каждый кандидат; набор и все модельные артефакты закреплены
+  SHA-256, поэтому «same-build сравнение» проверяется diff-ом, а не на слово.
+  Эталон: `assets/Ranker/baselines/glossbert-cpu.json`; числа и оговорки — в
+  [RESEARCH.md](RESEARCH.md). Ключевые бюджеты кандидата из правила выбора:
+  peak working set ≤ `813 МБ` (baseline `677 МБ`), медиана select ≤ `274 мс`
+  (baseline `228 мс`). **Остаётся** register/18+ dev из №14.2C — набор
+  `ranker-register-benchmark.json` ещё не создан, поэтому baseline неполон по
+  register-части и победителя объявить нельзя. Margin `0.25` текущего
+  GlossBERT до выбора победителя не меняется.
 - **Кандидаты bake-off:**
   1. текущий GlossBERT cross-encoder — обязательный baseline и rollback;
   2. уже реализованный MiniLM bi-encoder top-12 + GlossBERT cross rerank;

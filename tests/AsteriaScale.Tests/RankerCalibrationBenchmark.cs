@@ -37,11 +37,63 @@ internal static class RankerCalibrationBenchmark
         bool? Correct,
         string Selected);
 
+    /// <summary>
+    /// Machine-readable baseline record for roadmap #8. Its purpose is to make
+    /// "same-build comparison" enforceable rather than aspirational: every
+    /// bake-off candidate emits this exact schema, so a reviewer diffs two
+    /// files instead of trusting two prose summaries taken on different days.
+    /// Inputs are pinned by SHA-256 so a report cannot silently describe a
+    /// different benchmark set or model artifact than it claims.
+    /// </summary>
+    private sealed record BaselineReport(
+        int SchemaVersion,
+        string GeneratedUtc,
+        string Provider,
+        string AbstentionTag,
+        string DictionaryVersion,
+        ArtifactRecord BenchmarkSet,
+        IReadOnlyList<ArtifactRecord> ModelArtifacts,
+        long ModelArtifactBytes,
+        long WorkerPeakWorkingSetBytes,
+        RoutingRecord Routing,
+        DecisionRecord Decisions,
+        LatencyRecord Latency,
+        IReadOnlyDictionary<string, int> Pipelines);
+
+    private sealed record ArtifactRecord(string Name, long Bytes, string Sha256);
+
+    private sealed record RoutingRecord(
+        int Cases,
+        int Ranked,
+        int PhraseBypass,
+        int NoInventory,
+        int AutoResolved,
+        int DeterministicResolved,
+        int DeterministicCorrect);
+
+    private sealed record DecisionRecord(
+        int ExpectedCovered,
+        int Decided,
+        int Correct,
+        int Abstained,
+        double? AcceptedPrecision,
+        double? ExpectedInventoryCoverage,
+        double? DecisionCoverage,
+        double EndToEndCorrectCoverage,
+        double? MedianMargin);
+
+    private sealed record LatencyRecord(
+        long? MedianMilliseconds,
+        long? LargeInventoryMedianMilliseconds,
+        long? MaximumMilliseconds,
+        int SampleCount);
+
     public static async Task RunAsync(
         string benchmarkPath,
         string workerBaseDirectory,
         GlossBertRankerProvider provider,
-        string? dumpPath = null)
+        string? dumpPath = null,
+        string? reportPath = null)
     {
         using JsonDocument document = JsonDocument.Parse(
             await File.ReadAllTextAsync(benchmarkPath));
@@ -245,6 +297,37 @@ internal static class RankerCalibrationBenchmark
                     results,
                     new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
         }
+
+        // Peak memory must be read before the selector is disposed: the worker
+        // owns the model, so its peak working set is the number a replacement
+        // candidate has to beat, not this harness's own footprint.
+        long workerPeakBytes = ReadWorkerPeakWorkingSet(selector);
+        if (reportPath is not null)
+        {
+            await WriteBaselineReportAsync(
+                reportPath,
+                benchmarkPath,
+                workerBaseDirectory,
+                provider,
+                dictionary.VersionToken,
+                cases.Length,
+                results,
+                selectLatencies,
+                pipelineCounts,
+                skippedPhrase,
+                skippedNoInventory,
+                autoResolved,
+                deterministicResolved,
+                deterministicCorrect,
+                workerPeakBytes);
+            Console.WriteLine($"  baseline report: {Path.GetFullPath(reportPath)}");
+        }
+
+        Console.WriteLine(
+            $"  worker peak working set: " +
+            (workerPeakBytes > 0
+                ? $"{workerPeakBytes / (1024 * 1024)} MB"
+                : "unavailable"));
         PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
         PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
         PrintBucket("all ranked", results);
@@ -361,6 +444,143 @@ internal static class RankerCalibrationBenchmark
                 $"{MinimumEndToEndCorrectCoverage:P0} quality gate " +
                 $"({endToEndCorrect}/{caseCount}).");
         }
+    }
+
+    private static long ReadWorkerPeakWorkingSet(
+        GlossBertDictionarySelectorService selector)
+    {
+        try
+        {
+            if (selector.WorkerProcessId is not { } processId)
+            {
+                return 0;
+            }
+
+            using System.Diagnostics.Process worker =
+                System.Diagnostics.Process.GetProcessById(processId);
+            worker.Refresh();
+            return worker.PeakWorkingSet64;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException
+                or NotSupportedException)
+        {
+            // The worker may have been recycled by its idle timer. A missing
+            // memory sample must not fail a measurement run.
+            return 0;
+        }
+    }
+
+    private static async Task<ArtifactRecord> DescribeArtifactAsync(string path)
+    {
+        FileInfo file = new(path);
+        await using FileStream stream = File.OpenRead(path);
+        string hash = Convert.ToHexString(
+            await System.Security.Cryptography.SHA256.HashDataAsync(stream));
+        return new ArtifactRecord(file.Name, file.Length, hash);
+    }
+
+    private static async Task WriteBaselineReportAsync(
+        string reportPath,
+        string benchmarkPath,
+        string workerBaseDirectory,
+        GlossBertRankerProvider provider,
+        string dictionaryVersion,
+        int caseCount,
+        IReadOnlyList<CaseResult> results,
+        IReadOnlyList<(int Glosses, long Milliseconds)> selectLatencies,
+        IReadOnlyDictionary<string, int> pipelineCounts,
+        int phraseBypass,
+        int noInventory,
+        int autoResolved,
+        int deterministicResolved,
+        int deterministicCorrect,
+        long workerPeakBytes)
+    {
+        int covered = results.Count(result => result.ExpectedCovered);
+        int decided = results.Count(result => result.ExpectedCovered && !result.Abstained);
+        int correct = results.Count(result => result.Correct == true);
+        double[] margins = results
+            .Where(result => result.Margin is { } margin && double.IsFinite(margin))
+            .Select(result => result.Margin!.Value)
+            .OrderBy(value => value)
+            .ToArray();
+        long[] latencies = selectLatencies
+            .Select(entry => entry.Milliseconds)
+            .OrderBy(value => value)
+            .ToArray();
+        long[] largeLatencies = selectLatencies
+            .Where(entry => entry.Glosses > 12)
+            .Select(entry => entry.Milliseconds)
+            .OrderBy(value => value)
+            .ToArray();
+
+        List<ArtifactRecord> artifacts = [];
+        string modelDirectory = Path.Combine(workerBaseDirectory, "Ranker", "Models");
+        if (Directory.Exists(modelDirectory))
+        {
+            foreach (string path in Directory
+                         .EnumerateFiles(modelDirectory, "*", SearchOption.AllDirectories)
+                         .Where(path =>
+                             path.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ||
+                             path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) ||
+                             path.EndsWith(".vec", StringComparison.OrdinalIgnoreCase))
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                artifacts.Add(await DescribeArtifactAsync(path));
+            }
+        }
+
+        BaselineReport report = new(
+            SchemaVersion: 1,
+            GeneratedUtc: DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            Provider: provider.ToString(),
+            AbstentionTag: AsteriaScale.RankerProtocol.RankerAbstention.CacheTag,
+            DictionaryVersion: dictionaryVersion,
+            BenchmarkSet: await DescribeArtifactAsync(benchmarkPath),
+            ModelArtifacts: artifacts,
+            ModelArtifactBytes: artifacts.Sum(artifact => artifact.Bytes),
+            WorkerPeakWorkingSetBytes: workerPeakBytes,
+            Routing: new RoutingRecord(
+                caseCount,
+                results.Count,
+                phraseBypass,
+                noInventory,
+                autoResolved,
+                deterministicResolved,
+                deterministicCorrect),
+            Decisions: new DecisionRecord(
+                covered,
+                decided,
+                correct,
+                covered - decided,
+                decided == 0 ? null : correct / (double)decided,
+                results.Count == 0 ? null : covered / (double)results.Count,
+                covered == 0 ? null : decided / (double)covered,
+                (correct + deterministicCorrect) / (double)caseCount,
+                margins.Length == 0 ? null : margins[margins.Length / 2]),
+            Latency: new LatencyRecord(
+                latencies.Length == 0 ? null : latencies[latencies.Length / 2],
+                largeLatencies.Length == 0
+                    ? null
+                    : largeLatencies[largeLatencies.Length / 2],
+                latencies.Length == 0 ? null : latencies[^1],
+                latencies.Length),
+            Pipelines: new SortedDictionary<string, int>(
+                pipelineCounts.ToDictionary(entry => entry.Key, entry => entry.Value),
+                StringComparer.Ordinal));
+
+        string? directory = Path.GetDirectoryName(Path.GetFullPath(reportPath));
+        if (directory is not null)
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllTextAsync(
+            reportPath,
+            JsonSerializer.Serialize(
+                report,
+                new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static void PrintBucket(string label, IEnumerable<CaseResult> bucket)

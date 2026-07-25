@@ -1,0 +1,70 @@
+{
+  "SchemaVersion": 1,
+  "GeneratedUtc": "2026-07-25T13:03:21.6636657Z",
+  "Provider": "Cpu",
+  "AbstentionTag": "abstain-margin=0.25",
+  "DictionaryVersion": "E6178C791D1BBE3E69042ED7951E7F4DE321167C4D8F869F88D5775AEA3D014F.787778B1A26FE6ADE3BE037E37522F06C92793B5DD4C1223AB46193066F26595.940C68B6CA4C350BBC507E0D08178A908832381C6205248D27B8EBAA304391E4",
+  "BenchmarkSet": {
+    "Name": "ranker-benchmark.json",
+    "Bytes": 19370,
+    "Sha256": "CB51B3105ACB864557BE3B7C8ED4B6EDCE9FCAA0A9BDF219C34DC88142565253"
+  },
+  "ModelArtifacts": [
+    {
+      "Name": "glossbert-fp32-dynamic.onnx",
+      "Bytes": 438167088,
+      "Sha256": "DAA4098D59B9077AF59E22F846818455CA39593567326338F88E328EBEEF18B5"
+    },
+    {
+      "Name": "glossbert-eager-vitis-context.onnx",
+      "Bytes": 93776750,
+      "Sha256": "152BD5B4C54D4A339A4DBB642489B950AF6C712BC7736F2B7CEB977A05573320"
+    },
+    {
+      "Name": "glossbert-eager-vitis-context.onnx_VITISAI.bin",
+      "Bytes": 123964416,
+      "Sha256": "94095699D6B7B59AB6EDC92C7471BF507B861BD14B4D57CB3EC75F49F3F5D672"
+    },
+    {
+      "Name": "eng-senses.vec",
+      "Bytes": 91577685,
+      "Sha256": "13C0FB6DB773D85F94E2C930E2C49C8BC022BD2003550413BCF1F963CC55C2D3"
+    },
+    {
+      "Name": "minilm-l6-v2.onnx",
+      "Bytes": 90405214,
+      "Sha256": "6FD5D72FE4589F189F8EBC006442DBB529BB7CE38F8082112682524616046452"
+    }
+  ],
+  "ModelArtifactBytes": 837891153,
+  "WorkerPeakWorkingSetBytes": 709918720,
+  "Routing": {
+    "Cases": 65,
+    "Ranked": 45,
+    "PhraseBypass": 16,
+    "NoInventory": 1,
+    "AutoResolved": 3,
+    "DeterministicResolved": 19,
+    "DeterministicCorrect": 12
+  },
+  "Decisions": {
+    "ExpectedCovered": 37,
+    "Decided": 21,
+    "Correct": 21,
+    "Abstained": 16,
+    "AcceptedPrecision": 1,
+    "ExpectedInventoryCoverage": 0.8222222222222222,
+    "DecisionCoverage": 0.5675675675675675,
+    "EndToEndCorrectCoverage": 0.5076923076923077,
+    "MedianMargin": 0.3052414655685425
+  },
+  "Latency": {
+    "MedianMilliseconds": 228,
+    "LargeInventoryMedianMilliseconds": 662,
+    "MaximumMilliseconds": 3488,
+    "SampleCount": 45
+  },
+  "Pipelines": {
+    "cross": 45
+  }
+}
