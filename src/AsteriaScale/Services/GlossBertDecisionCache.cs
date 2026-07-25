@@ -111,9 +111,34 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         SmartDictionaryRankerPlan plan,
         GlossBertRankerProvider provider,
         string modelIdentity,
-        string dictionaryVersion)
+        string dictionaryVersion) =>
+        CreateFingerprint(
+            sentence,
+            target,
+            characterIndex,
+            plan,
+            provider,
+            modelIdentity,
+            dictionaryVersion,
+            RankerAbstention.CacheTag);
+
+    /// <summary>
+    /// Threshold-parameterized form. Production callers must use the overload
+    /// above so the frozen threshold cannot be forgotten; this one exists so a
+    /// test can prove that recalibrating it separates the key space.
+    /// </summary>
+    internal static string CreateFingerprint(
+        string sentence,
+        string target,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        GlossBertRankerProvider provider,
+        string modelIdentity,
+        string dictionaryVersion,
+        string abstentionTag)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentException.ThrowIfNullOrWhiteSpace(abstentionTag);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
         ArgumentException.ThrowIfNullOrWhiteSpace(dictionaryVersion);
 
@@ -128,6 +153,10 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         Append(canonical, "asteria-glossbert-decision-cache-v1");
         Append(canonical, RankerProtocolV2.Version);
         Append(canonical, SenseRankingEpoch);
+        // A cached verdict is only "what the ranker answered under this
+        // threshold". Abstentions are cached, so a recalibration that should
+        // turn them into selections must not keep reading the old answers.
+        Append(canonical, abstentionTag);
         Append(canonical, provider.ToString());
         Append(canonical, modelIdentity);
         Append(canonical, dictionaryVersion);

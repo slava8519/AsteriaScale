@@ -38,9 +38,11 @@ or `--smart-live` unless explicitly asked.
    The host validates the worker's reported provider/device/model version. Both
    consumers share one `GlossBertDecisionCache`; a cache hit may skip inference
    but never the warm-up that establishes provider and model identity.
-4. **Abstention is margin-only** (threshold `0.25`, frozen on the dev set). Any
-   change to acceptance criteria requires a `--ranker-benchmark` run on
-   `assets/Ranker/ranker-benchmark.json` and a note in `docs/RESEARCH.md`.
+4. **Abstention is margin-only** (threshold `0.25`, frozen on the dev set,
+   defined once in `RankerAbstention.MarginThreshold` and folded into every
+   decision cache key). Any change to acceptance criteria requires a
+   `--ranker-benchmark` run on `assets/Ranker/ranker-benchmark.json` and a note
+   in `docs/RESEARCH.md`.
 5. **Never consume `assets/Ranker/ranker-holdout*.json` while tuning** —
    holdouts are for one-shot final confirmation only; record each opening in
    `docs/RESEARCH.md`.

@@ -1,5 +1,6 @@
 using AsteriaScale.Interop;
 using AsteriaScale.Models;
+using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.Services;
 
@@ -638,7 +639,11 @@ internal sealed class SmartHoverPipeline : IDisposable
             sourceLanguage,
             backend,
             modelVersion,
-            _dictionary.VersionToken + "." + SmartRankingPipelineVersion,
+            // The abstention threshold decides whether a verdict exists at all,
+            // so it belongs in this key too: a recalibration must not leave a
+            // stored selection readable that the new threshold would refuse.
+            _dictionary.VersionToken + "." + SmartRankingPipelineVersion +
+            "." + RankerAbstention.CacheTag,
             rankingPipeline);
     }
 

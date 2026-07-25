@@ -1,3 +1,4 @@
+using AsteriaScale.RankerProtocol;
 using AsteriaScale.Services;
 
 /// <summary>
@@ -16,6 +17,7 @@ internal static class GlossBertDecisionCacheTests
 
         VerifyFingerprintSharing();
         VerifyScaffoldAndHoverAgree();
+        VerifyAbstentionThresholdIsKeyed();
         VerifyFingerprintSeparation();
         await VerifyRoundTripAndPersistenceAsync(root);
         await VerifyRejectedDecisionsAsync(root);
@@ -81,6 +83,50 @@ internal static class GlossBertDecisionCacheTests
         Check(scaffoldKey == hoverKey,
             "The scaffold and hover paths compute different decision keys for " +
             "the same worker call.");
+    }
+
+    /// <summary>
+    /// Abstentions are cached, and the abstention threshold is what produces
+    /// them. Recalibrating it (roadmap #8 aims to cut abstentions by 20%) must
+    /// separate the key space, otherwise the stored verdicts would mask exactly
+    /// the metric the recalibration is trying to move.
+    /// </summary>
+    private static void VerifyAbstentionThresholdIsKeyed()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+
+        Check(RankerAbstention.MarginThreshold == 0.25,
+            "The frozen abstention threshold changed without a benchmark run " +
+            $"(AGENTS.md rule 4): {RankerAbstention.MarginThreshold}.");
+        Check(RankerAbstention.CacheTag.Contains(
+                  "0.25",
+                  StringComparison.Ordinal),
+            $"The abstention cache tag lost its value: {RankerAbstention.CacheTag}");
+
+        string current = GlossBertDecisionCache.CreateFingerprint(
+            Sentence,
+            Target,
+            tokenStart,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            "model-v1",
+            "dictionary-v1",
+            RankerAbstention.CacheTag);
+        Check(current == Fingerprint(Sentence, tokenStart, plan),
+            "The production fingerprint does not use the shared abstention tag.");
+
+        string recalibrated = GlossBertDecisionCache.CreateFingerprint(
+            Sentence,
+            Target,
+            tokenStart,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            "model-v1",
+            "dictionary-v1",
+            "abstain-margin=0.18");
+        Check(current != recalibrated,
+            "A recalibrated abstention threshold reused the previous decision key.");
     }
 
     private static void VerifyFingerprintSeparation()

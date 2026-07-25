@@ -16,7 +16,10 @@ internal sealed class RankerEngine : IDisposable
     private const int CpuMaximumSequenceLength = 128;
     private const int NpuBatchSize = 4;
     private const int NpuSequenceLength = 64;
-    private const double AbstentionMargin = 0.25;
+    // Shared with the host through the protocol assembly: the host folds the
+    // same threshold into its decision cache keys, so a recalibration cannot
+    // leave stale verdicts readable.
+    private const double AbstentionMargin = RankerAbstention.MarginThreshold;
     private const string ModelBundleDirectoryName = "GlossBert";
     private const string CpuModelFileName = "glossbert-fp32-dynamic.onnx";
     private const string NpuModelFileName = "glossbert-eager-vitis-context.onnx";
