@@ -239,6 +239,42 @@ internal static class MagpieSafetyTests
         Check(MagpieEngineService.IsWindowedScalingModeState(new nint(1)),
             "A windowed Magpie session selected the fullscreen stop action.");
 
+        // The scaling hotkey is a toggle: repeating a request that is already
+        // satisfied would switch scaling off, and the asynchronous confirmation
+        // would still report success from the previous session's state.
+        Check(MagpieEngineService.PlanScalingCommand(
+                  isScalingActive: true,
+                  activeSourceWindow: sourceWindow,
+                  activeWindowedMode: true,
+                  requestedSourceWindow: sourceWindow,
+                  requestedWindowedMode: true) ==
+              MagpieEngineService.ScalingCommand.AlreadyActive,
+            "Re-requesting the running session would have toggled scaling off.");
+        Check(MagpieEngineService.PlanScalingCommand(
+                  isScalingActive: false,
+                  activeSourceWindow: nint.Zero,
+                  activeWindowedMode: false,
+                  requestedSourceWindow: sourceWindow,
+                  requestedWindowedMode: true) ==
+              MagpieEngineService.ScalingCommand.Start,
+            "An idle engine was not asked to start scaling.");
+        Check(MagpieEngineService.PlanScalingCommand(
+                  isScalingActive: true,
+                  activeSourceWindow: sourceWindow,
+                  activeWindowedMode: false,
+                  requestedSourceWindow: sourceWindow,
+                  requestedWindowedMode: true) ==
+              MagpieEngineService.ScalingCommand.RestartAfterStop,
+            "A mode change must stop the running mode before starting the new one.");
+        Check(MagpieEngineService.PlanScalingCommand(
+                  isScalingActive: true,
+                  activeSourceWindow: new nint(41),
+                  activeWindowedMode: true,
+                  requestedSourceWindow: sourceWindow,
+                  requestedWindowedMode: true) ==
+              MagpieEngineService.ScalingCommand.RestartAfterStop,
+            "Switching to another source window must stop the running session first.");
+
         Check(AutoScaleService.IsDesktopWindowClass("Progman") &&
               AutoScaleService.IsDesktopWindowClass("WorkerW") &&
               AutoScaleService.IsDesktopWindowClass("Shell_TrayWnd"),

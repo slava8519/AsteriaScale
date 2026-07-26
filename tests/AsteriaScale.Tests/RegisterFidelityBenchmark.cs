@@ -308,22 +308,36 @@ internal static class RegisterFidelityBenchmark
         int faithful = decided.Count(outcome => outcome.RegisterFaithful);
         int strengthened = decided.Count(outcome => outcome.Strengthened);
 
+        BucketGate[] buckets = outcomes
+            .GroupBy(outcome => outcome.Bucket)
+            .OrderBy(group => group.Key, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                CaseOutcome[] bucketDecided = group
+                    .Where(outcome => outcome.Resolved && !outcome.Abstained)
+                    .ToArray();
+                return new BucketGate(
+                    group.Key,
+                    group.Count(),
+                    bucketDecided.Length,
+                    bucketDecided.Count(outcome => outcome.SemanticallyCorrect),
+                    bucketDecided.Count(outcome => outcome.RegisterFaithful),
+                    bucketDecided.Count(outcome => outcome.Strengthened));
+            })
+            .ToArray();
+
         Console.WriteLine();
         Console.WriteLine(
             $"  cases={caseCount} decided={decided.Length} abstained={abstained} " +
             $"unresolved={unresolved}");
-        foreach (IGrouping<string, CaseOutcome> bucket in outcomes
-                     .GroupBy(outcome => outcome.Bucket)
-                     .OrderBy(group => group.Key, StringComparer.Ordinal))
+        foreach (BucketGate bucket in buckets)
         {
-            CaseOutcome[] bucketDecided = bucket
-                .Where(outcome => outcome.Resolved && !outcome.Abstained)
-                .ToArray();
             Console.WriteLine(
-                $"  {bucket.Key,-20} n={bucket.Count(),3} decided={bucketDecided.Length,3} " +
-                $"semantic={Ratio(bucketDecided.Count(o => o.SemanticallyCorrect), bucketDecided.Length)} " +
-                $"register={Ratio(bucketDecided.Count(o => o.RegisterFaithful), bucketDecided.Length)} " +
-                $"strengthened={bucketDecided.Count(o => o.Strengthened)}");
+                $"  {bucket.Bucket,-20} n={bucket.CaseCount,3} decided={bucket.DecidedCount,3} " +
+                $"abstained={bucket.CaseCount - bucket.DecidedCount,3} " +
+                $"semantic={Ratio(bucket.SemanticCount, bucket.DecidedCount)} " +
+                $"register={Ratio(bucket.FaithfulCount, bucket.DecidedCount)} " +
+                $"strengthened={bucket.StrengthenedCount}");
         }
 
         Console.WriteLine();
@@ -349,20 +363,46 @@ internal static class RegisterFidelityBenchmark
                         RegisterFidelity = Fraction(faithful, decided.Length),
                         NoUnjustifiedStrengthening =
                             Fraction(decided.Length - strengthened, decided.Length),
+                        // Per bucket as well: the gate is defined that way, and a
+                        // later baseline comparison needs the abstention counts.
+                        Buckets = buckets.Select(bucket => new
+                        {
+                            bucket.Bucket,
+                            Cases = bucket.CaseCount,
+                            Decided = bucket.DecidedCount,
+                            Abstained = bucket.CaseCount - bucket.DecidedCount,
+                            SemanticPrecision =
+                                Fraction(bucket.SemanticCount, bucket.DecidedCount),
+                            RegisterFidelity =
+                                Fraction(bucket.FaithfulCount, bucket.DecidedCount),
+                            NoUnjustifiedStrengthening = Fraction(
+                                bucket.DecidedCount - bucket.StrengthenedCount,
+                                bucket.DecidedCount)
+                        }),
                         Outcomes = outcomes
                     },
                     new JsonSerializerOptions { WriteIndented = true }));
             Console.WriteLine($"  report: {Path.GetFullPath(reportPath)}");
         }
 
-        VerifyGates(decided.Length, semantic, faithful, strengthened, unresolved);
+        VerifyGates(buckets, unresolved);
     }
 
+    /// <summary>
+    /// One bucket's counts. The gate is defined per bucket (roadmap #14.2C
+    /// phase C: "все метрики считаются отдельно по четырём корзинам"), so it is
+    /// stated that way here rather than reconstructed from an aggregate.
+    /// </summary>
+    internal readonly record struct BucketGate(
+        string Bucket,
+        int CaseCount,
+        int DecidedCount,
+        int SemanticCount,
+        int FaithfulCount,
+        int StrengthenedCount);
+
     internal static void VerifyGates(
-        int decidedCount,
-        int semanticCount,
-        int faithfulCount,
-        int strengthenedCount,
+        IReadOnlyList<BucketGate> buckets,
         int unresolvedCount)
     {
         // An unresolved case is a hole in the oracle, not a soft failure: the
@@ -374,32 +414,68 @@ internal static class RegisterFidelityBenchmark
                 $"{unresolvedCount} register case(s) produced no dictionary result.");
         }
 
-        if (decidedCount == 0)
+        if (buckets.Count == 0)
         {
             throw new InvalidOperationException(
-                "The register benchmark decided no case at all.");
+                "The register benchmark produced no buckets at all.");
         }
 
-        Check(
-            semanticCount / (double)decidedCount,
-            MinimumSemanticPrecision,
-            "semantic accepted precision");
-        Check(
-            faithfulCount / (double)decidedCount,
-            MinimumRegisterFidelity,
-            "register fidelity");
-        Check(
-            (decidedCount - strengthenedCount) / (double)decidedCount,
-            MinimumNoUnjustifiedStrengthening,
-            "no unjustified strengthening");
+        foreach (BucketGate bucket in buckets)
+        {
+            if (bucket.CaseCount <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"Register bucket '{bucket.Bucket}' contains no cases.");
+            }
+
+            if (bucket.SemanticCount < 0 || bucket.SemanticCount > bucket.DecidedCount ||
+                bucket.FaithfulCount < 0 || bucket.FaithfulCount > bucket.DecidedCount ||
+                bucket.StrengthenedCount < 0 || bucket.StrengthenedCount > bucket.DecidedCount ||
+                bucket.DecidedCount > bucket.CaseCount)
+            {
+                throw new InvalidOperationException(
+                    $"Register bucket '{bucket.Bucket}' reported inconsistent counts.");
+            }
+
+            // Abstention is a legitimate outcome per case, but a bucket that
+            // decided nothing has undefined metrics — and an aggregate-only gate
+            // let exactly that pass, so a candidate could abstain its way out of
+            // every hard bucket and still be recorded as an improvement.
+            if (bucket.DecidedCount == 0)
+            {
+                throw new InvalidOperationException(
+                    $"Register bucket '{bucket.Bucket}' abstained or failed on all " +
+                    $"{bucket.CaseCount} case(s), so its gates cannot be evaluated.");
+            }
+
+            Check(
+                bucket.SemanticCount / (double)bucket.DecidedCount,
+                MinimumSemanticPrecision,
+                "semantic accepted precision",
+                bucket.Bucket);
+            Check(
+                bucket.FaithfulCount / (double)bucket.DecidedCount,
+                MinimumRegisterFidelity,
+                "register fidelity",
+                bucket.Bucket);
+            Check(
+                (bucket.DecidedCount - bucket.StrengthenedCount) / (double)bucket.DecidedCount,
+                MinimumNoUnjustifiedStrengthening,
+                "no unjustified strengthening",
+                bucket.Bucket);
+        }
+
+        // The overall ratios need no separate gate: a weighted average of values
+        // that each clear the minimum clears it too. They stay in the report.
     }
 
-    private static void Check(double value, double minimum, string label)
+    private static void Check(double value, double minimum, string label, string bucket)
     {
         if (value < minimum)
         {
             throw new InvalidOperationException(
-                $"Register gate '{label}' is {value:P1}, below the {minimum:P0} minimum.");
+                $"Register gate '{label}' for bucket '{bucket}' is {value:P1}, " +
+                $"below the {minimum:P0} minimum.");
         }
     }
 

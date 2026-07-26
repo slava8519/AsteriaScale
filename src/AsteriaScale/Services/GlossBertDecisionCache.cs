@@ -45,7 +45,10 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     /// </summary>
     internal const string SenseRankingEpoch = "smart-sense-v8-bicross";
 
-    private const int SchemaVersion = 1;
+    // 2: key text normalization moved from FormKC to FormC. Entries written by
+    // the old rule must be discarded, not merely missed — a stale "ﬁle" key
+    // folded to "file" would otherwise be a live hit for a different input.
+    private const int SchemaVersion = 2;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTextLength = 256;
@@ -294,12 +297,18 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     private static double? NormalizeNumber(double? value) =>
         value is null || !double.IsFinite(value.Value) ? null : value;
 
+    // FormC, not FormKC: the key must not merge inputs the model can tell apart.
+    // Compatibility folding turns "ﬁle" into "file", but the worker tokenizes the
+    // original text, so the two produce different token ids and can earn
+    // different verdicts — one of which would then be served for the other.
+    // Canonical composition is safe because canonically equivalent strings
+    // tokenize identically.
     private static string NormalizeText(string? value) =>
         value is null
             ? string.Empty
             : string.Join(
                 " ",
-                value.Normalize(NormalizationForm.FormKC)
+                value.Normalize(NormalizationForm.FormC)
                     .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string Truncate(string value) =>

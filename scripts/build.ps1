@@ -62,12 +62,19 @@ if (-not $dotnetPath) {
     throw ".NET SDK was not found. Install Microsoft.DotNet.SDK.10 with winget."
 }
 
-$sdkTools = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.windows.sdk.buildtools\10.0.26100.8249\bin\10.0.26100.0\x64"
+# NUGET_PACKAGES relocates the global package folder; assuming %USERPROFILE%
+# makes the build fail on any machine that sets it.
+$packagesRoot = if ($env:NUGET_PACKAGES) {
+    $env:NUGET_PACKAGES
+} else {
+    Join-Path $env:USERPROFILE ".nuget\packages"
+}
+$sdkTools = Join-Path $packagesRoot "microsoft.windows.sdk.buildtools\10.0.26100.8249\bin\10.0.26100.0\x64"
 $makeAppx = Join-Path $sdkTools "makeappx.exe"
 $signTool = Join-Path $sdkTools "signtool.exe"
 if (-not (Test-Path -LiteralPath $makeAppx -PathType Leaf) -or
     -not (Test-Path -LiteralPath $signTool -PathType Leaf)) {
-    throw "Windows SDK packaging tools were not restored. Run dotnet restore first."
+    throw "Windows SDK packaging tools were not restored in '$packagesRoot'. Run dotnet restore first."
 }
 
 $certificate = Get-ChildItem Cert:\CurrentUser\My |
@@ -104,6 +111,15 @@ $newIdentityInstalled = $false
 try {
     New-Item -ItemType Directory -Path $stagingRoot | Out-Null
 
+    # Captured before anything is published. Taken afterwards, the fingerprint
+    # would stamp a binary compiled from the older sources with the identity of
+    # whatever the tree happens to contain once the publish finishes.
+    $sourceRevision = Get-AsteriaSourceRevision -Root $root
+    if (-not $sourceRevision) {
+        $sourceRevision = "unknown"
+    }
+    $sourceFingerprint = Get-AsteriaSourceFingerprint -Root $root
+
     & $dotnetPath publish $mainProject `
         -c $Configuration `
         -r $Runtime `
@@ -132,20 +148,28 @@ try {
         throw "Ranker worker build failed with exit code $LASTEXITCODE."
     }
 
-    $requiredRankerFiles = @(
-        (Join-Path $rankerOutput "AsteriaScale.RankerWorker.exe"),
-        (Join-Path $rankerOutput "Models\GlossBert\tokenizer.json"),
-        (Join-Path $rankerOutput "Models\GlossBert\Cpu\glossbert-fp32-dynamic.onnx"),
-        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx"),
-        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx.compatibility.txt"),
-        (Join-Path $rankerOutput "Models\GlossBert\Npu\glossbert-eager-vitis-context.onnx_VITISAI.bin"),
-        (Join-Path $rankerOutput "Models\GlossEmbeddings\eng-senses.vec"),
-        (Join-Path $rankerOutput "Models\GlossEmbeddings\minilm-l6-v2.onnx"),
-        (Join-Path $rankerOutput "Models\GlossEmbeddings\tokenizer.json")
-    )
-    foreach ($requiredFile in $requiredRankerFiles) {
+    # One list, shared with the dist freshness check, so a publish that passes
+    # here cannot be reported as incomplete later or vice versa.
+    foreach ($requiredFile in Get-AsteriaRequiredDistFiles -Root $root -Output $stagingOutput) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
-            throw "Ranker package is incomplete. Missing: $requiredFile"
+            throw "Publish is incomplete. Missing: $requiredFile"
+        }
+    }
+
+    # /nv is not optional here: this is an AllowExternalContent identity package,
+    # so the executable it declares deliberately lives outside the package and
+    # full manifest validation rejects that by design. Everything /nv stops
+    # checking is therefore ours to check — a manifest naming a logo that does
+    # not exist used to pack, sign and install without a word.
+    $identityManifest = Join-Path $identitySource "AppxManifest.xml"
+    $declaredAssets = [regex]::Matches(
+        (Get-Content -LiteralPath $identityManifest -Raw),
+        '"(Assets\\[^"]+)"') |
+        ForEach-Object { $_.Groups[1].Value } |
+        Sort-Object -Unique
+    foreach ($declaredAsset in $declaredAssets) {
+        if (-not (Test-Path -LiteralPath (Join-Path $identitySource $declaredAsset) -PathType Leaf)) {
+            throw "Identity manifest references a missing asset: $declaredAsset"
         }
     }
 
@@ -154,18 +178,21 @@ try {
         throw "Identity package creation failed with exit code $LASTEXITCODE."
     }
 
+    if (-not (Test-AsteriaIdentityPackage -Path $stagingIdentity)) {
+        throw "Identity package is not a readable MSIX: $stagingIdentity"
+    }
+
     & $signTool sign /sha1 $certificate.Thumbprint /fd SHA256 $stagingIdentity
     if ($LASTEXITCODE -ne 0) {
         throw "Identity package signing failed with exit code $LASTEXITCODE."
     }
 
-    $sourceRevision = Get-AsteriaSourceRevision -Root $root
-    if (-not $sourceRevision) {
-        $sourceRevision = "unknown"
+    if ((Get-AsteriaSourceFingerprint -Root $root) -ne $sourceFingerprint) {
+        throw "Build inputs changed while publishing. Re-run the build so dist matches the sources it was built from."
     }
+
     Set-Content -LiteralPath (Join-Path $stagingOutput ".build-revision") `
         -Value $sourceRevision -Encoding Ascii -NoNewline
-    $sourceFingerprint = Get-AsteriaSourceFingerprint -Root $root
     Set-Content -LiteralPath (Join-Path $stagingOutput ".build-source-fingerprint") `
         -Value $sourceFingerprint -Encoding Ascii -NoNewline
 

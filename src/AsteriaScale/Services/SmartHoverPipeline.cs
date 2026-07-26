@@ -442,8 +442,25 @@ internal sealed class SmartHoverPipeline : IDisposable
                     sharedDecision.Pipeline);
             if (sharedDecision is null)
             {
+                // Same rule as the scaffold ranker: a worker that lost its
+                // bi-encoder mid-request answers cross-only under a refreshed
+                // identity, and the key built before inference still names the
+                // old one. Key the verdict by the identity that produced it, the
+                // way the hover cache request below already does.
+                string storageKey = string.Equals(
+                    ranked.ModelVersion,
+                    modelVersion,
+                    StringComparison.Ordinal)
+                    ? decisionKey
+                    : CreateDecisionKey(
+                        rankerContext.Text,
+                        lookup.Source,
+                        rankerContext.CharacterIndex,
+                        plan,
+                        provider,
+                        ranked.ModelVersion);
                 await StoreSharedDecisionSafeAsync(
-                    decisionKey,
+                    storageKey,
                     new GlossBertDecision(
                         ranked.SelectedGroupId,
                         ranked.Abstained,

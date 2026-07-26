@@ -119,8 +119,29 @@ internal sealed class TranslationScaffoldGlossBertRanker
         // model identity and GroupId. Both selected decisions and calibrated
         // abstentions are deterministic reusable results; exceptions never get
         // here and therefore never enter the cache.
+        //
+        // The key above was built from the identity warm-up established, but the
+        // worker can lose its bi-encoder mid-request: it then disposes that
+        // pipeline, refreshes its reported identity and answers cross-only.
+        // Response validation accepts that (it checks the prefix, not equality),
+        // so storing under the pre-inference key would file a cross-only verdict
+        // as a "bi+cross" one and serve it back to a healthy worker after a
+        // restart. File the verdict under the identity that actually produced it.
+        string storageKey = string.Equals(
+            selection.ModelVersion,
+            modelIdentity,
+            StringComparison.Ordinal)
+            ? cacheKey
+            : GlossBertDecisionCache.CreateFingerprint(
+                rankerContext.Text,
+                request.Target,
+                rankerContext.CharacterIndex,
+                request.Plan,
+                provider,
+                selection.ModelVersion,
+                dictionaryVersion);
         await _decisionCache.StoreAsync(
-            cacheKey,
+            storageKey,
             new GlossBertDecision(
                 selection.SelectedGroupId,
                 selection.Abstained,

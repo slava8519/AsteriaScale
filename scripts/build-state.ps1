@@ -42,8 +42,19 @@ function Get-AsteriaBuildInputFiles {
             $_.Name -like "*.sln*" -or
             $_.Name -like "*.props" -or
             $_.Name -like "*.targets" -or
-            ($_.Name -in @("global.json", "NuGet.config"))
+            # Published by AsteriaScale.csproj, so a change to either belongs in
+            # the fingerprint even though neither is source.
+            ($_.Name -in @("global.json", "NuGet.config", "THIRD_PARTY_NOTICES.md", "LICENSE"))
         })
+
+    # Named one by one rather than by directory: tools\dictionary-source also
+    # holds the multi-gigabyte Wiktionary dump, which is not a build input.
+    foreach ($publishedInput in @("tools\dictionary-source\vn-sources.lock.json")) {
+        $publishedPath = Join-Path $Root $publishedInput
+        if (Test-Path -LiteralPath $publishedPath -PathType Leaf) {
+            $files += Get-Item -LiteralPath $publishedPath -Force
+        }
+    }
 
     return $files | Sort-Object FullName -Unique
 }
@@ -86,6 +97,9 @@ function Get-AsteriaSourceFingerprint {
             ":(top,glob)*.targets",
             ":(top)global.json",
             ":(top)NuGet.config",
+            ":(top)THIRD_PARTY_NOTICES.md",
+            ":(top)LICENSE",
+            ":(top)tools/dictionary-source/vn-sources.lock.json",
             ":(top,exclude,glob)assets/Ranker/ranker-holdout*.json",
             ":(top,exclude,glob)assets/Ranker/ranker-benchmark*.json"
         )
@@ -107,6 +121,96 @@ function Get-AsteriaSourceFingerprint {
     }
 }
 
+function Get-AsteriaRequiredRankerFiles {
+    param([Parameter(Mandatory = $true)][string]$Output)
+
+    $models = Join-Path $Output "Ranker\Models"
+    return @(
+        (Join-Path $Output "Ranker\AsteriaScale.RankerWorker.exe"),
+        (Join-Path $models "GlossBert\tokenizer.json"),
+        (Join-Path $models "GlossBert\Cpu\glossbert-fp32-dynamic.onnx"),
+        (Join-Path $models "GlossBert\Npu\glossbert-eager-vitis-context.onnx"),
+        (Join-Path $models "GlossBert\Npu\glossbert-eager-vitis-context.onnx.compatibility.txt"),
+        (Join-Path $models "GlossBert\Npu\glossbert-eager-vitis-context.onnx_VITISAI.bin"),
+        (Join-Path $models "GlossEmbeddings\eng-senses.vec"),
+        (Join-Path $models "GlossEmbeddings\minilm-l6-v2.onnx"),
+        (Join-Path $models "GlossEmbeddings\tokenizer.json")
+    )
+}
+
+<#
+.SYNOPSIS
+Every file a complete publish must contain, derived from the source assets.
+
+.DESCRIPTION
+Checking only the two executables meant a dist missing a dictionary, a model or
+the notices file still counted as current, so the user kept running an
+incomplete install until something failed at runtime. The asset lists are read
+from the source tree rather than hard-coded, so adding a dictionary does not
+silently fall outside the check.
+#>
+function Get-AsteriaRequiredDistFiles {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Output
+    )
+
+    $required = [Collections.Generic.List[string]]::new()
+    $required.Add((Join-Path $Output "AsteriaScale.exe"))
+    $required.Add((Join-Path $Output "THIRD_PARTY_NOTICES.md"))
+    $required.Add((Join-Path $Output "LICENSE"))
+    $required.Add((Join-Path $Output "Dictionaries\README.md"))
+    $required.Add((Join-Path $Output "Dictionaries\vn-build-manifest.json"))
+    $required.Add((Join-Path $Output "Dictionaries\vn-sources.lock.json"))
+    foreach ($rankerFile in Get-AsteriaRequiredRankerFiles -Output $Output) {
+        $required.Add($rankerFile)
+    }
+
+    $publishedAssets = @(
+        @{ Source = "assets\Dictionaries"; Filter = "*.tsv.gz"; Target = "Dictionaries" },
+        @{ Source = "assets\TextHook"; Filter = "*.tsv"; Target = "TextHook" },
+        @{ Source = "assets\Morphology"; Filter = "*.tsv.gz"; Target = "Morphology" }
+    )
+    foreach ($publishedAsset in $publishedAssets) {
+        $sourceDirectory = Join-Path $Root $publishedAsset.Source
+        if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) {
+            continue
+        }
+
+        foreach ($asset in Get-ChildItem -LiteralPath $sourceDirectory -File -Filter $publishedAsset.Filter) {
+            $required.Add((Join-Path $Output (Join-Path $publishedAsset.Target $asset.Name)))
+        }
+    }
+
+    return $required.ToArray()
+}
+
+<#
+.SYNOPSIS
+Whether the identity package is a readable MSIX rather than a truncated file.
+#>
+function Test-AsteriaIdentityPackage {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    try {
+        $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            return $null -ne ($archive.Entries |
+                Where-Object { $_.FullName -eq "AppxManifest.xml" } |
+                Select-Object -First 1)
+        } finally {
+            $archive.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
 function Test-AsteriaDistCurrent {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
@@ -116,20 +220,20 @@ function Test-AsteriaDistCurrent {
     $output = Join-Path $Root "dist\AsteriaScale"
     $revisionMarker = Join-Path $output ".build-revision"
     $fingerprintMarker = Join-Path $output ".build-source-fingerprint"
-    $requiredFiles = @(
-        (Join-Path $output "AsteriaScale.exe"),
-        (Join-Path $output "Ranker\AsteriaScale.RankerWorker.exe"),
+    $requiredFiles = @(Get-AsteriaRequiredDistFiles -Root $Root -Output $output) + @(
         $revisionMarker,
         $fingerprintMarker
     )
-    if ($RequireIdentity) {
-        $requiredFiles += Join-Path $Root "dist\AsteriaScale.Identity.msix"
-    }
 
     foreach ($requiredFile in $requiredFiles) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
             return $false
         }
+    }
+
+    if ($RequireIdentity -and
+        -not (Test-AsteriaIdentityPackage -Path (Join-Path $Root "dist\AsteriaScale.Identity.msix"))) {
+        return $false
     }
 
     $builtRevision = (Get-Content -LiteralPath $revisionMarker -Raw).Trim()

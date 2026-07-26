@@ -14,6 +14,91 @@ internal static class SmartDictionaryResultCacheTests
         await VerifyLruEvictionAsync(root);
         await VerifyConcurrentBoundedWritesAsync(root);
         await VerifyCorruptFileRecoveryAsync(root);
+        await VerifyFailedWriteRecoveryAsync(root);
+    }
+
+    /// <summary>
+    /// A background write that fails persisted nothing, so the entries are still
+    /// pending. The store has to keep them dirty, retry on its own and keep
+    /// evicting in the meantime: the caller only ever schedules a write on the
+    /// clean-to-dirty edge, so a store left dirty by a failure would never write
+    /// again and would grow past capacity for the rest of the session.
+    /// </summary>
+    private static async Task VerifyFailedWriteRecoveryAsync(string root)
+    {
+        string path = Path.Combine(root, "failed-write-recovery.json");
+        SmartDictionaryCacheRequest[] requests =
+        [
+            CreateRequest("The first ambiguous word appeared here.", "word", ["первое", "второе"]),
+            CreateRequest("A second ambiguous bank appeared here.", "bank", ["банк", "берег"]),
+            CreateRequest("A third ambiguous spring appeared here.", "spring", ["весна", "пружина"]),
+            CreateRequest("A fourth ambiguous crane appeared here.", "crane", ["журавль", "кран"])
+        ];
+
+        await using SmartDictionaryResultCache cache = new(path, capacity: 2);
+        Check(await cache.StoreAsync(requests[0], Selection(requests[0])),
+            "The first selection was rejected.");
+        await WaitUntilAsync(
+            () => File.Exists(path),
+            TimeSpan.FromSeconds(5),
+            "The debounced write never created the cache file.");
+
+        // Holding the destination open makes the atomic replace fail exactly the
+        // way a locked file or a full disk would.
+        using (FileStream blocked = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            foreach (SmartDictionaryCacheRequest request in requests[1..])
+            {
+                Check(await cache.StoreAsync(request, Selection(request)),
+                    "A selection was rejected while persistence was failing.");
+            }
+
+            // Long enough for the debounced write to run and fail at least once.
+            await Task.Delay(TimeSpan.FromMilliseconds(1200));
+        }
+
+        // Nothing mutates the cache from here on: only the store's own retry can
+        // move the file forward, and eviction must have run despite the failure.
+        await WaitUntilAsync(
+            () => EntryCount(path) == 2,
+            TimeSpan.FromSeconds(20),
+            "A failed background write was never retried, or eviction was skipped " +
+            $"while the store stayed dirty (entries on disk: {EntryCount(path)}).");
+
+        SmartDictionarySelection? newest = await cache.TryGetAsync(requests[^1]);
+        Check(newest is { Index: 0 }, "The most recent entry was evicted instead of the oldest.");
+    }
+
+    private static SmartDictionarySelection Selection(SmartDictionaryCacheRequest request) =>
+        new(0, request.Candidates[0], 0.9, string.Empty);
+
+    private static int EntryCount(string path)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(path));
+            return document.RootElement.TryGetProperty("entries", out JsonElement entries)
+                ? entries.GetArrayLength()
+                : -1;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            return -1;
+        }
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> predicate,
+        TimeSpan timeout,
+        string failureMessage)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (!predicate() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        Check(predicate(), failureMessage);
     }
 
     private static async Task VerifyLargeCandidateInventoryAsync(string root)
@@ -86,6 +171,20 @@ internal static class SmartDictionaryResultCacheTests
         };
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(differentOpening),
             "Context inside the ranker's own window must separate cache keys.");
+
+        // The key may not merge inputs the tokenizer keeps apart. Compatibility
+        // normalization folded the "fi" ligature into two letters while the
+        // worker still encoded the original character, so two texts with
+        // different token ids shared one verdict.
+        const string ligatureContext =
+            "alpha beta gamma delta epsilon zeta one two three four ﬁve bank six seven eight nine ten.";
+        SmartDictionaryCacheRequest ligature = request with
+        {
+            Context = ligatureContext,
+            CharacterIndex = ligatureContext.IndexOf("bank", StringComparison.Ordinal)
+        };
+        Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(ligature),
+            "A compatibility ligature the tokenizer sees as different shared a cache key.");
 
         // Beyond the window the model genuinely cannot see the difference, so
         // those requests still share a key. "Distant" is now defined by the
@@ -192,7 +291,7 @@ internal static class SmartDictionaryResultCacheTests
             poisonedPath,
             JsonSerializer.Serialize(new
             {
-                version = 2,
+                version = SmartDictionaryResultCache.SchemaVersion,
                 entries = new[]
                 {
                     new
@@ -313,7 +412,8 @@ internal static class SmartDictionaryResultCacheTests
         }
 
         using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(path));
-        Check(document.RootElement.GetProperty("version").GetInt32() == 2,
+        Check(document.RootElement.GetProperty("version").GetInt32() ==
+              SmartDictionaryResultCache.SchemaVersion,
             "A corrupt cache was not replaced atomically with a valid document.");
     }
 

@@ -96,11 +96,7 @@ public sealed class UserDictionaryService
         try
         {
             MigrateLegacyJapaneseLocked();
-            List<UserDictionaryEntry> entries = ReadLocked(path, language)
-                .Where(entry => !string.Equals(entry.Key, canonicalKey, StringComparison.Ordinal))
-                .ToList();
-            entries.Add(new UserDictionaryEntry(canonicalKey, value, language));
-            WriteLocked(path, entries, language);
+            EditLocked(path, language, canonicalKey, value);
             return canonicalKey;
         }
         finally
@@ -125,15 +121,7 @@ public sealed class UserDictionaryService
         try
         {
             MigrateLegacyJapaneseLocked();
-            List<UserDictionaryEntry> entries = ReadLocked(path, language);
-            int removed = entries.RemoveAll(entry =>
-                string.Equals(entry.Key, canonicalKey, StringComparison.Ordinal));
-            if (removed > 0)
-            {
-                WriteLocked(path, entries, language);
-            }
-
-            return removed > 0;
+            return EditLocked(path, language, canonicalKey, translation: null);
         }
         finally
         {
@@ -196,15 +184,7 @@ public sealed class UserDictionaryService
             HashSet<string> destinationKeys = new(StringComparer.Ordinal);
             foreach (string line in japaneseLines)
             {
-                int separator = line.IndexOf('\t');
-                if (separator <= 0 || separator == line.Length - 1)
-                {
-                    continue;
-                }
-
-                string key = LocalDictionaryService.NormalizeJapanese(line[..separator]);
-                string value = CollapseWhitespace(line[(separator + 1)..]);
-                if (key.Length > 0 && value.Length > 0)
+                if (TryParseRow(line, "JA", out string key, out _))
                 {
                     destinationKeys.Add(key);
                 }
@@ -248,28 +228,114 @@ public sealed class UserDictionaryService
         HashSet<string> seen = new(StringComparer.Ordinal);
         foreach (string line in File.ReadLines(path, Encoding.UTF8))
         {
-            if (line.Length == 0 || line.TrimStart().StartsWith('#'))
-            {
-                continue;
-            }
-
-            int separator = line.IndexOf('\t');
-            if (separator <= 0 || separator == line.Length - 1)
-            {
-                continue;
-            }
-
-            string key = language == "JA"
-                ? LocalDictionaryService.NormalizeJapanese(line[..separator])
-                : LocalDictionaryService.NormalizeEnglish(line[..separator]);
-            string value = CollapseWhitespace(line[(separator + 1)..]);
-            if (key.Length > 0 && value.Length > 0 && seen.Add(key))
+            if (TryParseRow(line, language, out string key, out string value) && seen.Add(key))
             {
                 entries.Add(new UserDictionaryEntry(key, value, language));
             }
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Parses one TSV row the way lookup does. Comments, blank lines and rows
+    /// without a usable key/value pair are reported as unparsed so that callers
+    /// can keep them verbatim instead of discarding them.
+    /// </summary>
+    private static bool TryParseRow(
+        string line,
+        string language,
+        out string key,
+        out string value)
+    {
+        key = string.Empty;
+        value = string.Empty;
+        if (line.Length == 0 || line.TrimStart().StartsWith('#'))
+        {
+            return false;
+        }
+
+        int separator = line.IndexOf('\t');
+        if (separator <= 0 || separator == line.Length - 1)
+        {
+            return false;
+        }
+
+        key = language == "JA"
+            ? LocalDictionaryService.NormalizeJapanese(line[..separator])
+            : LocalDictionaryService.NormalizeEnglish(line[..separator]);
+        value = CollapseWhitespace(line[(separator + 1)..]);
+        return key.Length > 0 && value.Length > 0;
+    }
+
+    /// <summary>
+    /// Applies one edit in place instead of rebuilding the layer from the rows
+    /// this service happens to understand. The file belongs to the user, who is
+    /// invited to hand-edit it: comments, blank lines and rows we cannot parse
+    /// must survive an unrelated edit made through the UI. Passing a null
+    /// <paramref name="translation"/> removes the key. Returns whether the file
+    /// changed.
+    /// </summary>
+    private bool EditLocked(
+        string path,
+        string language,
+        string canonicalKey,
+        string? translation)
+    {
+        if (!File.Exists(path))
+        {
+            if (translation is null)
+            {
+                return false;
+            }
+
+            WriteLocked(
+                path,
+                [new UserDictionaryEntry(canonicalKey, translation, language)],
+                language);
+            return true;
+        }
+
+        List<string> lines = File.ReadLines(path, Encoding.UTF8).ToList();
+        List<string> result = new(lines.Count + 1);
+        bool replaced = false;
+        bool changed = false;
+        foreach (string line in lines)
+        {
+            if (!TryParseRow(line, language, out string key, out _) ||
+                !string.Equals(key, canonicalKey, StringComparison.Ordinal))
+            {
+                result.Add(line);
+                continue;
+            }
+
+            // The first row wins at load time, so that is the one an edit has
+            // to replace; later duplicates of the same key are already dead and
+            // would resurrect the old translation if the first one were removed.
+            if (translation is not null && !replaced)
+            {
+                replaced = true;
+                string rewritten = $"{canonicalKey}\t{translation}";
+                changed |= !string.Equals(rewritten, line, StringComparison.Ordinal);
+                result.Add(rewritten);
+                continue;
+            }
+
+            changed = true;
+        }
+
+        if (translation is not null && !replaced)
+        {
+            result.Add($"{canonicalKey}\t{translation}");
+            changed = true;
+        }
+
+        if (changed)
+        {
+            WriteRawLinesLocked(path, result);
+        }
+
+        return changed;
     }
 
     private void WriteLocked(

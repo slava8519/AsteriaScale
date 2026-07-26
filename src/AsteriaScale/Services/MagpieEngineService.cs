@@ -120,6 +120,27 @@ public sealed class MagpieEngineService : IAsyncDisposable
             }
 
             int ownedProcessId = GetOwnedProcessIdOrThrow();
+            // WM_HOTKEY is a mode-specific toggle, not a start command: sending
+            // it while that same mode is already scaling *stops* the session.
+            // The message is asynchronous, so the confirmation below would still
+            // observe the stale "true" and report success — the user would be
+            // told scaling started at the moment it turned off.
+            bool active = TryGetActiveScaling(out nint activeSource, out bool activeWindowed);
+            switch (PlanScalingCommand(active, activeSource, activeWindowed, target.Handle, windowed))
+            {
+                case ScalingCommand.AlreadyActive:
+                    Report(windowed
+                        ? "Оконное масштабирование уже запущено"
+                        : "Полноэкранное масштабирование уже запущено");
+                    return;
+                case ScalingCommand.RestartAfterStop:
+                    // Another source or another mode: the running session must be
+                    // toggled off with *its* mode first, and confirmed stopped, so
+                    // the start below cannot read the previous session's state.
+                    await StopScalingLockedAsync(ownedProcessId, activeWindowed, cancellationToken);
+                    break;
+            }
+
             if (!NativeMethods.TriggerMagpieAction(
                     windowed,
                     ownedProcessId,
@@ -164,32 +185,42 @@ public sealed class MagpieEngineService : IAsyncDisposable
                 return;
             }
 
-            // WM_HOTKEY selects a mode-specific toggle, not a generic stop. Sending
-            // the active mode stops it; sending the other mode can switch modes.
             bool activeWindowedMode = IsWindowedScalingModeState(
                 NativeMethods.GetProp(scalingWindow, "Magpie.Windowed"));
-            if (!NativeMethods.TriggerMagpieAction(
-                    activeWindowedMode,
-                    ownedProcessId,
-                    allowKeyboardFallback: !HasExternalMagpieProcess()))
-            {
-                throw new InvalidOperationException("Magpie не принял команду остановки масштабирования.");
-            }
-
-            if (!await WaitForStateAsync(
-                    () => IsScaling,
-                    expectedState: false,
-                    TimeSpan.FromSeconds(5),
-                    cancellationToken))
-            {
-                throw new InvalidOperationException("Magpie не подтвердил остановку масштабирования.");
-            }
-
+            await StopScalingLockedAsync(ownedProcessId, activeWindowedMode, cancellationToken);
             Report("Масштабирование остановлено");
         }
         finally
         {
             _operationLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Stops the running session. WM_HOTKEY selects a mode-specific toggle, not
+    /// a generic stop: sending the active mode stops it, sending the other mode
+    /// can switch modes instead. The caller already holds the operation lock.
+    /// </summary>
+    private async Task StopScalingLockedAsync(
+        int ownedProcessId,
+        bool activeWindowedMode,
+        CancellationToken cancellationToken)
+    {
+        if (!NativeMethods.TriggerMagpieAction(
+                activeWindowedMode,
+                ownedProcessId,
+                allowKeyboardFallback: !HasExternalMagpieProcess()))
+        {
+            throw new InvalidOperationException("Magpie не принял команду остановки масштабирования.");
+        }
+
+        if (!await WaitForStateAsync(
+                () => IsScaling,
+                expectedState: false,
+                TimeSpan.FromSeconds(5),
+                cancellationToken))
+        {
+            throw new InvalidOperationException("Magpie не подтвердил остановку масштабирования.");
         }
     }
 
@@ -442,7 +473,7 @@ public sealed class MagpieEngineService : IAsyncDisposable
             return;
         }
 
-        string backup = configPath + ".before-asteria.json";
+        string backup = configPath + MagpieConfigEditor.BackupSuffix;
         if (File.Exists(backup))
         {
             return;
@@ -587,6 +618,64 @@ public sealed class MagpieEngineService : IAsyncDisposable
 
     internal static bool IsWindowedScalingModeState(nint windowedProperty) =>
         windowedProperty != nint.Zero;
+
+    internal enum ScalingCommand
+    {
+        /// <summary>Nothing is scaling this target: send the mode toggle.</summary>
+        Start,
+
+        /// <summary>Requested target and mode are already running: send nothing.</summary>
+        AlreadyActive,
+
+        /// <summary>Another target or mode is running: stop it, then start.</summary>
+        RestartAfterStop
+    }
+
+    /// <summary>
+    /// What <see cref="ScaleAsync"/> must actually send. Kept pure because the
+    /// consequence of getting it wrong — toggling off a session the user just
+    /// asked for — cannot be reproduced without a live Magpie.
+    /// </summary>
+    internal static ScalingCommand PlanScalingCommand(
+        bool isScalingActive,
+        nint activeSourceWindow,
+        bool activeWindowedMode,
+        nint requestedSourceWindow,
+        bool requestedWindowedMode)
+    {
+        if (!isScalingActive)
+        {
+            return ScalingCommand.Start;
+        }
+
+        return activeSourceWindow == requestedSourceWindow &&
+               activeWindowedMode == requestedWindowedMode
+            ? ScalingCommand.AlreadyActive
+            : ScalingCommand.RestartAfterStop;
+    }
+
+    /// <summary>
+    /// The session Magpie is running right now, if any: its source window and
+    /// mode. Because the hotkey is a toggle, a caller has to know what is
+    /// already running before it can decide whether to send anything.
+    /// </summary>
+    private bool TryGetActiveScaling(out nint sourceWindow, out bool windowedMode)
+    {
+        sourceWindow = nint.Zero;
+        windowedMode = false;
+        nint scalingWindow = FindOwnedWindow(ScalingWindowClass);
+        if (!IsScalingWindowActiveState(
+                scalingWindow,
+                scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow)))
+        {
+            return false;
+        }
+
+        sourceWindow = NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
+        windowedMode = IsWindowedScalingModeState(
+            NativeMethods.GetProp(scalingWindow, "Magpie.Windowed"));
+        return sourceWindow != nint.Zero && NativeMethods.IsWindow(sourceWindow);
+    }
 
     private bool IsScalingReadyForTarget(nint expectedSourceWindow)
     {

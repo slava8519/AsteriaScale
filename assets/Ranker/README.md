@@ -101,3 +101,27 @@ Measured: decisions and margins are bit-identical to the pure cross path on
 the dev set and the hyper-polysemy probe; k=8 was rejected after it evicted
 the correct sense of "set" and turned a calibrated abstention into a wrong
 answer. Missing artifacts silently fall back to the pure cross pipeline.
+
+All three files are **required for a complete build**: `scripts/build.ps1` refuses
+to publish without them, and `scripts/build-state.ps1` treats a `dist` that lacks
+any of them as out of date.
+
+### Regenerating the index
+
+`tools/build-gloss-embeddings.py --senses assets/Dictionaries/eng-rus-enwiktionary-senses.tsv.gz --output <out>/eng-senses.vec`
+
+The runtime pins the whole bundle, so a regenerated index is rejected with
+`embedding_metadata_mismatch` until `RankerEngine.cs` is updated. The script
+prints every constant to paste — `EmbeddingIndexFormat`, `EmbeddingIndexLength`,
+`EmbeddingIndexSha256`, `EmbeddingSenseFileSha256`, `EmbeddingKeyCount`,
+`EmbeddingVectorCount`, `EmbeddingBundleCacheTag` — and the table above must be
+updated with the new size and SHA-256.
+
+Note on `EmbeddingSenseFileSha256`: the shipped index is **format 1**, which
+recorded the SHA-256 of the sidecar's gzip *container*. Those bytes change on
+every recompression even when the glosses are identical, so the pinned value
+`A15C4037…` no longer matches the sidecar currently on disk
+(`A776B4DA…`) — the sidecar was rebuilt after the index. A regenerated bundle is
+**format 2** and records the digest of the decompressed contents instead, which
+is stable across recompression. The shipped bundle is intact and passes
+validation; only regeneration moves to the new format.

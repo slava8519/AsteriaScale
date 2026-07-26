@@ -29,7 +29,9 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
 {
     internal const string EngineLabel = "NPU OCR  •  SMART-CACHE";
 
-    private const int SchemaVersion = 2;
+    // 3: key text normalization moved from FormKC to FormC, so entries written
+    // under the old rule have to be discarded rather than silently reused.
+    internal const int SchemaVersion = 3;
     private const int MaximumCandidates = 128;
     private const int MaximumStoredTextLength = 1_024;
     private const int DefaultCapacity = 4_096;
@@ -306,10 +308,13 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
     private static string NormalizeCandidate(string? value) =>
         Truncate(NormalizeText(value));
 
+    // FormC, not FormKC: compatibility folding merges inputs the ranker can tell
+    // apart ("ﬁle" and "file" tokenize differently), so one verdict would be
+    // served for the other. See GlossBertDecisionCache.NormalizeText.
     private static string NormalizeText(string? value) =>
         value is null
             ? string.Empty
-            : WhitespaceRegex().Replace(value.Normalize(NormalizationForm.FormKC), " ").Trim();
+            : WhitespaceRegex().Replace(value.Normalize(NormalizationForm.FormC), " ").Trim();
 
     private static string Truncate(string value) =>
         value.Length <= MaximumStoredTextLength ? value : value[..MaximumStoredTextLength];

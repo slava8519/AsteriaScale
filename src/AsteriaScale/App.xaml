@@ -29,6 +29,7 @@
         <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
 
         <!-- Extra light-theme tints used by MainWindow.xaml -->
+        <SolidColorBrush x:Key="SurfaceHoverBrush" Color="#F1E8D7" />
         <SolidColorBrush x:Key="BorderStrongBrush" Color="#D3C7AF" />
         <SolidColorBrush x:Key="AccentSoftBrush" Color="#E4EBE0" />
         <SolidColorBrush x:Key="PositiveTintBrush" Color="#EFF2E9" />
@@ -75,9 +76,6 @@
                                               TextElement.Foreground="{TemplateBinding Foreground}" />
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Root" Property="Background" Value="#F1E8D7" />
-                            </Trigger>
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="Root" Property="Opacity" Value="0.8" />
                             </Trigger>
@@ -88,6 +86,15 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <!-- The hover colour belongs to the style, not to the template. As a
+                 template trigger it set the Border directly and so beat the
+                 accent hover of any BasedOn style: the primary button turned
+                 near-white on hover while keeping its white text. -->
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SurfaceHoverBrush}" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">

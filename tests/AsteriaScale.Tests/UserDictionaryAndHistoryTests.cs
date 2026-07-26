@@ -9,6 +9,7 @@ internal static class UserDictionaryAndHistoryTests
     public static async Task RunAsync(string tempRoot)
     {
         await VerifyUserDictionaryAsync(tempRoot);
+        await VerifyHandEditedRowsSurviveAsync(tempRoot);
         await VerifyUserEntryReachesLookupAsync(tempRoot);
         await VerifyLegacyJapaneseMigrationAsync(tempRoot);
         await VerifyHistoryAsync(tempRoot);
@@ -66,6 +67,60 @@ internal static class UserDictionaryAndHistoryTests
         {
             // Expected: the TSV loader treats leading # as a comment.
         }
+    }
+
+    /// <summary>
+    /// The user layer is a hand-editable TSV the UI advertises as such, so one
+    /// edit made through the editor must not rewrite rows it does not own.
+    /// </summary>
+    private static async Task VerifyHandEditedRowsSurviveAsync(string tempRoot)
+    {
+        string directory = Path.Combine(tempRoot, "user-dictionary-hand-edited");
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "eng-rus-user.tsv");
+        await File.WriteAllLinesAsync(
+            path,
+            [
+                "# мои заметки по глоссарию",
+                "hello\tпривет",
+                "",
+                "строка без табуляции",
+                "verge\tграница",
+                "# TODO: проверить перевод",
+                "verge\tкрай"
+            ]);
+
+        UserDictionaryService service = new(directory);
+        await service.SaveEntryAsync("verge", "грань");
+        Check(await service.RemoveEntryAsync("hello"),
+            "Removing an existing hand-typed row reported no change.");
+        await service.SaveEntryAsync("teetering", "на грани");
+
+        string[] lines = await File.ReadAllLinesAsync(path);
+        Check(lines.Contains("# мои заметки по глоссарию") &&
+              lines.Contains("# TODO: проверить перевод") &&
+              lines.Contains("строка без табуляции") &&
+              lines.Contains(string.Empty),
+            "An edit through the editor discarded comments or unparsed rows:\n" +
+            string.Join('\n', lines));
+        Check(lines.Count(line => line.StartsWith("verge\t", StringComparison.Ordinal)) == 1 &&
+              lines.Contains("verge\tгрань"),
+            "Saving over a duplicated key must replace the row that wins at load time.");
+        Check(!lines.Any(line => line.StartsWith("hello\t", StringComparison.Ordinal)),
+            "A removed key stayed in the file.");
+        Check(lines.Contains("teetering\tна грани"), "A new key was not appended.");
+
+        IReadOnlyList<UserDictionaryEntry> entries = await service.LoadAsync();
+        Check(entries.Count == 2 &&
+              entries.Single(entry => entry.Key == "verge").Translation == "грань",
+            $"The hand-edited layer did not load back as expected: {entries.Count} entries.");
+
+        // A no-op removal must not touch the file at all.
+        string before = await File.ReadAllTextAsync(path);
+        Check(!await service.RemoveEntryAsync("absent"),
+            "Removing a missing key reported a change.");
+        Check(await File.ReadAllTextAsync(path) == before,
+            "A no-op removal rewrote the user layer.");
     }
 
     /// <summary>

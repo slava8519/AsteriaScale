@@ -9,7 +9,14 @@ namespace AsteriaScale;
 
 public partial class App : System.Windows.Application
 {
+    private const string SingleInstanceMutexName =
+        "Local\\AsteriaScale-0D67E2AA-AC2A-4D77-92B7-45F61A43FE96";
+    private const string ShowRequestEventName =
+        "Local\\AsteriaScale-Show-0D67E2AA-AC2A-4D77-92B7-45F61A43FE96";
+
     private Mutex? _singleInstanceMutex;
+    private EventWaitHandle? _showRequestSignal;
+    private readonly ManualResetEvent _showRequestListenerStop = new(false);
     private readonly object _settingsSaveSync = new();
     private readonly HashSet<Task> _pendingSettingsSaves = [];
 
@@ -85,12 +92,31 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _singleInstanceMutex = new Mutex(true, "Local\\AsteriaScale-0D67E2AA-AC2A-4D77-92B7-45F61A43FE96", out bool isFirst);
+        _singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out bool isFirst);
         if (!isFirst)
         {
+            // Launching again is a request to see the running instance, not a
+            // no-op: the window may be hidden in the tray, so without this the
+            // user clicks the shortcut and nothing whatsoever happens.
+            if (EventWaitHandle.TryOpenExisting(
+                    ShowRequestEventName,
+                    out EventWaitHandle? running))
+            {
+                using (running)
+                {
+                    running.Set();
+                }
+            }
+
             Shutdown();
             return;
         }
+
+        _showRequestSignal = new EventWaitHandle(
+            false,
+            EventResetMode.AutoReset,
+            ShowRequestEventName);
+        StartShowRequestListener(_showRequestSignal);
 
         try
         {
@@ -344,9 +370,31 @@ public partial class App : System.Windows.Application
         }
     }
 
+    /// <summary>
+    /// Waits for another launch to ask for the window. A background thread, so
+    /// process exit can never be held open by it; the handles are reclaimed by
+    /// teardown rather than disposed out from under the wait.
+    /// </summary>
+    private void StartShowRequestListener(EventWaitHandle signal)
+    {
+        Thread listener = new(() =>
+        {
+            WaitHandle[] handles = [signal, _showRequestListenerStop];
+            while (WaitHandle.WaitAny(handles) == 0)
+            {
+                Dispatcher.BeginInvoke(new Action(ShowMainWindow));
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "AsteriaScale show-request listener"
+        };
+        listener.Start();
+    }
+
     public void ShowMainWindow()
     {
-        if (AsteriaWindow is null)
+        if (AsteriaWindow is null || AsteriaWindow.IsClosed)
         {
             return;
         }
@@ -509,6 +557,8 @@ public partial class App : System.Windows.Application
             // Shutdown must remain possible even if the external engine is already gone.
         }
 
+        _showRequestListenerStop.Set();
+        _showRequestSignal = null;
         _singleInstanceMutex?.ReleaseMutex();
         _singleInstanceMutex?.Dispose();
         _singleInstanceMutex = null;

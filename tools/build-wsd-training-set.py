@@ -37,11 +37,35 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BUILDER_PATH = REPOSITORY_ROOT / "scripts" / "build-dictionaries.py"
+TARGET_CONTEXT_PATH = (
+    REPOSITORY_ROOT / "src" / "AsteriaScale" / "Services" / "TargetCenteredContext.cs"
+)
 
-# Shorter examples carry no disambiguating context; much longer ones are
-# crowded out by the 128-token budget anyway (64 on NPU).
+
+def runtime_window_words() -> int:
+    """``TargetCenteredContextBuilder.MaximumWords``, read from the runtime.
+
+    Copying the number here would let the two drift apart silently, and a
+    training set built for the old window teaches the model an input shape
+    production stopped sending. Recalibrating that constant already requires a
+    ``--ranker-benchmark`` run; this makes the training set follow it.
+    """
+    match = re.search(
+        r"const\s+int\s+MaximumWords\s*=\s*(\d+)",
+        TARGET_CONTEXT_PATH.read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise SystemExit(f"cannot read MaximumWords from {TARGET_CONTEXT_PATH}")
+    return int(match.group(1))
+
+# Shorter examples carry no disambiguating context. The upper bound is not a
+# taste judgement: the runtime never hands the model more than this many words
+# around the target, so a longer example would reach it as a window this script
+# never scored. Counting uses the runtime's own word rule rather than
+# str.split, which sees "well-being," as one word where WordRegex sees
+# "well-being".
 MINIMUM_EXAMPLE_WORDS = 5
-MAXIMUM_EXAMPLE_WORDS = 40
+MAXIMUM_EXAMPLE_WORDS = runtime_window_words()
 # A lemma needs rival senses for the choice to mean anything.
 MINIMUM_SENSES_PER_LEMMA = 2
 MAXIMUM_NEGATIVES_PER_POSITIVE = 7
@@ -57,6 +81,7 @@ MAXIMUM_DEFINITION_OVERLAP = 0.6
 MAXIMUM_ENRICHMENT_OVERLAP = 0.7
 VALIDATION_SHARE = 0.03
 TOKEN_PATTERN = re.compile(r"[a-z0-9']+")
+HOLDOUT_PATTERN = re.compile(r"ranker-holdout", re.IGNORECASE)
 STOP_WORDS = frozenset(
     """a an and are as at be by for from had has have in into is it its of on or
     that the this to was were which who with without not no such other any""".split()
@@ -86,6 +111,57 @@ is_usable_english_definition = BUILDER.is_usable_english_definition
 normalize_english = BUILDER.normalize_english
 sense_enrichment = BUILDER._kaikki_sense_enrichment
 inflected_forms = BUILDER._kaikki_inflected_forms
+
+
+def runtime_words(text: str) -> list[str]:
+    """Word spans exactly as TargetCenteredContextBuilder.WordRegex sees them.
+
+    That regex is ``[\\p{L}\\p{M}\\p{N}]+(?:['’-][\\p{L}\\p{M}\\p{N}]+)*``; the
+    scan below is the same rule written the way build-dictionaries.py writes its
+    tokenizer, so the two stay comparable by eye.
+    """
+    result: list[str] = []
+    start = -1
+    index = 0
+    while index < len(text):
+        if unicodedata.category(text[index])[0] in {"L", "M", "N"}:
+            if start < 0:
+                start = index
+            index += 1
+            continue
+
+        if (
+            start >= 0
+            and text[index] in {"'", "’", "-"}
+            and index + 1 < len(text)
+            and unicodedata.category(text[index + 1])[0] in {"L", "M", "N"}
+        ):
+            index += 1
+            continue
+
+        if start >= 0:
+            result.append(text[start:index])
+            start = -1
+        index += 1
+
+    if start >= 0:
+        result.append(text[start:])
+    return result
+
+
+def is_token_character(character: str) -> bool:
+    """``RankerTargetAnchor.IsTokenCharacter`` — the worker's own boundary rule.
+
+    Letters, digits, combining marks, dash punctuation and apostrophes continue
+    a token, so an occurrence touching one of them is not standalone and
+    ``BuildMarkedContext`` refuses to mark it. ``str.isalnum`` alone accepts
+    "well-being" as an occurrence of "well", which the worker would reject.
+    """
+    return (
+        character.isalnum()
+        or unicodedata.category(character) in {"Mn", "Mc", "Me", "Pd"}
+        or character in {"'", "’", "ʼ"}
+    )
 
 
 def content_words(text: str) -> set[str]:
@@ -131,7 +207,7 @@ def find_surface(example: str, forms: list[str]) -> tuple[int, str] | None:
             before = example[index - 1] if index > 0 else " "
             after_index = index + len(needle)
             after = example[after_index] if after_index < len(example) else " "
-            if before.isalnum() or after.isalnum():
+            if is_token_character(before) or is_token_character(after):
                 continue
             candidate = (index, example[index : index + len(needle)])
             # Prefer the longest matched surface at the earliest position, so
@@ -148,14 +224,33 @@ def marked_context(example: str, index: int, surface: str) -> str:
     ).strip()
 
 
+def reject_holdouts(paths: list[Path]) -> None:
+    """Frozen holdouts may not shape the training set (invariant 7).
+
+    Reading only the ``target`` field looks harmless — the exclusion can only
+    make a later measurement more conservative — but it still lets the holdout
+    decide what the model is trained on, and a set that shaped training is no
+    longer blind. ARCHITECTURE.md invariant 7 and AGENTS.md rule 5 reserve these
+    files for one-shot final confirmation, so this refuses rather than warns:
+    the previous default silently opened all three.
+    """
+    offenders = sorted({path.name for path in paths if HOLDOUT_PATTERN.search(path.name)})
+    if offenders:
+        raise SystemExit(
+            "refusing to read frozen holdouts (" + ", ".join(offenders) + "): "
+            "ARCHITECTURE.md invariant 7 and AGENTS.md rule 5 allow them only for "
+            "one-shot final confirmation, never for preparing training data. Use "
+            "assets/Ranker/ranker-benchmark.json for dev-set exclusions."
+        )
+
+
 def collect_excluded_lemmas(paths: list[Path]) -> tuple[set[str], list[str]]:
     """Target lemmas that must never appear in training.
 
     Only the ``target`` field is read — never a label, never an expected
     translation. Excluding evaluated lemmas can only make the measurement more
-    conservative, and a holdout that shares vocabulary with the training set
-    stops being a holdout (AGENTS.md rule 5; each opening is recorded in
-    docs/RESEARCH.md).
+    conservative. Frozen holdouts are rejected outright by ``reject_holdouts``
+    before this runs; these are dev sets, which tuning is allowed to consult.
     """
     excluded: set[str] = set()
     notes: list[str] = []
@@ -190,7 +285,23 @@ def load_shipped_definitions(path: Path) -> dict[str, set[str]]:
     return shipped
 
 
-def iter_entries(path: Path, limit: int | None):
+def source_digest(path: Path) -> tuple[int, str]:
+    """Size and SHA-256 of the source dump.
+
+    The dump is several gigabytes, is not in git and is versioned only by the
+    day it was downloaded, so a run that does not record which bytes it read
+    cannot be reproduced or compared against another machine's run.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+            size += len(block)
+    return size, digest.hexdigest()
+
+
+def iter_entries(path: Path, limit: int | None, statistics: defaultdict):
     with path.open(encoding="utf-8") as handle:
         for number, line in enumerate(handle):
             if limit is not None and number >= limit:
@@ -201,20 +312,28 @@ def iter_entries(path: Path, limit: int | None):
             try:
                 yield json.loads(line)
             except json.JSONDecodeError:
+                # A silent skip cannot be told apart from a truncated download,
+                # which would quietly shrink the training set instead of failing.
+                statistics["source_lines_unparsed"] += 1
                 continue
 
 
 def build(arguments: argparse.Namespace) -> int:
-    excluded, exclusion_notes = collect_excluded_lemmas(
-        [Path(value) for value in arguments.exclude]
-    )
+    exclude_paths = [Path(value) for value in arguments.exclude]
+    reject_holdouts(exclude_paths)
+    excluded, exclusion_notes = collect_excluded_lemmas(exclude_paths)
     shipped = load_shipped_definitions(Path(arguments.sidecar))
+
+    source = Path(arguments.source)
+    provenance = (
+        None if arguments.skip_source_digest else source_digest(source)
+    )
 
     # lemma -> definition -> [definition, enrichment, pos, examples]
     lemmas: dict[str, dict[str, dict]] = defaultdict(dict)
     statistics = defaultdict(int)
 
-    for item in iter_entries(Path(arguments.source), arguments.max_entries):
+    for item in iter_entries(source, arguments.max_entries, statistics):
         word = clean(item.get("word"))
         lemma = normalize_english(word)
         if not lemma or lemma in excluded:
@@ -246,7 +365,7 @@ def build(arguments: argparse.Namespace) -> int:
                 text = clean(entry.get("text"))
                 if not text:
                     continue
-                words = text.split()
+                words = runtime_words(text)
                 if not MINIMUM_EXAMPLE_WORDS <= len(words) <= MAXIMUM_EXAMPLE_WORDS:
                     statistics["examples_out_of_range"] += 1
                     continue
@@ -361,6 +480,10 @@ def build(arguments: argparse.Namespace) -> int:
     train = sum(1 for group in groups if group["split"] == "train")
     matched = statistics["shipped_definitions_matched"]
     total = statistics["shipped_definitions_total"]
+    if provenance is not None:
+        print(f"source                   : {source.name}")
+        print(f"  bytes                  : {provenance[0]}")
+        print(f"  sha-256                : {provenance[1]}")
     print(f"entries scanned          : {statistics['entries']}")
     print(f"lemmas with rival senses : {len(lemmas) - statistics['lemmas_single_sense']}")
     print(f"groups written           : {len(groups)} (train {train}, valid {len(groups) - train})")
@@ -372,6 +495,7 @@ def build(arguments: argparse.Namespace) -> int:
     print(f"dropped: no surface      : {statistics['examples_without_surface']}")
     print(f"dropped: overlaps gloss  : {statistics['examples_overlapping_definition']}")
     print(f"dropped: length          : {statistics['examples_out_of_range']}")
+    print(f"unparsed source lines    : {statistics['source_lines_unparsed']}")
     if total:
         print(
             f"sidecar parity           : {matched}/{total} definitions "
@@ -400,11 +524,17 @@ def main() -> int:
         default=[
             str(REPOSITORY_ROOT / "assets/Ranker/ranker-benchmark.json"),
             str(REPOSITORY_ROOT / "assets/Ranker/ranker-register-benchmark.json"),
-            str(REPOSITORY_ROOT / "assets/Ranker/ranker-holdout.json"),
-            str(REPOSITORY_ROOT / "assets/Ranker/ranker-holdout-v2.json"),
-            str(REPOSITORY_ROOT / "assets/Ranker/ranker-holdout-v3.json"),
         ],
-        help="Benchmark files whose target lemmas are kept out of training.",
+        help=(
+            "Dev benchmark files whose target lemmas are kept out of training. "
+            "Frozen ranker-holdout* sets are rejected: they may not shape "
+            "training data (ARCHITECTURE.md invariant 7)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-source-digest",
+        action="store_true",
+        help="Do not hash the source dump (faster; the run is then unreproducible).",
     )
     parser.add_argument(
         "--shipped-only",

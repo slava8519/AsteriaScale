@@ -47,7 +47,10 @@ internal static class LocalDictionaryNormalizationTests
             Path.Combine(bundled, "eng-rus-dialogue.tsv"),
             [
                 "well i don't know\tну не знаю",
-                "a bird flies\tлетит птица"
+                "a bird flies\tлетит птица",
+                // Built from "A bird flies at 119 mph": the generator drops the
+                // number, so every other speed shares this key.
+                "a bird flies at mph\tптица летит со скоростью 119 миль в час"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "jpn-rus.tsv"),
@@ -58,7 +61,10 @@ internal static class LocalDictionaryNormalizationTests
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "jpn-rus-dialogue.tsv"),
             [
-                "鳥飛ぶ\tлетит птица"
+                "鳥飛ぶ\tлетит птица",
+                // Built from "鳥が119羽飛ぶ" — Japanese keys keep only kana and
+                // kanji, so the count is dropped exactly as in English.
+                "鳥が羽飛ぶ\tптицы летят числом 119"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(user, "eng-rus-custom.tsv"),
@@ -95,6 +101,45 @@ internal static class LocalDictionaryNormalizationTests
             0);
         Check(sentenceFallback is { Found: true, IsPhrase: true, Translation: "ну не знаю" },
             $"The dialogue sentence fallback ignored a punctuated sentence: {sentenceFallback}");
+
+        // Digits are absent from sentence keys on both sides of the generator
+        // contract, so every numeric variant of a sentence collapses onto one
+        // key. Such a hit names a number the user is not looking at, which is
+        // worse than no sentence translation at all.
+        const string numericDialogue = "A bird flies at 911 mph.";
+        DictionaryLookupResult numericWord = await dictionary.LookupAsync(
+            numericDialogue,
+            "bird",
+            numericDialogue.IndexOf("bird", StringComparison.Ordinal));
+        Check(numericWord is { Found: true, Translation: "птица" } &&
+              numericWord.ContextTranslation.Length == 0,
+            "A digit-colliding sentence key reached the hover card: " +
+            $"'{numericWord.ContextTranslation}'");
+
+        DictionaryLookupResult numericFallback = await dictionary.LookupAsync(
+            numericDialogue,
+            "mph",
+            numericDialogue.IndexOf("mph", StringComparison.Ordinal));
+        Check(!numericFallback.Found,
+            $"A digit-colliding sentence key answered a hover: {numericFallback.Translation}");
+        Check(await dictionary.LookupExactEnglishDialogueAsync(numericDialogue) is null,
+            "The exact dialogue API returned a digit-colliding sentence translation.");
+
+        // The very same key still answers for a source that carries no digits,
+        // where the stored translation is the only thing it can mean.
+        Check(await dictionary.LookupExactEnglishDialogueAsync("A bird flies at mph") ==
+              "птица летит со скоростью 119 миль в час",
+            "The digit guard suppressed a verifiable exact sentence match.");
+
+        const string numericJapaneseDialogue = "鳥が911羽飛ぶ";
+        DictionaryLookupResult numericJapanese = await dictionary.LookupAsync(
+            numericJapaneseDialogue,
+            "鳥",
+            0);
+        Check(numericJapanese is { Found: true, Translation: "птица" } &&
+              numericJapanese.ContextTranslation.Length == 0,
+            "A digit-colliding Japanese sentence key reached the hover card: " +
+            $"'{numericJapanese.ContextTranslation}'");
 
         // OCR reads the typographic apostrophe; the dictionary stores don't.
         const string typographicDialogue = "“Well, I don’t know…”";

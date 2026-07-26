@@ -6,8 +6,49 @@ namespace AsteriaScale.Services;
 
 public sealed class MagpieConfigEditor
 {
+    internal const string BackupSuffix = ".before-asteria.json";
+
     private const double VisualNovelMinimumFrameRate = 10.0;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// The user's configuration as it was before Asteria first edited it. Undoing
+    /// an override belongs here rather than in a guessed Magpie default: guessing
+    /// would quietly change a setting Asteria never touched.
+    /// </summary>
+    private static async Task<JsonObject?> TryReadBackupAsync(
+        string configPath,
+        CancellationToken cancellationToken)
+    {
+        string backupPath = configPath + BackupSuffix;
+        if (!File.Exists(backupPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonNode.Parse(
+                await File.ReadAllTextAsync(backupPath, cancellationToken)) as JsonObject;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException)
+        {
+            // A damaged backup only means the key is dropped instead of
+            // restored; it must never block applying a preset.
+            return null;
+        }
+    }
+
+    private static void RestoreOrRemove(JsonObject target, JsonObject? original, string key)
+    {
+        if (original is not null && original.TryGetPropertyValue(key, out JsonNode? value))
+        {
+            target[key] = value?.DeepClone();
+            return;
+        }
+
+        target.Remove(key);
+    }
 
     public async Task ApplyPresetAsync(
         string configPath,
@@ -52,12 +93,13 @@ public sealed class MagpieConfigEditor
             defaultProfile["adjustCursorSpeed"] = true;
             defaultProfile["frameRateLimiterEnabled"] = isVisualNovelPreset;
             defaultProfile["maxFrameRate"] = normalizedFrameRateLimit;
-            if (isVisualNovelPreset)
-            {
-                // Magpie skips duplicate-frame detection completely in 3D game mode.
-                defaultProfile["3DGameMode"] = false;
-                defaultProfile["disableDirectFlip"] = false;
-            }
+            // Magpie skips duplicate-frame detection completely in 3D game mode.
+            // Written for every preset, not only the visual-novel ones: these are
+            // the same values CreateDefaultProfile gives a fresh profile, and
+            // writing them only in the VN branch left VN policy behind in the
+            // config after a switch back to a general preset.
+            defaultProfile["3DGameMode"] = false;
+            defaultProfile["disableDirectFlip"] = false;
         }
 
         JsonObject shortcuts = root["shortcuts"] as JsonObject ?? new JsonObject();
@@ -71,6 +113,17 @@ public sealed class MagpieConfigEditor
         {
             // A small redraw floor avoids aggressive GPU downclocking between VN scene changes.
             root["minFrameRate"] = VisualNovelMinimumFrameRate;
+        }
+        else
+        {
+            // Undo the VN floor rather than leave it applied to a general
+            // preset. This is the one override with no Asteria baseline to fall
+            // back on, so the user's own value is restored from the one-time
+            // backup and the key is simply dropped when they never had one.
+            RestoreOrRemove(
+                root,
+                await TryReadBackupAsync(configPath, cancellationToken),
+                "minFrameRate");
         }
 
         // Keep compiled shaders cached and allow the faster half-precision shader path.

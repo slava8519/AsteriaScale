@@ -87,6 +87,27 @@ Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRe
 сверяют `.build-revision` с Git HEAD и `.build-source-fingerprint` с манифестом путей, содержимого и удалений входных файлов, поэтому устаревший `dist` пересобирается даже в dirty worktree.
 Запущенное из трея приложение всё равно следует закрыть перед сборкой: Windows может удерживать файлы старой публикации.
 
+**Что обязано лежать в готовой публикации.** Список строится из дерева
+исходников (`Get-AsteriaRequiredDistFiles` в `scripts/build-state.ps1`) и
+проверяется дважды: `build.ps1` не отдаёт неполный staging, а `run`/`install`
+считают `dist` без любого из этих файлов устаревшим и пересобирают его.
+
+- `AsteriaScale.exe`, `THIRD_PARTY_NOTICES.md`, `LICENSE`;
+- `Dictionaries\` — каждый `assets\Dictionaries\*.tsv.gz`, плюс `README.md`,
+  `vn-build-manifest.json` и `vn-sources.lock.json`;
+- `TextHook\*.tsv` и `Morphology\*.tsv.gz` — по одному на исходный файл;
+- `Ranker\AsteriaScale.RankerWorker.exe` и **оба** набора моделей:
+  `Models\GlossBert\` (tokenizer, CPU-ONNX, три файла NPU-контекста) и
+  `Models\GlossEmbeddings\` (`eng-senses.vec`, `minilm-l6-v2.onnx`,
+  `tokenizer.json`). Модели не лежат в git — см.
+  [assets/Ranker/README.md](../assets/Ranker/README.md);
+- `AsteriaScale.Identity.msix` рядом с каталогом публикации: проверяется не
+  только его наличие, но и читаемость как пакета.
+
+`run.cmd` дополнительно требует, чтобы identity-пакет был **зарегистрирован**
+(`Add-AppxPackage`, это делает `install.cmd`): без package identity основной
+Windows OCR недоступен, и раньше приложение молча запускалось без него.
+
 ## Регенерация морфословаря
 
 `assets/Morphology/ru-morph.tsv.gz` (глагольные инфинитивы и прошедшее время

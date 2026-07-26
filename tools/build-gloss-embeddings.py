@@ -71,6 +71,21 @@ def load_glosses(path: Path) -> dict[str, list[str]]:
     return glosses
 
 
+def sense_content_sha256(path: Path) -> str:
+    """SHA-256 of the sidecar's *contents*, not of its gzip container.
+
+    gzip stores a timestamp and depends on the compressor, so hashing the file
+    bytes made the recorded value change whenever the sidecar was recompressed
+    from identical glosses. The runtime pins this value, so an unstable digest
+    made the documented regeneration produce an index it would then reject.
+    """
+    digest = hashlib.sha256()
+    with gzip.open(path, "rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def encode_batch(
     session: onnxruntime.InferenceSession,
     tokenizer: Tokenizer,
@@ -113,11 +128,15 @@ def main() -> None:
 
     glosses = load_glosses(args.senses)
     total = sum(len(values) for values in glosses.values())
-    sense_sha = hashlib.sha256(args.senses.read_bytes()).hexdigest()
+    sense_sha = sense_content_sha256(args.senses)
     print(f"keys={len(glosses):,} glosses={total:,}")
 
     header = {
-        "format": 1,
+        # 2: senseFileSha256 is the digest of the decompressed sidecar. Format 1
+        # hashed the gzip container, whose bytes change on every recompression
+        # even when every gloss is identical, so the value could not be
+        # reproduced and the shipped index no longer matches the sidecar on disk.
+        "format": 2,
         "model": MODEL_ID,
         "revision": REVISION,
         "dimensions": DIMENSIONS,
@@ -179,7 +198,22 @@ def main() -> None:
 
     elapsed = time.perf_counter() - started
     size = args.output.stat().st_size
+    index_sha = hashlib.sha256(args.output.read_bytes()).hexdigest()
     print(f"done: {total:,} vectors, {size / 1024 / 1024:.1f} MB, {elapsed:,.0f}s")
+
+    # The runtime pins every one of these. Printing them is the difference
+    # between a documented regeneration and one whose output the worker rejects
+    # with embedding_metadata_mismatch. Paste into RankerEngine.cs and update the
+    # table in assets/Ranker/README.md.
+    print()
+    print("RankerEngine.cs constants for this bundle:")
+    print(f"  EmbeddingIndexFormat      = 2;")
+    print(f"  EmbeddingIndexLength      = {size:_};")
+    print(f'  EmbeddingIndexSha256      = "{index_sha}";')
+    print(f'  EmbeddingSenseFileSha256  = "{sense_sha.upper()}";')
+    print(f"  EmbeddingKeyCount         = {len(glosses):_};")
+    print(f"  EmbeddingVectorCount      = {total:_};")
+    print(f'  EmbeddingBundleCacheTag   = "bi-{REVISION[:8]}-{index_sha[:8]}-...";')
 
 
 if __name__ == "__main__":

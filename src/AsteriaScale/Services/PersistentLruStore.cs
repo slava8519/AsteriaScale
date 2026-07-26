@@ -59,6 +59,13 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
 {
     private static readonly TimeSpan PersistenceDebounce = TimeSpan.FromMilliseconds(650);
 
+    // A failed background write leaves entries pending, so it has to be retried
+    // from here — nothing else will. A path that stays unwritable (a locked
+    // file, a full disk) must not turn that into a spin, so the retry backs off
+    // geometrically up to this ceiling and simply keeps waiting.
+    private static readonly TimeSpan MaximumPersistenceRetryDelay =
+        TimeSpan.FromSeconds(30);
+
     // One lock per path, not per instance: two stores over the same file must
     // not interleave their atomic replaces.
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> FileLocks =
@@ -80,6 +87,8 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
     private Task? _backgroundPersistTask;
     private long _mutationVersion;
     private long _lastCommittedVersion;
+    private int _consecutivePersistFailures;
+    private readonly CancellationTokenSource _disposal = new();
 
     public PersistentLruStore(
         string cachePath,
@@ -125,9 +134,14 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
         {
             ThrowIfDisposed();
             await EnsureLoadedLockedAsync(cancellationToken);
-            bool dirtyBefore = _dirty;
+            // The mutation counter, not the dirty edge, says whether this body
+            // changed anything. Keying on the edge meant a store that stayed
+            // dirty — because an earlier write failed — silently stopped
+            // evicting and never scheduled another write. SchedulePersistLocked
+            // is idempotent while a write is already pending.
+            long versionBefore = _mutationVersion;
             TResult result = body(new PersistentLruAccess<TEntry>(this, _entries));
-            if (_dirty && !dirtyBefore)
+            if (_mutationVersion != versionBefore)
             {
                 EvictToCapacityLocked();
                 SchedulePersistLocked();
@@ -282,12 +296,47 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
             return;
         }
 
-        _backgroundPersistTask = Task.Run(PersistAfterDebounceAsync);
+        TimeSpan delay = NextPersistDelayLocked();
+        _backgroundPersistTask = Task.Run(() => PersistAfterDebounceAsync(delay));
     }
 
-    private async Task PersistAfterDebounceAsync()
+    private TimeSpan NextPersistDelayLocked()
     {
-        await Task.Delay(PersistenceDebounce);
+        if (_consecutivePersistFailures == 0)
+        {
+            return PersistenceDebounce;
+        }
+
+        double milliseconds = PersistenceDebounce.TotalMilliseconds *
+                              Math.Pow(2, Math.Min(_consecutivePersistFailures, 8));
+        return TimeSpan.FromMilliseconds(
+            Math.Min(milliseconds, MaximumPersistenceRetryDelay.TotalMilliseconds));
+    }
+
+    private async Task PersistAfterDebounceAsync(TimeSpan delay)
+    {
+        try
+        {
+            await Task.Delay(delay, _disposal.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposal writes synchronously before cancelling, so there is
+            // nothing left to flush — and a backed-off retry must not hold
+            // shutdown open for its whole delay.
+            await _gate.WaitAsync(CancellationToken.None);
+            try
+            {
+                _backgroundPersistTask = null;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            return;
+        }
+
         CacheDocument? snapshot = null;
         long snapshotVersion = 0;
         bool persistenceFailed = false;
@@ -332,13 +381,24 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
         await _gate.WaitAsync();
         try
         {
-            if (snapshot is not null && snapshotVersion == _mutationVersion)
+            if (persistenceFailed)
             {
-                _dirty = false;
+                // Nothing reached the disk, so the entries are still pending:
+                // clearing _dirty here would drop them until some unrelated
+                // mutation happened to schedule another write.
+                _consecutivePersistFailures++;
+            }
+            else
+            {
+                _consecutivePersistFailures = 0;
+                if (snapshot is not null && snapshotVersion == _mutationVersion)
+                {
+                    _dirty = false;
+                }
             }
 
             _backgroundPersistTask = null;
-            if (_dirty && !_disposed && !persistenceFailed)
+            if (_dirty && !_disposed)
             {
                 SchedulePersistLocked();
             }
@@ -359,6 +419,7 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
         byte[] payload = SerializeWithinBudget(CreateSnapshotLocked());
         await PersistPayloadAsync(payload, _mutationVersion, cancellationToken);
         _dirty = false;
+        _consecutivePersistFailures = 0;
     }
 
     private async Task PersistPayloadAsync(
@@ -452,7 +513,7 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
             }
 
             _entries.Remove(oldest);
-            _dirty = true;
+            MarkDirtyLocked();
         }
     }
 
@@ -482,10 +543,15 @@ internal sealed class PersistentLruStore<TEntry> : IAsyncDisposable
             _gate.Release();
         }
 
+        // The pending write may be sitting in a backed-off retry delay; the
+        // synchronous persist above already covered its work.
+        await _disposal.CancelAsync();
         if (pendingPersistence is not null)
         {
             await pendingPersistence;
         }
+
+        _disposal.Dispose();
 
         // The semaphore stays alive on purpose: a request queued before disposal
         // must still acquire it, observe _disposed and release without racing an

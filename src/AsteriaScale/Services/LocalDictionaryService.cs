@@ -62,6 +62,7 @@ public sealed partial class LocalDictionaryService
     private const int MaximumMergedMeaningCount = 32;
     private const int MaximumMergedValueLength = 4 * 1024;
     private const int MaximumSenseCountPerKey = 128;
+    private const long MaximumHashedVersionBytes = 16L * 1024 * 1024;
 
     private readonly object _loadLock = new();
     private readonly string? _senseMetadataFileOverride;
@@ -507,6 +508,7 @@ public sealed partial class LocalDictionaryService
         cancellationToken.ThrowIfCancellationRequested();
         string key = NormalizeEnglishSentenceKey(sentence);
         return key.Length > 0 &&
+               CanTrustExactSentenceTranslation(sentence) &&
                _dialogueEnglishTranslations.TryGetValue(key, out string? translation)
             ? Limit(translation)
             : null;
@@ -832,12 +834,49 @@ public sealed partial class LocalDictionaryService
             fingerprint.Append('\u001f');
             fingerprint.Append(file.Length);
             fingerprint.Append('\u001f');
-            fingerprint.Append(file.LastWriteTimeUtc.Ticks);
+            // Size and timestamp alone let content that preserves both — a
+            // restored backup, a coarse-granularity filesystem — keep serving
+            // cached translations from the previous file. Hashing costs one more
+            // read of bytes this load is about to decompress anyway; above the
+            // threshold the timestamp stays the cheaper proxy, the same
+            // trade-off scripts/build-state.ps1 makes for large artifacts.
+            if (file.Length <= MaximumHashedVersionBytes)
+            {
+                fingerprint.Append(HashFileContent(path));
+            }
+            else
+            {
+                fingerprint.Append(file.LastWriteTimeUtc.Ticks);
+            }
+
             fingerprint.Append('\u001e');
         }
 
         return Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint.ToString())));
+    }
+
+    private static string HashFileContent(string path)
+    {
+        try
+        {
+            using FileStream stream = new(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read | FileShare.Delete,
+                64 * 1024,
+                FileOptions.SequentialScan);
+            return Convert.ToHexString(SHA256.HashData(stream));
+        }
+        catch (Exception exception) when (exception is IOException or
+                                          UnauthorizedAccessException)
+        {
+            // A file that cannot be read here is reported by the load that
+            // follows; the token falls back instead of failing first.
+            return new FileInfo(path).LastWriteTimeUtc.Ticks.ToString(
+                CultureInfo.InvariantCulture);
+        }
     }
 
     private static IReadOnlyList<string> DiscoverFiles(
@@ -1376,9 +1415,13 @@ public sealed partial class LocalDictionaryService
 
         int tokenIndex = FindClosestToken(tokens, characterIndex, hoveredWord);
         string normalizedSentence = context.SentenceKey;
-        _dialogueEnglishTranslations.TryGetValue(
-            normalizedSentence,
-            out string? dialogueTranslation);
+        string? dialogueTranslation = null;
+        if (CanTrustExactSentenceTranslation(text))
+        {
+            _dialogueEnglishTranslations.TryGetValue(
+                normalizedSentence,
+                out dialogueTranslation);
+        }
 
         Match hoveredToken = tokens[tokenIndex];
         string lexicalSurface = ExtractEnglishLexeme(text, hoveredToken);
@@ -1612,7 +1655,13 @@ public sealed partial class LocalDictionaryService
             anchor = Math.Max(0, normalized.Length / 2);
         }
 
-        _dialogueJapaneseTranslations.TryGetValue(normalized, out string? dialogueTranslation);
+        // Japanese sentence keys keep only kana and kanji, so they drop digits
+        // for the same reason the English ones do (invariant 1).
+        string? dialogueTranslation = null;
+        if (CanTrustExactSentenceTranslation(text))
+        {
+            _dialogueJapaneseTranslations.TryGetValue(normalized, out dialogueTranslation);
+        }
         int maximumLength = Math.Min(_maximumJapaneseLength, normalized.Length);
         for (int length = maximumLength; length >= 1; length--)
         {
@@ -1884,6 +1933,21 @@ public sealed partial class LocalDictionaryService
             EnglishTokenRegex()
                 .Matches((value ?? string.Empty).Normalize(NormalizationForm.FormC))
                 .Select(match => FoldEnglishCase(match.Value.Replace('’', '\''))));
+
+    /// <summary>
+    /// Whether an exact dialogue sentence translation may be trusted for this
+    /// source. Sentence keys drop digits on both sides of the contract —
+    /// <see cref="EnglishTokenRegex"/> and english_tokens in
+    /// build-dictionaries.py accept only letters and marks — so "call 119" and
+    /// "call 911" share one key and the stored translation may belong to the
+    /// other number. Until the shipped asset is rebuilt under a synchronized
+    /// runtime/generator contract, a digit in the source makes an exact
+    /// sentence hit unverifiable, and an unverifiable full-sentence answer is
+    /// worse than none: it silently replaces a correct per-word result.
+    /// Every consumer of a dialogue sentence key shares this one guard.
+    /// </summary>
+    internal static bool CanTrustExactSentenceTranslation(string? sentence) =>
+        !(sentence ?? string.Empty).Any(char.IsDigit);
 
     // Unicode default lower-casing is one-to-one in .NET. These expanding
     // folds cover the English-adjacent characters accepted by our dictionaries

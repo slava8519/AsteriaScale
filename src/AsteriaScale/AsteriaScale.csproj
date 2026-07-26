@@ -62,5 +62,10 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest"
              ExcludeFromSingleFile="true" />
+    <Content Include="..\..\LICENSE"
+             Link="LICENSE"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest"
+             ExcludeFromSingleFile="true" />
   </ItemGroup>
 </Project>

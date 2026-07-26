@@ -217,15 +217,14 @@ internal sealed class TranslationScaffoldBuilder
         try
         {
             // The shipped dialogue keys predate numeric sentence-key support,
-            // so "at 1" and "at 9" collide after normalization. Never bypass
-            // the model when the source contains a digit until that asset is
-            // rebuilt under a synchronized runtime/generator contract.
-            string? exactSentenceTranslation = sentence.Any(char.IsDigit)
-                ? null
-                : NormalizeExactSentenceTranslation(
-                    await _dictionary.LookupExactEnglishDialogueAsync(
-                        sentence,
-                        cancellationToken));
+            // so "at 1" and "at 9" collide after normalization. That guard now
+            // lives with the keys themselves, in
+            // LocalDictionaryService.CanTrustExactSentenceTranslation, so this
+            // path and the hover path cannot drift apart again.
+            string? exactSentenceTranslation = NormalizeExactSentenceTranslation(
+                await _dictionary.LookupExactEnglishDialogueAsync(
+                    sentence,
+                    cancellationToken));
             Match[] tokens = EnglishContextLexicon.TokenRegex()
                 .Matches(sentence)
                 .Cast<Match>()

@@ -77,6 +77,53 @@ internal static class BuildScriptSafetyTests
             if (-not [object]::ReferenceEquals($preserved, $original)) {
                 throw 'A clean rollback did not preserve the original failure object.'
             }
+
+            # A publish counts as complete only when every artifact the source
+            # tree publishes is present. Checking two executables let a dist
+            # with a deleted dictionary or model pass as current, so the user
+            # kept running an incomplete install until it failed at runtime.
+            $assetsRoot = Join-Path $root 'dist-completeness'
+            New-Item -ItemType Directory -Path `
+                (Join-Path $assetsRoot 'assets\Dictionaries'), `
+                (Join-Path $assetsRoot 'assets\TextHook'), `
+                (Join-Path $assetsRoot 'assets\Morphology') | Out-Null
+            Set-Content -LiteralPath (Join-Path $assetsRoot 'assets\Dictionaries\eng-rus.tsv.gz') -Value 'x'
+            Set-Content -LiteralPath (Join-Path $assetsRoot 'assets\TextHook\hooks.tsv') -Value 'x'
+            Set-Content -LiteralPath (Join-Path $assetsRoot 'assets\Morphology\forms.tsv.gz') -Value 'x'
+            $distOutput = Join-Path $assetsRoot 'dist\AsteriaScale'
+            $requiredDist = @(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput)
+            foreach ($expected in @(
+                (Join-Path $distOutput 'AsteriaScale.exe'),
+                (Join-Path $distOutput 'Dictionaries\eng-rus.tsv.gz'),
+                (Join-Path $distOutput 'TextHook\hooks.tsv'),
+                (Join-Path $distOutput 'Morphology\forms.tsv.gz'),
+                (Join-Path $distOutput 'THIRD_PARTY_NOTICES.md'),
+                (Join-Path $distOutput 'LICENSE'),
+                (Join-Path $distOutput 'Ranker\Models\GlossEmbeddings\minilm-l6-v2.onnx'))) {
+                if ($requiredDist -notcontains $expected) {
+                    throw "The dist completeness check ignores a published artifact: $expected"
+                }
+            }
+
+            # A truncated or half-written package must force a rebuild rather
+            # than count as an installed identity.
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $brokenIdentity = Join-Path $assetsRoot 'broken.msix'
+            Set-Content -LiteralPath $brokenIdentity -Value 'not a package'
+            if (Test-AsteriaIdentityPackage -Path $brokenIdentity) {
+                throw 'A corrupt identity package was accepted.'
+            }
+            if (Test-AsteriaIdentityPackage -Path (Join-Path $assetsRoot 'absent.msix')) {
+                throw 'A missing identity package was accepted.'
+            }
+            $packageSource = Join-Path $assetsRoot 'package-source'
+            New-Item -ItemType Directory -Path $packageSource | Out-Null
+            Set-Content -LiteralPath (Join-Path $packageSource 'AppxManifest.xml') -Value '<Package />'
+            $validIdentity = Join-Path $assetsRoot 'valid.msix'
+            [IO.Compression.ZipFile]::CreateFromDirectory($packageSource, $validIdentity)
+            if (-not (Test-AsteriaIdentityPackage -Path $validIdentity)) {
+                throw 'A readable identity package was rejected.'
+            }
             """;
 
         string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));

@@ -86,6 +86,13 @@ public partial class MainWindow : Window
         _hoverTranslation = hoverTranslation;
 
         InitializeComponent();
+
+        // A 1366×768 laptop at 125–150 % scaling offers far less work area than
+        // the designed size, and a window taller than the work area opens with
+        // its footer — where the scaling button lives — below the screen edge.
+        Width = Math.Min(Width, SystemParameters.WorkArea.Width);
+        Height = Math.Min(Height, SystemParameters.WorkArea.Height);
+
         WindowsList.ItemsSource = _visibleWindows;
         ProfilesList.ItemsSource = _profiles;
         PresetComboBox.ItemsSource = PresetCatalog.All;
@@ -887,10 +894,29 @@ public partial class MainWindow : Window
             : (_engine.IsAvailable ? "GPU-движок готов" : "Движок не найден");
     }
 
+    internal bool IsClosed { get; private set; }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        IsClosed = true;
+        base.OnClosed(e);
+    }
+
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
-        if (App.Current.IsExiting || !_settings.CloseToTray)
+        if (App.Current.IsExiting)
         {
+            return;
+        }
+
+        if (!_settings.CloseToTray)
+        {
+            // ShutdownMode is OnExplicitShutdown, so simply letting the window
+            // close would leave a running process with no window and no way
+            // back: the tray "Show" command would call Show() on a closed
+            // window and throw. Closing with CloseToTray off means quit.
+            e.Cancel = true;
+            _ = App.Current.ExitApplicationAsync();
             return;
         }
 

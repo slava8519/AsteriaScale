@@ -78,9 +78,23 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 
 ## Qwen 3.5
 
-- Model: `qwen3.5-2b-text-generic-gpu:3`, downloaded separately by Foundry Local
+- Model: `qwen3.5-2b-text-generic-cpu:1`, downloaded separately by Foundry Local
+  (`FoundryTranslationService.ModelId`)
 - License reported by the Foundry catalog: Apache-2.0
 - Role: local translation to Russian
+
+## all-MiniLM-L6-v2
+
+- Model: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+- Pinned revision: `c9745ed1`
+- License: Apache-2.0
+- Changes: exported to ONNX and paired with a precomputed int8 index of 225,217
+  gloss vectors plus a deterministic tokenizer artifact
+- Role: CPU-only bi-encoder prefilter that narrows a large sense inventory before
+  GlossBERT ranks it; it never selects a sense on its own
+- Encoder SHA-256: `6FD5D72FE4589F189F8EBC006442DBB529BB7CE38F8082112682524616046452`
+- Gloss index SHA-256: `13C0FB6DB773D85F94E2C930E2C49C8BC022BD2003550413BCF1F963CC55C2D3`
+- Tokenizer SHA-256: `BE50C3628F2BF5BB5E3A7F17B1F74611B2561A3A27EEAB05E5AA30F411572037`
 
 ## FreeDict / WikDict English–Russian data
 

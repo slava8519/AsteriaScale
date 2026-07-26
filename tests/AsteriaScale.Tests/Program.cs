@@ -2126,6 +2126,47 @@ try
             }
         }
 
+        // The register gate is defined per bucket (roadmap #14.2C phase C). An
+        // aggregate-only gate let a failing bucket hide behind healthy ones and
+        // let a bucket that abstained on every case vanish from the measurement,
+        // so a regression could be recorded as a pass.
+        RegisterFidelityBenchmark.BucketGate[] healthyRegisterBuckets =
+        [
+            new("masked", 40, 40, 40, 40, 0),
+            new("neutral-vulgar", 30, 28, 28, 27, 1),
+            new("sexual-ordinary", 34, 32, 31, 30, 1),
+            new("slang", 31, 30, 29, 28, 1)
+        ];
+        RegisterFidelityBenchmark.VerifyGates(healthyRegisterBuckets, unresolvedCount: 0);
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(healthyRegisterBuckets, unresolvedCount: 1),
+            "An unresolved register case passed the gate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates([], unresolvedCount: 0),
+            "A register run without buckets passed the gate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(
+                [
+                    new("masked", 40, 40, 40, 40, 0),
+                    new("neutral-vulgar", 30, 0, 0, 0, 0)
+                ],
+                unresolvedCount: 0),
+            "A bucket that abstained on every case passed the register gate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(
+                [
+                    // 105/110 faithful overall clears 90 %, one bucket at 50 % does not.
+                    new("masked", 100, 100, 100, 100, 0),
+                    new("neutral-vulgar", 10, 10, 10, 5, 0)
+                ],
+                unresolvedCount: 0),
+            "A bucket below register fidelity hid behind the aggregate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(
+                [new("masked", 40, 41, 41, 41, 0)],
+                unresolvedCount: 0),
+            "A bucket deciding more cases than it contains passed the gate.");
+
         string? repositoryRoot = AppContext.BaseDirectory;
         while (repositoryRoot is not null &&
                !File.Exists(Path.Combine(repositoryRoot, "AsteriaScale.slnx")))
@@ -2557,6 +2598,29 @@ try
         Assert(root["duplicateFrameDetectionMode"]!.GetValue<int>() == 1 &&
                !root["profiles"]![0]!["frameRateLimiterEnabled"]!.GetValue<bool>(),
             "Non-VN presets must retain dynamic duplicate detection and an unrestricted frame rate.");
+
+        // The written config must describe the preset selected now, not the
+        // presets applied before it. Without a backup to restore from, the VN
+        // redraw floor is dropped rather than guessed at.
+        Assert(!root.ContainsKey("minFrameRate"),
+            "The visual-novel redraw floor leaked into a general preset.");
+        Assert(!root["profiles"]![0]!["3DGameMode"]!.GetValue<bool>() &&
+               !root["profiles"]![0]!["disableDirectFlip"]!.GetValue<bool>(),
+            "A general preset must write the same profile policy as a fresh profile.");
+
+        // With the one-time backup present, the user's own value comes back
+        // instead of being dropped.
+        await File.WriteAllTextAsync(
+            path + MagpieConfigEditor.BackupSuffix,
+            "{\"minFrameRate\":55}");
+        await editor.ApplyPresetAsync(path, PresetCatalog.Find("vn-ultra"));
+        root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        Assert(root["minFrameRate"]!.GetValue<double>() == 10.0,
+            "The visual-novel redraw floor was not applied over a restored value.");
+        await editor.ApplyPresetAsync(path, PresetCatalog.Find("general"));
+        root = JsonNode.Parse(await File.ReadAllTextAsync(path))!.AsObject();
+        Assert(root["minFrameRate"]!.GetValue<double>() == 55.0,
+            "Leaving a visual-novel preset did not restore the user's own redraw floor.");
     });
 
     await RunAsync("Installed effects", () =>
@@ -2875,11 +2939,10 @@ try
     {
         Assert(args.Length > rankerBenchmarkArgument + 2,
             "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> [cpu|npu]");
-        GlossBertRankerProvider benchmarkProvider =
-            args.Length > rankerBenchmarkArgument + 3 &&
-            string.Equals(args[rankerBenchmarkArgument + 3], "npu", StringComparison.OrdinalIgnoreCase)
-                ? GlossBertRankerProvider.Npu
-                : GlossBertRankerProvider.Cpu;
+        GlossBertRankerProvider benchmarkProvider = ParseBenchmarkProvider(
+            args,
+            rankerBenchmarkArgument + 3,
+            "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> [cpu|npu]");
         int dumpArgument = Array.FindIndex(args, arg =>
             string.Equals(arg, "--dump", StringComparison.OrdinalIgnoreCase));
         string? dumpPath = dumpArgument >= 0 && args.Length > dumpArgument + 1
@@ -2933,11 +2996,10 @@ try
     {
         Assert(args.Length > registerBenchmarkArgument + 2,
             "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> [cpu|npu]");
-        GlossBertRankerProvider registerProvider =
-            args.Length > registerBenchmarkArgument + 3 &&
-            string.Equals(args[registerBenchmarkArgument + 3], "npu", StringComparison.OrdinalIgnoreCase)
-                ? GlossBertRankerProvider.Npu
-                : GlossBertRankerProvider.Cpu;
+        GlossBertRankerProvider registerProvider = ParseBenchmarkProvider(
+            args,
+            registerBenchmarkArgument + 3,
+            "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> [cpu|npu]");
         int registerReportArgument = Array.FindIndex(args, arg =>
             string.Equals(arg, "--register-report", StringComparison.OrdinalIgnoreCase));
         Assert(registerReportArgument < 0 ||
@@ -3144,6 +3206,27 @@ static (string SetPath, string Engine, string? DumpPath, string? RankerBaseDirec
     }
 
     return (setPath, engine, dumpPath, rankerBaseDirectory);
+}
+
+// Anything that was not exactly "npu" used to become CPU without a word, so a
+// typo produced a full benchmark report attributed to the wrong device — the
+// measurement equivalent of the silent provider fallback invariant 3 forbids.
+static GlossBertRankerProvider ParseBenchmarkProvider(string[] args, int index, string usage)
+{
+    if (args.Length <= index || args[index].StartsWith("--", StringComparison.Ordinal))
+    {
+        return GlossBertRankerProvider.Cpu;
+    }
+
+    string requested = args[index];
+    if (string.Equals(requested, "npu", StringComparison.OrdinalIgnoreCase))
+    {
+        return GlossBertRankerProvider.Npu;
+    }
+
+    Assert(string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase),
+        $"Unknown ranker provider '{requested}'. {usage}");
+    return GlossBertRankerProvider.Cpu;
 }
 
 static void Assert(bool condition, string message)

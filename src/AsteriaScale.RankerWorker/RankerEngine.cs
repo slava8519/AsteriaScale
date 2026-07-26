@@ -55,6 +55,12 @@ internal sealed class RankerEngine : IDisposable
         "sentence-transformers/all-MiniLM-L6-v2";
     private const string EmbeddingRevision =
         "c9745ed1d9f207416be6d2e6f8de32d1f16199bf";
+    // Format 1 recorded the SHA-256 of the gzip container; the shipped index is
+    // format 1, so this stays the historical container digest and no longer
+    // matches the sidecar on disk (recompression changes those bytes). A
+    // regenerated bundle is format 2, whose digest covers the decompressed
+    // contents — build-gloss-embeddings.py prints every constant to update.
+    private const int EmbeddingIndexFormat = 1;
     private const string EmbeddingSenseFileSha256 =
         "A15C4037F37137DD54CD5B3E451A6D4E1B3E847A7D94266CD40A7B3F970E85FF";
     private const int EmbeddingDimensions = 384;
@@ -370,7 +376,7 @@ internal sealed class RankerEngine : IDisposable
 
     private static void ValidateEmbeddingMetadata(GlossEmbeddingIndex index)
     {
-        if (index.Format != 1 ||
+        if (index.Format != EmbeddingIndexFormat ||
             !string.Equals(index.ModelId, EmbeddingModelId, StringComparison.Ordinal) ||
             !string.Equals(index.Revision, EmbeddingRevision, StringComparison.Ordinal) ||
             index.Dimensions != EmbeddingDimensions ||
