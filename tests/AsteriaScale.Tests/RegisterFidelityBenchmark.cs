@@ -19,6 +19,13 @@ internal static class RegisterFidelityBenchmark
     private const double MinimumSemanticPrecision = 0.90;
     private const double MinimumRegisterFidelity = 0.90;
     private const double MinimumNoUnjustifiedStrengthening = 0.95;
+    private static readonly string[] ExpectedBuckets =
+    [
+        "masked-euphemistic",
+        "neutral-vulgar",
+        "sexual-ordinary",
+        "slang-colloquial"
+    ];
 
     private sealed record RegisterCase(
         string Id,
@@ -414,10 +421,17 @@ internal static class RegisterFidelityBenchmark
                 $"{unresolvedCount} register case(s) produced no dictionary result.");
         }
 
-        if (buckets.Count == 0)
+        string[] actualBuckets = buckets
+            .Select(bucket => bucket.Bucket)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (actualBuckets.Length != ExpectedBuckets.Length ||
+            !actualBuckets.SequenceEqual(ExpectedBuckets, StringComparer.Ordinal))
         {
             throw new InvalidOperationException(
-                "The register benchmark produced no buckets at all.");
+                "The register benchmark must contain exactly the documented " +
+                $"buckets [{string.Join(", ", ExpectedBuckets)}]; got " +
+                $"[{string.Join(", ", actualBuckets)}].");
         }
 
         foreach (BucketGate bucket in buckets)
@@ -437,10 +451,10 @@ internal static class RegisterFidelityBenchmark
                     $"Register bucket '{bucket.Bucket}' reported inconsistent counts.");
             }
 
-            // Abstention is a legitimate outcome per case, but a bucket that
-            // decided nothing has undefined metrics — and an aggregate-only gate
-            // let exactly that pass, so a candidate could abstain its way out of
-            // every hard bucket and still be recorded as an improvement.
+            // Margin-only abstention is a documented runtime outcome, not an
+            // empty translation or provider failure. Still, a bucket that
+            // decided nothing has undefined quality metrics and could otherwise
+            // disappear from the effective gate while remaining in the file.
             if (bucket.DecidedCount == 0)
             {
                 throw new InvalidOperationException(

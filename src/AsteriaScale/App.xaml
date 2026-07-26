@@ -12,7 +12,7 @@
         <Color x:Key="SurfaceColor">#FBF8F1</Color>
         <Color x:Key="SurfaceRaisedColor">#FCFAF4</Color>
         <Color x:Key="AccentColor">#5F7A54</Color>
-        <Color x:Key="AccentHoverColor">#6E8A66</Color>
+        <Color x:Key="AccentHoverColor">#587450</Color>
         <Color x:Key="MintColor">#5C7A54</Color>
         <Color x:Key="PrimaryTextColor">#35302A</Color>
         <Color x:Key="SecondaryTextColor">#8B8064</Color>

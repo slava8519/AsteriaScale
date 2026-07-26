@@ -246,13 +246,13 @@ internal static class Program
         string errorCode,
         string error,
         RankerEngine engine) => new()
-    {
-        RequestId = requestId ?? string.Empty,
-        Ok = false,
-        Provider = engine.Provider,
-        Device = engine.Device,
-        ModelVersion = engine.ModelVersion,
-        ErrorCode = errorCode,
-        Error = error
-    };
+        {
+            RequestId = requestId ?? string.Empty,
+            Ok = false,
+            Provider = engine.Provider,
+            Device = engine.Device,
+            ModelVersion = engine.ModelVersion,
+            ErrorCode = errorCode,
+            Error = error
+        };
 }

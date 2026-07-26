@@ -1936,18 +1936,33 @@ public sealed partial class LocalDictionaryService
 
     /// <summary>
     /// Whether an exact dialogue sentence translation may be trusted for this
-    /// source. Sentence keys drop digits on both sides of the contract —
+    /// source. Sentence keys drop Unicode numbers on both sides of the contract —
     /// <see cref="EnglishTokenRegex"/> and english_tokens in
     /// build-dictionaries.py accept only letters and marks — so "call 119" and
     /// "call 911" share one key and the stored translation may belong to the
     /// other number. Until the shipped asset is rebuilt under a synchronized
-    /// runtime/generator contract, a digit in the source makes an exact
+    /// runtime/generator contract, a number in the source makes an exact
     /// sentence hit unverifiable, and an unverifiable full-sentence answer is
     /// worse than none: it silently replaces a correct per-word result.
     /// Every consumer of a dialogue sentence key shares this one guard.
     /// </summary>
-    internal static bool CanTrustExactSentenceTranslation(string? sentence) =>
-        !(sentence ?? string.Empty).Any(char.IsDigit);
+    internal static bool CanTrustExactSentenceTranslation(string? sentence)
+    {
+        // char.IsDigit covers only UTF-16 decimal-digit code units. Sentence
+        // keys drop every Unicode number, including fractions, circled/Roman
+        // numerals and supplementary-plane mathematical digits. Inspecting
+        // scalar values keeps all of those collision-prone sources out of the
+        // exact-dialogue fallback.
+        foreach (Rune rune in (sentence ?? string.Empty).EnumerateRunes())
+        {
+            if (Rune.IsNumber(rune))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     // Unicode default lower-casing is one-to-one in .NET. These expanding
     // folds cover the English-adjacent characters accepted by our dictionaries

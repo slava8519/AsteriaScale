@@ -286,27 +286,27 @@ public sealed class MagpieConfigEditor
         int scalingMode,
         bool isVisualNovelPreset,
         int visualNovelFrameRateLimit) => new()
-    {
-        ["scalingMode"] = scalingMode,
-        ["captureMethod"] = 0,
-        ["multiMonitorUsage"] = 0,
-        ["initialWindowedScaleFactor"] = 0,
-        ["customInitialWindowedScaleFactor"] = 1.25,
-        ["graphicsCardId"] = new JsonObject { ["idx"] = -1, ["vendorId"] = 0, ["deviceId"] = 0 },
-        ["frameRateLimiterEnabled"] = isVisualNovelPreset,
-        ["maxFrameRate"] = visualNovelFrameRateLimit,
-        ["3DGameMode"] = false,
-        ["captureTitleBar"] = false,
-        ["adjustCursorSpeed"] = true,
-        ["disableDirectFlip"] = false,
-        ["cursorScaling"] = 2,
-        ["customCursorScaling"] = 1.0,
-        ["cursorInterpolationMode"] = 0,
-        ["autoHideCursorEnabled"] = false,
-        ["autoHideCursorDelay"] = 3.0,
-        ["croppingEnabled"] = false,
-        ["cropping"] = new JsonObject { ["left"] = 0, ["top"] = 0, ["right"] = 0, ["bottom"] = 0 }
-    };
+        {
+            ["scalingMode"] = scalingMode,
+            ["captureMethod"] = 0,
+            ["multiMonitorUsage"] = 0,
+            ["initialWindowedScaleFactor"] = 0,
+            ["customInitialWindowedScaleFactor"] = 1.25,
+            ["graphicsCardId"] = new JsonObject { ["idx"] = -1, ["vendorId"] = 0, ["deviceId"] = 0 },
+            ["frameRateLimiterEnabled"] = isVisualNovelPreset,
+            ["maxFrameRate"] = visualNovelFrameRateLimit,
+            ["3DGameMode"] = false,
+            ["captureTitleBar"] = false,
+            ["adjustCursorSpeed"] = true,
+            ["disableDirectFlip"] = false,
+            ["cursorScaling"] = 2,
+            ["customCursorScaling"] = 1.0,
+            ["cursorInterpolationMode"] = 0,
+            ["autoHideCursorEnabled"] = false,
+            ["autoHideCursorDelay"] = 3.0,
+            ["croppingEnabled"] = false,
+            ["cropping"] = new JsonObject { ["left"] = 0, ["top"] = 0, ["right"] = 0, ["bottom"] = 0 }
+        };
 
     private static JsonObject CreateBaseConfig() => new()
     {

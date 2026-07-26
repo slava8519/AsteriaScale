@@ -10,7 +10,7 @@
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
 | Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | только для полного/экранного перевода |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
-| Python | 3.11+ | только для регенерации словарей |
+| Python | 3.11+ (`python` в `PATH`) | для полного smoke-набора и регенерации артефактов |
 
 ## Артефакты модели GlossBERT
 
@@ -25,6 +25,11 @@ Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx
 Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx_VITISAI.bin
 Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx.compatibility.txt
 ```
+
+CPU bi-encoder bundle `Models/GlossEmbeddings` также обязателен. В отличие от
+скомпилированного GlossBERT/NPU-набора, он полностью восстанавливается одной
+командой из [assets/Ranker/README.md](../assets/Ranker/README.md): скрипт создаёт
+индекс и сам помещает проверенные ONNX/tokenizer в требуемый каталог.
 
 ## Сборка и тесты
 
@@ -68,23 +73,39 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Relea
 ```powershell
 ./scripts/build.cmd    # publish в dist/AsteriaScale + Ranker + подпись identity-пакета
 ./scripts/install.cmd  # ярлык и автозапуск
-./scripts/run.cmd      # запуск без установки
+./scripts/run.cmd      # запуск после однократной регистрации identity через install
 ```
 
-`build.ps1` подписывает MSIX identity-пакет сертификатом `CN=Asteria Scale Local` из `Cert:\CurrentUser\My`. На новой машине создайте его один раз:
+`build.ps1` подписывает MSIX identity-пакет сертификатом `CN=Asteria Scale Local`
+из `Cert:\CurrentUser\My`. Самоподписанный сертификат разработки должен быть
+доверен текущим пользователем, иначе финальный `signtool verify /pa` и
+`Add-AppxPackage` корректно отвергнут пакет. На новой машине создайте его,
+экспортируйте только публичную часть и добавьте её в `TrustedPeople`:
 
 ```powershell
-New-SelfSignedCertificate -Type Custom -Subject "CN=Asteria Scale Local" `
+$certificate = New-SelfSignedCertificate -Type Custom -Subject "CN=Asteria Scale Local" `
   -KeyUsage DigitalSignature -CertStoreLocation "Cert:\CurrentUser\My" `
   -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+$publicCertificatePath = Join-Path ([IO.Path]::GetTempPath()) "asteria-scale-local.cer"
+Export-Certificate -Cert $certificate -FilePath $publicCertificatePath | Out-Null
+Import-Certificate -FilePath $publicCertificatePath `
+  -CertStoreLocation "Cert:\CurrentUser\TrustedPeople" | Out-Null
+Remove-Item -LiteralPath $publicCertificatePath
 ```
+
+Импортируется `.cer` без закрытого ключа; доверяйте так только собственному
+локальному сертификату разработки. Для распространения нужен сертификат от
+доверенного центра или сервис подписи.
 
 Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRecognizer` недоступен обычному Win32-процессу.
 
 Публикация сначала собирает и проверяет приложение, Ranker с обоими наборами моделей и подписанный identity-пакет
 в уникальном staging-каталоге внутри `dist`. Рабочие `dist/AsteriaScale` и `AsteriaScale.Identity.msix`
 заменяются только после всех проверок; при ошибке прежняя публикация остаётся на месте. `run` и `install`
-сверяют `.build-revision` с Git HEAD и `.build-source-fingerprint` с манифестом путей, содержимого и удалений входных файлов, поэтому устаревший `dist` пересобирается даже в dirty worktree.
+сверяют `.build-revision` с Git HEAD и `.build-source-fingerprint` с манифестом путей, содержимого и удалений входных файлов, поэтому устаревший `dist` пересобирается даже в dirty worktree. Закрытый
+`.build-output-manifest.json` дополнительно фиксирует путь, размер и SHA-256
+**каждого** опубликованного файла (включая DLL/runtime Ranker): удаление,
+добавление или повреждение любого файла также делает публикацию устаревшей.
 Запущенное из трея приложение всё равно следует закрыть перед сборкой: Windows может удерживать файлы старой публикации.
 
 **Что обязано лежать в готовой публикации.** Список строится из дерева
@@ -101,12 +122,26 @@ Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRe
   `Models\GlossEmbeddings\` (`eng-senses.vec`, `minilm-l6-v2.onnx`,
   `tokenizer.json`). Модели не лежат в git — см.
   [assets/Ranker/README.md](../assets/Ranker/README.md);
-- `AsteriaScale.Identity.msix` рядом с каталогом публикации: проверяется не
-  только его наличие, но и читаемость как пакета.
+- `AsteriaScale.Identity.msix` рядом с каталогом публикации: проверяются
+  манифест, block map, content types, обязательные PNG с точными размерами и
+  подпись `CN=Asteria Scale Local`; после подписания отдельно запускается
+  `signtool verify`.
 
 `run.cmd` дополнительно требует, чтобы identity-пакет был **зарегистрирован**
-(`Add-AppxPackage`, это делает `install.cmd`): без package identity основной
-Windows OCR недоступен, и раньше приложение молча запускалось без него.
+(`Add-AppxPackage`, это делает `install.cmd`) именно для текущего
+`dist\AsteriaScale`: sparse package хранит `ExternalLocation`, и регистрация из
+другого checkout не даёт identity этому EXE. Также сверяется SHA-256 реально
+зарегистрированного `AppxManifest.xml` с текущим подписанным MSIX, поэтому старые
+capabilities по тому же пути не считаются актуальными. Без package identity
+основной Windows OCR недоступен, и раньше приложение молча запускалось без него.
+
+`install.cmd` сначала пытается выполнить штатное транзакционное обновление. Для
+ограничения sparse MSIX «та же версия уже зарегистрирована» старый подписанный
+пакет, его `ExternalLocation` и прежний publish заранее сохраняются во временный
+rollback-набор; только после этого допустимы сборка и замена регистрации. Если
+новая регистрация не проходит, восстанавливаются и регистрация, и внешние
+файлы. При любой другой ошибке рабочая регистрация вообще не удаляется, а
+publish всё равно откатывается к согласованной с ней версии.
 
 ## Регенерация морфословаря
 

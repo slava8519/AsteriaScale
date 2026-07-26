@@ -34,10 +34,10 @@ internal static class SmartDictionaryQualityFoundationTests
                 15,
                 technical);
         Check(technicalSelection is
-            {
-                Translation: "выключатель",
-                Reason: "cleaner Russian dictionary surface"
-            },
+        {
+            Translation: "выключатель",
+            Reason: "cleaner Russian dictionary surface"
+        },
             $"A technical Latin annotation beat the clean surface: {technicalSelection}");
 
         SmartDictionarySenseGroup unbalanced = new(
@@ -258,10 +258,10 @@ internal static class SmartDictionaryQualityFoundationTests
                 durationContext.IndexOf("ago", StringComparison.Ordinal),
                 ago);
         Check(durationSelection is
-            {
-                Translation: "назад",
-                Reason: "duration-before-now construction"
-            },
+        {
+            Translation: "назад",
+            Reason: "duration-before-now construction"
+        },
             $"A duration + ago construction kept the awkward source form: {durationSelection}");
 
         SmartDictionarySurfaceSelection? noContextSelection =
@@ -284,10 +284,10 @@ internal static class SmartDictionaryQualityFoundationTests
         SmartDictionarySurfaceSelection? uiSelection =
             SmartDictionarySenseResolver.SelectSurfaceForm("Save", "Save", 0, fileSave);
         Check(uiSelection is
-            {
-                Translation: "сохранить",
-                Reason: "standalone save command"
-            },
+        {
+            Translation: "сохранить",
+            Reason: "standalone save command"
+        },
             $"A standalone Save label did not prefer the command form: {uiSelection}");
 
         const string sentence = "They save files daily.";
@@ -318,10 +318,10 @@ internal static class SmartDictionaryQualityFoundationTests
                 conjunctionContext.IndexOf("while", StringComparison.Ordinal),
                 candidates);
         Check(conjunctionInventory is
-            {
-                InferredPartOfSpeech: "conj",
-                PartOfSpeechFilterApplied: true
-            } && conjunctionInventory.Groups.All(group => group.PartOfSpeech == "conj"),
+        {
+            InferredPartOfSpeech: "conj",
+            PartOfSpeechFilterApplied: true
+        } && conjunctionInventory.Groups.All(group => group.PartOfSpeech == "conj"),
             "A clause-introducing while retained its noun sense inventory.");
 
         const string nounContext = "I waited for a while.";
@@ -391,10 +391,10 @@ internal static class SmartDictionaryQualityFoundationTests
                 clausePlan.Outcomes.Select(outcome => outcome.Translation).ToArray(),
                 "English");
         Check(clauseInventory is
-            {
-                InferredPartOfSpeech: "conj",
-                PartOfSpeechFilterApplied: true
-            } && clauseSelection is { Translation: "что" },
+        {
+            InferredPartOfSpeech: "conj",
+            PartOfSpeechFilterApplied: true
+        } && clauseSelection is { Translation: "что" },
             $"A content-clause that was not resolved conservatively: {clauseSelection}");
 
         const string determinerContext = "That book belongs to me.";

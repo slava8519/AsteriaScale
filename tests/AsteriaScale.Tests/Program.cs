@@ -164,6 +164,10 @@ try
         "Magpie config and backup safety",
         () => MagpieSafetyTests.RunAsync(tempRoot));
 
+    await RunAsync(
+        "Application lifecycle and theme safety",
+        ApplicationLifecycleSafetyTests.RunAsync);
+
     await RunAsync("Local dictionary lookup", async () =>
     {
         string mergedMeanings = LocalDictionaryService.MergeBundledMeanings(
@@ -885,10 +889,10 @@ try
                 3,
                 closeSense);
         Assert(closedOnce is
-               {
-                   Translation: "закрыть",
-                   Reason: "single completed action aspect"
-               },
+        {
+            Translation: "закрыть",
+            Reason: "single completed action aspect"
+        },
             $"Grammeme aspect must prefer the perfective for a completed action: {closedOnce}");
 
         SmartDictionarySurfaceSelection? progressive =
@@ -898,11 +902,11 @@ try
                 7,
                 breathingSense);
         Assert(progressive is
-               {
-                   Translation: "вздыхать",
-                   Confidence: >= 0.95,
-                   Reason: "progressive or durative aspect"
-               },
+        {
+            Translation: "вздыхать",
+            Confidence: >= 0.95,
+            Reason: "progressive or durative aspect"
+        },
             $"A progressive action did not prefer the durative Russian surface: {progressive}");
 
         SmartDictionarySurfaceSelection? completed =
@@ -912,11 +916,11 @@ try
                 3,
                 breathingSense);
         Assert(completed is
-               {
-                   Translation: "вздохнуть",
-                   Confidence: >= 0.9,
-                   Reason: "single completed action aspect"
-               },
+        {
+            Translation: "вздохнуть",
+            Confidence: >= 0.9,
+            Reason: "single completed action aspect"
+        },
             $"A completed action did not prefer the semelfactive Russian surface: {completed}");
 
         SmartDictionarySenseGroup pastParadigm = new(
@@ -935,12 +939,12 @@ try
                 5,
                 pastParadigm);
         Assert(feminine is
-               {
-                   SourceIndex: 1,
-                   Translation: "вздохнула",
-                   Confidence: >= 0.98,
-                   Reason: "Russian past-tense agreement"
-               },
+        {
+            SourceIndex: 1,
+            Translation: "вздохнула",
+            Confidence: >= 0.98,
+            Reason: "Russian past-tense agreement"
+        },
             $"The selected sense did not preserve Russian subject agreement: {feminine}");
 
         SmartDictionarySenseGroup registerVariants = new(
@@ -963,11 +967,11 @@ try
         // softening. A vulgar sense over the same inventory is covered by
         // SmartDictionaryQualityFoundationTests.
         Assert(safeRegister is
-               {
-                   SourceIndex: 2,
-                   Translation: "лицо",
-                   Reason: "matching sense register"
-               },
+        {
+            SourceIndex: 2,
+            Translation: "лицо",
+            Reason: "matching sense register"
+        },
             $"A marked literary/slang form outranked the neutral form: {safeRegister}");
 
         SmartDictionarySenseGroup stableSynonyms = new(
@@ -985,11 +989,11 @@ try
                 15,
                 stableSynonyms);
         Assert(stable is
-               {
-                   SourceIndex: 7,
-                   Translation: "взгляд",
-                   Reason: "stable dictionary source order"
-               },
+        {
+            SourceIndex: 7,
+            Translation: "взгляд",
+            Reason: "stable dictionary source order"
+        },
             $"Unmarked synonyms did not retain stable source priority: {stable}");
 
         SmartDictionarySenseInventory filteredVerbs =
@@ -1221,10 +1225,10 @@ try
                 "separated",
                 getSeparatedSentence.IndexOf("separated", StringComparison.Ordinal));
         Assert(patientSurface is
-               {
-                   Translation: "отделиться от",
-                   Reason: "passive or result-state construction"
-               } &&
+        {
+            Translation: "отделиться от",
+            Reason: "passive or result-state construction"
+        } &&
                patientSpan is
                {
                    Source: "get separated from",
@@ -1907,11 +1911,11 @@ try
                 "Не было никаких признаков того, что она это сделает.",
                 ["знак", "признак", "след", "вывеска"]);
         Assert(tatoebaSign is
-               {
-                   Translation: "признак",
-                   Confidence: >= 0.99,
-                   Reason: "exact Tatoeba sentence alignment"
-               },
+        {
+            Translation: "признак",
+            Confidence: >= 0.99,
+            Reason: "exact Tatoeba sentence alignment"
+        },
             $"An exact Tatoeba sentence must align an inflected unique meaning: {tatoebaSign}");
 
         SmartDictionaryHeuristicSelection? tatoebaSharedStem =
@@ -2132,10 +2136,10 @@ try
         // so a regression could be recorded as a pass.
         RegisterFidelityBenchmark.BucketGate[] healthyRegisterBuckets =
         [
-            new("masked", 40, 40, 40, 40, 0),
-            new("neutral-vulgar", 30, 28, 28, 27, 1),
-            new("sexual-ordinary", 34, 32, 31, 30, 1),
-            new("slang", 31, 30, 29, 28, 1)
+            new("masked-euphemistic", 41, 15, 15, 15, 0),
+            new("neutral-vulgar", 30, 18, 18, 18, 0),
+            new("sexual-ordinary", 34, 16, 16, 16, 0),
+            new("slang-colloquial", 30, 17, 17, 17, 0)
         ];
         RegisterFidelityBenchmark.VerifyGates(healthyRegisterBuckets, unresolvedCount: 0);
         AssertThrows<InvalidOperationException>(
@@ -2147,25 +2151,64 @@ try
         AssertThrows<InvalidOperationException>(
             () => RegisterFidelityBenchmark.VerifyGates(
                 [
-                    new("masked", 40, 40, 40, 40, 0),
-                    new("neutral-vulgar", 30, 0, 0, 0, 0)
+                    new("masked-euphemistic", 41, 41, 41, 41, 0),
+                    new("neutral-vulgar", 30, 30, 30, 30, 0),
+                    new("sexual-ordinary", 34, 34, 34, 34, 0)
                 ],
                 unresolvedCount: 0),
-            "A bucket that abstained on every case passed the register gate.");
+            "A register run with a missing documented bucket passed the gate.");
         AssertThrows<InvalidOperationException>(
             () => RegisterFidelityBenchmark.VerifyGates(
                 [
-                    // 105/110 faithful overall clears 90 %, one bucket at 50 % does not.
-                    new("masked", 100, 100, 100, 100, 0),
-                    new("neutral-vulgar", 10, 10, 10, 5, 0)
+                    new("masked-euphemistic", 41, 41, 41, 41, 0),
+                    new("neutral-vulgar", 30, 30, 30, 30, 0),
+                    new("sexual-ordinary", 34, 34, 34, 34, 0),
+                    new("slang-renamed", 30, 30, 30, 30, 0)
+                ],
+                unresolvedCount: 0),
+            "A renamed register bucket passed the gate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(
+                [
+                    new("masked-euphemistic", 41, 41, 41, 41, 0),
+                    new("neutral-vulgar", 30, 0, 0, 0, 0),
+                    new("sexual-ordinary", 34, 34, 34, 34, 0),
+                    new("slang-colloquial", 30, 30, 30, 30, 0)
+                ],
+                unresolvedCount: 0),
+            "A register bucket that abstained on every case passed the gate.");
+        AssertThrows<InvalidOperationException>(
+            () => RegisterFidelityBenchmark.VerifyGates(
+                [
+                    // 125/130 faithful overall clears 90 %, one bucket at 50 % does not.
+                    new("masked-euphemistic", 100, 100, 100, 100, 0),
+                    new("neutral-vulgar", 10, 10, 10, 5, 0),
+                    new("sexual-ordinary", 10, 10, 10, 10, 0),
+                    new("slang-colloquial", 10, 10, 10, 10, 0)
                 ],
                 unresolvedCount: 0),
             "A bucket below register fidelity hid behind the aggregate.");
         AssertThrows<InvalidOperationException>(
             () => RegisterFidelityBenchmark.VerifyGates(
-                [new("masked", 40, 41, 41, 41, 0)],
+                [
+                    new("masked-euphemistic", 41, 42, 42, 42, 0),
+                    new("neutral-vulgar", 30, 30, 30, 30, 0),
+                    new("sexual-ordinary", 34, 34, 34, 34, 0),
+                    new("slang-colloquial", 30, 30, 30, 30, 0)
+                ],
                 unresolvedCount: 0),
             "A bucket deciding more cases than it contains passed the gate.");
+
+        const string providerUsage = "provider must be cpu or npu";
+        Assert(ParseBenchmarkProvider(["cpu"], 0, providerUsage) == GlossBertRankerProvider.Cpu,
+            "The benchmark parser rejected the explicit CPU provider.");
+        Assert(ParseBenchmarkProvider(["NPU"], 0, providerUsage) == GlossBertRankerProvider.Npu,
+            "The benchmark parser rejected the explicit NPU provider.");
+        Assert(ParseBenchmarkProvider(["--report"], 0, providerUsage) == GlossBertRankerProvider.Cpu,
+            "An omitted benchmark provider did not retain the documented CPU default.");
+        AssertThrows<InvalidOperationException>(
+            () => ParseBenchmarkProvider(["gpu"], 0, providerUsage),
+            "A provider typo silently fell back to CPU.");
 
         string? repositoryRoot = AppContext.BaseDirectory;
         while (repositoryRoot is not null &&
@@ -2274,6 +2317,14 @@ try
     await RunAsync(
         "Shared GlossBERT decision cache",
         () => GlossBertDecisionCacheTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "WSD training-set safety and runtime parity",
+        () => WsdTrainingToolTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Atomic generated-output safety",
+        () => AtomicOutputSafetyTests.RunAsync(tempRoot));
 
     await RunAsync(
         "Ranker worker fail-open and target anchoring",

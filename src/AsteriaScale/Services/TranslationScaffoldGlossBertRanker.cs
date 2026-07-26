@@ -127,19 +127,18 @@ internal sealed class TranslationScaffoldGlossBertRanker
         // so storing under the pre-inference key would file a cross-only verdict
         // as a "bi+cross" one and serve it back to a healthy worker after a
         // restart. File the verdict under the identity that actually produced it.
-        string storageKey = string.Equals(
-            selection.ModelVersion,
+        string storageKey = GlossBertDecisionCache.ResolveStorageFingerprint(
+            cacheKey,
             modelIdentity,
-            StringComparison.Ordinal)
-            ? cacheKey
-            : GlossBertDecisionCache.CreateFingerprint(
+            selection.ModelVersion,
+            resultModelIdentity => GlossBertDecisionCache.CreateFingerprint(
                 rankerContext.Text,
                 request.Target,
                 rankerContext.CharacterIndex,
                 request.Plan,
                 provider,
-                selection.ModelVersion,
-                dictionaryVersion);
+                resultModelIdentity,
+                dictionaryVersion));
         await _decisionCache.StoreAsync(
             storageKey,
             new GlossBertDecision(

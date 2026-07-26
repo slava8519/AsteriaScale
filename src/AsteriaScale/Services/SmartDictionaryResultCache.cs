@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace AsteriaScale.Services;
 
@@ -25,13 +24,13 @@ public sealed record SmartDictionaryCacheRequest(
 /// A small persistent LRU for completed Smart Dictionary selections.
 /// Cache keys are SHA-256 fingerprints, so source dialogue is never written to disk.
 /// </summary>
-public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
+public sealed class SmartDictionaryResultCache : IAsyncDisposable
 {
     internal const string EngineLabel = "NPU OCR  •  SMART-CACHE";
 
-    // 3: key text normalization moved from FormKC to FormC, so entries written
-    // under the old rule have to be discarded rather than silently reused.
-    internal const int SchemaVersion = 3;
+    // 4: key text normalization now mirrors the pinned BertNormalizer clean_text
+    // stage, separating controls BERT deletes from whitespace BERT preserves.
+    internal const int SchemaVersion = 4;
     private const int MaximumCandidates = 128;
     private const int MaximumStoredTextLength = 1_024;
     private const int DefaultCapacity = 4_096;
@@ -240,7 +239,7 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         }
 
         StringBuilder canonical = new();
-        AppendComponent(canonical, "asteria-smart-dictionary-cache-key-v3");
+        AppendComponent(canonical, "asteria-smart-dictionary-cache-key-v4");
         AppendComponent(canonical, NormalizeLanguage(request.SourceLanguage));
         AppendComponent(canonical, CreateLocalContextWindow(
             request.Context,
@@ -309,12 +308,10 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         Truncate(NormalizeText(value));
 
     // FormC, not FormKC: compatibility folding merges inputs the ranker can tell
-    // apart ("ﬁle" and "file" tokenize differently), so one verdict would be
-    // served for the other. See GlossBertDecisionCache.NormalizeText.
+    // apart. The shared helper also follows BertNormalizer clean_text rather
+    // than treating every .NET whitespace scalar as an interchangeable space.
     private static string NormalizeText(string? value) =>
-        value is null
-            ? string.Empty
-            : WhitespaceRegex().Replace(value.Normalize(NormalizationForm.FormC), " ").Trim();
+        RankerCacheTextNormalizer.Normalize(value);
 
     private static string Truncate(string value) =>
         value.Length <= MaximumStoredTextLength ? value : value[..MaximumStoredTextLength];
@@ -329,9 +326,6 @@ public sealed partial class SmartDictionaryResultCache : IAsyncDisposable
         builder.Append(value);
         builder.Append('|');
     }
-
-    [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
-    private static partial Regex WhitespaceRegex();
 
 
     private sealed record NormalizedRequest(string Key, string[] Candidates);

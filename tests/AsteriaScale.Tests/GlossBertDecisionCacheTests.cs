@@ -20,6 +20,8 @@ internal static class GlossBertDecisionCacheTests
         VerifyScaffoldAndHoverAgree();
         VerifyAbstentionThresholdIsKeyed();
         VerifyEnrichmentGateIsClosed();
+        VerifyBertCleanTextParity();
+        VerifyStorageFingerprintFollowsResponseIdentity();
         VerifyFingerprintSeparation();
         await VerifyRoundTripAndPersistenceAsync(root);
         await VerifyRejectedDecisionsAsync(root);
@@ -54,6 +56,105 @@ internal static class GlossBertDecisionCacheTests
                   tokenStart,
                   plan) == scaffoldKey,
             "Collapsible whitespace produced a different decision key.");
+    }
+
+    private static void VerifyBertCleanTextParity()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        const string spaced = "She sat on the bank and watched the water.";
+        const string joined = "Shesat on the bank and watched the water.";
+        string spacedKey = Fingerprint(
+            spaced,
+            spaced.IndexOf(Target, StringComparison.Ordinal),
+            plan);
+        string joinedKey = Fingerprint(
+            joined,
+            joined.IndexOf(Target, StringComparison.Ordinal),
+            plan);
+
+        foreach (char preservedWhitespace in
+                 new[] { '\t', '\n', '\r', '\u00A0', '\u2028', '\u2029' })
+        {
+            string separated = $"She{preservedWhitespace}sat on the bank and watched the water.";
+            Check(Fingerprint(
+                    separated,
+                    separated.IndexOf(Target, StringComparison.Ordinal),
+                    plan) == spacedKey,
+                $"BertNormalizer whitespace U+{(int)preservedWhitespace:X4} did not map to a space.");
+        }
+
+        foreach (char deletedControl in new[] { '\u000B', '\u000C', '\u0085' })
+        {
+            string controlled = $"She{deletedControl}sat on the bank and watched the water.";
+            string controlledKey = Fingerprint(
+                controlled,
+                controlled.IndexOf(Target, StringComparison.Ordinal),
+                plan);
+            Check(controlledKey == joinedKey,
+                $"BertNormalizer-deleted U+{(int)deletedControl:X4} was not removed from the decision key.");
+            Check(controlledKey != spacedKey,
+                $"BertNormalizer-deleted U+{(int)deletedControl:X4} collided with a preserved space.");
+        }
+
+        string shiftedRepeated = new string('\u000B', 100) + "bank river bank";
+        int firstRaw = shiftedRepeated.IndexOf(Target, StringComparison.Ordinal);
+        int secondRaw = shiftedRepeated.LastIndexOf(Target, StringComparison.Ordinal);
+        string firstShiftedKey = Fingerprint(shiftedRepeated, firstRaw, plan);
+        string secondShiftedKey = Fingerprint(shiftedRepeated, secondRaw, plan);
+        Check(firstShiftedKey != secondShiftedKey,
+            "Deleted leading controls made two repeated target occurrences share a decision key.");
+
+        const string repeated = "bank river bank";
+        Check(firstShiftedKey == Fingerprint(repeated, 0, plan) &&
+              secondShiftedKey == Fingerprint(
+                  repeated,
+                  repeated.LastIndexOf(Target, StringComparison.Ordinal),
+                  plan),
+            "The cache key no longer follows the worker's marked context through clean_text.");
+    }
+
+    private static void VerifyStorageFingerprintFollowsResponseIdentity()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        const string lookupIdentity = "model-v1;pipeline=bi+cross";
+        const string responseIdentity = "model-v1;pipeline=cross";
+        string lookupKey = Fingerprint(
+            Sentence,
+            tokenStart,
+            plan,
+            modelIdentity: lookupIdentity);
+        bool factoryCalled = false;
+
+        string unchanged = GlossBertDecisionCache.ResolveStorageFingerprint(
+            lookupKey,
+            lookupIdentity,
+            lookupIdentity,
+            identity =>
+            {
+                factoryCalled = true;
+                return Fingerprint(Sentence, tokenStart, plan, modelIdentity: identity);
+            });
+        Check(unchanged == lookupKey && !factoryCalled,
+            "An unchanged response identity rebuilt or changed the storage fingerprint.");
+
+        string changed = GlossBertDecisionCache.ResolveStorageFingerprint(
+            lookupKey,
+            lookupIdentity,
+            responseIdentity,
+            identity =>
+            {
+                factoryCalled = true;
+                return Fingerprint(Sentence, tokenStart, plan, modelIdentity: identity);
+            });
+        Check(factoryCalled && changed != lookupKey,
+            "A cross-only response was stored under the warmed bi+cross identity.");
+        Check(changed == Fingerprint(
+                Sentence,
+                tokenStart,
+                plan,
+                modelIdentity: responseIdentity),
+            "The replacement storage fingerprint did not use the response model identity.");
     }
 
     /// <summary>
@@ -362,14 +463,14 @@ internal static class GlossBertDecisionCacheTests
                 Fingerprint(Sentence, tokenStart + 2, plan),
                 plan.Outcomes.Count);
             Check(hoverHit is
-                {
-                    Abstained: false,
-                    SelectedGroupId: 1,
-                    Margin: 0.42,
-                    Confidence: 0.81,
-                    ModelVersion: "model-v1",
-                    Pipeline: "cross"
-                },
+            {
+                Abstained: false,
+                SelectedGroupId: 1,
+                Margin: 0.42,
+                Confidence: 0.81,
+                ModelVersion: "model-v1",
+                Pipeline: "cross"
+            },
                 $"A scaffold decision did not survive a restart for hover: {hoverHit}");
 
             GlossBertDecision? abstainedHit = await reopened.TryGetAsync(
@@ -456,7 +557,7 @@ internal static class GlossBertDecisionCacheTests
                     "cross")),
             "A normalizable abstention was rejected outright.");
         Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is
-            { Abstained: true, SelectedGroupId: null },
+        { Abstained: true, SelectedGroupId: null },
             "A stored abstention kept a group id.");
     }
 
@@ -519,7 +620,7 @@ internal static class GlossBertDecisionCacheTests
                     "cross")),
             "A cache recovered from a corrupt file refused to store.");
         Check(await cache.TryGetAsync(key, plan.Outcomes.Count) is
-            { SelectedGroupId: 0 },
+        { SelectedGroupId: 0 },
             "A cache recovered from a corrupt file lost the new decision.");
     }
 

@@ -1513,21 +1513,18 @@ internal sealed class RankerEngine : IDisposable
         int? characterIndex)
     {
         int anchor = Math.Clamp(characterIndex ?? 0, 0, context.Length);
-        int index = RankerSelectionLogic.FindClosestTargetOccurrence(
+        if (!RankerTargetAnchor.TryBuildMarkedContext(
             context,
             target,
-            anchor);
-        if (index < 0)
+            anchor,
+            out string markedContext))
         {
             throw new RankerException(
                 "target_not_in_context",
                 "The selected target does not occur in the source context.");
         }
 
-        return (
-            context[..index] +
-            "\"" + context.Substring(index, target.Length) + "\"" +
-            context[(index + target.Length)..]).Trim();
+        return markedContext;
     }
 
     private static IReadOnlyList<GroupScore> GroupScores(

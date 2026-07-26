@@ -159,7 +159,17 @@ public sealed class UserDictionaryService
             string japaneseKey = LocalDictionaryService.NormalizeJapanese(rawKey);
             if (japaneseKey.Length > 0)
             {
-                if (value.Length > 0 && japaneseKeys.Add(japaneseKey))
+                // A Japanese-looking key alone does not make this a dictionary
+                // row. In particular, a whitespace-only value is unparsed by
+                // TryParseRow and belongs to the user's hand-edited source file;
+                // migrating a valid neighbouring row must not delete it.
+                if (value.Length == 0)
+                {
+                    retainedEnglishLines.Add(line);
+                    continue;
+                }
+
+                if (japaneseKeys.Add(japaneseKey))
                 {
                     legacyJapaneseEntries.Add(
                         new UserDictionaryEntry(japaneseKey, value, "JA"));

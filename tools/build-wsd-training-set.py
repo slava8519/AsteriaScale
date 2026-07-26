@@ -40,6 +40,13 @@ BUILDER_PATH = REPOSITORY_ROOT / "scripts" / "build-dictionaries.py"
 TARGET_CONTEXT_PATH = (
     REPOSITORY_ROOT / "src" / "AsteriaScale" / "Services" / "TargetCenteredContext.cs"
 )
+SENSE_RESOLVER_PATH = (
+    REPOSITORY_ROOT
+    / "src"
+    / "AsteriaScale"
+    / "Services"
+    / "SmartDictionarySenseResolver.cs"
+)
 
 
 def runtime_window_words() -> int:
@@ -58,6 +65,29 @@ def runtime_window_words() -> int:
         raise SystemExit(f"cannot read MaximumWords from {TARGET_CONTEXT_PATH}")
     return int(match.group(1))
 
+
+def runtime_enrichment_length_share() -> float:
+    """Read the production group-relative enrichment threshold.
+
+    Training pairs must expose hints for exactly the candidates that would be
+    enriched together at inference. Reading the ratio from its canonical C#
+    definition makes a later recalibration fail visibly instead of leaving the
+    silver data on a stale policy.
+    """
+    match = re.search(
+        r"const\s+double\s+EnrichmentLengthShare\s*=\s*"
+        r"([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+        SENSE_RESOLVER_PATH.read_text(encoding="utf-8"),
+    )
+    if match is None:
+        raise SystemExit(
+            f"cannot read EnrichmentLengthShare from {SENSE_RESOLVER_PATH}"
+        )
+    denominator = float(match.group(2))
+    if denominator == 0:
+        raise SystemExit(f"invalid EnrichmentLengthShare in {SENSE_RESOLVER_PATH}")
+    return float(match.group(1)) / denominator
+
 # Shorter examples carry no disambiguating context. The upper bound is not a
 # taste judgement: the runtime never hands the model more than this many words
 # around the target, so a longer example would reach it as a window this script
@@ -66,6 +96,7 @@ def runtime_window_words() -> int:
 # "well-being".
 MINIMUM_EXAMPLE_WORDS = 5
 MAXIMUM_EXAMPLE_WORDS = runtime_window_words()
+ENRICHMENT_LENGTH_SHARE = runtime_enrichment_length_share()
 # A lemma needs rival senses for the choice to mean anything.
 MINIMUM_SENSES_PER_LEMMA = 2
 MAXIMUM_NEGATIVES_PER_POSITIVE = 7
@@ -301,21 +332,27 @@ def source_digest(path: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def iter_entries(path: Path, limit: int | None, statistics: defaultdict):
+def iter_entries(path: Path, limit: int | None):
     with path.open(encoding="utf-8") as handle:
-        for number, line in enumerate(handle):
-            if limit is not None and number >= limit:
+        for number, line in enumerate(handle, start=1):
+            if limit is not None and number > limit:
                 return
             line = line.strip()
             if not line:
                 continue
             try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
+                entry = json.loads(line)
+            except json.JSONDecodeError as error:
                 # A silent skip cannot be told apart from a truncated download,
                 # which would quietly shrink the training set instead of failing.
-                statistics["source_lines_unparsed"] += 1
-                continue
+                raise SystemExit(
+                    f"{path}:{number}: invalid JSONL: {error.msg}"
+                ) from error
+            if not isinstance(entry, dict):
+                raise SystemExit(
+                    f"{path}:{number}: invalid JSONL: expected a JSON object"
+                )
+            yield entry
 
 
 def build(arguments: argparse.Namespace) -> int:
@@ -333,15 +370,18 @@ def build(arguments: argparse.Namespace) -> int:
     lemmas: dict[str, dict[str, dict]] = defaultdict(dict)
     statistics = defaultdict(int)
 
-    for item in iter_entries(source, arguments.max_entries, statistics):
+    for item in iter_entries(source, arguments.max_entries):
         word = clean(item.get("word"))
         lemma = normalize_english(word)
-        if not lemma or lemma in excluded:
-            statistics["entries_excluded"] += 1 if lemma in excluded else 0
+        forms = [word, *inflected_forms(item)]
+        normalized_forms = {normalize_english(form) for form in forms}
+        normalized_forms.discard("")
+        excluded_forms = excluded.intersection(normalized_forms)
+        if not lemma or excluded_forms:
+            statistics["entries_excluded"] += 1 if excluded_forms else 0
             continue
         statistics["entries"] += 1
         part_of_speech = clean(item.get("pos"))
-        forms = [word, *inflected_forms(item)]
         for sense in item.get("senses", []):
             definition = definition_of(sense)
             if not definition:
@@ -425,9 +465,17 @@ def build(arguments: argparse.Namespace) -> int:
                         continue
                 context = marked_context(example, index, surface)
                 example_words = content_words(example)
+                candidate_records = [positive, *negatives]
+                plain_glosses = [
+                    f"{surface}: {record['definition']}"
+                    for record in candidate_records
+                ]
+                longest_gloss = max(
+                    (len(gloss.split()) for gloss in plain_glosses),
+                    default=0,
+                )
 
-                def render(record: dict) -> dict:
-                    plain = f"{surface}: {record['definition']}"
+                def render(record: dict, plain: str) -> dict:
                     hint = record["enrichment"]
                     hint_words = content_words(hint) if hint else set()
                     leaks = bool(hint_words) and (
@@ -436,10 +484,16 @@ def build(arguments: argparse.Namespace) -> int:
                     )
                     if leaks:
                         statistics["enrichment_dropped_leak"] += 1
+                    outmatched = (
+                        len(plain.split())
+                        < longest_gloss * ENRICHMENT_LENGTH_SHARE
+                    )
                     return {
                         "text_b": plain,
                         "text_b_enriched": (
-                            f"{plain} — {hint}" if hint and not leaks else plain
+                            f"{plain} — {hint}"
+                            if hint and not leaks and outmatched
+                            else plain
                         ),
                     }
 
@@ -454,10 +508,15 @@ def build(arguments: argparse.Namespace) -> int:
                     "surface": surface,
                     "split": split,
                     "text_a": context,
-                    "pairs": [{**render(positive), "label": 1}],
+                    "pairs": [],
                 }
-                for other in negatives:
-                    group["pairs"].append({**render(other), "label": 0})
+                for index, record in enumerate(candidate_records):
+                    group["pairs"].append(
+                        {
+                            **render(record, plain_glosses[index]),
+                            "label": 1 if index == 0 else 0,
+                        }
+                    )
                 groups.append(group)
                 statistics["positives"] += 1
                 statistics["negatives"] += len(negatives)
@@ -495,7 +554,6 @@ def build(arguments: argparse.Namespace) -> int:
     print(f"dropped: no surface      : {statistics['examples_without_surface']}")
     print(f"dropped: overlaps gloss  : {statistics['examples_overlapping_definition']}")
     print(f"dropped: length          : {statistics['examples_out_of_range']}")
-    print(f"unparsed source lines    : {statistics['source_lines_unparsed']}")
     if total:
         print(
             f"sidecar parity           : {matched}/{total} definitions "

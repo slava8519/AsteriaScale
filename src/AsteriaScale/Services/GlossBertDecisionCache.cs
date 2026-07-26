@@ -45,10 +45,10 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     /// </summary>
     internal const string SenseRankingEpoch = "smart-sense-v8-bicross";
 
-    // 2: key text normalization moved from FormKC to FormC. Entries written by
-    // the old rule must be discarded, not merely missed — a stale "ﬁle" key
-    // folded to "file" would otherwise be a live hit for a different input.
-    private const int SchemaVersion = 2;
+    // 3: key text normalization now mirrors the pinned BertNormalizer clean_text
+    // stage. Old entries may have merged controls that BERT deletes with spaces
+    // that BERT preserves, so they must be discarded rather than reused.
+    private const int SchemaVersion = 3;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTextLength = 256;
@@ -125,15 +125,21 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
         ArgumentException.ThrowIfNullOrWhiteSpace(dictionaryVersion);
 
-        string normalizedSentence = NormalizeText(sentence);
+        // Resolve and mark on the raw UTF-16 input, exactly as the worker does,
+        // before clean_text removes controls or collapses whitespace. Applying
+        // the original cursor after normalization can select a different one of
+        // two repeated targets and reuse a verdict for the wrong occurrence.
+        bool anchored = RankerTargetAnchor.TryBuildMarkedContext(
+            sentence,
+            target,
+            characterIndex,
+            out string markedSentence);
+        string normalizedSentence = NormalizeText(
+            anchored ? markedSentence : sentence);
         string normalizedTarget = NormalizeText(target);
-        int anchor = RankerTargetAnchor.FindClosestOccurrence(
-            normalizedSentence,
-            normalizedTarget,
-            characterIndex);
 
         StringBuilder canonical = new();
-        Append(canonical, "asteria-glossbert-decision-cache-v1");
+        Append(canonical, "asteria-glossbert-decision-cache-v3");
         Append(canonical, RankerProtocolV2.Version);
         Append(canonical, SenseRankingEpoch);
         // A cached verdict is only "what the ranker answered under this
@@ -145,14 +151,14 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         Append(canonical, dictionaryVersion);
         Append(canonical, normalizedSentence);
         Append(canonical, normalizedTarget);
-        // A target that does not occur as a standalone token has no shared
-        // anchor, so the raw index stays in the key instead of merging unrelated
-        // requests onto one entry.
-        Append(
-            canonical,
-            (anchor >= 0 ? anchor : characterIndex).ToString(
-                CultureInfo.InvariantCulture));
-        Append(canonical, anchor >= 0 ? "anchored" : "raw");
+        // Quotes in the marked sentence identify the selected occurrence. A
+        // target the worker would reject has no such identity, so retain its raw
+        // index rather than merging unrelated invalid requests.
+        Append(canonical, anchored ? "anchored" : "raw");
+        if (!anchored)
+        {
+            Append(canonical, characterIndex.ToString(CultureInfo.InvariantCulture));
+        }
         foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
         {
             Append(canonical, "outcome");
@@ -179,6 +185,30 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
 
         return Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(canonical.ToString())));
+    }
+
+    /// <summary>
+    /// Chooses the storage key from the model identity reported by the response.
+    /// A worker can lose its bi-encoder after warm-up and answer cross-only; that
+    /// verdict must not be filed under the earlier bi+cross lookup identity.
+    /// </summary>
+    internal static string ResolveStorageFingerprint(
+        string lookupFingerprint,
+        string lookupModelIdentity,
+        string resultModelIdentity,
+        Func<string, string> createFingerprint)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(lookupFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lookupModelIdentity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resultModelIdentity);
+        ArgumentNullException.ThrowIfNull(createFingerprint);
+
+        return string.Equals(
+            lookupModelIdentity,
+            resultModelIdentity,
+            StringComparison.Ordinal)
+            ? lookupFingerprint
+            : createFingerprint(resultModelIdentity);
     }
 
     /// <summary>
@@ -297,19 +327,11 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     private static double? NormalizeNumber(double? value) =>
         value is null || !double.IsFinite(value.Value) ? null : value;
 
-    // FormC, not FormKC: the key must not merge inputs the model can tell apart.
-    // Compatibility folding turns "ﬁle" into "file", but the worker tokenizes the
-    // original text, so the two produce different token ids and can earn
-    // different verdicts — one of which would then be served for the other.
-    // Canonical composition is safe because canonically equivalent strings
-    // tokenize identically.
+    // FormC, not FormKC: compatibility folding merges inputs the model can tell
+    // apart. The shared helper also distinguishes whitespace BERT maps to a
+    // space from control characters BERT deletes entirely.
     private static string NormalizeText(string? value) =>
-        value is null
-            ? string.Empty
-            : string.Join(
-                " ",
-                value.Normalize(NormalizationForm.FormC)
-                    .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        RankerCacheTextNormalizer.Normalize(value);
 
     private static string Truncate(string value) =>
         value.Length <= MaximumStoredTextLength

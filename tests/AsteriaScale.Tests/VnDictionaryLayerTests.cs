@@ -113,11 +113,11 @@ internal static class VnDictionaryLayerTests
             "crimson",
             hardContext.IndexOf("crimson", StringComparison.Ordinal));
         Check(hard is
-            {
-                Found: true,
-                IsPhrase: true,
-                Translation: "алая клятва"
-            },
+        {
+            Found: true,
+            IsPhrase: true,
+            Translation: "алая клятва"
+        },
             $"The hard VN row did not override the broad layer: {hard}");
         Check(hard.SenseCandidates.Count == 0,
             "A hard VN override retained broad/sense-sidecar candidates.");
@@ -137,11 +137,11 @@ internal static class VnDictionaryLayerTests
             "vow",
             userContext.IndexOf("vow", StringComparison.Ordinal));
         Check(user is
-            {
-                Found: true,
-                IsPhrase: true,
-                Translation: "пользовательская клятва"
-            },
+        {
+            Found: true,
+            IsPhrase: true,
+            Translation: "пользовательская клятва"
+        },
             $"A hard VN row overrode the authoritative user layer: {user}");
 
         const string softContext = "Moonlit branches crossed the window.";
@@ -204,11 +204,11 @@ internal static class VnDictionaryLayerTests
             "lolling",
             "He was lolling on the sofa.".IndexOf("lolling", StringComparison.Ordinal));
         Check(hardSuffixCollision is
-            {
-                Found: true,
-                Source: "lolling",
-                Translation: "бездельничать"
-            },
+        {
+            Found: true,
+            Source: "lolling",
+            Translation: "бездельничать"
+        },
             $"A VN-hard acronym displaced an exact broad -ing form: {hardSuffixCollision}");
 
         DictionaryLookupResult hardParticipleCollision = await dictionary.LookupAsync(
@@ -216,11 +216,11 @@ internal static class VnDictionaryLayerTests
             "damning",
             "The report contained damning evidence.".IndexOf("damning", StringComparison.Ordinal));
         Check(hardParticipleCollision is
-            {
-                Found: true,
-                Source: "damning",
-                Translation: "осуждающий"
-            },
+        {
+            Found: true,
+            Source: "damning",
+            Translation: "осуждающий"
+        },
             $"A VN-hard interjection displaced an exact broad participle: {hardParticipleCollision}");
 
         DictionaryLookupResult hardDerivedOnly = await dictionary.LookupAsync(
@@ -235,11 +235,11 @@ internal static class VnDictionaryLayerTests
             "waited",
             "They waited by the gate.".IndexOf("waited", StringComparison.Ordinal));
         Check(userLemma is
-            {
-                Found: true,
-                Source: "waited",
-                Translation: "ожидать"
-            },
+        {
+            Found: true,
+            Source: "waited",
+            Translation: "ожидать"
+        },
             $"A safe user lemma stopped overriding an exact broad form: {userLemma}");
     }
 
@@ -262,12 +262,12 @@ internal static class VnDictionaryLayerTests
             "oath",
             source.IndexOf("oath", StringComparison.Ordinal));
         Check(lookup is
-            {
-                Found: true,
-                IsPhrase: false,
-                Source: "oath",
-                Translation: "клятва"
-            },
+        {
+            Found: true,
+            IsPhrase: false,
+            Source: "oath",
+            Translation: "клятва"
+        },
             $"A scaffold-only anchor leaked into ordinary dictionary lookup: {lookup}");
 
         TranslationScaffold scaffold =
@@ -323,12 +323,12 @@ internal static class VnDictionaryLayerTests
             "prancing",
             lemmaCollisionSource.IndexOf("prancing", StringComparison.Ordinal));
         Check(lemmaCollisionLookup is
-            {
-                Found: true,
-                Source: "prancing",
-                MatchedEnglishKey: "prance",
-                Translation: "гарцевать"
-            },
+        {
+            Found: true,
+            Source: "prancing",
+            MatchedEnglishKey: "prance",
+            Translation: "гарцевать"
+        },
             "The lemma-collision regression did not exercise a user lemma behind " +
             $"an inflected scaffold surface: {lemmaCollisionLookup}");
         Check((await dictionary.FindEnglishScaffoldMatchesAsync(lemmaCollisionSource))
@@ -372,12 +372,12 @@ internal static class VnDictionaryLayerTests
             "bell",
             embedded.IndexOf("bell", StringComparison.Ordinal));
         Check(embeddedLookup is
-            {
-                Found: true,
-                IsPhrase: false,
-                Translation: "колокол",
-                ContextTranslation: ""
-            },
+        {
+            Found: true,
+            IsPhrase: false,
+            Translation: "колокол",
+            ContextTranslation: ""
+        },
             $"A dialogue sentence leaked into embedded lexical lookup: {embeddedLookup}");
         Check(await dictionary.LookupExactEnglishDialogueAsync(embedded) is null,
             "A dialogue sentence matched a larger source instead of the complete sentence.");

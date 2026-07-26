@@ -15,6 +15,35 @@ namespace AsteriaScale.RankerProtocol;
 public static class RankerTargetAnchor
 {
     /// <summary>
+    /// Builds the exact context string scored by the worker, including target
+    /// quotes and outer trimming. Keeping this beside anchor resolution lets the
+    /// host key the post-normalization model input without applying a raw UTF-16
+    /// cursor index to text whose controls or whitespace have already changed.
+    /// </summary>
+    public static bool TryBuildMarkedContext(
+        string context,
+        string target,
+        int characterIndex,
+        out string markedContext)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(target);
+
+        int index = FindClosestOccurrence(context, target, characterIndex);
+        if (index < 0)
+        {
+            markedContext = context.Trim();
+            return false;
+        }
+
+        markedContext = (
+            context[..index] +
+            "\"" + context.Substring(index, target.Length) + "\"" +
+            context[(index + target.Length)..]).Trim();
+        return true;
+    }
+
+    /// <summary>
     /// Returns the start index of the target occurrence closest to
     /// <paramref name="characterIndex"/>, or -1 when the target does not appear
     /// as a standalone token. Occurrences glued to surrounding word characters

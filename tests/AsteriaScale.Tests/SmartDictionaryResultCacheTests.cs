@@ -186,6 +186,54 @@ internal static class SmartDictionaryResultCacheTests
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(ligature),
             "A compatibility ligature the tokenizer sees as different shared a cache key.");
 
+        // BertNormalizer clean_text deletes VT, FF and NEL instead of turning
+        // them into spaces. .NET classifies all three as whitespace, so a broad
+        // whitespace collapse used to serve the spaced sentence's verdict for
+        // a joined token sequence the worker actually scored differently.
+        string joinedControlContext = context.Replace(
+            "alpha beta",
+            "alphabeta",
+            StringComparison.Ordinal);
+        SmartDictionaryCacheRequest joinedControl = request with
+        {
+            Context = joinedControlContext,
+            CharacterIndex = joinedControlContext.IndexOf("bank", StringComparison.Ordinal)
+        };
+        string joinedControlKey = SmartDictionaryResultCache.CreateKeyFingerprint(joinedControl);
+        foreach (char preservedWhitespace in
+                 new[] { '\t', '\n', '\r', '\u00A0', '\u2028', '\u2029' })
+        {
+            string separatedContext = context.Replace(
+                "alpha beta",
+                $"alpha{preservedWhitespace}beta",
+                StringComparison.Ordinal);
+            SmartDictionaryCacheRequest separated = request with
+            {
+                Context = separatedContext,
+                CharacterIndex = separatedContext.IndexOf("bank", StringComparison.Ordinal)
+            };
+            Check(SmartDictionaryResultCache.CreateKeyFingerprint(separated) == first,
+                $"BertNormalizer whitespace U+{(int)preservedWhitespace:X4} did not map to a space.");
+        }
+
+        foreach (char deletedControl in new[] { '\u000B', '\u000C', '\u0085' })
+        {
+            string controlledContext = context.Replace(
+                "alpha beta",
+                $"alpha{deletedControl}beta",
+                StringComparison.Ordinal);
+            SmartDictionaryCacheRequest controlled = request with
+            {
+                Context = controlledContext,
+                CharacterIndex = controlledContext.IndexOf("bank", StringComparison.Ordinal)
+            };
+            string controlledKey = SmartDictionaryResultCache.CreateKeyFingerprint(controlled);
+            Check(controlledKey == joinedControlKey,
+                $"BertNormalizer-deleted U+{(int)deletedControl:X4} was not removed from the result-cache key.");
+            Check(controlledKey != first,
+                $"BertNormalizer-deleted U+{(int)deletedControl:X4} collided with a preserved space.");
+        }
+
         // Beyond the window the model genuinely cannot see the difference, so
         // those requests still share a key. "Distant" is now defined by the
         // token budget instead of an arbitrary radius.

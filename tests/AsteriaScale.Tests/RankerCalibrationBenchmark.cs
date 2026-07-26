@@ -126,219 +126,219 @@ internal static class RankerCalibrationBenchmark
                 workerBaseDirectory,
                 TimeSpan.FromMinutes(10));
 
-        List<CaseResult> results = [];
-        List<(int Glosses, long Milliseconds)> selectLatencies = [];
-        Dictionary<string, int> pipelineCounts = new(StringComparer.Ordinal);
-        int skippedNoInventory = 0;
-        int skippedPhrase = 0;
-        int autoResolved = 0;
-        int deterministicResolved = 0;
-        int deterministicCorrect = 0;
-        foreach (BenchmarkCase benchmarkCase in cases)
-        {
-            DictionaryLookupResult lookup = await dictionary.LookupWithSenseMetadataAsync(
-                benchmarkCase.Context,
-                benchmarkCase.Target,
-                benchmarkCase.CharacterIndex);
-            if (lookup.Found &&
-                lookup.IsPhrase &&
-                (lookup.IsTrustedPhrase || !lookup.HasMultipleMeanings))
+            List<CaseResult> results = [];
+            List<(int Glosses, long Milliseconds)> selectLatencies = [];
+            Dictionary<string, int> pipelineCounts = new(StringComparer.Ordinal);
+            int skippedNoInventory = 0;
+            int skippedPhrase = 0;
+            int autoResolved = 0;
+            int deterministicResolved = 0;
+            int deterministicCorrect = 0;
+            foreach (BenchmarkCase benchmarkCase in cases)
             {
-                skippedPhrase++;
-                deterministicResolved++;
-                bool phraseCorrect = TranslationContainsExpected(
-                    lookup.Translation,
-                    benchmarkCase.ExpectedTranslation);
-                deterministicCorrect += phraseCorrect ? 1 : 0;
-                Console.WriteLine(
-                    $"  {benchmarkCase.Id,-24} phrase-bypass ({lookup.Source}) " +
-                    $"correct={(phraseCorrect ? "yes" : "NO")}");
-                continue;
-            }
-
-            if (!lookup.Found || lookup.SenseCandidates.Count == 0)
-            {
-                skippedNoInventory++;
-                Console.WriteLine($"  {benchmarkCase.Id,-24} no aligned sense inventory");
-                continue;
-            }
-
-            SmartDictionarySenseInventory inventory =
-                SmartDictionarySenseResolver.GroupCandidates(
+                DictionaryLookupResult lookup = await dictionary.LookupWithSenseMetadataAsync(
                     benchmarkCase.Context,
-                    lookup.Source,
-                    benchmarkCase.CharacterIndex,
-                    lookup.SenseCandidates);
-            SmartDictionaryRankerPlan plan =
-                SmartDictionarySenseResolver.CreateRankerPlan(
-                    benchmarkCase.Context,
-                    lookup.Source,
-                    benchmarkCase.CharacterIndex,
-                    inventory.Groups);
-            if (plan.Outcomes.Count < 2)
-            {
-                autoResolved++;
-                SmartDictionaryRankerOutcome? outcome = plan.Outcomes.FirstOrDefault();
-                if (outcome is not null)
+                    benchmarkCase.Target,
+                    benchmarkCase.CharacterIndex);
+                if (lookup.Found &&
+                    lookup.IsPhrase &&
+                    (lookup.IsTrustedPhrase || !lookup.HasMultipleMeanings))
                 {
+                    skippedPhrase++;
                     deterministicResolved++;
-                    bool autoCorrect = RussianLabelsMatch(
-                        outcome.Translation,
-                        NormalizeRussian(benchmarkCase.ExpectedTranslation));
-                    deterministicCorrect += autoCorrect ? 1 : 0;
+                    bool phraseCorrect = TranslationContainsExpected(
+                        lookup.Translation,
+                        benchmarkCase.ExpectedTranslation);
+                    deterministicCorrect += phraseCorrect ? 1 : 0;
+                    Console.WriteLine(
+                        $"  {benchmarkCase.Id,-24} phrase-bypass ({lookup.Source}) " +
+                        $"correct={(phraseCorrect ? "yes" : "NO")}");
+                    continue;
                 }
-                Console.WriteLine(
-                    $"  {benchmarkCase.Id,-24} auto-resolved without the model " +
-                    $"({outcome?.Translation ?? "<none>"})" +
-                    (outcome is null
-                        ? string.Empty
-                        : $" correct={(RussianLabelsMatch(outcome.Translation, NormalizeRussian(benchmarkCase.ExpectedTranslation)) ? "yes" : "NO")}"));
-                continue;
-            }
 
-            string expected = NormalizeRussian(benchmarkCase.ExpectedTranslation);
-            HashSet<int> expectedGroupIds = [];
-            foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
-            {
-                if (RussianLabelsMatch(outcome.Translation, expected))
+                if (!lookup.Found || lookup.SenseCandidates.Count == 0)
                 {
-                    expectedGroupIds.Add(outcome.GroupId);
+                    skippedNoInventory++;
+                    Console.WriteLine($"  {benchmarkCase.Id,-24} no aligned sense inventory");
+                    continue;
                 }
-            }
 
-            SmartDictionarySenseGroup[] orderedSenses = inventory.Groups
-                .OrderBy(group => group.SourceIndex)
-                .ToArray();
-            if (orderedSenses.Length == plan.CandidateGroupIds.Count)
-            {
-                for (int index = 0; index < orderedSenses.Length; index++)
+                SmartDictionarySenseInventory inventory =
+                    SmartDictionarySenseResolver.GroupCandidates(
+                        benchmarkCase.Context,
+                        lookup.Source,
+                        benchmarkCase.CharacterIndex,
+                        lookup.SenseCandidates);
+                SmartDictionaryRankerPlan plan =
+                    SmartDictionarySenseResolver.CreateRankerPlan(
+                        benchmarkCase.Context,
+                        lookup.Source,
+                        benchmarkCase.CharacterIndex,
+                        inventory.Groups);
+                if (plan.Outcomes.Count < 2)
                 {
-                    if (orderedSenses[index].Surfaces.Any(surface =>
-                            RussianLabelsMatch(surface.Translation, expected)))
+                    autoResolved++;
+                    SmartDictionaryRankerOutcome? outcome = plan.Outcomes.FirstOrDefault();
+                    if (outcome is not null)
                     {
-                        expectedGroupIds.Add(plan.CandidateGroupIds[index]);
+                        deterministicResolved++;
+                        bool autoCorrect = RussianLabelsMatch(
+                            outcome.Translation,
+                            NormalizeRussian(benchmarkCase.ExpectedTranslation));
+                        deterministicCorrect += autoCorrect ? 1 : 0;
+                    }
+                    Console.WriteLine(
+                        $"  {benchmarkCase.Id,-24} auto-resolved without the model " +
+                        $"({outcome?.Translation ?? "<none>"})" +
+                        (outcome is null
+                            ? string.Empty
+                            : $" correct={(RussianLabelsMatch(outcome.Translation, NormalizeRussian(benchmarkCase.ExpectedTranslation)) ? "yes" : "NO")}"));
+                    continue;
+                }
+
+                string expected = NormalizeRussian(benchmarkCase.ExpectedTranslation);
+                HashSet<int> expectedGroupIds = [];
+                foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
+                {
+                    if (RussianLabelsMatch(outcome.Translation, expected))
+                    {
+                        expectedGroupIds.Add(outcome.GroupId);
                     }
                 }
+
+                SmartDictionarySenseGroup[] orderedSenses = inventory.Groups
+                    .OrderBy(group => group.SourceIndex)
+                    .ToArray();
+                if (orderedSenses.Length == plan.CandidateGroupIds.Count)
+                {
+                    for (int index = 0; index < orderedSenses.Length; index++)
+                    {
+                        if (orderedSenses[index].Surfaces.Any(surface =>
+                                RussianLabelsMatch(surface.Translation, expected)))
+                        {
+                            expectedGroupIds.Add(plan.CandidateGroupIds[index]);
+                        }
+                    }
+                }
+
+                System.Diagnostics.Stopwatch selectTimer = System.Diagnostics.Stopwatch.StartNew();
+                GlossBertDictionarySelection selection = await selector.SelectAsync(
+                    benchmarkCase.Context,
+                    lookup.Source,
+                    benchmarkCase.CharacterIndex,
+                    plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
+                    plan.CandidateGroupIds,
+                    "English",
+                    provider);
+                selectTimer.Stop();
+                selectLatencies.Add((plan.CandidateGlosses.Count, selectTimer.ElapsedMilliseconds));
+                pipelineCounts[selection.Pipeline] =
+                    pipelineCounts.GetValueOrDefault(selection.Pipeline) + 1;
+                string selected = selection.SelectedGroupId is { } groupId
+                    ? plan.Outcomes.First(outcome => outcome.GroupId == groupId).Translation
+                    : "<abstained>";
+                bool? correct = selection.Abstained || expectedGroupIds.Count == 0
+                    ? null
+                    : expectedGroupIds.Contains(selection.SelectedGroupId!.Value);
+                CaseResult result = new(
+                    benchmarkCase.Id,
+                    plan.CandidateGlosses.Count,
+                    plan.Outcomes.Count,
+                    expectedGroupIds.Count > 0,
+                    selection.Abstained,
+                    selection.Margin,
+                    correct,
+                    selected);
+                results.Add(result);
+                Console.WriteLine(
+                    $"  {result.Id,-24} glosses={result.GlossCount,3} outcomes={result.OutcomeCount,3} " +
+                    $"margin={FormatMargin(result.Margin),6} " +
+                    (result.Abstained
+                        ? "abstained"
+                        : $"selected='{result.Selected}' correct={FormatCorrect(result.Correct)}") +
+                    $" expected='{benchmarkCase.ExpectedTranslation}'" +
+                    (result.ExpectedCovered ? "" : " [expected-not-covered]"));
             }
 
-            System.Diagnostics.Stopwatch selectTimer = System.Diagnostics.Stopwatch.StartNew();
-            GlossBertDictionarySelection selection = await selector.SelectAsync(
-                benchmarkCase.Context,
-                lookup.Source,
-                benchmarkCase.CharacterIndex,
-                plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
-                plan.CandidateGroupIds,
-                "English",
-                provider);
-            selectTimer.Stop();
-            selectLatencies.Add((plan.CandidateGlosses.Count, selectTimer.ElapsedMilliseconds));
-            pipelineCounts[selection.Pipeline] =
-                pipelineCounts.GetValueOrDefault(selection.Pipeline) + 1;
-            string selected = selection.SelectedGroupId is { } groupId
-                ? plan.Outcomes.First(outcome => outcome.GroupId == groupId).Translation
-                : "<abstained>";
-            bool? correct = selection.Abstained || expectedGroupIds.Count == 0
-                ? null
-                : expectedGroupIds.Contains(selection.SelectedGroupId!.Value);
-            CaseResult result = new(
-                benchmarkCase.Id,
-                plan.CandidateGlosses.Count,
-                plan.Outcomes.Count,
-                expectedGroupIds.Count > 0,
-                selection.Abstained,
-                selection.Margin,
-                correct,
-                selected);
-            results.Add(result);
+            Console.WriteLine();
+            int coveredCount = results.Count(result => result.ExpectedCovered);
+            int decidedCount = results.Count(result => result.ExpectedCovered && !result.Abstained);
+            int correctCount = results.Count(result => result.Correct == true);
             Console.WriteLine(
-                $"  {result.Id,-24} glosses={result.GlossCount,3} outcomes={result.OutcomeCount,3} " +
-                $"margin={FormatMargin(result.Margin),6} " +
-                (result.Abstained
-                    ? "abstained"
-                    : $"selected='{result.Selected}' correct={FormatCorrect(result.Correct)}") +
-                $" expected='{benchmarkCase.ExpectedTranslation}'" +
-                (result.ExpectedCovered ? "" : " [expected-not-covered]"));
-        }
+                $"  cases={cases.Length} ranked={results.Count} phrase-bypass={skippedPhrase} " +
+                $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
+            Console.WriteLine(
+                $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
+            Console.WriteLine(
+                $"  deterministic resolutions: {deterministicCorrect}/{deterministicResolved} correct; " +
+                $"end-to-end correct coverage: " +
+                $"{correctCount + deterministicCorrect}/{cases.Length}");
+            if (selectLatencies.Count > 0)
+            {
+                long[] ordered = selectLatencies.Select(entry => entry.Milliseconds)
+                    .OrderBy(value => value)
+                    .ToArray();
+                long[] large = selectLatencies.Where(entry => entry.Glosses > 12)
+                    .Select(entry => entry.Milliseconds)
+                    .OrderBy(value => value)
+                    .ToArray();
+                Console.WriteLine(
+                    $"  select latency: median={ordered[ordered.Length / 2]} ms" +
+                    (large.Length > 0
+                        ? $", large-inventory (>12 glosses) median={large[large.Length / 2]} ms"
+                        : "") +
+                    $"; pipelines: {string.Join(", ", pipelineCounts.Select(entry => $"{entry.Key}={entry.Value}"))}");
+            }
+            if (dumpPath is not null)
+            {
+                await File.WriteAllTextAsync(
+                    dumpPath,
+                    System.Text.Json.JsonSerializer.Serialize(
+                        results,
+                        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            }
 
-        Console.WriteLine();
-        int coveredCount = results.Count(result => result.ExpectedCovered);
-        int decidedCount = results.Count(result => result.ExpectedCovered && !result.Abstained);
-        int correctCount = results.Count(result => result.Correct == true);
-        Console.WriteLine(
-            $"  cases={cases.Length} ranked={results.Count} phrase-bypass={skippedPhrase} " +
-            $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
-        Console.WriteLine(
-            $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
-        Console.WriteLine(
-            $"  deterministic resolutions: {deterministicCorrect}/{deterministicResolved} correct; " +
-            $"end-to-end correct coverage: " +
-            $"{correctCount + deterministicCorrect}/{cases.Length}");
-        if (selectLatencies.Count > 0)
-        {
-            long[] ordered = selectLatencies.Select(entry => entry.Milliseconds)
-                .OrderBy(value => value)
-                .ToArray();
-            long[] large = selectLatencies.Where(entry => entry.Glosses > 12)
-                .Select(entry => entry.Milliseconds)
-                .OrderBy(value => value)
-                .ToArray();
-            Console.WriteLine(
-                $"  select latency: median={ordered[ordered.Length / 2]} ms" +
-                (large.Length > 0
-                    ? $", large-inventory (>12 glosses) median={large[large.Length / 2]} ms"
-                    : "") +
-                $"; pipelines: {string.Join(", ", pipelineCounts.Select(entry => $"{entry.Key}={entry.Value}"))}");
-        }
-        if (dumpPath is not null)
-        {
-            await File.WriteAllTextAsync(
-                dumpPath,
-                System.Text.Json.JsonSerializer.Serialize(
+            // Peak memory must be read before the selector is disposed: the worker
+            // owns the model, so its peak working set is the number a replacement
+            // candidate has to beat, not this harness's own footprint.
+            long workerPeakBytes = ReadWorkerPeakWorkingSet(selector);
+            if (reportPath is not null)
+            {
+                await WriteBaselineReportAsync(
+                    reportPath,
+                    benchmarkPath,
+                    workerBaseDirectory,
+                    provider,
+                    dictionary.VersionToken,
+                    cases.Length,
                     results,
-                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        }
+                    selectLatencies,
+                    pipelineCounts,
+                    skippedPhrase,
+                    skippedNoInventory,
+                    autoResolved,
+                    deterministicResolved,
+                    deterministicCorrect,
+                    workerPeakBytes);
+                Console.WriteLine($"  baseline report: {Path.GetFullPath(reportPath)}");
+            }
 
-        // Peak memory must be read before the selector is disposed: the worker
-        // owns the model, so its peak working set is the number a replacement
-        // candidate has to beat, not this harness's own footprint.
-        long workerPeakBytes = ReadWorkerPeakWorkingSet(selector);
-        if (reportPath is not null)
-        {
-            await WriteBaselineReportAsync(
-                reportPath,
-                benchmarkPath,
-                workerBaseDirectory,
-                provider,
-                dictionary.VersionToken,
+            Console.WriteLine(
+                $"  worker peak working set: " +
+                (workerPeakBytes > 0
+                    ? $"{workerPeakBytes / (1024 * 1024)} MB"
+                    : "unavailable"));
+            PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
+            PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
+            PrintBucket("all ranked", results);
+            VerifyMeasurementCounts(
                 cases.Length,
-                results,
-                selectLatencies,
-                pipelineCounts,
-                skippedPhrase,
-                skippedNoInventory,
-                autoResolved,
+                results.Count,
+                coveredCount,
+                decidedCount,
+                correctCount,
                 deterministicResolved,
-                deterministicCorrect,
-                workerPeakBytes);
-            Console.WriteLine($"  baseline report: {Path.GetFullPath(reportPath)}");
-        }
-
-        Console.WriteLine(
-            $"  worker peak working set: " +
-            (workerPeakBytes > 0
-                ? $"{workerPeakBytes / (1024 * 1024)} MB"
-                : "unavailable"));
-        PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
-        PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
-        PrintBucket("all ranked", results);
-        VerifyMeasurementCounts(
-            cases.Length,
-            results.Count,
-            coveredCount,
-            decidedCount,
-            correctCount,
-            deterministicResolved,
-            deterministicCorrect);
+                deterministicCorrect);
         }
         finally
         {

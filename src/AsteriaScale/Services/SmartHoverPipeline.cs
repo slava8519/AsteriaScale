@@ -447,18 +447,17 @@ internal sealed class SmartHoverPipeline : IDisposable
                 // identity, and the key built before inference still names the
                 // old one. Key the verdict by the identity that produced it, the
                 // way the hover cache request below already does.
-                string storageKey = string.Equals(
-                    ranked.ModelVersion,
+                string storageKey = GlossBertDecisionCache.ResolveStorageFingerprint(
+                    decisionKey,
                     modelVersion,
-                    StringComparison.Ordinal)
-                    ? decisionKey
-                    : CreateDecisionKey(
+                    ranked.ModelVersion,
+                    resultModelIdentity => CreateDecisionKey(
                         rankerContext.Text,
                         lookup.Source,
                         rankerContext.CharacterIndex,
                         plan,
                         provider,
-                        ranked.ModelVersion);
+                        resultModelIdentity));
                 await StoreSharedDecisionSafeAsync(
                     storageKey,
                     new GlossBertDecision(

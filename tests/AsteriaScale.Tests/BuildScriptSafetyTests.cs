@@ -105,8 +105,36 @@ internal static class BuildScriptSafetyTests
                 }
             }
 
-            # A truncated or half-written package must force a rebuild rather
-            # than count as an installed identity.
+            # The closed output manifest covers files that cannot be derived
+            # from the source tree, especially the worker's self-contained
+            # runtime, and detects same-size content corruption as well.
+            $integrityOutput = Join-Path $assetsRoot 'integrity-output'
+            New-Item -ItemType Directory -Path `
+                (Join-Path $integrityOutput 'Ranker'), `
+                (Join-Path $integrityOutput 'Dictionaries') | Out-Null
+            $workerDll = Join-Path $integrityOutput 'Ranker\AsteriaScale.RankerWorker.dll'
+            $dictionaryAsset = Join-Path $integrityOutput 'Dictionaries\eng-rus.tsv.gz'
+            Set-Content -LiteralPath (Join-Path $integrityOutput 'AsteriaScale.exe') -Value 'main'
+            Set-Content -LiteralPath (Join-Path $integrityOutput 'Ranker\AsteriaScale.RankerWorker.exe') -Value 'worker'
+            Set-Content -LiteralPath $workerDll -Value 'managed-worker'
+            Set-Content -LiteralPath $dictionaryAsset -Value 'abcd' -NoNewline
+            [void](New-AsteriaOutputManifest -Output $integrityOutput)
+            if (-not (Test-AsteriaOutputManifest -Output $integrityOutput)) {
+                throw 'A freshly generated output manifest was rejected.'
+            }
+            Remove-Item -LiteralPath $workerDll
+            if (Test-AsteriaOutputManifest -Output $integrityOutput) {
+                throw 'Deleting an unlisted worker dependency did not invalidate the output manifest.'
+            }
+            Set-Content -LiteralPath $workerDll -Value 'managed-worker'
+            [void](New-AsteriaOutputManifest -Output $integrityOutput)
+            Set-Content -LiteralPath $dictionaryAsset -Value 'wxyz' -NoNewline
+            if (Test-AsteriaOutputManifest -Output $integrityOutput) {
+                throw 'Same-size asset corruption did not invalidate the output manifest.'
+            }
+
+            # A package must be structurally valid and signed, not merely a ZIP
+            # that happens to contain a file called AppxManifest.xml.
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $brokenIdentity = Join-Path $assetsRoot 'broken.msix'
             Set-Content -LiteralPath $brokenIdentity -Value 'not a package'
@@ -117,16 +145,243 @@ internal static class BuildScriptSafetyTests
                 throw 'A missing identity package was accepted.'
             }
             $packageSource = Join-Path $assetsRoot 'package-source'
-            New-Item -ItemType Directory -Path $packageSource | Out-Null
-            Set-Content -LiteralPath (Join-Path $packageSource 'AppxManifest.xml') -Value '<Package />'
-            $validIdentity = Join-Path $assetsRoot 'valid.msix'
-            [IO.Compression.ZipFile]::CreateFromDirectory($packageSource, $validIdentity)
-            if (-not (Test-AsteriaIdentityPackage -Path $validIdentity)) {
-                throw 'A readable identity package was rejected.'
+            $packageAssets = Join-Path $packageSource 'Assets'
+            New-Item -ItemType Directory -Path $packageAssets | Out-Null
+            @'
+            <?xml version="1.0" encoding="utf-8"?>
+            <Package IgnorableNamespaces="uap uap10"
+              xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+              xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+              xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10">
+              <Identity Name="AsteriaScale" Publisher="CN=Asteria Scale Local" Version="0.9.3.0" ProcessorArchitecture="neutral" />
+              <Properties><DisplayName>Asteria Scale</DisplayName><PublisherDisplayName>Asteria Scale Local</PublisherDisplayName><Logo>Assets\storelogo.png</Logo><uap10:AllowExternalContent>true</uap10:AllowExternalContent></Properties>
+              <Resources><Resource Language="ru-ru" /></Resources>
+              <Applications><Application Id="AsteriaScale" Executable="AsteriaScale.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App"><uap:VisualElements DisplayName="Asteria Scale" Description="test" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" /></Application></Applications>
+            </Package>
+            '@ | Set-Content -LiteralPath (Join-Path $packageSource 'AppxManifest.xml') -Encoding UTF8
+            @'
+            <?xml version="1.0" encoding="utf-8"?>
+            <BlockMap xmlns="http://schemas.microsoft.com/appx/2010/blockmap">
+              <File Name="AppxManifest.xml" /><File Name="Assets\storelogo.png" />
+              <File Name="Assets\Square150x150Logo.png" /><File Name="Assets\Square44x44Logo.png" />
+            </BlockMap>
+            '@ | Set-Content -LiteralPath (Join-Path $packageSource 'AppxBlockMap.xml') -Encoding UTF8
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" />' |
+                Set-Content -LiteralPath (Join-Path $packageSource '[Content_Types].xml') -Encoding UTF8
+            Copy-Item -LiteralPath '{{Quote(Path.Combine(repositoryRoot!, "packaging", "Identity", "Assets", "storelogo.png"))}}' -Destination $packageAssets
+            Copy-Item -LiteralPath '{{Quote(Path.Combine(repositoryRoot!, "packaging", "Identity", "Assets", "Square150x150Logo.png"))}}' -Destination $packageAssets
+            Copy-Item -LiteralPath '{{Quote(Path.Combine(repositoryRoot!, "packaging", "Identity", "Assets", "Square44x44Logo.png"))}}' -Destination $packageAssets
+            $unsignedIdentity = Join-Path $assetsRoot 'unsigned-valid.msix'
+            [IO.Compression.ZipFile]::CreateFromDirectory($packageSource, $unsignedIdentity)
+            if (-not (Test-AsteriaIdentityPackage -Path $unsignedIdentity -AllowUnsigned)) {
+                throw 'A structurally complete unsigned identity was rejected before signing.'
+            }
+            if (Test-AsteriaIdentityPackage -Path $unsignedIdentity) {
+                throw 'An unsigned identity package was accepted as release-ready.'
+            }
+            Remove-Item -LiteralPath (Join-Path $packageAssets 'Square44x44Logo.png')
+            $missingAssetIdentity = Join-Path $assetsRoot 'missing-asset.msix'
+            [IO.Compression.ZipFile]::CreateFromDirectory($packageSource, $missingAssetIdentity)
+            if (Test-AsteriaIdentityPackage -Path $missingAssetIdentity -AllowUnsigned) {
+                throw 'An identity package missing a declared logo was accepted.'
+            }
+
+            # An unknown deployment error must preserve the old registration;
+            # the exact-version replace path must restore it if the new add fails.
+            if (-not (Test-AsteriaPackageRoot -Expected 'C:\Asteria' -Actual 'c:\asteria\')) {
+                throw 'Equivalent package roots were not recognized.'
+            }
+            if (Test-AsteriaPackageRoot -Expected 'C:\Asteria' -Actual 'C:\Other') {
+                throw 'Different package roots were treated as equivalent.'
+            }
+            $registrationLocation = Join-Path $assetsRoot 'registered-package'
+            New-Item -ItemType Directory -Path $registrationLocation | Out-Null
+            $registeredManifest = Join-Path $registrationLocation 'AppxManifest.xml'
+            Set-Content -LiteralPath $registeredManifest -Value '<Package Version="current" />' -NoNewline
+            $registeredPackage = [pscustomobject]@{
+                Name = 'AsteriaScale'
+                Publisher = 'CN=Asteria Scale Local'
+                Version = [Version]'0.9.3.0'
+                InstallLocation = $registrationLocation
+            }
+            $identityInfo = [pscustomobject]@{
+                Name = 'AsteriaScale'
+                Publisher = 'CN=Asteria Scale Local'
+                Version = [Version]'0.9.3.0'
+                ManifestSha256 = (Get-FileHash -LiteralPath $registeredManifest -Algorithm SHA256).Hash
+            }
+            if (-not (Test-AsteriaIdentityRegistrationCurrent `
+                    -Package $registeredPackage `
+                    -RegisteredRoot 'C:\Asteria' `
+                    -ExpectedExternalLocation 'c:\asteria\' `
+                    -IdentityInfo $identityInfo)) {
+                throw 'A matching registered identity was rejected.'
+            }
+            $identityInfo.ManifestSha256 = '0' * 64
+            if (Test-AsteriaIdentityRegistrationCurrent `
+                    -Package $registeredPackage `
+                    -RegisteredRoot 'C:\Asteria' `
+                    -ExpectedExternalLocation 'C:\Asteria' `
+                    -IdentityInfo $identityInfo) {
+                throw 'A stale registered manifest passed the launch identity check.'
+            }
+            $newPackage = Join-Path $assetsRoot 'new.msix'
+            $rollbackPackage = Join-Path $assetsRoot 'rollback.msix'
+            Set-Content -LiteralPath $newPackage -Value 'new'
+            Set-Content -LiteralPath $rollbackPackage -Value 'old'
+            $script:fakePackage = [pscustomobject]@{ Root = 'C:\Old' }
+            $script:removed = 0
+            $get = { param($name) $script:fakePackage }
+            $getRoot = { param($package) $package.Root }
+            $remove = { param($package) $script:removed++; $script:fakePackage = $null }
+            $unknownAdd = { param($package, $location) throw '0x80070005 access denied' }
+            try {
+                Invoke-AsteriaIdentityRegistrationUpdate `
+                    -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                    -RollbackPackagePath $rollbackPackage -RollbackExternalLocation 'C:\Old' `
+                    -AddOperation $unknownAdd -RemoveOperation $remove `
+                    -GetOperation $get -GetRootOperation $getRoot
+                throw 'An unknown registration failure unexpectedly succeeded.'
+            } catch {
+                if ($_.Exception.Message -notmatch 'left untouched') { throw }
+            }
+            if ($script:removed -ne 0 -or -not $script:fakePackage) {
+                throw 'An unknown registration failure removed the working package.'
+            }
+            if (-not (Test-AsteriaSameVersionRegistrationError `
+                    -ErrorRecord ([Runtime.InteropServices.Marshal]::GetExceptionForHR(-2147009285))) -or
+                (Test-AsteriaSameVersionRegistrationError `
+                    -ErrorRecord ([Runtime.InteropServices.Marshal]::GetExceptionForHR(-2147009287)))) {
+                throw 'The exact-version HRESULT was confused with generic APPX install failure.'
+            }
+
+            # A prebuilt next-version package has no matching old MSIX beside it.
+            # The transactional update must still be attempted; only the later
+            # destructive same-version replacement requires rollback material.
+            $script:fakePackage = [pscustomobject]@{
+                Root = 'C:\Old'
+                Version = [Version]'0.9.3.0'
+            }
+            $script:removed = 0
+            $script:addAttempt = 0
+            $versionUpgrade = {
+                param($package, $location)
+                $script:addAttempt++
+                $script:fakePackage = [pscustomobject]@{
+                    Root = $location
+                    Version = [Version]'0.9.4.0'
+                }
+            }
+            $upgradeResult = Invoke-AsteriaIdentityRegistrationUpdate `
+                -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                -AddOperation $versionUpgrade -RemoveOperation $remove `
+                -GetOperation $get -GetRootOperation $getRoot
+            if ($upgradeResult -ne 'updated' -or $script:addAttempt -ne 1 -or
+                $script:removed -ne 0 -or $script:fakePackage.Root -ne 'C:\New') {
+                throw 'A normal version upgrade without rollback material was blocked or made destructive.'
+            }
+
+            # If Add succeeded but independent validation fails and there is no
+            # rollback package, retain the observed state instead of deleting the
+            # only registration. The explicit error tells the caller recovery is
+            # required without falsely claiming the old package is untouched.
+            $script:fakePackage = [pscustomobject]@{ Root = 'C:\Old' }
+            $script:removed = 0
+            $postAddWithoutRollback = {
+                param($package, $location)
+                $script:fakePackage = [pscustomobject]@{ Root = 'C:\Unexpected' }
+            }
+            try {
+                Invoke-AsteriaIdentityRegistrationUpdate `
+                    -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                    -AddOperation $postAddWithoutRollback -RemoveOperation $remove `
+                    -GetOperation $get -GetRootOperation $getRoot
+                throw 'An unvalidated update without rollback unexpectedly succeeded.'
+            } catch {
+                if ($_.Exception.Message -notmatch 'retained for recovery') { throw }
+            }
+            if ($script:removed -ne 0 -or $script:fakePackage.Root -ne 'C:\Unexpected') {
+                throw 'An unvalidated update without rollback deleted the observed registration.'
+            }
+
+            $script:fakePackage = [pscustomobject]@{ Root = 'C:\Old' }
+            $script:removed = 0
+            $sameVersionWithoutRollback = {
+                param($package, $location)
+                throw [Runtime.InteropServices.Marshal]::GetExceptionForHR(-2147009285)
+            }
+            try {
+                Invoke-AsteriaIdentityRegistrationUpdate `
+                    -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                    -AddOperation $sameVersionWithoutRollback -RemoveOperation $remove `
+                    -GetOperation $get -GetRootOperation $getRoot
+                throw 'An exact-version replacement without rollback unexpectedly succeeded.'
+            } catch {
+                if ($_.Exception.Message -notmatch 'no verified rollback package' -or
+                    $_.Exception.Message -notmatch 'left untouched') { throw }
+            }
+            if ($script:removed -ne 0 -or -not $script:fakePackage) {
+                throw 'An exact-version conflict without rollback removed the working package.'
+            }
+
+            # Add-AppxPackage can return before our independent observation of
+            # the registered root. If that observation fails, the add may have
+            # changed state already and must be rolled back instead of being
+            # reported as an untouched failure.
+            $script:fakePackage = [pscustomobject]@{ Root = 'C:\Old' }
+            $script:removed = 0
+            $postAddWrongRoot = {
+                param($package, $location)
+                if ($package -eq $rollbackPackage) {
+                    $script:fakePackage = [pscustomobject]@{ Root = $location }
+                } else {
+                    $script:fakePackage = [pscustomobject]@{ Root = 'C:\Unexpected' }
+                }
+            }
+            try {
+                Invoke-AsteriaIdentityRegistrationUpdate `
+                    -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                    -RollbackPackagePath $rollbackPackage -RollbackExternalLocation 'C:\Old' `
+                    -AddOperation $postAddWrongRoot -RemoveOperation $remove `
+                    -GetOperation $get -GetRootOperation $getRoot
+                throw 'An update with an unverified post-add root unexpectedly succeeded.'
+            } catch {
+                if ($_.Exception.Message -notmatch 'previous registration was restored') { throw }
+            }
+            if (-not $script:fakePackage -or $script:fakePackage.Root -ne 'C:\Old' -or
+                $script:removed -ne 1) {
+                throw 'A successful add followed by failed root validation was not rolled back.'
+            }
+
+            $script:addAttempt = 0
+            $replaceThenRollback = {
+                param($package, $location)
+                if ($package -eq $newPackage) {
+                    $script:addAttempt++
+                    if ($script:addAttempt -eq 1) {
+                        throw [Runtime.InteropServices.Marshal]::GetExceptionForHR(-2147009285)
+                    }
+                    throw 'replacement failed'
+                }
+                $script:fakePackage = [pscustomobject]@{ Root = $location }
+            }
+            try {
+                Invoke-AsteriaIdentityRegistrationUpdate `
+                    -PackagePath $newPackage -ExternalLocation 'C:\New' `
+                    -RollbackPackagePath $rollbackPackage -RollbackExternalLocation 'C:\Old' `
+                    -AddOperation $replaceThenRollback -RemoveOperation $remove `
+                    -GetOperation $get -GetRootOperation $getRoot
+                throw 'A failed replacement unexpectedly succeeded.'
+            } catch {
+                if ($_.Exception.Message -notmatch 'previous registration was restored') { throw }
+            }
+            if (-not $script:fakePackage -or $script:fakePackage.Root -ne 'C:\Old') {
+                throw 'The same-version replacement did not restore the old registration.'
             }
             """;
 
-        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+        string scriptPath = Path.Combine(root, "build-safety.ps1");
+        File.WriteAllText(scriptPath, command, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
         string powershell = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell",
@@ -144,8 +399,8 @@ internal static class BuildScriptSafetyTests
         startInfo.ArgumentList.Add("-NonInteractive");
         startInfo.ArgumentList.Add("-ExecutionPolicy");
         startInfo.ArgumentList.Add("Bypass");
-        startInfo.ArgumentList.Add("-EncodedCommand");
-        startInfo.ArgumentList.Add(encoded);
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(scriptPath);
         using Process process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("PowerShell rollback test did not start.");
         string outputText = await process.StandardOutput.ReadToEndAsync();

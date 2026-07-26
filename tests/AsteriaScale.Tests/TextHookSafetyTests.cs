@@ -67,11 +67,11 @@ internal static class TextHookSafetyTests
             ocrResult,
             new TextHookMatch("LongSpeaker: bank and another bank", 13));
         Assert(hookedResult is
-            {
-                Text: "LongSpeaker: bank and another bank",
-                CharacterIndex: 13,
-                TextSource: HoverTextSource.TextHook
-            },
+        {
+            Text: "LongSpeaker: bank and another bank",
+            CharacterIndex: 13,
+            TextSource: HoverTextSource.TextHook
+        },
             "A fresh hook match did not preserve explicit Textractor provenance.");
         // Roadmap 14.3 requires the card to name the text source in both
         // directions. Labelling only HOOK left OCR to be inferred from the

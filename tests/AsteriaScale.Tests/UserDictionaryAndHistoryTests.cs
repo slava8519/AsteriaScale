@@ -10,6 +10,7 @@ internal static class UserDictionaryAndHistoryTests
     {
         await VerifyUserDictionaryAsync(tempRoot);
         await VerifyHandEditedRowsSurviveAsync(tempRoot);
+        await VerifyMalformedLegacyJapaneseRowsSurviveAsync(tempRoot);
         await VerifyUserEntryReachesLookupAsync(tempRoot);
         await VerifyLegacyJapaneseMigrationAsync(tempRoot);
         await VerifyHistoryAsync(tempRoot);
@@ -123,6 +124,39 @@ internal static class UserDictionaryAndHistoryTests
             "A no-op removal rewrote the user layer.");
     }
 
+    private static async Task VerifyMalformedLegacyJapaneseRowsSurviveAsync(string tempRoot)
+    {
+        string directory = Path.Combine(tempRoot, "user-dictionary-malformed-legacy-ja");
+        Directory.CreateDirectory(directory);
+        string englishPath = Path.Combine(directory, "eng-rus-user.tsv");
+        const string malformedJapaneseRow = "かな\t   ";
+        await File.WriteAllLinesAsync(
+            englishPath,
+            [
+                "# legacy mixed layer",
+                malformedJapaneseRow,
+                "ありがとう\tспасибо",
+                "hello\tпривет"
+            ]);
+
+        UserDictionaryService service = new(directory);
+        IReadOnlyList<UserDictionaryEntry> entries = await service.LoadAsync();
+
+        string[] retainedEnglishLines = await File.ReadAllLinesAsync(englishPath);
+        Check(retainedEnglishLines.Contains(malformedJapaneseRow, StringComparer.Ordinal),
+            "Migrating a valid neighbouring Japanese row discarded an unparsed whitespace-value row.");
+        Check(retainedEnglishLines.Contains("# legacy mixed layer", StringComparer.Ordinal) &&
+              retainedEnglishLines.Contains("hello\tпривет", StringComparer.Ordinal),
+            "Legacy Japanese migration changed unrelated hand-edited English rows.");
+        Check(entries.Any(entry => entry is { Key: "ありがとう", Translation: "спасибо", Language: "JA" }),
+            "The valid legacy Japanese neighbour was not migrated.");
+
+        await service.SaveEntryAsync("world", "мир");
+        retainedEnglishLines = await File.ReadAllLinesAsync(englishPath);
+        Check(retainedEnglishLines.Contains(malformedJapaneseRow, StringComparer.Ordinal),
+            "A later editor write discarded the retained malformed Japanese-looking row.");
+    }
+
     /// <summary>
     /// The contract users actually care about: an entry added through the
     /// editor must win over the bundled layers at lookup time.
@@ -207,9 +241,9 @@ internal static class UserDictionaryAndHistoryTests
         IReadOnlyList<UserDictionaryEntry> migrated = await editor.LoadAsync();
         string migratedJapaneseText = File.ReadAllText(japaneseUserPath);
         Check(migrated.Any(entry => entry is
-                  { Key: "古語", Translation: "новое значение", Language: "JA" }) &&
+        { Key: "古語", Translation: "новое значение", Language: "JA" }) &&
               migrated.Any(entry => entry is
-                  { Key: "旧語", Translation: "устаревшее слово", Language: "JA" }) &&
+              { Key: "旧語", Translation: "устаревшее слово", Language: "JA" }) &&
               !File.ReadAllText(legacyPath).Contains("古語", StringComparison.Ordinal) &&
               !File.ReadAllText(legacyPath).Contains("旧語", StringComparison.Ordinal) &&
               migratedJapaneseText.Contains("古語\tновое значение", StringComparison.Ordinal) &&

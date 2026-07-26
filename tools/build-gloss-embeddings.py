@@ -24,6 +24,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import shutil
 import struct
 import time
 from collections import defaultdict
@@ -34,8 +35,18 @@ import onnxruntime
 from huggingface_hub import hf_hub_download
 from tokenizers import Tokenizer
 
+from atomic_output import (
+    atomic_output_path,
+    atomic_verified_copy,
+    ensure_distinct_paths,
+)
+
 MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
+EXPECTED_MODEL_LENGTH = 90_405_214
+EXPECTED_MODEL_SHA256 = "6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452"
+EXPECTED_TOKENIZER_LENGTH = 466_247
+EXPECTED_TOKENIZER_SHA256 = "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037"
 DIMENSIONS = 384
 SEQUENCE_LENGTH = 64
 BATCH_SIZE = 64
@@ -86,6 +97,52 @@ def sense_content_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_pinned_file(
+    source: Path,
+    expected_length: int,
+    expected_sha256: str,
+) -> str:
+    source_sha256 = file_sha256(source)
+    if source.stat().st_size != expected_length or source_sha256 != expected_sha256:
+        raise RuntimeError(
+            f"Pinned artifact mismatch: {source} "
+            f"({source.stat().st_size} bytes, SHA-256 {source_sha256})"
+        )
+
+    return source_sha256
+
+
+def stage_pinned_file(
+    source: Path,
+    destination: Path,
+    expected_length: int,
+    expected_sha256: str,
+) -> str:
+    source_sha256 = verify_pinned_file(
+        source,
+        expected_length,
+        expected_sha256,
+    )
+
+    def verify(path: Path) -> None:
+        if path.stat().st_size != expected_length:
+            raise RuntimeError(f"Staged artifact has the wrong length: {path}")
+        if file_sha256(path) != expected_sha256:
+            raise RuntimeError(f"Staged artifact has the wrong SHA-256: {path}")
+
+    atomic_verified_copy(source, destination, verify)
+    staged_sha256 = file_sha256(destination)
+    return staged_sha256
+
+
 def encode_batch(
     session: onnxruntime.InferenceSession,
     tokenizer: Tokenizer,
@@ -117,13 +174,75 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--senses", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--bundle-dir",
+        type=Path,
+        help=(
+            "stage the complete runtime bundle here; defaults to the output "
+            "directory"
+        ),
+    )
     args = parser.parse_args()
 
-    model_path = hf_hub_download(MODEL_ID, "onnx/model.onnx", revision=REVISION)
-    tokenizer_path = hf_hub_download(MODEL_ID, "tokenizer.json", revision=REVISION)
-    tokenizer = Tokenizer.from_file(tokenizer_path)
+    bundle_dir = args.bundle_dir or args.output.parent
+    staged_model = bundle_dir / "minilm-l6-v2.onnx"
+    staged_tokenizer = bundle_dir / "tokenizer.json"
+    staged_index = bundle_dir / "eng-senses.vec"
+    try:
+        ensure_distinct_paths(
+            {
+                "sense source": args.senses,
+                "requested output": args.output,
+                "bundle model": staged_model,
+                "bundle tokenizer": staged_tokenizer,
+                "bundle index": staged_index,
+            },
+            allowed_aliases=[
+                frozenset(("requested output", "bundle index")),
+            ],
+        )
+    except ValueError as error:
+        parser.error(str(error))
+
+    model_path = Path(
+        hf_hub_download(MODEL_ID, "onnx/model.onnx", revision=REVISION)
+    )
+    tokenizer_path = Path(
+        hf_hub_download(MODEL_ID, "tokenizer.json", revision=REVISION)
+    )
+    try:
+        ensure_distinct_paths(
+            {
+                "sense source": args.senses,
+                "requested output": args.output,
+                "bundle model": staged_model,
+                "bundle tokenizer": staged_tokenizer,
+                "bundle index": staged_index,
+                "downloaded model": model_path,
+                "downloaded tokenizer": tokenizer_path,
+            },
+            allowed_aliases=[
+                frozenset(("requested output", "bundle index")),
+                frozenset(("bundle model", "downloaded model")),
+                frozenset(("bundle tokenizer", "downloaded tokenizer")),
+            ],
+        )
+    except ValueError as error:
+        parser.error(str(error))
+
+    model_sha = verify_pinned_file(
+        model_path,
+        EXPECTED_MODEL_LENGTH,
+        EXPECTED_MODEL_SHA256,
+    )
+    tokenizer_sha = verify_pinned_file(
+        tokenizer_path,
+        EXPECTED_TOKENIZER_LENGTH,
+        EXPECTED_TOKENIZER_SHA256,
+    )
+    tokenizer = Tokenizer.from_file(str(tokenizer_path))
     session = onnxruntime.InferenceSession(
-        model_path, providers=["CPUExecutionProvider"]
+        str(model_path), providers=["CPUExecutionProvider"]
     )
 
     glosses = load_glosses(args.senses)
@@ -149,57 +268,90 @@ def main() -> None:
 
     started = time.perf_counter()
     encoded = 0
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("wb") as output:
-        output.write((json.dumps(header) + "\n").encode("utf-8"))
-        pending_texts: list[str] = []
-        pending_slots: list[tuple[str, int]] = []
-        vectors: dict[str, list[np.ndarray | None]] = {
-            key: [None] * len(values) for key, values in glosses.items()
-        }
+    with atomic_output_path(args.output) as pending_output:
+        with pending_output.open("wb") as output:
+            output.write((json.dumps(header) + "\n").encode("utf-8"))
+            pending_texts: list[str] = []
+            pending_slots: list[tuple[str, int]] = []
+            vectors: dict[str, list[np.ndarray | None]] = {
+                key: [None] * len(values) for key, values in glosses.items()
+            }
 
-        def flush() -> None:
-            nonlocal encoded
-            if not pending_texts:
-                return
-            matrix = encode_batch(session, tokenizer, pending_texts)
-            for (slot_key, slot_index), vector in zip(pending_slots, matrix):
-                vectors[slot_key][slot_index] = vector
-            encoded += len(pending_texts)
-            pending_texts.clear()
-            pending_slots.clear()
-            if encoded % 12800 < BATCH_SIZE:
-                rate = encoded / max(time.perf_counter() - started, 1e-9)
-                print(f"encoded {encoded:,}/{total:,} ({rate:,.0f}/s)", flush=True)
+            def flush() -> None:
+                nonlocal encoded
+                if not pending_texts:
+                    return
+                matrix = encode_batch(session, tokenizer, pending_texts)
+                for (slot_key, slot_index), vector in zip(pending_slots, matrix):
+                    vectors[slot_key][slot_index] = vector
+                encoded += len(pending_texts)
+                pending_texts.clear()
+                pending_slots.clear()
+                if encoded % 12800 < BATCH_SIZE:
+                    rate = encoded / max(time.perf_counter() - started, 1e-9)
+                    print(
+                        f"encoded {encoded:,}/{total:,} ({rate:,.0f}/s)",
+                        flush=True,
+                    )
 
-        for key, definitions in glosses.items():
-            for index, definition in enumerate(definitions):
-                # Mirror the cross-encoder gloss format "target: definition".
-                pending_texts.append(f"{key}: {definition}")
-                pending_slots.append((key, index))
-                if len(pending_texts) >= BATCH_SIZE:
-                    flush()
-        flush()
+            for key, definitions in glosses.items():
+                for index, definition in enumerate(definitions):
+                    # Mirror the cross-encoder gloss format "target: definition".
+                    pending_texts.append(f"{key}: {definition}")
+                    pending_slots.append((key, index))
+                    if len(pending_texts) >= BATCH_SIZE:
+                        flush()
+            flush()
 
-        for key, definitions in glosses.items():
-            key_bytes = key.encode("utf-8")
-            output.write(struct.pack("<H", len(key_bytes)))
-            output.write(key_bytes)
-            output.write(struct.pack("<i", len(definitions)))
-            for definition, vector in zip(definitions, vectors[key]):
-                assert vector is not None
-                scale = float(np.max(np.abs(vector))) or 1.0
-                quantized = np.clip(
-                    np.round(vector / scale * 127.0), -127, 127
-                ).astype(np.int8)
-                output.write(struct.pack("<Q", fnv1a64(normalize_gloss(definition))))
-                output.write(struct.pack("<f", scale / 127.0))
-                output.write(quantized.tobytes())
+            for key, definitions in glosses.items():
+                key_bytes = key.encode("utf-8")
+                output.write(struct.pack("<H", len(key_bytes)))
+                output.write(key_bytes)
+                output.write(struct.pack("<i", len(definitions)))
+                for definition, vector in zip(definitions, vectors[key]):
+                    assert vector is not None
+                    scale = float(np.max(np.abs(vector))) or 1.0
+                    quantized = np.clip(
+                        np.round(vector / scale * 127.0), -127, 127
+                    ).astype(np.int8)
+                    output.write(
+                        struct.pack("<Q", fnv1a64(normalize_gloss(definition)))
+                    )
+                    output.write(struct.pack("<f", scale / 127.0))
+                    output.write(quantized.tobytes())
+
+        size = pending_output.stat().st_size
+        index_sha = file_sha256(pending_output)
+
+        # Keep the live bundle untouched until the expensive index generation
+        # and digest both succeed. Each pinned dependency is copied through a
+        # sibling temporary file; the index is committed last by the outer
+        # atomic_output_path context.
+        stage_pinned_file(
+            model_path,
+            staged_model,
+            EXPECTED_MODEL_LENGTH,
+            EXPECTED_MODEL_SHA256,
+        )
+        stage_pinned_file(
+            tokenizer_path,
+            staged_tokenizer,
+            EXPECTED_TOKENIZER_LENGTH,
+            EXPECTED_TOKENIZER_SHA256,
+        )
 
     elapsed = time.perf_counter() - started
-    size = args.output.stat().st_size
-    index_sha = hashlib.sha256(args.output.read_bytes()).hexdigest()
+    if args.output.resolve() != staged_index.resolve():
+        with atomic_output_path(staged_index) as temporary_index:
+            shutil.copyfile(args.output, temporary_index)
+            if file_sha256(temporary_index) != index_sha:
+                raise RuntimeError(
+                    f"Staged index has the wrong SHA-256: {temporary_index}"
+                )
+        if file_sha256(staged_index) != index_sha:
+            raise RuntimeError(f"Staged index has the wrong SHA-256: {staged_index}")
     print(f"done: {total:,} vectors, {size / 1024 / 1024:.1f} MB, {elapsed:,.0f}s")
+    print(f"bundle: {bundle_dir.resolve()}")
 
     # The runtime pins every one of these. Printing them is the difference
     # between a documented regeneration and one whose output the worker rejects
@@ -210,10 +362,18 @@ def main() -> None:
     print(f"  EmbeddingIndexFormat      = 2;")
     print(f"  EmbeddingIndexLength      = {size:_};")
     print(f'  EmbeddingIndexSha256      = "{index_sha}";')
+    print(f"  EmbeddingModelLength      = {EXPECTED_MODEL_LENGTH:_};")
+    print(f'  EmbeddingModelSha256      = "{model_sha}";')
+    print(f"  EmbeddingTokenizerLength  = {EXPECTED_TOKENIZER_LENGTH:_};")
+    print(f'  EmbeddingTokenizerSha256  = "{tokenizer_sha}";')
     print(f'  EmbeddingSenseFileSha256  = "{sense_sha.upper()}";')
     print(f"  EmbeddingKeyCount         = {len(glosses):_};")
     print(f"  EmbeddingVectorCount      = {total:_};")
-    print(f'  EmbeddingBundleCacheTag   = "bi-{REVISION[:8]}-{index_sha[:8]}-...";')
+    print(
+        '  EmbeddingBundleCacheTag   = '
+        f'"bi-{REVISION[:8]}-{index_sha[:8]}-{model_sha[:8]}-'
+        f'{tokenizer_sha[:8]}";'
+    )
 
 
 if __name__ == "__main__":

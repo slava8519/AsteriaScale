@@ -141,6 +141,33 @@ internal static class LocalDictionaryNormalizationTests
             "A digit-colliding Japanese sentence key reached the hover card: " +
             $"'{numericJapanese.ContextTranslation}'");
 
+        // Sentence-key normalization drops every Unicode Number scalar, not
+        // only decimal ASCII digits. Fractions, circled and Roman numerals, and
+        // supplementary-plane mathematical digits must therefore get the same
+        // collision guard in both dialogue languages.
+        foreach (string number in new[] { "\u00BD", "\u2460", "\u2160", "\U0001D7D9" })
+        {
+            string english = $"A bird flies at {number} mph.";
+            Check(!LocalDictionaryService.CanTrustExactSentenceTranslation(english),
+                $"Unicode number U+{char.ConvertToUtf32(number, 0):X} passed the exact-dialogue guard.");
+            DictionaryLookupResult englishFallback = await dictionary.LookupAsync(
+                english,
+                "mph",
+                english.IndexOf("mph", StringComparison.Ordinal));
+            Check(!englishFallback.Found,
+                $"Unicode number '{number}' let a colliding English sentence answer a hover.");
+            Check(await dictionary.LookupExactEnglishDialogueAsync(english) is null,
+                $"Unicode number '{number}' let the exact English dialogue API return a collision.");
+
+            string japanese = $"\u9CE5\u304C{number}\u7FBD\u98DB\u3076";
+            DictionaryLookupResult japaneseWord = await dictionary.LookupAsync(
+                japanese,
+                "\u9CE5",
+                0);
+            Check(japaneseWord.Found && japaneseWord.ContextTranslation.Length == 0,
+                $"Unicode number '{number}' exposed a colliding Japanese dialogue translation.");
+        }
+
         // OCR reads the typographic apostrophe; the dictionary stores don't.
         const string typographicDialogue = "“Well, I don’t know…”";
         DictionaryLookupResult typographicWord = await dictionary.LookupAsync(
@@ -210,7 +237,7 @@ internal static class LocalDictionaryNormalizationTests
             "bird",
             embeddedDialogue.IndexOf("bird", StringComparison.Ordinal));
         Check(embeddedDialogueLookup is
-            { Found: true, IsPhrase: false, Translation: "птица", ContextTranslation: "" },
+        { Found: true, IsPhrase: false, Translation: "птица", ContextTranslation: "" },
             $"A dialogue-only sentence leaked into generic phrase lookup: {embeddedDialogueLookup}");
 
         const string embeddedJapaneseDialogue = "空で鳥飛ぶ姿";
@@ -219,7 +246,7 @@ internal static class LocalDictionaryNormalizationTests
             "鳥",
             embeddedJapaneseDialogue.IndexOf('鳥'));
         Check(embeddedJapaneseLookup is
-            { Found: true, IsPhrase: false, Translation: "птица", ContextTranslation: "" },
+        { Found: true, IsPhrase: false, Translation: "птица", ContextTranslation: "" },
             $"A Japanese dialogue sentence leaked into substring lookup: {embeddedJapaneseLookup}");
 
         DictionaryLookupResult exactJapaneseDialogue = await dictionary.LookupAsync(
@@ -227,7 +254,7 @@ internal static class LocalDictionaryNormalizationTests
             "飛",
             1);
         Check(exactJapaneseDialogue is
-            { Found: true, IsPhrase: true, Translation: "летит птица", ContextTranslation: "летит птица" },
+        { Found: true, IsPhrase: true, Translation: "летит птица", ContextTranslation: "летит птица" },
             $"An exact Japanese dialogue sentence stopped working: {exactJapaneseDialogue}");
 
         DictionaryLookupResult japaneseUser = await dictionary.LookupAsync(
@@ -557,16 +584,16 @@ internal static class LocalDictionaryNormalizationTests
               ] &&
               neural.NeuralDecisions is
               [
-                  {
-                      Status: TranslationScaffoldNeuralStatus.Selected,
-                      SelectedTranslation: "берег",
-                      SelectedGroupId: not null,
-                      CandidateGroupCount: 2,
-                      CandidateGlossCount: 2,
-                      Margin: 0.42,
-                      ElapsedMilliseconds: 7,
-                      Provenance: ScaffoldTermProvenance.GlossBert
-                  }
+              {
+                  Status: TranslationScaffoldNeuralStatus.Selected,
+                  SelectedTranslation: "берег",
+                  SelectedGroupId: not null,
+                  CandidateGroupCount: 2,
+                  CandidateGlossCount: 2,
+                  Margin: 0.42,
+                  ElapsedMilliseconds: 7,
+                  Provenance: ScaffoldTermProvenance.GlossBert
+              }
               ],
             "An accepted margin-only neural sense became a hard term or lost its soft hint.");
         string scaffoldCacheKey = TranslationScaffoldGlossBertRanker.CreateCacheKey(
@@ -721,10 +748,13 @@ internal static class LocalDictionaryNormalizationTests
         Check(abstainedNeural.Terms.Count == 0 &&
               abstainedNeural.SenseHints.Count == 0 &&
               abstainedNeural.NeuralDecisions is
-              [{ Status: TranslationScaffoldNeuralStatus.Abstained,
-                 SelectedGroupId: null,
-                 SelectedTranslation: null,
-                 Margin: 0.12 }],
+              [
+              {
+                  Status: TranslationScaffoldNeuralStatus.Abstained,
+                  SelectedGroupId: null,
+                  SelectedTranslation: null,
+                  Margin: 0.12
+              }],
             "A margin-only abstention was not preserved as a non-term decision.");
 
         ScaffoldSenseHint gateHint = new(
@@ -793,8 +823,11 @@ internal static class LocalDictionaryNormalizationTests
             neuralSession);
         Check(failingNeuralCalls == 1 &&
               disabledAcrossOperation.NeuralDecisions is
-              [{ Status: TranslationScaffoldNeuralStatus.Skipped,
-                 ErrorCode: "session-disabled-after-error" }],
+              [
+                  {
+                      Status: TranslationScaffoldNeuralStatus.Skipped,
+                      ErrorCode: "session-disabled-after-error"
+                  }],
             "A shared neural session retried after the first operation error.");
 
         using CancellationTokenSource neuralCancellation = new();

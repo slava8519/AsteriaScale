@@ -108,14 +108,29 @@ any of them as out of date.
 
 ### Regenerating the index
 
-`tools/build-gloss-embeddings.py --senses assets/Dictionaries/eng-rus-enwiktionary-senses.tsv.gz --output <out>/eng-senses.vec`
+```powershell
+python tools/build-gloss-embeddings.py `
+  --senses assets/Dictionaries/eng-rus-enwiktionary-senses.tsv.gz `
+  --output src/AsteriaScale.RankerWorker/Models/GlossEmbeddings/eng-senses.vec `
+  --bundle-dir src/AsteriaScale.RankerWorker/Models/GlossEmbeddings
+```
+
+The pinned encoder and tokenizer are downloaded at the immutable revision and
+verified by size and SHA-256. The index is generated under a sibling temporary
+name, verified, and only then replaces `eng-senses.vec`; interruption cannot
+truncate the working bundle. The two pinned dependencies are likewise replaced
+through temporary files. Thus the command creates the complete three-file
+runtime bundle from a clean checkout rather than leaving two files in the
+Hugging Face cache for manual copying.
 
 The runtime pins the whole bundle, so a regenerated index is rejected with
 `embedding_metadata_mismatch` until `RankerEngine.cs` is updated. The script
-prints every constant to paste — `EmbeddingIndexFormat`, `EmbeddingIndexLength`,
-`EmbeddingIndexSha256`, `EmbeddingSenseFileSha256`, `EmbeddingKeyCount`,
-`EmbeddingVectorCount`, `EmbeddingBundleCacheTag` — and the table above must be
-updated with the new size and SHA-256.
+prints every paste-ready constant — `EmbeddingIndexFormat`,
+`EmbeddingIndexLength`, `EmbeddingIndexSha256`, `EmbeddingModelLength`,
+`EmbeddingModelSha256`, `EmbeddingTokenizerLength`,
+`EmbeddingTokenizerSha256`, `EmbeddingSenseFileSha256`, `EmbeddingKeyCount`,
+`EmbeddingVectorCount`, and the complete `EmbeddingBundleCacheTag` — and the
+table above must be updated with the new size and SHA-256.
 
 Note on `EmbeddingSenseFileSha256`: the shipped index is **format 1**, which
 recorded the SHA-256 of the sidecar's gzip *container*. Those bytes change on

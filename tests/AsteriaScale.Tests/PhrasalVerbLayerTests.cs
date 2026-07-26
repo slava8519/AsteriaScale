@@ -70,7 +70,7 @@ internal static class PhrasalVerbLayerTests
         DictionaryLookupResult inflectedPhrase = await dictionary.LookupAsync(
             inflected, "bursts", inflected.IndexOf("bursts", StringComparison.Ordinal));
         Check(inflectedPhrase is
-            { Found: true, IsPhrase: true, Translation: "воскликнуть; вырваться; разразиться" },
+        { Found: true, IsPhrase: true, Translation: "воскликнуть; вырваться; разразиться" },
             $"An inflected phrasal verb did not canonicalize onto its base key: {inflectedPhrase}");
     }
 

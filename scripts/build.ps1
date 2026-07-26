@@ -178,7 +178,7 @@ try {
         throw "Identity package creation failed with exit code $LASTEXITCODE."
     }
 
-    if (-not (Test-AsteriaIdentityPackage -Path $stagingIdentity)) {
+    if (-not (Test-AsteriaIdentityPackage -Path $stagingIdentity -AllowUnsigned)) {
         throw "Identity package is not a readable MSIX: $stagingIdentity"
     }
 
@@ -186,6 +186,19 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Identity package signing failed with exit code $LASTEXITCODE."
     }
+
+    & $signTool verify /pa /all /v $stagingIdentity
+    if ($LASTEXITCODE -ne 0) {
+        throw "Identity package signature verification failed with exit code $LASTEXITCODE."
+    }
+    if (-not (Test-AsteriaIdentityPackage -Path $stagingIdentity)) {
+        throw "The signed identity package failed structural or signature validation: $stagingIdentity"
+    }
+
+    # Close over every published byte, including the worker's self-contained
+    # runtime. Freshness checks later verify this manifest rather than assuming
+    # that the presence of one launcher EXE proves the whole publish survived.
+    [void](New-AsteriaOutputManifest -Output $stagingOutput)
 
     if ((Get-AsteriaSourceFingerprint -Root $root) -ne $sourceFingerprint) {
         throw "Build inputs changed while publishing. Re-run the build so dist matches the sources it was built from."

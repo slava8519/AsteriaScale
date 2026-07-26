@@ -17,6 +17,7 @@ public partial class App : System.Windows.Application
     private Mutex? _singleInstanceMutex;
     private EventWaitHandle? _showRequestSignal;
     private readonly ManualResetEvent _showRequestListenerStop = new(false);
+    private readonly PendingShowRequestState _pendingShowRequest = new();
     private readonly object _settingsSaveSync = new();
     private readonly HashSet<Task> _pendingSettingsSaves = [];
 
@@ -92,30 +93,29 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        // Publish the show endpoint before claiming the mutex. If two launches
+        // race, the loser can then signal the endpoint even when the winner has
+        // not started its listener yet; AutoResetEvent retains that one signal.
+        _showRequestSignal = new EventWaitHandle(
+            false,
+            EventResetMode.AutoReset,
+            ShowRequestEventName);
         _singleInstanceMutex = new Mutex(true, SingleInstanceMutexName, out bool isFirst);
         if (!isFirst)
         {
             // Launching again is a request to see the running instance, not a
             // no-op: the window may be hidden in the tray, so without this the
             // user clicks the shortcut and nothing whatsoever happens.
-            if (EventWaitHandle.TryOpenExisting(
-                    ShowRequestEventName,
-                    out EventWaitHandle? running))
-            {
-                using (running)
-                {
-                    running.Set();
-                }
-            }
+            _showRequestSignal.Set();
+            _showRequestSignal.Dispose();
+            _showRequestSignal = null;
+            _singleInstanceMutex.Dispose();
+            _singleInstanceMutex = null;
 
             Shutdown();
             return;
         }
 
-        _showRequestSignal = new EventWaitHandle(
-            false,
-            EventResetMode.AutoReset,
-            ShowRequestEventName);
         StartShowRequestListener(_showRequestSignal);
 
         try
@@ -151,6 +151,10 @@ public partial class App : System.Windows.Application
             HoverTranslation.StatusChanged += (_, status) => AsteriaWindow?.SetStatus(status);
             AutoScale.Start();
             HoverTranslation.Start();
+
+            // A request may have arrived while settings or the window were
+            // still being created. Consume it only now that Show() is safe.
+            ShowRequestedMainWindow();
 
             bool commandLineMinimized = e.Args.Any(arg => string.Equals(arg, "--minimized", StringComparison.OrdinalIgnoreCase));
             bool commandLineShow = e.Args.Any(arg =>
@@ -382,7 +386,8 @@ public partial class App : System.Windows.Application
             WaitHandle[] handles = [signal, _showRequestListenerStop];
             while (WaitHandle.WaitAny(handles) == 0)
             {
-                Dispatcher.BeginInvoke(new Action(ShowMainWindow));
+                _pendingShowRequest.Request();
+                Dispatcher.BeginInvoke(new Action(ShowRequestedMainWindow));
             }
         })
         {
@@ -392,9 +397,18 @@ public partial class App : System.Windows.Application
         listener.Start();
     }
 
+    private void ShowRequestedMainWindow()
+    {
+        bool canShow = !IsExiting && AsteriaWindow is { IsClosed: false };
+        if (_pendingShowRequest.TryConsume(canShow))
+        {
+            ShowMainWindow();
+        }
+    }
+
     public void ShowMainWindow()
     {
-        if (AsteriaWindow is null || AsteriaWindow.IsClosed)
+        if (IsExiting || AsteriaWindow is null || AsteriaWindow.IsClosed)
         {
             return;
         }

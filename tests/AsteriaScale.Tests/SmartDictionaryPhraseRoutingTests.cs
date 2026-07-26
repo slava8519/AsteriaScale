@@ -32,11 +32,11 @@ internal static class SmartDictionaryPhraseRoutingTests
             "first",
             Path.Combine(root, "broad-cache.json"));
         Check(broadResult is
-            {
-                Source: "first time",
-                Translation: "впервые",
-                IsPhrase: true
-            } &&
+        {
+            Source: "first time",
+            Translation: "впервые",
+            IsPhrase: true
+        } &&
             broadResult.Engine == SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
             $"An ambiguous broad phrase bypassed Smart routing: {broadResult}");
 
@@ -87,14 +87,14 @@ internal static class SmartDictionaryPhraseRoutingTests
                 target,
                 Path.Combine(root, $"vn-{target}-cache.json"));
             Check(longTrusted is
-                {
-                    Found: true,
-                    Source: "I get that a lot",
-                    Translation: "я часто это слышу",
-                    IsPhrase: true,
-                    IsTrustedPhrase: true,
-                    HasMultipleMeanings: false
-                } &&
+            {
+                Found: true,
+                Source: "I get that a lot",
+                Translation: "я часто это слышу",
+                IsPhrase: true,
+                IsTrustedPhrase: true,
+                HasMultipleMeanings: false
+            } &&
                 longTrustedResult.Translation == "я часто это слышу" &&
                 longTrustedResult.Engine == LocalDictionaryService.EngineLabel,
                 $"A five-token VN-hard phrase was unreachable through '{target}'.");
@@ -128,14 +128,14 @@ internal static class SmartDictionaryPhraseRoutingTests
             "first",
             cachePath);
         Check(lookup is
-            {
-                Found: true,
-                Source: "first time",
-                Translation: "первый раз",
-                IsPhrase: true,
-                IsTrustedPhrase: true,
-                HasMultipleMeanings: false
-            } &&
+        {
+            Found: true,
+            Source: "first time",
+            Translation: "первый раз",
+            IsPhrase: true,
+            IsTrustedPhrase: true,
+            HasMultipleMeanings: false
+        } &&
             lookup.SenseCandidates.Count == 0 &&
             result.Translation == "первый раз" &&
             result.Engine == LocalDictionaryService.EngineLabel,
