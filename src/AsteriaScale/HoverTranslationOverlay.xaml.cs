@@ -304,10 +304,17 @@ public partial class HoverTranslationOverlay : Window
         StatusDot.Fill = accent;
     }
 
+    /// <summary>
+    /// States where the translated text came from, in both directions (roadmap
+    /// 14.3). Only HOOK used to be labelled, which left OCR to be inferred from
+    /// the engine prefix — and that prefix says "NPU OCR" even on a hook match,
+    /// because the OCR engine still located the hovered word. Naming the text
+    /// source explicitly removes the contradiction.
+    /// </summary>
     internal static string AddTextSourceBadge(string metaText, HoverTextSource textSource) =>
         textSource == HoverTextSource.TextHook
             ? metaText + "  ·  HOOK"
-            : metaText;
+            : metaText + "  ·  OCR";
 
     internal static string? SmartAccelerator(string engine)
     {

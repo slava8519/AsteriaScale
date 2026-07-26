@@ -73,16 +73,24 @@ internal static class TextHookSafetyTests
                 TextSource: HoverTextSource.TextHook
             },
             "A fresh hook match did not preserve explicit Textractor provenance.");
+        // Roadmap 14.3 requires the card to name the text source in both
+        // directions. Labelling only HOOK left OCR to be inferred from the
+        // engine prefix, which reads "NPU OCR" even on a hook match.
         const string ocrBadge = "EN → RU  ·  CPU КОНТЕКСТ";
-        Assert(string.Equals(
-                HoverTranslationOverlay.AddTextSourceBadge(ocrBadge, HoverTextSource.Ocr),
-                ocrBadge,
-                StringComparison.Ordinal),
+        string ocrLabelled = HoverTranslationOverlay.AddTextSourceBadge(
+            ocrBadge,
+            HoverTextSource.Ocr);
+        Assert(ocrLabelled.EndsWith("  ·  OCR", StringComparison.Ordinal),
+            $"An OCR-backed hover card does not state its provenance: '{ocrLabelled}'");
+        Assert(!ocrLabelled.Contains("HOOK", StringComparison.Ordinal),
             "Pure OCR unexpectedly gained a text-hook badge.");
-        Assert(HoverTranslationOverlay.AddTextSourceBadge(
-                ocrBadge,
-                HoverTextSource.TextHook).EndsWith("  ·  HOOK", StringComparison.Ordinal),
+        string hookLabelled = HoverTranslationOverlay.AddTextSourceBadge(
+            ocrBadge,
+            HoverTextSource.TextHook);
+        Assert(hookLabelled.EndsWith("  ·  HOOK", StringComparison.Ordinal),
             "A Textractor-backed hover card does not visibly report HOOK provenance.");
+        Assert(!string.Equals(ocrLabelled, hookLabelled, StringComparison.Ordinal),
+            "The two provenances are indistinguishable on the card.");
 
         string textractorRoot = Path.Combine(tempRoot, "text-hook-profile-detach");
         string cliDirectory = Path.Combine(textractorRoot, "x64");

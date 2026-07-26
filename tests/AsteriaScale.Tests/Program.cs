@@ -2318,6 +2318,49 @@ try
             10);
         Assert(japanese.Text == "私はここで待っている！",
             "Japanese sentence boundaries were not respected.");
+
+        // Roadmap 14.3: an ellipsis is one mark, not two or three terminators.
+        // Visual novels use it constantly, and splitting on its first dot hands
+        // the translator a fragment - which no model can recover from.
+        const string hesitation = "I... don't really know what to say.";
+        SentenceContext middle = WindowsAiOcrService.ExtractSentence(
+            hesitation,
+            hesitation.IndexOf("know", StringComparison.Ordinal));
+        Assert(middle.Text == hesitation,
+            $"A mid-utterance ellipsis truncated the reply: '{middle.Text}'");
+
+        const string leadingAnchor = "I... don't really know what to say.";
+        SentenceContext beforeEllipsis = WindowsAiOcrService.ExtractSentence(
+            leadingAnchor,
+            0);
+        Assert(beforeEllipsis.Text == leadingAnchor,
+            $"An anchor before the ellipsis lost the rest of the reply: '{beforeEllipsis.Text}'");
+
+        // A trailing ellipsis does close the utterance: the next capitalised
+        // clause is a separate reply, exactly like a full stop.
+        const string trailing = "I don't know... Maybe we should just go.";
+        SentenceContext firstHalf = WindowsAiOcrService.ExtractSentence(
+            trailing,
+            trailing.IndexOf("know", StringComparison.Ordinal));
+        Assert(firstHalf.Text == "I don't know...",
+            $"A trailing ellipsis did not close the utterance: '{firstHalf.Text}'");
+        SentenceContext secondHalf = WindowsAiOcrService.ExtractSentence(
+            trailing,
+            trailing.IndexOf("Maybe", StringComparison.Ordinal));
+        Assert(secondHalf.Text == "Maybe we should just go.",
+            $"The clause after an ellipsis was not a separate reply: '{secondHalf.Text}'");
+
+        SentenceContext unicodeEllipsis = WindowsAiOcrService.ExtractSentence(
+            "That's… not what I meant at all.",
+            "That's… not what I meant at all.".IndexOf("meant", StringComparison.Ordinal));
+        Assert(unicodeEllipsis.Text == "That's… not what I meant at all.",
+            $"A unicode ellipsis truncated the reply: '{unicodeEllipsis.Text}'");
+
+        SentenceContext quoted = WindowsAiOcrService.ExtractSentence(
+            "\"Wait...\" she said. Then she left.",
+            5);
+        Assert(quoted.Text == "\"Wait...\"",
+            $"A quoted ellipsis lost its closing quote: '{quoted.Text}'");
         return Task.CompletedTask;
     });
 
