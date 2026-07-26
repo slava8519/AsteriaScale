@@ -26,7 +26,15 @@ public sealed record DictionarySenseCandidate(
     string Translation,
     string EnglishDefinition,
     string Register,
-    string PartOfSpeech = "");
+    string PartOfSpeech = "")
+{
+    /// <summary>
+    /// Short disambiguating hint (synonyms, else a clipped example) shown to the
+    /// sense ranker alongside the definition. Never part of sense identity:
+    /// grouping and merging still key on the definition alone.
+    /// </summary>
+    public string Enrichment { get; init; } = string.Empty;
+}
 
 internal sealed record ScaffoldDictionaryMatch(
     string Source,
@@ -694,6 +702,7 @@ public sealed partial class LocalDictionaryService
         Dictionary<string, string> definitionPool = new(StringComparer.Ordinal);
         Dictionary<string, string> registerPool = new(StringComparer.Ordinal);
         Dictionary<string, string> partOfSpeechPool = new(StringComparer.Ordinal);
+        Dictionary<string, string> enrichmentPool = new(StringComparer.Ordinal);
         List<string> loadedFiles = [];
         foreach (string path in files)
         {
@@ -705,7 +714,8 @@ public sealed partial class LocalDictionaryService
                     translationPool,
                     definitionPool,
                     registerPool,
-                    partOfSpeechPool);
+                    partOfSpeechPool,
+                    enrichmentPool);
                 loadedFiles.Add(path);
             }
             catch (Exception exception) when (exception is IOException or
@@ -1064,7 +1074,8 @@ public sealed partial class LocalDictionaryService
         Dictionary<string, string> translationPool,
         Dictionary<string, string> definitionPool,
         Dictionary<string, string> registerPool,
-        Dictionary<string, string> partOfSpeechPool)
+        Dictionary<string, string> partOfSpeechPool,
+        Dictionary<string, string> enrichmentPool)
     {
         await using FileStream file = File.OpenRead(path);
         Stream input = path.EndsWith(".gz", StringComparison.OrdinalIgnoreCase)
@@ -1083,6 +1094,11 @@ public sealed partial class LocalDictionaryService
             int fourthSeparator = thirdSeparator < 0
                 ? -1
                 : line.IndexOf('\t', thirdSeparator + 1);
+            // Sixth column (roadmap #8 candidate 5) is optional: a sidecar
+            // written before it must keep loading with an empty enrichment.
+            int fifthSeparator = fourthSeparator < 0
+                ? -1
+                : line.IndexOf('\t', fourthSeparator + 1);
             if (firstSeparator <= 0 ||
                 secondSeparator <= firstSeparator + 1 ||
                 thirdSeparator <= secondSeparator + 1)
@@ -1111,9 +1127,18 @@ public sealed partial class LocalDictionaryService
             string partOfSpeech = InternSenseField(
                 fourthSeparator < 0
                     ? string.Empty
-                    : NormalizeSenseField(line[(fourthSeparator + 1)..], 64)
+                    : NormalizeSenseField(
+                            fifthSeparator < 0
+                                ? line[(fourthSeparator + 1)..]
+                                : line[(fourthSeparator + 1)..fifthSeparator],
+                            64)
                         .ToLowerInvariant(),
                 partOfSpeechPool);
+            string enrichment = InternSenseField(
+                fifthSeparator < 0
+                    ? string.Empty
+                    : NormalizeSenseField(line[(fifthSeparator + 1)..], 96),
+                enrichmentPool);
             if (key.Length == 0 ||
                 key.Length > 256 ||
                 translation.Length == 0 ||
@@ -1137,7 +1162,10 @@ public sealed partial class LocalDictionaryService
                 translation,
                 definition,
                 register,
-                partOfSpeech);
+                partOfSpeech)
+            {
+                Enrichment = enrichment
+            };
             if (!candidates.Contains(candidate))
             {
                 candidates.Add(candidate);
@@ -1157,6 +1185,7 @@ public sealed partial class LocalDictionaryService
                 writer.Write(candidate.EnglishDefinition);
                 writer.Write(candidate.Register);
                 writer.Write(candidate.PartOfSpeech);
+                writer.Write(candidate.Enrichment);
             }
         }
 
@@ -1171,11 +1200,17 @@ public sealed partial class LocalDictionaryService
         var candidates = new DictionarySenseCandidate[count];
         for (int index = 0; index < count; index++)
         {
+            // Field order and count must mirror EncodeSenseCandidates exactly:
+            // a missing read does not fail, it shifts every later candidate by
+            // one field and silently corrupts the whole blob.
             candidates[index] = new DictionarySenseCandidate(
                 reader.ReadString(),
                 reader.ReadString(),
                 reader.ReadString(),
-                reader.ReadString());
+                reader.ReadString())
+            {
+                Enrichment = reader.ReadString()
+            };
         }
 
         return candidates;

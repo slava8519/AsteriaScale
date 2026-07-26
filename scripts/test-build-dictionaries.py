@@ -202,10 +202,12 @@ class SenseEnrichmentTests(unittest.TestCase):
                 self.assertEqual(builder._split_ru_gloss(gloss), ("", []))
 
     def test_sibling_enrichment_is_strictly_same_part_of_speech(self) -> None:
+        # Five columns since roadmap #8 candidate 5: the trailing field is the
+        # ranker enrichment, which sibling rows inherit as empty.
         sense_entries = {
             "reach": [
-                ("доставать", "To extend as far as.", "", "verb"),
-                ("доставание", "The act of obtaining.", "", "noun"),
+                ("доставать", "To extend as far as.", "", "verb", ""),
+                ("доставание", "The act of obtaining.", "", "noun", ""),
             ]
         }
         ru_glosses = {
@@ -222,10 +224,10 @@ class SenseEnrichmentTests(unittest.TestCase):
         self.assertEqual(
             sense_entries["reach"],
             [
-                ("доставать", "To extend as far as.", "", "verb"),
-                ("доставание", "The act of obtaining.", "", "noun"),
-                ("достигать", "To extend as far as.", "", "verb"),
-                ("получение", "The act of obtaining.", "", "noun"),
+                ("доставать", "To extend as far as.", "", "verb", ""),
+                ("доставание", "The act of obtaining.", "", "noun", ""),
+                ("достигать", "To extend as far as.", "", "verb", ""),
+                ("получение", "The act of obtaining.", "", "noun", ""),
             ],
         )
 

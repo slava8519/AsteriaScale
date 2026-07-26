@@ -19,6 +19,7 @@ internal static class GlossBertDecisionCacheTests
         VerifyTargetSurvivesTrimming();
         VerifyScaffoldAndHoverAgree();
         VerifyAbstentionThresholdIsKeyed();
+        VerifyEnrichmentGateIsClosed();
         VerifyFingerprintSeparation();
         await VerifyRoundTripAndPersistenceAsync(root);
         await VerifyRejectedDecisionsAsync(root);
@@ -182,6 +183,67 @@ internal static class GlossBertDecisionCacheTests
             "abstain-margin=0.18");
         Check(current != recalibrated,
             "A recalibrated abstention threshold reused the previous decision key.");
+    }
+
+    /// <summary>
+    /// Roadmap #8 candidate 5 (enriched sense representation) was measured and
+    /// rejected; the mechanism stays for the training track. Two things must
+    /// hold: it is inert everywhere worker input is formed, and the decision key
+    /// follows the rendering — otherwise a future experiment would read verdicts
+    /// computed from glosses the worker never saw.
+    /// </summary>
+    private static void VerifyEnrichmentGateIsClosed()
+    {
+        // The rule fires on a gloss outmatched by its neighbour, which is the
+        // case it was designed for: a terse slang sense losing to a detailed
+        // literal one. CreatePlan's two glosses are of similar length and would
+        // render identically with the gate open, proving nothing.
+        SmartDictionaryRankerPlan plan = new(
+            [
+                new SmartDictionaryRankerOutcome(0, 0, "бабки"),
+                new SmartDictionaryRankerOutcome(1, 1, "берег")
+            ],
+            ["Money.", "sloping land alongside a river or a lake"],
+            [0, 1]);
+        SmartDictionaryRankerPlan enriched = plan with
+        {
+            CandidateEnrichments = ["cash, dough", "riverside, embankment"]
+        };
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+
+        Check(!SmartDictionaryRankerPlan.EnrichmentEnabled,
+            "Candidate 5 was re-enabled. It is a measured negative result: see " +
+            "docs/RESEARCH.md, and re-run the bake-off with a cleared cache " +
+            "before trusting any number.");
+        Check(ReferenceEquals(enriched.GlossesFor(true), enriched.CandidateGlosses),
+            "The CPU rendering enriched glosses while the gate is closed — the " +
+            "rejected variant would ship unmeasured.");
+        Check(ReferenceEquals(
+                enriched.GlossesFor(true, enabled: false),
+                enriched.CandidateGlosses),
+            "The gate parameter does not actually suppress enrichment.");
+        Check(!ReferenceEquals(
+                enriched.GlossesFor(true, enabled: true),
+                enriched.CandidateGlosses),
+            "The enrichment mechanism no longer renders anything; the stored " +
+            "sidecar column and its measurements have quietly rotted.");
+        Check(ReferenceEquals(
+                enriched.GlossesFor(false, enabled: true),
+                enriched.CandidateGlosses),
+            "The NPU rendering spent sequence budget on enrichment; a pair " +
+            "already truncates above the median gloss there.");
+
+        // The key must follow the rendering, not the plan's raw glosses.
+        // Otherwise reopening candidate 5 would read back verdicts the worker
+        // produced from different input — the defect that hid the abstention
+        // threshold from the key space.
+        Check(Fingerprint(Sentence, tokenStart, enriched, enrichmentEnabled: true) !=
+              Fingerprint(Sentence, tokenStart, enriched),
+            "The decision key ignored the enriched gloss rendering.");
+        Check(Fingerprint(Sentence, tokenStart, enriched) ==
+              Fingerprint(Sentence, tokenStart, plan),
+            "An inert enrichment column split the decision key space and " +
+            "silently invalidated every stored verdict.");
     }
 
     private static void VerifyFingerprintSeparation()
@@ -476,7 +538,8 @@ internal static class GlossBertDecisionCacheTests
         SmartDictionaryRankerPlan plan,
         GlossBertRankerProvider provider = GlossBertRankerProvider.Cpu,
         string modelIdentity = "model-v1",
-        string dictionaryVersion = "dictionary-v1") =>
+        string dictionaryVersion = "dictionary-v1",
+        bool enrichmentEnabled = SmartDictionaryRankerPlan.EnrichmentEnabled) =>
         GlossBertDecisionCache.CreateFingerprint(
             sentence,
             Target,
@@ -484,7 +547,9 @@ internal static class GlossBertDecisionCacheTests
             plan,
             provider,
             modelIdentity,
-            dictionaryVersion);
+            dictionaryVersion,
+            RankerAbstention.CacheTag,
+            enrichmentEnabled);
 
     private static void Check(bool condition, string message)
     {

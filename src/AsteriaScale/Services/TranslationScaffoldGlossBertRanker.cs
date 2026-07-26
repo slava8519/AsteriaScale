@@ -97,7 +97,7 @@ internal sealed class TranslationScaffoldGlossBertRanker
             rankerContext.Text,
             request.Target,
             rankerContext.CharacterIndex,
-            request.Plan.CandidateGlosses,
+            request.Plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
             request.Plan.CandidateGroupIds,
             "English",
             provider,

@@ -226,7 +226,7 @@ internal static class RankerCalibrationBenchmark
                 benchmarkCase.Context,
                 lookup.Source,
                 benchmarkCase.CharacterIndex,
-                plan.CandidateGlosses,
+                plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
                 plan.CandidateGroupIds,
                 "English",
                 provider);

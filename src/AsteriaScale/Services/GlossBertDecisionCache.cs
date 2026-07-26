@@ -102,6 +102,9 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     /// Threshold-parameterized form. Production callers must use the overload
     /// above so the frozen threshold cannot be forgotten; this one exists so a
     /// test can prove that recalibrating it separates the key space.
+    /// <paramref name="enrichmentEnabled"/> exists for the same reason: it lets
+    /// a test prove the key follows the gloss rendering while roadmap #8
+    /// candidate 5 is off, so reopening it cannot silently reuse old verdicts.
     /// </summary>
     internal static string CreateFingerprint(
         string sentence,
@@ -111,7 +114,8 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         GlossBertRankerProvider provider,
         string modelIdentity,
         string dictionaryVersion,
-        string abstentionTag)
+        string abstentionTag,
+        bool enrichmentEnabled = SmartDictionaryRankerPlan.EnrichmentEnabled)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrWhiteSpace(abstentionTag);
@@ -154,10 +158,17 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
             Append(canonical, NormalizeText(outcome.Translation));
         }
 
-        for (int index = 0; index < plan.CandidateGlosses.Count; index++)
+        // The key must describe the glosses the worker actually received. A plan
+        // can render them per provider (roadmap #8 candidate 5 appends a hint
+        // where the sequence budget allows), so keying the unrendered glosses
+        // would serve a verdict computed from different input.
+        IReadOnlyList<string> glosses = plan.GlossesFor(
+            provider == GlossBertRankerProvider.Cpu,
+            enrichmentEnabled);
+        for (int index = 0; index < glosses.Count; index++)
         {
             Append(canonical, "candidate");
-            Append(canonical, NormalizeText(plan.CandidateGlosses[index]));
+            Append(canonical, NormalizeText(glosses[index]));
             Append(
                 canonical,
                 plan.CandidateGroupIds[index].ToString(CultureInfo.InvariantCulture));

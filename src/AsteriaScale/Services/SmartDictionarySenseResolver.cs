@@ -29,6 +29,9 @@ internal sealed record SmartDictionarySenseGroup(
     /// choice must preserve it rather than drift toward the blandest wording.
     /// </summary>
     public SenseRegister Register { get; init; } = SenseRegister.Neutral;
+
+    /// <summary>Short hint for the ranker; never part of sense identity.</summary>
+    public string Enrichment { get; init; } = string.Empty;
 }
 
 internal sealed record SmartDictionarySenseInventory(
@@ -79,7 +82,122 @@ internal sealed record SmartDictionaryRankerOutcome(
 internal sealed record SmartDictionaryRankerPlan(
     IReadOnlyList<SmartDictionaryRankerOutcome> Outcomes,
     IReadOnlyList<string> CandidateGlosses,
-    IReadOnlyList<int> CandidateGroupIds);
+    IReadOnlyList<int> CandidateGroupIds)
+{
+    /// <summary>
+    /// Per-gloss disambiguating hints, aligned with <see cref="CandidateGlosses"/>
+    /// (roadmap #8 candidate 5). Kept beside the glosses rather than folded into
+    /// them because the pair encoder shares one sequence budget with the
+    /// context: on CPU there is room for the hint, on NPU there is not, so the
+    /// caller that knows the provider decides whether to spend it.
+    /// </summary>
+    public IReadOnlyList<string> CandidateEnrichments { get; init; } =
+        Array.Empty<string>();
+
+    /// <summary>
+    /// Enrich a gloss only while it stays under this share of the plan's longest
+    /// gloss. Measured: enriching every gloss moved the register set up but
+    /// compressed the median margin 0.305 -> 0.229, pushing decisions under the
+    /// abstention threshold. The failure it targets is
+    /// relative — a terse slang gloss ("Money.") losing to a rich literal
+    /// neighbour — so spending budget on already-detailed glosses buys nothing
+    /// and blurs the comparison. A first calibration, to be re-measured rather
+    /// than trusted.
+    /// </summary>
+    private const double EnrichmentLengthShare = 2.0 / 3.0;
+
+    /// <summary>
+    /// Bake-off candidate 5 is off: it was measured and rejected, not skipped.
+    /// It lost a dev decision (21/21 -> 20/20, end-to-end 33/65 -> 32/65) and
+    /// compressed the median margin 0.305 -> 0.229 in both variants alike.
+    /// Those numbers reproduce exactly on every run; the latency figures do not
+    /// (see docs/RESEARCH.md) and are not part of the verdict.
+    ///
+    /// That the margin fell identically however few glosses were touched is the
+    /// informative part: GlossBERT was trained on (context, definition) pairs,
+    /// so "definition — synonyms" is out-of-distribution input. It does not read
+    /// the hint, it grows less certain about everything. The idea therefore
+    /// belongs to the training track of roadmap #8 — a model fine-tuned on
+    /// enriched glosses — and not to a wrapper over the current one. The data
+    /// and the mechanism stay so that experiment starts from measurements.
+    /// </summary>
+    internal const bool EnrichmentEnabled = false;
+
+    /// <summary>
+    /// Glosses as they should reach the worker for a given budget. Enrichment is
+    /// appended only where it earns its cost; the plan stays provider-neutral.
+    /// </summary>
+    public IReadOnlyList<string> GlossesFor(bool enriched) =>
+        GlossesFor(enriched, EnrichmentEnabled);
+
+    /// <summary>
+    /// Gate-parameterized form, so a test can compare both renderings while the
+    /// gate is closed. Production callers use the overload above.
+    /// </summary>
+    internal IReadOnlyList<string> GlossesFor(bool enriched, bool enabled)
+    {
+        if (!enabled ||
+            !enriched ||
+            CandidateEnrichments.Count != CandidateGlosses.Count ||
+            CandidateGlosses.Count < 2)
+        {
+            return CandidateGlosses;
+        }
+
+        int[] wordCounts = new int[CandidateGlosses.Count];
+        int longest = 0;
+        for (int index = 0; index < wordCounts.Length; index++)
+        {
+            wordCounts[index] = CountWords(CandidateGlosses[index]);
+            longest = Math.Max(longest, wordCounts[index]);
+        }
+
+        if (longest == 0)
+        {
+            return CandidateGlosses;
+        }
+
+        string[] glosses = new string[CandidateGlosses.Count];
+        bool changed = false;
+        for (int index = 0; index < glosses.Length; index++)
+        {
+            string hint = CandidateEnrichments[index];
+            bool outmatched = wordCounts[index] < longest * EnrichmentLengthShare;
+            if (hint.Length == 0 || !outmatched)
+            {
+                glosses[index] = CandidateGlosses[index];
+                continue;
+            }
+
+            glosses[index] = CandidateGlosses[index] + " — " + hint;
+            changed = true;
+        }
+
+        return changed ? glosses : CandidateGlosses;
+    }
+
+    private static int CountWords(string value)
+    {
+        int count = 0;
+        bool inWord = false;
+        foreach (char character in value)
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                inWord = false;
+                continue;
+            }
+
+            if (!inWord)
+            {
+                inWord = true;
+                count++;
+            }
+        }
+
+        return count;
+    }
+}
 
 internal sealed record SmartDictionaryTargetSpan(
     string Source,
@@ -150,8 +268,20 @@ internal static partial class SmartDictionarySenseResolver
         /// </summary>
         public SenseRegister Register { get; private set; } = SenseRegister.Neutral;
 
-        public void AddSurface(int sourceIndex, string translation, string register)
+        /// <summary>First non-empty hint among the rows merged into this sense.</summary>
+        public string Enrichment { get; private set; } = string.Empty;
+
+        public void AddSurface(
+            int sourceIndex,
+            string translation,
+            string register,
+            string enrichment = "")
         {
+            if (Enrichment.Length == 0 && enrichment.Length > 0)
+            {
+                Enrichment = enrichment;
+            }
+
             SenseRegister parsed = SenseRegisters.Parse(register);
             if (parsed > Register)
             {
@@ -173,7 +303,8 @@ internal static partial class SmartDictionarySenseResolver
         public SmartDictionarySenseGroup Build() =>
             new(SourceIndex, Definition, PartOfSpeech, Surfaces.ToArray())
             {
-                Register = Register
+                Register = Register,
+                Enrichment = Enrichment
             };
     }
 
@@ -282,7 +413,11 @@ internal static partial class SmartDictionarySenseResolver
                 bySense.Add(key, builder);
             }
 
-            builder.AddSurface(index, translation, candidate.Register);
+            builder.AddSurface(
+                index,
+                translation,
+                candidate.Register,
+                CollapseWhitespace(candidate.Enrichment));
         }
 
         SmartDictionarySenseGroup[] allGroups = builders
@@ -531,6 +666,7 @@ internal static partial class SmartDictionarySenseResolver
 
         List<SmartDictionaryRankerOutcome> outcomes = [];
         List<string> glosses = [];
+        List<string> enrichments = [];
         List<int> groupIds = [];
         Dictionary<string, int> groupByTranslation =
             new(StringComparer.Ordinal);
@@ -579,13 +715,17 @@ internal static partial class SmartDictionarySenseResolver
             }
 
             glosses.Add(gloss);
+            enrichments.Add(CollapseWhitespace(sense.Enrichment));
             groupIds.Add(groupId);
         }
 
         return new SmartDictionaryRankerPlan(
             outcomes.ToArray(),
             glosses.ToArray(),
-            groupIds.ToArray());
+            groupIds.ToArray())
+        {
+            CandidateEnrichments = enrichments.ToArray()
+        };
     }
 
     internal static string CanonicalizePartOfSpeech(string? value)

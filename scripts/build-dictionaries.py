@@ -415,6 +415,47 @@ def _entry_level_register(source_senses: list[dict]) -> str:
     return " ".join(label for label in ordered if label in (shared or set()))
 
 
+SENSE_ENRICHMENT_MAX_WORDS = 8
+
+
+def _kaikki_sense_enrichment(sense: dict) -> str:
+    """A short, dense hint that separates a sense from its neighbours.
+
+    Bake-off candidate #5 (roadmap #8): the ranker sees only the definition, and
+    the measured misses all had a terse slang gloss ("Money.", "One's residence")
+    losing to a rich literal one. Synonyms are preferred over example sentences
+    because the pair encoder shares a fixed sequence budget with the context —
+    a long quotation would buy separation by crowding out the very sentence
+    being disambiguated.
+    """
+    synonyms: list[str] = []
+    for entry in sense.get("synonyms", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        word = clean(entry.get("word"))
+        if word and word not in synonyms:
+            synonyms.append(word)
+
+    if synonyms:
+        picked = synonyms[:4]
+        text = ", ".join(picked)
+    else:
+        text = ""
+        for entry in sense.get("examples", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            candidate = clean(entry.get("text"))
+            if candidate:
+                text = candidate
+                break
+
+    words = text.split()
+    if not words:
+        return ""
+
+    return " ".join(words[:SENSE_ENRICHMENT_MAX_WORDS])
+
+
 def _kaikki_glosses(sense: dict) -> list[str]:
     if "no-gloss" in sense.get("tags", []):
         return []
@@ -547,6 +588,7 @@ def parse_kaikki_enwiktionary_russian(
                 source_translations: list,
                 register: str,
                 fallback_definition: str = "",
+                enrichment: str = "",
             ) -> None:
                 for translation in source_translations:
                     if not isinstance(translation, dict):
@@ -572,7 +614,7 @@ def parse_kaikki_enwiktionary_russian(
                     )
                     if definition and is_usable_english_definition(definition):
                         aligned_translations.append(
-                            (value, definition, register, part_of_speech)
+                            (value, definition, register, part_of_speech, enrichment)
                         )
 
             item_uncovered: list[tuple[str, str, str]] = []
@@ -587,11 +629,13 @@ def parse_kaikki_enwiktionary_russian(
                     default="",
                 )
                 sense_register = _kaikki_style_prefix(sense)
+                sense_enrichment = _kaikki_sense_enrichment(sense)
                 aligned_before = len(aligned_translations)
                 collect_translations(
                     sense.get("translations", []),
                     sense_register,
                     fallback_definition,
+                    sense_enrichment,
                 )
                 if len(aligned_translations) == aligned_before and fallback_definition:
                     item_uncovered.append(
@@ -614,18 +658,16 @@ def parse_kaikki_enwiktionary_russian(
                 normalized_key = normalize_english(key)
                 if not normalized_key:
                     continue
+                # Enrichment is a hint for the ranker, not part of what makes a
+                # sense distinct: two rows differing only by it are one sense.
                 known_senses = {
-                    (
-                        translation.casefold(),
-                        definition.casefold(),
-                        register.casefold(),
-                        sense_part_of_speech.casefold(),
-                    )
-                    for translation, definition, register, sense_part_of_speech
-                    in sense_entries[normalized_key]
+                    tuple(value.casefold() for value in row[:4])
+                    for row in sense_entries[normalized_key]
                 }
                 for aligned in aligned_translations:
-                    normalized_aligned = tuple(value.casefold() for value in aligned)
+                    normalized_aligned = tuple(
+                        value.casefold() for value in aligned[:4]
+                    )
                     if normalized_aligned not in known_senses:
                         sense_entries[normalized_key].append(aligned)
                         known_senses.add(normalized_aligned)
@@ -745,7 +787,7 @@ def enrich_sense_entries(
                     marker = (part.casefold(), definition.casefold())
                     if marker in known:
                         continue
-                    rows.append((part, definition, register or gloss_register, pos))
+                    rows.append((part, definition, register or gloss_register, pos, ""))
                     known.add(marker)
                     appended += 1
                     added += 1
@@ -762,7 +804,7 @@ def enrich_sense_entries(
             for gloss_pos, glosses in pos_glosses.items()
         }
         known = {(row[0].casefold(), row[1].casefold()) for row in rows}
-        for translation, definition, register, pos in list(rows):
+        for translation, definition, register, pos, _ in list(rows):
             gloss_parts = gloss_parts_by_pos.get(pos.casefold(), [])
             siblings = 0
             for _, parts in gloss_parts:
@@ -778,7 +820,7 @@ def enrich_sense_entries(
                     marker = (part.casefold(), definition.casefold())
                     if marker in known:
                         continue
-                    rows.append((part, definition, register, pos))
+                    rows.append((part, definition, register, pos, ""))
                     known.add(marker)
                     siblings += 1
                     added += 1
@@ -1185,6 +1227,9 @@ def parse_curated_tsv(
                     record.english_definition,
                     record.register,
                     record.part_of_speech,
+                    # Curated VN rows carry no kaikki synonyms or examples, so
+                    # the ranker enrichment column stays empty for them.
+                    "",
                 )
                 canonical_sense = tuple(value.casefold() for value in sense)
                 if canonical_sense not in known_senses[record.normalized_english]:
@@ -1565,14 +1610,20 @@ def write_dictionary(path: Path, entries: dict[str, list[str]]) -> None:
 
 def write_sense_dictionary(
     path: Path,
-    entries: dict[str, list[tuple[str, str, str, str]]],
+    entries: dict[str, list[tuple[str, str, str, str, str]]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as raw:
         with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed:
             with io.TextIOWrapper(compressed, encoding="utf-8", newline="\n") as text:
                 for key in sorted(entries):
-                    for translation, definition, register, part_of_speech in entries[key]:
+                    for (
+                        translation,
+                        definition,
+                        register,
+                        part_of_speech,
+                        enrichment,
+                    ) in entries[key]:
                         text.write(key)
                         text.write("\t")
                         text.write(translation.replace("\t", " "))
@@ -1582,6 +1633,8 @@ def write_sense_dictionary(
                         text.write(register.replace("\t", " "))
                         text.write("\t")
                         text.write(part_of_speech.replace("\t", " "))
+                        text.write("\t")
+                        text.write(enrichment.replace("\t", " "))
                         text.write("\n")
 
 

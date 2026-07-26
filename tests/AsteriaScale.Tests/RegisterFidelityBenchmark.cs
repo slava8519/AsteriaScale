@@ -166,7 +166,7 @@ internal static class RegisterFidelityBenchmark
                 rankerContext.Text,
                 lookup.Source,
                 rankerContext.CharacterIndex,
-                plan.CandidateGlosses,
+                plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
                 plan.CandidateGroupIds,
                 "English",
                 provider,

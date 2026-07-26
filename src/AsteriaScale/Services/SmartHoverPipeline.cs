@@ -361,6 +361,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                 recognized.Text,
                 lookup.Source,
                 recognized.CharacterIndex);
+            // Enrichment is spent only where the sequence budget allows it:
+            // measured, an NPU pair already truncates above the median gloss.
+            IReadOnlyList<string> rankerGlosses =
+                plan.GlossesFor(provider == GlossBertRankerProvider.Cpu);
             string decisionKey = CreateDecisionKey(
                 rankerContext.Text,
                 lookup.Source,
@@ -418,7 +422,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     rankerContext.Text,
                     lookup.Source,
                     rankerContext.CharacterIndex,
-                    plan.CandidateGlosses,
+                    rankerGlosses,
                     plan.CandidateGroupIds,
                     "English",
                     provider,

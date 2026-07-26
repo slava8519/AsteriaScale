@@ -38,9 +38,9 @@
     }
   },
   "generator": {
-    "bytes": 79292,
+    "bytes": 83261,
     "fileName": "build-dictionaries.py",
-    "sha256": "61224C41AB7B1874164303B20333B1A4F3EC53D6514A09C131B5E366F66D2AAF"
+    "sha256": "A83BA069F86D97FE8AF1C2C5F39932ECD5762C03E19DD77F1B83F8E3CB2E359F"
   },
   "inputs": {
     "curatedVn": {
@@ -77,10 +77,10 @@
       "sha256": "FE76E7D63BE3FB1C78BDFE19CE567569904CBA1D7AD68AAE5878F9FD2297D78E"
     },
     {
-      "bytes": 1657,
+      "bytes": 1663,
       "fileName": "eng-rus-vn-senses.tsv.gz",
       "rows": 102,
-      "sha256": "AE40581B6321D313FF0EC752B27175443EE7CEBD28671A7FAECF43FA8728F784"
+      "sha256": "BAF58784E022262C93174DE55E690E1D38D52C0EC8AA8D88E401AAB121D89F82"
     },
     {
       "bytes": 814,
