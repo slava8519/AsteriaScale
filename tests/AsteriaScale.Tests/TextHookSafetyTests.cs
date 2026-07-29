@@ -116,6 +116,65 @@ internal static class TextHookSafetyTests
         Assert(!string.Equals(ocrLabelled, hookLabelled, StringComparison.Ordinal),
             "The two provenances are indistinguishable on the card.");
 
+        ProcessTarget diagnosticTarget = new(4242, "Novel.exe", "x86");
+        TextHookStatusSnapshot disabledStatus = TextHookStatusSnapshot.Disabled();
+        Assert(HoverTranslationOverlay.AddTextSourceBadge(
+                ocrBadge,
+                HoverTextSource.Ocr,
+                disabledStatus).EndsWith("  ·  OCR · HOOK ВЫКЛ", StringComparison.Ordinal),
+            "The card did not state that an explicitly configured hook is disabled.");
+        TextHookStatusSnapshot unavailableStatus = TextHookStatusSnapshot.Unavailable(
+            diagnosticTarget.ProcessId,
+            diagnosticTarget,
+            string.Empty,
+            "Injection failed.");
+        Assert(HoverTranslationOverlay.AddTextSourceBadge(
+                ocrBadge,
+                HoverTextSource.Ocr,
+                unavailableStatus).EndsWith("  ·  OCR · HOOK НЕТ", StringComparison.Ordinal),
+            "An unavailable injector was presented as ordinary OCR.");
+        TextHookStatusSnapshot waitingStatus = TextHookStatusSnapshot.Attached(
+            diagnosticTarget.ProcessId,
+            diagnosticTarget,
+            @"C:\Textractor\x86\TextractorCLI.exe");
+        Assert(HoverTranslationOverlay.AddTextSourceBadge(
+                ocrBadge,
+                HoverTextSource.Ocr,
+                waitingStatus).EndsWith("  ·  OCR · HOOK ЖДЁТ", StringComparison.Ordinal),
+            "An attached injector without a matching line was presented as active.");
+        TextHookStatusSnapshot activeStatus = waitingStatus.WithCurrentMatch(matched: true);
+        Assert(activeStatus.State == TextHookRuntimeState.Active &&
+               HoverTranslationOverlay.AddTextSourceBadge(
+                   ocrBadge,
+                   HoverTextSource.TextHook,
+                   activeStatus).EndsWith("  ·  HOOK", StringComparison.Ordinal),
+             "A matching Textractor line was not presented as an active hook.");
+        Assert(HoverTranslationOverlay.AddTextSourceBadge(
+                ocrBadge,
+                HoverTextSource.Ocr,
+                activeStatus).EndsWith("  ·  OCR · HOOK АКТИВЕН", StringComparison.Ordinal),
+            "An operational hook was hidden when one card used OCR fallback.");
+
+        AppSettings missingCliSettings = new()
+        {
+            TextHookEnabled = true,
+            TextractorDirectory = Path.Combine(tempRoot, "missing-textractor")
+        };
+        await using (TextHookService missingCli = new(missingCliSettings))
+        {
+            missingCli.EnsureAttached(Environment.ProcessId);
+            TextHookStatusSnapshot unavailable = missingCli.GetStatusSnapshot(
+                Environment.ProcessId);
+            Assert(unavailable.State == TextHookRuntimeState.Unavailable &&
+                   unavailable.ProcessId == Environment.ProcessId &&
+                   unavailable.ExecutableName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                   unavailable.Details.Contains("PID", StringComparison.Ordinal) &&
+                   unavailable.Details.Contains("OCR", StringComparison.Ordinal),
+                "Attach diagnostics omitted the target executable, PID, or OCR fallback.");
+            Assert(unavailable.ProcessArchitecture is "x86" or "x64" or "архитектура неизвестна",
+                "Attach diagnostics omitted the target architecture.");
+        }
+
         string textractorRoot = Path.Combine(tempRoot, "text-hook-profile-detach");
         string cliDirectory = Path.Combine(textractorRoot, "x64");
         Directory.CreateDirectory(cliDirectory);
@@ -141,6 +200,18 @@ internal static class TextHookSafetyTests
         attached.EnsureAttached(Environment.ProcessId);
         Assert(attached.AttachedProcessId == Environment.ProcessId,
             "The profile detach fixture did not start its isolated CLI.");
+        TextHookStatusSnapshot attachedStatus = attached.GetStatusSnapshot(
+            Environment.ProcessId);
+        Assert(attachedStatus.State == TextHookRuntimeState.AttachedWaiting &&
+               attachedStatus.ProcessId == Environment.ProcessId &&
+               attachedStatus.CliPath.EndsWith("TextractorCLI.exe", StringComparison.OrdinalIgnoreCase) &&
+               attachedStatus.Details.Contains("PID", StringComparison.Ordinal),
+            "The attached status omitted its PID, architecture, or CLI path.");
+        Assert(attached.GetStatusSnapshot(
+                   Environment.ProcessId,
+                   matchedCurrentText: true).State == TextHookRuntimeState.Active &&
+               attached.GetStatusSnapshot(Environment.ProcessId).State == TextHookRuntimeState.Active,
+            "A verified hook stream did not remain visibly active for the attachment.");
         profileSettings.Profiles[0].TextHookEnabled = false;
         attached.ApplySettings();
         Assert(attached.AttachedProcessId == 0,

@@ -4,6 +4,7 @@ using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Graphics.Imaging;
 using Microsoft.Windows.AI;
 using Microsoft.Windows.AI.Imaging;
@@ -26,6 +27,11 @@ internal sealed record HoverOcrResult(
     Drawing.Rectangle CaptureBounds,
     HoverTextSource TextSource = HoverTextSource.Ocr)
 {
+    // Neural phrase translation is allowed only after two compatible OCR
+    // observations. A single observation is still sufficient for the local
+    // dictionary, which must remain available when OCR is unstable.
+    public bool IsSentenceContextStable { get; init; } = true;
+
     // Context is populated only by a process- and hook-stream-scoped
     // Textractor match. It is never rendered as part of the current reply.
     public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
@@ -66,7 +72,7 @@ internal sealed record OcrLineWords(
 internal sealed record OcrRecognition(
     IReadOnlyList<OcrLineWords> Lines);
 
-internal sealed class WindowsAiOcrService : IDisposable
+internal sealed partial class WindowsAiOcrService : IDisposable
 {
     private const int SentenceCaptureMaximumWidth = 2400;
     private const int SentenceCaptureMaximumHeight = 720;
@@ -122,39 +128,215 @@ internal sealed class WindowsAiOcrService : IDisposable
         await EnsureReadyAsync();
         cancellationToken.ThrowIfCancellationRequested();
 
-        using Capture capture = sentenceContext
+        using Capture firstCapture = sentenceContext
             ? CaptureSentenceContext(cursor, GetReusableSentenceBounds(cursor))
             : CaptureAround(cursor, 900, 340);
-        byte[] pixels = ReadBgraPixels(capture.Bitmap);
-        ulong fingerprint = ComputeFrameFingerprint(pixels);
-        OcrRecognition? result = null;
+        byte[] firstPixels = ReadBgraPixels(firstCapture.Bitmap);
+        ulong firstFingerprint = ComputeFrameFingerprint(firstPixels);
+        OcrRecognition? firstRecognition = null;
         bool cacheHit = sentenceContext &&
-                        TryGetCachedRecognition(capture.Bounds, fingerprint, DateTimeOffset.UtcNow, out result);
-        if (!cacheHit)
+                        TryGetCachedRecognition(
+                            firstCapture.Bounds,
+                            firstFingerprint,
+                            DateTimeOffset.UtcNow,
+                            out firstRecognition);
+        if (cacheHit)
         {
-            result = RecognizePixels(pixels, capture.Bitmap.Width, capture.Bitmap.Height, cancellationToken);
-            if (sentenceContext && result is not null)
-            {
-                StoreCachedRecognition(capture.Bounds, fingerprint, result, DateTimeOffset.UtcNow);
-            }
+            HoverOcrResult? cachedSelection = SelectRecognitionNearCursor(
+                firstRecognition,
+                cursor,
+                firstCapture.Bounds,
+                sentenceContext);
+            TraceRecognition(
+                firstCapture.Bitmap,
+                firstRecognition!,
+                cachedSelection,
+                cursor.X - firstCapture.Bounds.Left,
+                cursor.Y - firstCapture.Bounds.Top,
+                firstCapture.Bounds);
+            return cachedSelection;
         }
 
-        if (result is null || result.Lines.Count == 0)
+        firstRecognition = RecognizePixels(
+            firstPixels,
+            firstCapture.Bitmap.Width,
+            firstCapture.Bitmap.Height,
+            cancellationToken);
+        HoverOcrResult? firstSelection = SelectRecognitionNearCursor(
+            firstRecognition,
+            cursor,
+            firstCapture.Bounds,
+            sentenceContext);
+        if (!sentenceContext)
+        {
+            if (firstRecognition is not null)
+            {
+                TraceRecognition(
+                    firstCapture.Bitmap,
+                    firstRecognition,
+                    firstSelection,
+                    cursor.X - firstCapture.Bounds.Left,
+                    cursor.Y - firstCapture.Bounds.Top,
+                    firstCapture.Bounds);
+            }
+
+            return firstSelection;
+        }
+
+        // A second capture is deliberately bounded to one extra pass and runs
+        // before the overlay is shown. VN renderers can expose a temporarily
+        // incomplete glyph frame; agreeing observations are cheap to cache,
+        // while a richer compatible observation repairs omissions without
+        // ever splicing unrelated OCR strings together.
+        cancellationToken.ThrowIfCancellationRequested();
+        using Capture secondCapture = CaptureSentenceContext(cursor, firstCapture.Bounds);
+        byte[] secondPixels = ReadBgraPixels(secondCapture.Bitmap);
+        ulong secondFingerprint = ComputeFrameFingerprint(secondPixels);
+        OcrRecognition? secondRecognition = RecognizePixels(
+            secondPixels,
+            secondCapture.Bitmap.Width,
+            secondCapture.Bitmap.Height,
+            cancellationToken);
+        HoverOcrResult? secondSelection = SelectRecognitionNearCursor(
+            secondRecognition,
+            cursor,
+            secondCapture.Bounds,
+            sentenceContext: true);
+        HoverOcrResult? stabilized = StabilizeSentenceContext(
+            firstSelection,
+            secondSelection,
+            out bool useSecondObservation);
+        if (stabilized is null)
         {
             return null;
         }
 
-        float cursorX = cursor.X - capture.Bounds.Left;
-        float cursorY = cursor.Y - capture.Bounds.Top;
-        HoverOcrResult? selection = SelectNearPoint(
-            result,
-            cursorX,
-            cursorY,
-            capture.Bounds,
-            sentenceContext);
-        TraceRecognition(capture.Bitmap, result, selection, cursorX, cursorY, capture.Bounds);
-        return selection;
+        Capture selectedCapture = useSecondObservation ? secondCapture : firstCapture;
+        OcrRecognition? selectedRecognition = useSecondObservation
+            ? secondRecognition
+            : firstRecognition;
+        ulong selectedFingerprint = useSecondObservation
+            ? secondFingerprint
+            : firstFingerprint;
+        if (stabilized.IsSentenceContextStable && selectedRecognition is not null)
+        {
+            StoreCachedRecognition(
+                selectedCapture.Bounds,
+                selectedFingerprint,
+                selectedRecognition,
+                DateTimeOffset.UtcNow);
+        }
+
+        if (selectedRecognition is not null)
+        {
+            TraceRecognition(
+                selectedCapture.Bitmap,
+                selectedRecognition,
+                stabilized,
+                cursor.X - selectedCapture.Bounds.Left,
+                cursor.Y - selectedCapture.Bounds.Top,
+                selectedCapture.Bounds);
+        }
+
+        return stabilized;
     }
+
+    private static HoverOcrResult? SelectRecognitionNearCursor(
+        OcrRecognition? recognition,
+        NativeMethods.Point cursor,
+        Drawing.Rectangle captureBounds,
+        bool sentenceContext)
+    {
+        if (recognition is null || recognition.Lines.Count == 0)
+        {
+            return null;
+        }
+
+        return SelectNearPoint(
+            recognition,
+            cursor.X - captureBounds.Left,
+            cursor.Y - captureBounds.Top,
+            captureBounds,
+            sentenceContext);
+    }
+
+    internal static HoverOcrResult? StabilizeSentenceContext(
+        HoverOcrResult? first,
+        HoverOcrResult? second,
+        out bool useSecondObservation)
+    {
+        useSecondObservation = first is null;
+        if (first is null)
+        {
+            return second is null
+                ? null
+                : second with { IsSentenceContextStable = false };
+        }
+
+        if (second is null ||
+            !string.Equals(
+                LocalDictionaryService.NormalizeEnglish(first.HoveredWord),
+                LocalDictionaryService.NormalizeEnglish(second.HoveredWord),
+                StringComparison.Ordinal))
+        {
+            useSecondObservation = false;
+            return first with { IsSentenceContextStable = false };
+        }
+
+        string[] firstTokens = SentenceComparisonTokens(first.Text);
+        string[] secondTokens = SentenceComparisonTokens(second.Text);
+        if (firstTokens.Length == 0 || secondTokens.Length == 0)
+        {
+            useSecondObservation = false;
+            return first with { IsSentenceContextStable = false };
+        }
+
+        bool firstFitsSecond = IsOrderedSubsequence(firstTokens, secondTokens);
+        bool secondFitsFirst = IsOrderedSubsequence(secondTokens, firstTokens);
+        if (!firstFitsSecond && !secondFitsFirst)
+        {
+            useSecondObservation = false;
+            return first with { IsSentenceContextStable = false };
+        }
+
+        useSecondObservation = firstFitsSecond &&
+                               (!secondFitsFirst || second.Text.Length > first.Text.Length);
+        HoverOcrResult selected = useSecondObservation ? second : first;
+        return selected with { IsSentenceContextStable = true };
+    }
+
+    private static string[] SentenceComparisonTokens(string value) =>
+        SentenceComparisonTokenRegex()
+            .Matches((value ?? string.Empty).Normalize(NormalizationForm.FormC))
+            .Select(match => LocalDictionaryService.NormalizeEnglish(match.Value))
+            .ToArray();
+
+    private static bool IsOrderedSubsequence(
+        IReadOnlyList<string> candidate,
+        IReadOnlyList<string> sequence)
+    {
+        if (candidate.Count > sequence.Count)
+        {
+            return false;
+        }
+
+        int candidateIndex = 0;
+        foreach (string token in sequence)
+        {
+            if (candidateIndex < candidate.Count &&
+                string.Equals(candidate[candidateIndex], token, StringComparison.Ordinal))
+            {
+                candidateIndex++;
+            }
+        }
+
+        return candidateIndex == candidate.Count;
+    }
+
+    [GeneratedRegex(
+        @"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex SentenceComparisonTokenRegex();
 
     internal async Task<ScreenOcrResult> RecognizeScreenAsync(
         nint preferredWindow,

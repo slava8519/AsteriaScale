@@ -2787,6 +2787,56 @@ try
             out AsteriaScale.Interop.NativeMethods.Point unchanged);
         Assert(!mappedOutside && unchanged.X == outside.X && unchanged.Y == outside.Y,
             "A cursor outside the source window must stay in physical screen coordinates.");
+
+        nint gameWindow = new(101);
+        nint scalingWindow = new(202);
+        nint magpieChildWindow = new(203);
+        nint unrelatedWindow = new(303);
+        Assert(VisibleCursorService.SelectTextSourceWindow(
+                   scalingWindow,
+                   scalingWindow,
+                   gameWindow,
+                   sourceWindowValid: true,
+                   hoveredProcessId: 20,
+                   scalingProcessId: 20,
+                   pointInsideDestination: true) == gameWindow,
+            "Textractor did not resolve the Magpie destination HWND to the game HWND.");
+        Assert(VisibleCursorService.SelectTextSourceWindow(
+                   magpieChildWindow,
+                   scalingWindow,
+                   gameWindow,
+                   sourceWindowValid: true,
+                   hoveredProcessId: 20,
+                   scalingProcessId: 20,
+                   pointInsideDestination: true) == gameWindow,
+            "A Magpie companion HWND inside the destination was not resolved to the game HWND.");
+        Assert(VisibleCursorService.SelectTextSourceWindow(
+                   unrelatedWindow,
+                   scalingWindow,
+                   gameWindow,
+                   sourceWindowValid: true,
+                   hoveredProcessId: 30,
+                   scalingProcessId: 20,
+                   pointInsideDestination: true) == unrelatedWindow,
+            "An unrelated overlay inside the destination was redirected to the game process.");
+        Assert(VisibleCursorService.SelectTextSourceWindow(
+                   magpieChildWindow,
+                   scalingWindow,
+                   gameWindow,
+                   sourceWindowValid: true,
+                   hoveredProcessId: 20,
+                   scalingProcessId: 20,
+                   pointInsideDestination: false) == magpieChildWindow,
+            "A Magpie-owned window outside the active destination was redirected to the game.");
+        Assert(VisibleCursorService.SelectTextSourceWindow(
+                   scalingWindow,
+                   scalingWindow,
+                   gameWindow,
+                   sourceWindowValid: false,
+                   hoveredProcessId: 20,
+                   scalingProcessId: 20,
+                   pointInsideDestination: true) == scalingWindow,
+            "An invalid Magpie.SrcHWND was used as a Textractor target.");
         return Task.CompletedTask;
     });
 
@@ -2957,6 +3007,93 @@ try
                 fingerprint,
                 cachedAt.AddSeconds(31)),
             "The one-entry OCR cache must expire conservatively.");
+        return Task.CompletedTask;
+    });
+
+    await RunAsync("Smart OCR sentence stabilization", () =>
+    {
+        System.Drawing.Rectangle bounds = new(400, 500, 1600, 720);
+        HoverOcrResult incomplete = new(
+            "Wait here for a little Kotori.",
+            "Wait",
+            1,
+            bounds);
+        const string completeText = "Wait here for a little if you can, Kotori.";
+        HoverOcrResult complete = new(
+            completeText,
+            "Wait",
+            1,
+            bounds);
+
+        HoverOcrResult? richer = WindowsAiOcrService.StabilizeSentenceContext(
+            incomplete,
+            complete,
+            out bool usedSecond);
+        Assert(richer is {
+                   Text: completeText,
+                   IsSentenceContextStable: true
+               } && usedSecond,
+            "A compatible richer OCR observation did not replace the incomplete sentence.");
+
+        HoverOcrResult? richerFirst = WindowsAiOcrService.StabilizeSentenceContext(
+            complete,
+            incomplete,
+            out usedSecond);
+        Assert(richerFirst is {
+                   Text: completeText,
+                   IsSentenceContextStable: true
+               } && !usedSecond,
+            "A later compatible truncation displaced the richer OCR sentence.");
+
+        HoverOcrResult? identical = WindowsAiOcrService.StabilizeSentenceContext(
+            complete,
+            complete with { CharacterIndex = 2 },
+            out usedSecond);
+        Assert(identical is {
+                   Text: completeText,
+                   CharacterIndex: 1,
+                   IsSentenceContextStable: true
+               } && !usedSecond,
+            "Identical OCR observations should stabilize without replacing the first geometry.");
+
+        HoverOcrResult incompatible = complete with
+        {
+            Text = "Wait until the train arrives.",
+            CharacterIndex = 1
+        };
+        HoverOcrResult? guarded = WindowsAiOcrService.StabilizeSentenceContext(
+            incomplete,
+            incompatible,
+            out usedSecond);
+        Assert(guarded is {
+                   Text: "Wait here for a little Kotori.",
+                   IsSentenceContextStable: false
+               } && !usedSecond,
+            "Incompatible OCR sentences were merged or allowed to drive phrase translation.");
+        Assert(!SmartHoverPipeline.HasReliablePhraseContext(guarded!),
+            "An unstable OCR sentence must keep the dictionary but suppress TranslateGemma.");
+        Assert(SmartHoverPipeline.HasReliablePhraseContext(
+                guarded! with { TextSource = HoverTextSource.TextHook }),
+            "A process-scoped text-hook match should supersede OCR instability.");
+
+        HoverOcrResult numericConflict = incomplete with
+        {
+            Text = "Wait here for 10 minutes.",
+            CharacterIndex = 1
+        };
+        HoverOcrResult? numericGuarded = WindowsAiOcrService.StabilizeSentenceContext(
+            incomplete with { Text = "Wait here for 5 minutes." },
+            numericConflict,
+            out usedSecond);
+        Assert(numericGuarded is { IsSentenceContextStable: false },
+            "Different OCR numbers were erased while checking sentence compatibility.");
+
+        HoverOcrResult? single = WindowsAiOcrService.StabilizeSentenceContext(
+            incomplete,
+            null,
+            out usedSecond);
+        Assert(single is { IsSentenceContextStable: false } && !usedSecond,
+            "A lone OCR observation was incorrectly marked stable.");
         return Task.CompletedTask;
     });
 

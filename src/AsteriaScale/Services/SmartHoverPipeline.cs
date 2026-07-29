@@ -683,6 +683,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         if (!PhraseTranslationEnabled ||
             _smartPhraseTranslator is null ||
             _smartPhraseCache is null ||
+            !HasReliablePhraseContext(recognized) ||
             !string.Equals(dictionaryResult.Language, "EN", StringComparison.OrdinalIgnoreCase))
         {
             return null;
@@ -782,6 +783,10 @@ internal sealed class SmartHoverPipeline : IDisposable
             return UnavailablePhraseLine(phrase.Value.Text);
         }
     }
+
+    internal static bool HasReliablePhraseContext(HoverOcrResult recognized) =>
+        recognized.TextSource == HoverTextSource.TextHook ||
+        recognized.IsSentenceContextStable;
 
     private static SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
         SmartPhraseModelInput modelInput,

@@ -35,6 +35,8 @@ public sealed partial class TextHookService : IAsyncDisposable
     private int _attachedProcessId;
     private long _attachmentGeneration;
     private string _activeCliPath = string.Empty;
+    private TextHookStatusSnapshot _status = TextHookStatusSnapshot.Disabled();
+    private string _lastCliMessage = string.Empty;
     private bool _disposed;
 
     public TextHookService(AppSettings settings)
@@ -69,6 +71,110 @@ public sealed partial class TextHookService : IAsyncDisposable
     }
 
     /// <summary>
+    /// Returns an honest, display-safe snapshot of the current hook state.
+    /// A running injector is only "active" for a card after its exact OCR
+    /// target was found in a fresh hooked sentence; attach alone means waiting.
+    /// </summary>
+    internal TextHookStatusSnapshot GetStatusSnapshot(
+        int expectedProcessId,
+        bool matchedCurrentText = false)
+    {
+        lock (_gate)
+        {
+            if (!_settings.TextHookEnabled)
+            {
+                return TextHookStatusSnapshot.Disabled(
+                    "Text-hook выключен в настройках; используется OCR.");
+            }
+
+            if (string.IsNullOrWhiteSpace(_settings.TextractorDirectory))
+            {
+                return TextHookStatusSnapshot.Unavailable(
+                    expectedProcessId,
+                    DescribeTarget(expectedProcessId),
+                    string.Empty,
+                    "Папка Textractor не указана; используется OCR.");
+            }
+
+            if (_disposed)
+            {
+                return TextHookStatusSnapshot.Unavailable(
+                    expectedProcessId,
+                    DescribeTarget(expectedProcessId),
+                    string.Empty,
+                    "Служба text-hook уже остановлена; используется OCR.");
+            }
+
+            TextHookStatusSnapshot status = _status;
+            if (status.State == TextHookRuntimeState.Disabled &&
+                status.ProcessId == 0)
+            {
+                return TextHookStatusSnapshot.Unavailable(
+                    expectedProcessId,
+                    DescribeTarget(expectedProcessId),
+                    string.Empty,
+                    "Целевой процесс для Textractor не определён; используется OCR.");
+            }
+
+            if (expectedProcessId > 0 && status.ProcessId != expectedProcessId)
+            {
+                ProcessTarget target = DescribeTarget(expectedProcessId);
+                return TextHookStatusSnapshot.Unavailable(
+                    expectedProcessId,
+                    target,
+                    string.Empty,
+                    $"Textractor не подключён к {target.DisplayName}; используется OCR.");
+            }
+
+            if (status.State is TextHookRuntimeState.AttachedWaiting or
+                TextHookRuntimeState.Active)
+            {
+                bool alive;
+                try
+                {
+                    alive = _cli is { HasExited: false };
+                }
+                catch (InvalidOperationException)
+                {
+                    alive = false;
+                }
+
+                if (!alive)
+                {
+                    status = status with
+                    {
+                        State = TextHookRuntimeState.Unavailable,
+                        Details = $"TextractorCLI завершился после подключения к " +
+                                  $"{status.TargetDisplayName}; используется OCR."
+                    };
+                    _status = status;
+                }
+            }
+
+            TextHookStatusSnapshot verifiedStatus = status.WithCurrentMatch(matchedCurrentText);
+            if (verifiedStatus.State != status.State)
+            {
+                // Once an exact OCR-anchored sentence has proved the stream,
+                // keep reporting the hook as operational for this attachment.
+                // Individual cards still state OCR when that specific context
+                // did not come from Textractor.
+                _status = verifiedStatus;
+            }
+
+            status = verifiedStatus;
+            if (!string.IsNullOrWhiteSpace(_lastCliMessage))
+            {
+                status = status with
+                {
+                    Details = status.Details + " Последнее сообщение CLI: " + _lastCliMessage
+                };
+            }
+
+            return status;
+        }
+    }
+
+    /// <summary>
     /// Best-effort attach to the process under the cursor. Injection may be
     /// refused (elevation, antivirus); every failure leaves OCR in charge.
     /// </summary>
@@ -86,9 +192,28 @@ public sealed partial class TextHookService : IAsyncDisposable
                 return;
             }
 
-            if (!IsEnabled || !IsProcessAllowed(processId))
+            ProcessTarget target = DescribeTarget(processId);
+            if (!IsEnabled)
             {
                 StopCliLocked(clearSentences: true);
+                _status = !_settings.TextHookEnabled
+                    ? TextHookStatusSnapshot.Disabled(
+                        "Text-hook выключен в настройках; используется OCR.")
+                    : TextHookStatusSnapshot.Unavailable(
+                        processId,
+                        target,
+                        string.Empty,
+                        "Папка Textractor не указана; используется OCR.");
+                return;
+            }
+
+            if (!IsProcessAllowed(processId))
+            {
+                StopCliLocked(clearSentences: true);
+                _status = TextHookStatusSnapshot.Disabled(
+                    $"Text-hook выключен для {target.DisplayName}; используется OCR.",
+                    processId,
+                    target);
                 return;
             }
 
@@ -96,6 +221,12 @@ public sealed partial class TextHookService : IAsyncDisposable
             if (cliPath is null)
             {
                 StopCliLocked(clearSentences: true);
+                _status = TextHookStatusSnapshot.Unavailable(
+                    processId,
+                    target,
+                    string.Empty,
+                    $"TextractorCLI для {target.DisplayName} не найден в " +
+                    $"'{_settings.TextractorDirectory}'; используется OCR.");
                 return;
             }
 
@@ -109,6 +240,7 @@ public sealed partial class TextHookService : IAsyncDisposable
             try
             {
                 StopCliLocked(clearSentences: true);
+                _lastCliMessage = string.Empty;
 
                 ProcessStartInfo startInfo = new(cliPath)
                 {
@@ -125,6 +257,11 @@ public sealed partial class TextHookService : IAsyncDisposable
                 Process? cli = Process.Start(startInfo);
                 if (cli is null)
                 {
+                    _status = TextHookStatusSnapshot.Unavailable(
+                        processId,
+                        target,
+                        cliPath,
+                        $"Не удалось запустить TextractorCLI для {target.DisplayName}; используется OCR.");
                     return;
                 }
 
@@ -141,15 +278,25 @@ public sealed partial class TextHookService : IAsyncDisposable
 
                 _attachedProcessId = processId;
                 _activeCliPath = cliPath;
+                _status = TextHookStatusSnapshot.Attached(
+                    processId,
+                    target,
+                    cliPath);
                 long generation = ++_attachmentGeneration;
                 _readLoop = ReadLoopAsync(_cliOutput, processId, generation);
-                _errorDrain = DrainAsync(_cliError);
+                _errorDrain = DrainAsync(_cliError, processId, generation);
             }
             catch (Exception exception) when (exception is IOException or
                                               InvalidOperationException or
                                               System.ComponentModel.Win32Exception)
             {
                 StopCliLocked(clearSentences: true);
+                _status = TextHookStatusSnapshot.Unavailable(
+                    processId,
+                    target,
+                    cliPath,
+                    $"Не удалось подключить Textractor к {target.DisplayName}: " +
+                    $"{CompactDiagnostic(exception.Message)} Используется OCR.");
             }
         }
     }
@@ -290,8 +437,14 @@ public sealed partial class TextHookService : IAsyncDisposable
         long generation,
         DateTime receivedUtc)
     {
-        if (string.IsNullOrWhiteSpace(line) || line[0] != '[')
+        if (string.IsNullOrWhiteSpace(line))
         {
+            return;
+        }
+
+        if (line[0] != '[')
+        {
+            RecordCliMessage(line, processId, generation);
             return;
         }
 
@@ -347,23 +500,67 @@ public sealed partial class TextHookService : IAsyncDisposable
             {
                 IngestLine(line, processId, generation, DateTime.UtcNow);
             }
+
+            RecordCliExit(processId, generation);
         }
         catch (Exception exception) when (exception is IOException or ObjectDisposedException)
         {
             // The CLI exited; the next hover simply reattaches or stays on OCR.
+            RecordCliExit(processId, generation);
         }
     }
 
-    private static async Task DrainAsync(StreamReader reader)
+    private async Task DrainAsync(StreamReader reader, int processId, long generation)
     {
         try
         {
-            while (await reader.ReadLineAsync().ConfigureAwait(false) is not null)
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
             {
+                RecordCliMessage(line, processId, generation);
             }
         }
         catch (Exception exception) when (exception is IOException or ObjectDisposedException)
         {
+        }
+    }
+
+    private void RecordCliMessage(string message, int processId, long generation)
+    {
+        string compact = CompactDiagnostic(message);
+        if (compact.Length == 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            if (generation == _attachmentGeneration &&
+                (_attachedProcessId == 0 ||
+                 processId == 0 ||
+                 processId == _attachedProcessId))
+            {
+                _lastCliMessage = compact;
+            }
+        }
+    }
+
+    private void RecordCliExit(int processId, long generation)
+    {
+        lock (_gate)
+        {
+            if (generation != _attachmentGeneration ||
+                processId != _attachedProcessId)
+            {
+                return;
+            }
+
+            _attachedProcessId = 0;
+            _status = _status with
+            {
+                State = TextHookRuntimeState.Unavailable,
+                Details = $"TextractorCLI завершился после подключения к " +
+                          $"{_status.TargetDisplayName}; используется OCR."
+            };
         }
     }
 
@@ -631,6 +828,63 @@ public sealed partial class TextHookService : IAsyncDisposable
         }
     }
 
+    private static ProcessTarget DescribeTarget(int processId)
+    {
+        if (processId <= 0)
+        {
+            return new ProcessTarget(
+                processId,
+                "неизвестный процесс",
+                "архитектура неизвестна");
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            string executableName = process.ProcessName.EndsWith(
+                    ".exe",
+                    StringComparison.OrdinalIgnoreCase)
+                ? process.ProcessName
+                : process.ProcessName + ".exe";
+            string architecture;
+            try
+            {
+                architecture = !Environment.Is64BitOperatingSystem
+                    ? "x86"
+                    : Interop.NativeMethods.IsWow64Process(process.Handle, out bool isWow64)
+                        ? isWow64 ? "x86" : "x64"
+                        : "архитектура неизвестна";
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or
+                                              System.ComponentModel.Win32Exception or
+                                              NotSupportedException)
+            {
+                architecture = "архитектура неизвестна";
+            }
+
+            return new ProcessTarget(processId, executableName, architecture);
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                          InvalidOperationException or
+                                          System.ComponentModel.Win32Exception)
+        {
+            return new ProcessTarget(
+                processId,
+                "неизвестный процесс",
+                "архитектура неизвестна");
+        }
+    }
+
+    private static string CompactDiagnostic(string? value)
+    {
+        string compact = string.Join(
+            " ",
+            (value ?? string.Empty).Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= 240 ? compact : compact[..237] + "…";
+    }
+
     private void StopCliLocked(bool clearSentences)
     {
         Process? cli = _cli;
@@ -842,4 +1096,92 @@ public sealed partial class TextHookService : IAsyncDisposable
 internal sealed record TextHookMatch(string Text, int CharacterIndex)
 {
     public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
+}
+
+internal enum TextHookRuntimeState
+{
+    Disabled,
+    Unavailable,
+    AttachedWaiting,
+    Active
+}
+
+internal sealed record ProcessTarget(
+    int ProcessId,
+    string ExecutableName,
+    string Architecture)
+{
+    internal string DisplayName => ProcessId > 0
+        ? $"{ExecutableName} (PID {ProcessId}, {Architecture})"
+        : ExecutableName;
+}
+
+internal sealed record TextHookStatusSnapshot(
+    TextHookRuntimeState State,
+    int ProcessId,
+    string ExecutableName,
+    string ProcessArchitecture,
+    string CliPath,
+    string Details)
+{
+    internal string TargetDisplayName => ProcessId > 0
+        ? $"{ExecutableName} (PID {ProcessId}, {ProcessArchitecture})"
+        : ExecutableName;
+
+    internal string CardBadge => State switch
+    {
+        TextHookRuntimeState.Disabled => "OCR · HOOK ВЫКЛ",
+        TextHookRuntimeState.Unavailable => "OCR · HOOK НЕТ",
+        TextHookRuntimeState.AttachedWaiting => "OCR · HOOK ЖДЁТ",
+        TextHookRuntimeState.Active => "OCR · HOOK АКТИВЕН",
+        _ => "OCR"
+    };
+
+    internal TextHookStatusSnapshot WithCurrentMatch(bool matched) =>
+        matched && State == TextHookRuntimeState.AttachedWaiting
+            ? this with
+            {
+                State = TextHookRuntimeState.Active,
+                Details = $"Контекст карточки получен из Textractor для " +
+                          $"{TargetDisplayName} через '{CliPath}'."
+            }
+            : this;
+
+    internal static TextHookStatusSnapshot Disabled(
+        string details = "Text-hook выключен; используется OCR.",
+        int processId = 0,
+        ProcessTarget? target = null) =>
+        new(
+            TextHookRuntimeState.Disabled,
+            processId,
+            target?.ExecutableName ?? "text-hook",
+            target?.Architecture ?? string.Empty,
+            string.Empty,
+            details);
+
+    internal static TextHookStatusSnapshot Unavailable(
+        int processId,
+        ProcessTarget target,
+        string cliPath,
+        string details) =>
+        new(
+            TextHookRuntimeState.Unavailable,
+            processId,
+            target.ExecutableName,
+            target.Architecture,
+            cliPath,
+            details);
+
+    internal static TextHookStatusSnapshot Attached(
+        int processId,
+        ProcessTarget target,
+        string cliPath) =>
+        new(
+            TextHookRuntimeState.AttachedWaiting,
+            processId,
+            target.ExecutableName,
+            target.Architecture,
+            cliPath,
+            $"TextractorCLI подключён к {target.DisplayName} через '{cliPath}'; " +
+            "совпадающая строка пока не получена.");
 }

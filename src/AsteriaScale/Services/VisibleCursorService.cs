@@ -41,6 +41,87 @@ internal static class VisibleCursorService
         return true;
     }
 
+    /// <summary>
+    /// Returns the window that owns text rendered at a visible screen point.
+    /// Under Magpie the visible surface belongs to Magpie while OCR must keep
+    /// using that destination point; Textractor, however, must attach to the
+    /// source window recorded by Magpie.
+    /// </summary>
+    internal static nint GetTextSourceWindow(NativeMethods.Point visiblePoint)
+    {
+        nint hoveredWindow = NativeMethods.WindowFromPoint(visiblePoint);
+        if (hoveredWindow == nint.Zero)
+        {
+            return nint.Zero;
+        }
+
+        // Prefer the property on the actual hit-test window. This remains
+        // compatible if Magpie changes its generated class name while keeping
+        // the documented source-window property.
+        nint directSourceWindow = NativeMethods.GetProp(hoveredWindow, "Magpie.SrcHWND");
+        if (IsValidSourceWindow(directSourceWindow, hoveredWindow, hoveredWindow))
+        {
+            return directSourceWindow;
+        }
+
+        nint scalingWindow = NativeMethods.FindWindow(MagpieScalingWindowClass, null);
+        if (scalingWindow == nint.Zero ||
+            !NativeMethods.IsWindow(scalingWindow) ||
+            !NativeMethods.IsWindowVisible(scalingWindow))
+        {
+            return hoveredWindow;
+        }
+
+        nint sourceWindow = NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
+        bool sourceWindowValid =
+            IsValidSourceWindow(sourceWindow, hoveredWindow, scalingWindow);
+
+        NativeMethods.GetWindowThreadProcessId(hoveredWindow, out uint hoveredProcessId);
+        NativeMethods.GetWindowThreadProcessId(scalingWindow, out uint scalingProcessId);
+        bool pointInsideDestination = PointIsInside(
+            visiblePoint,
+            ReadDestinationBounds(scalingWindow));
+
+        return SelectTextSourceWindow(
+            hoveredWindow,
+            scalingWindow,
+            sourceWindow,
+            sourceWindowValid,
+            hoveredProcessId,
+            scalingProcessId,
+            pointInsideDestination);
+    }
+
+    /// <summary>
+    /// Pure selection seam for the safety cases that cannot be reproduced in
+    /// CI without a live injected Magpie session.
+    /// </summary>
+    internal static nint SelectTextSourceWindow(
+        nint hoveredWindow,
+        nint scalingWindow,
+        nint sourceWindow,
+        bool sourceWindowValid,
+        uint hoveredProcessId,
+        uint scalingProcessId,
+        bool pointInsideDestination)
+    {
+        if (!sourceWindowValid)
+        {
+            return hoveredWindow;
+        }
+
+        // WindowFromPoint normally returns the scaling HWND itself. A future
+        // Magpie surface may use a child/companion HWND, so a window owned by
+        // the same process is accepted only while the point is inside this
+        // scaling session's destination rectangle.
+        bool isScalingSurface =
+            hoveredWindow == scalingWindow ||
+            (pointInsideDestination &&
+             hoveredProcessId != 0 &&
+             hoveredProcessId == scalingProcessId);
+        return isScalingSurface ? sourceWindow : hoveredWindow;
+    }
+
     internal static bool TryMapFromSourceToDestination(
         NativeMethods.Point sourcePoint,
         NativeMethods.Rect source,
@@ -74,6 +155,33 @@ internal static class VisibleCursorService
 
     private static int ReadIntProperty(nint window, string name) =>
         unchecked((int)NativeMethods.GetProp(window, name).ToInt64());
+
+    private static NativeMethods.Rect ReadDestinationBounds(nint scalingWindow)
+    {
+        NativeMethods.Rect destination = ReadRect(scalingWindow, "Magpie.Dest");
+        return destination.Width > 0 && destination.Height > 0
+            ? destination
+            : NativeMethods.GetWindowRect(scalingWindow, out NativeMethods.Rect bounds)
+                ? bounds
+                : default;
+    }
+
+    private static bool PointIsInside(NativeMethods.Point point, NativeMethods.Rect bounds) =>
+        bounds.Width > 0 &&
+        bounds.Height > 0 &&
+        point.X >= bounds.Left &&
+        point.X < bounds.Right &&
+        point.Y >= bounds.Top &&
+        point.Y < bounds.Bottom;
+
+    private static bool IsValidSourceWindow(
+        nint sourceWindow,
+        nint hoveredWindow,
+        nint scalingWindow) =>
+        sourceWindow != nint.Zero &&
+        sourceWindow != hoveredWindow &&
+        sourceWindow != scalingWindow &&
+        NativeMethods.IsWindow(sourceWindow);
 
     private static int MapAxis(int value, int sourceStart, int sourceLength, int destinationStart, int destinationLength)
     {

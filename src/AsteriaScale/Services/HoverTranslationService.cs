@@ -756,6 +756,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
             }
 
             recognized = UpgradeWithTextHook(recognized, cursor);
+            TextHookStatusSnapshot textHookStatus = _textHook.GetStatusSnapshot(
+                _textHook.AttachedProcessId,
+                recognized.TextSource == HoverTextSource.TextHook);
+            ReportStatus("Text-hook: " + textHookStatus.Details);
 
             string smartBackend = ResolveSmartBackend();
             string currentEngine = IsSmartMode
@@ -766,7 +770,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 currentEngine,
                 cursor,
                 displayGeneration,
-                recognized.TextSource);
+                recognized.TextSource,
+                textHookStatus);
             string source;
             string translation;
             string engine;
@@ -855,7 +860,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     recognized.Text,
                     displayGeneration,
                     requireCursorNear: true,
-                    textSource: recognized.TextSource);
+                    textSource: recognized.TextSource,
+                    textHookStatus: textHookStatus);
             }
 
             if (resultCacheRequest is not null && resultCacheSelection is not null)
@@ -889,7 +895,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     displayGeneration,
                     requireCursorNear: true,
                     textSource: recognized.TextSource,
-                    phraseLine: phraseLine);
+                    phraseLine: phraseLine,
+                    textHookStatus: textHookStatus);
             }
             else if (!primaryDisplayable)
             {
@@ -936,7 +943,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
         try
         {
-            nint window = NativeMethods.WindowFromPoint(cursor);
+            // OCR has already consumed the visible Magpie destination point.
+            // Resolve only the process used by Textractor back to Magpie's
+            // source HWND; changing the cursor here would corrupt OCR geometry.
+            nint window = VisibleCursorService.GetTextSourceWindow(cursor);
             if (window == nint.Zero)
             {
                 _textHook.Detach();
@@ -946,13 +956,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
             NativeMethods.GetWindowThreadProcessId(window, out uint processIdValue);
             int processId = unchecked((int)processIdValue);
             if (processId <= 0 ||
-                processId == Environment.ProcessId ||
-                !_textHook.IsProcessAllowed(processId))
+                processId == Environment.ProcessId)
             {
                 _textHook.Detach();
                 return recognized;
             }
 
+            // Let TextHookService see profile-disabled targets as well. It will
+            // keep OCR in charge, but the card can then distinguish an explicit
+            // per-game opt-out from a missing or failed Textractor installation.
             _textHook.EnsureAttached(processId);
             if (_textHook.AttachedProcessId != processId)
             {
@@ -1072,7 +1084,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         string engine,
         NativeMethods.Point cursor,
         long displayGeneration,
-        HoverTextSource textSource = HoverTextSource.Ocr) =>
+        HoverTextSource textSource = HoverTextSource.Ocr,
+        TextHookStatusSnapshot? textHookStatus = null) =>
         _dispatcher.BeginInvoke(
             () =>
             {
@@ -1080,7 +1093,12 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     _enabled &&
                     displayGeneration == Volatile.Read(ref _overlayGeneration))
                 {
-                    _overlay.ShowLoading(source, cursor, engine, textSource);
+                    _overlay.ShowLoading(
+                        source,
+                        cursor,
+                        engine,
+                        textSource,
+                        textHookStatus);
                 }
             },
             DispatcherPriority.Normal);
@@ -1098,7 +1116,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         long displayGeneration,
         bool requireCursorNear,
         HoverTextSource textSource = HoverTextSource.Ocr,
-        SmartHoverPhraseLine? phraseLine = null)
+        SmartHoverPhraseLine? phraseLine = null,
+        TextHookStatusSnapshot? textHookStatus = null)
     {
         _dispatcher.BeginInvoke(
             () =>
@@ -1121,7 +1140,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     language,
                     confidence,
                     textSource,
-                    phraseLine);
+                    phraseLine,
+                    textHookStatus);
                 // The progressive phrase update redraws the same primary card.
                 // Record that answer only on its first render; otherwise every
                 // successful TranslateGemma call would duplicate history.
