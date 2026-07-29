@@ -6,6 +6,8 @@
 *.cs text
 *.xaml text
 *.py text eol=lf
+tools/requirements-consec-reference.txt text eol=lf
+tools/consec-upstream-reference-golden.json text eol=lf
 *.md text
 *.json text
 

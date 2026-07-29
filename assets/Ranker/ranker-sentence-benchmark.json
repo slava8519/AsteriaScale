@@ -1,0 +1,3877 @@
+{
+  "name": "Asteria Scale sentence-level semantic translation benchmark",
+  "schemaVersion": 1,
+  "languagePair": "en-ru",
+  "license": "CC0-1.0",
+  "origin": "All source sentences, contexts, sense groups, and reference translations were written originally for Asteria Scale; no corpus or publication sentences were copied.",
+  "intendedUse": [
+    "sentence-level word-sense evaluation for independent and joint semantic planners",
+    "context-conditioned EN-RU translation evaluation",
+    "visible Russian surface-selection evaluation"
+  ],
+  "fieldSemantics": {
+    "sourceText": "The current sentence shown to the user.",
+    "previousContext": "Optional input-only history. It may inform a model but must not be appended to displayed source or reference output.",
+    "referenceTranslation": "A manually curated Russian reference for the complete current sentence.",
+    "targets": "Two to six exact, non-repeated source spans with ordered sense groups.",
+    "groupId": "Zero-based and sequential within one target; it is the stable outcome index.",
+    "expectedTranslation": "A canonical visible Russian rendering that belongs to the gold sense group.",
+    "surfaceScorable": "True when the gold sense has a Russian surface distinct from every distractor; false keeps the target in sense scoring but excludes it from strict visible-surface scoring.",
+    "contrastSetId": "Pairs cases with identical sourceText and target candidates; only input-only previousContext may change the gold senses."
+  },
+  "scientificDomains": [
+    "biology",
+    "medicine",
+    "physics",
+    "chemistry",
+    "statistics",
+    "computer-science"
+  ],
+  "cases": [
+    {
+      "id": "biology-regulator-expression",
+      "domain": "biology",
+      "sourceText": "The regulator suppressed expression after the cells entered stress.",
+      "previousContext": "The assay tracked transcription during a sudden heat shock.",
+      "referenceTranslation": "Регулятор подавил экспрессию после того, как клетки перешли в состояние стресса.",
+      "targets": [
+        {
+          "text": "regulator",
+          "characterIndex": 4,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a molecule that controls a biological process",
+              "translations": [
+                "регулятор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a person or authority that supervises an activity",
+              "translations": [
+                "контролёр",
+                "регулирующий орган",
+                "регулятор"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "регулятор",
+          "surfaceScorable": false
+        },
+        {
+          "text": "expression",
+          "characterIndex": 25,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the outward communication of an idea or emotion",
+              "translations": [
+                "выражение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the production of RNA or protein from genetic information",
+              "translations": [
+                "экспрессия"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "экспрессия",
+          "surfaceScorable": true
+        },
+        {
+          "text": "cells",
+          "characterIndex": 46,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the basic structural units of living organisms",
+              "translations": [
+                "клетки"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "small rooms used for confinement",
+              "translations": [
+                "камеры"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "клетки",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "biology-culture-medium",
+      "domain": "biology",
+      "sourceText": "The culture grew in a clear medium under constant light.",
+      "referenceTranslation": "Культура росла в прозрачной питательной среде при постоянном освещении.",
+      "targets": [
+        {
+          "text": "culture",
+          "characterIndex": 4,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the customs and arts of a society",
+              "translations": [
+                "культура общества",
+                "культура"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "microorganisms or cells grown under controlled conditions",
+              "translations": [
+                "культура"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "культура",
+          "surfaceScorable": false
+        },
+        {
+          "text": "medium",
+          "characterIndex": 28,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a substance in which cells or microorganisms grow",
+              "translations": [
+                "среда"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a person believed to communicate with spirits",
+              "translations": [
+                "медиум"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "среда",
+          "surfaceScorable": true
+        },
+        {
+          "text": "light",
+          "characterIndex": 50,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "not heavy in weight",
+              "translations": [
+                "лёгкий"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "visible electromagnetic radiation or illumination",
+              "translations": [
+                "свет",
+                "освещение"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "освещение",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "biology-strain-host",
+      "domain": "biology",
+      "sourceText": "This strain colonized the host without causing visible lesions.",
+      "referenceTranslation": "Этот штамм колонизировал организм хозяина, не вызывая видимых поражений.",
+      "targets": [
+        {
+          "text": "strain",
+          "characterIndex": 5,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a genetic variant or subtype of a microorganism",
+              "translations": [
+                "штамм"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "pressure, tension, or physical deformation",
+              "translations": [
+                "напряжение",
+                "деформация"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "штамм",
+          "surfaceScorable": true
+        },
+        {
+          "text": "host",
+          "characterIndex": 26,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a person who receives or entertains guests",
+              "translations": [
+                "хозяин"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an organism that harbors another organism",
+              "translations": [
+                "организм-хозяин"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "организм-хозяин",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "biology-translation-sequence",
+      "domain": "biology",
+      "sourceText": "Translation stopped when the ribosome reached the altered sequence.",
+      "previousContext": "A premature stop codon had been introduced into the messenger RNA.",
+      "referenceTranslation": "Трансляция прекратилась, когда рибосома достигла изменённого участка последовательности.",
+      "targets": [
+        {
+          "text": "Translation",
+          "characterIndex": 0,
+          "length": 11,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "synthesis of a protein from messenger RNA",
+              "translations": [
+                "трансляция"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "rendering words from one language into another",
+              "translations": [
+                "перевод"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "трансляция",
+          "surfaceScorable": true
+        },
+        {
+          "text": "sequence",
+          "characterIndex": 58,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an ordered series of events or items",
+              "translations": [
+                "порядок",
+                "очерёдность"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an ordered string of nucleotides or amino acids",
+              "translations": [
+                "последовательность"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "последовательность",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "biology-control-line",
+      "domain": "biology",
+      "sourceText": "The control cell line remained free of contamination throughout the assay.",
+      "referenceTranslation": "Контрольная клеточная линия оставалась свободной от контаминации на протяжении всего анализа.",
+      "targets": [
+        {
+          "text": "control",
+          "characterIndex": 4,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a comparator used to establish an experimental baseline",
+              "translations": [
+                "контрольный",
+                "контроль"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "authority or power over people or events",
+              "translations": [
+                "управление",
+                "власть",
+                "контроль"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "контрольный",
+          "surfaceScorable": false
+        },
+        {
+          "text": "line",
+          "characterIndex": 17,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a queue or a drawn narrow mark",
+              "translations": [
+                "очередь",
+                "черта"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a lineage of cells maintained for research",
+              "translations": [
+                "клеточная линия"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "клеточная линия",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "biology-population-fitness",
+      "domain": "biology",
+      "sourceText": "The isolated population showed lower fitness after the bottleneck.",
+      "referenceTranslation": "Изолированная популяция показала более низкую приспособленность после эффекта бутылочного горлышка.",
+      "targets": [
+        {
+          "text": "population",
+          "characterIndex": 13,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a group of interbreeding organisms of one species",
+              "translations": [
+                "популяция"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "all people living in a country or region",
+              "translations": [
+                "население"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "популяция",
+          "surfaceScorable": true
+        },
+        {
+          "text": "fitness",
+          "characterIndex": 37,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "physical health and athletic condition",
+              "translations": [
+                "физическая форма"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "reproductive success in a given environment",
+              "translations": [
+                "приспособленность"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "приспособленность",
+          "surfaceScorable": true
+        },
+        {
+          "text": "bottleneck",
+          "characterIndex": 55,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a sharp temporary reduction in population size and diversity",
+              "translations": [
+                "эффект бутылочного горлышка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a narrow place that limits traffic or throughput",
+              "translations": [
+                "узкое место"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "эффект бутылочного горлышка",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-acute-attack",
+      "domain": "medicine",
+      "sourceText": "The patient presented with an acute attack after missing the dose.",
+      "previousContext": "The subject had reported intermittent chest pressure for two days.",
+      "referenceTranslation": "Пациент обратился с острым приступом после пропуска дозы.",
+      "targets": [
+        {
+          "text": "presented",
+          "characterIndex": 12,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "came for medical attention with specified symptoms",
+              "translations": [
+                "обратился",
+                "поступил"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "formally displayed, introduced, or handed something over",
+              "translations": [
+                "представил",
+                "вручил"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "обратился",
+          "surfaceScorable": true
+        },
+        {
+          "text": "acute",
+          "characterIndex": 30,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "forming a sharp angle or having a sharp point",
+              "translations": [
+                "острый угол"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "having sudden onset and usually short duration",
+              "translations": [
+                "острый"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "острый",
+          "surfaceScorable": true
+        },
+        {
+          "text": "attack",
+          "characterIndex": 36,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a sudden episode of illness or symptoms",
+              "translations": [
+                "приступ"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an act of violence against a person or place",
+              "translations": [
+                "нападение"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "приступ",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-negative-screen",
+      "domain": "medicine",
+      "sourceText": "A negative screen made the common infection less likely.",
+      "referenceTranslation": "Отрицательный результат скрининга снизил вероятность распространённой инфекции.",
+      "targets": [
+        {
+          "text": "negative",
+          "characterIndex": 2,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "unfavorable, pessimistic, or less than zero",
+              "translations": [
+                "негативный",
+                "отрицательное число",
+                "отрицательный"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "showing that a tested condition was not detected",
+              "translations": [
+                "отрицательный результат",
+                "отрицательный"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "отрицательный результат",
+          "surfaceScorable": false
+        },
+        {
+          "text": "screen",
+          "characterIndex": 11,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a test used to detect disease or risk",
+              "translations": [
+                "скрининг",
+                "скрининговый тест"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a display surface for images or text",
+              "translations": [
+                "экран"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "скрининговый тест",
+          "surfaceScorable": true
+        },
+        {
+          "text": "infection",
+          "characterIndex": 34,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "malicious software installed on a computer",
+              "translations": [
+                "заражение",
+                "вредоносное ПО"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "invasion of body tissue by a pathogen",
+              "translations": [
+                "инфекция"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "инфекция",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-remission-discharge",
+      "domain": "medicine",
+      "sourceText": "The resident noted remission before discharge from the ward.",
+      "previousContext": "The oncology team reviewed the latest scan before rounds.",
+      "referenceTranslation": "Ординатор отметил ремиссию перед выпиской из отделения.",
+      "targets": [
+        {
+          "text": "resident",
+          "characterIndex": 4,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a physician receiving supervised postgraduate training",
+              "translations": [
+                "ординатор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a person who lives in a particular place",
+              "translations": [
+                "житель"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "ординатор",
+          "surfaceScorable": true
+        },
+        {
+          "text": "remission",
+          "characterIndex": 19,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "forgiveness or cancellation of a debt or penalty",
+              "translations": [
+                "прощение",
+                "освобождение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a temporary reduction or disappearance of disease signs",
+              "translations": [
+                "ремиссия"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ремиссия",
+          "surfaceScorable": true
+        },
+        {
+          "text": "discharge",
+          "characterIndex": 36,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "formal release of a patient from medical care",
+              "translations": [
+                "выписка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a release of liquid, gas, electricity, or a duty",
+              "translations": [
+                "выделение",
+                "разряд"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "выписка",
+          "surfaceScorable": true
+        },
+        {
+          "text": "ward",
+          "characterIndex": 55,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a person placed under another person's legal protection",
+              "translations": [
+                "подопечный"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a division or room of a hospital",
+              "translations": [
+                "отделение",
+                "палата"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "отделение",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-sensitive-agent",
+      "domain": "medicine",
+      "sourceText": "The lesion culture was sensitive to the second agent.",
+      "referenceTranslation": "Посев материала из очага поражения оказался чувствительным ко второму препарату.",
+      "targets": [
+        {
+          "text": "culture",
+          "characterIndex": 11,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a laboratory growth or test of microorganisms",
+              "translations": [
+                "культура",
+                "посев"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the shared customs and arts of a society",
+              "translations": [
+                "культура общества",
+                "культура"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "посев",
+          "surfaceScorable": false
+        },
+        {
+          "text": "sensitive",
+          "characterIndex": 23,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "easily upset or acutely aware of feelings",
+              "translations": [
+                "ранимый",
+                "чуткий",
+                "чувствительный"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "susceptible to inhibition by a drug or treatment",
+              "translations": [
+                "чувствительный"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "чувствительный",
+          "surfaceScorable": false
+        },
+        {
+          "text": "agent",
+          "characterIndex": 47,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a substance that produces a biological or chemical effect",
+              "translations": [
+                "препарат",
+                "вещество"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a representative or operative acting for someone",
+              "translations": [
+                "агент"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "препарат",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-trial-arm",
+      "domain": "medicine",
+      "sourceText": "One trial arm reached its primary endpoint without a serious adverse event.",
+      "referenceTranslation": "Одна группа исследования достигла первичной конечной точки без серьёзного нежелательного явления.",
+      "targets": [
+        {
+          "text": "trial",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a judicial examination in a court",
+              "translations": [
+                "судебный процесс"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a controlled study of a medical intervention",
+              "translations": [
+                "исследование",
+                "испытание"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "исследование",
+          "surfaceScorable": true
+        },
+        {
+          "text": "arm",
+          "characterIndex": 10,
+          "length": 3,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a treatment group within a clinical trial",
+              "translations": [
+                "группа"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an upper limb of the human body",
+              "translations": [
+                "рука"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "группа",
+          "surfaceScorable": true
+        },
+        {
+          "text": "endpoint",
+          "characterIndex": 34,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the end of a path or a network address",
+              "translations": [
+                "конечный пункт",
+                "эндпоинт"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a predefined outcome measured in a clinical study",
+              "translations": [
+                "конечная точка"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "конечная точка",
+          "surfaceScorable": true
+        },
+        {
+          "text": "event",
+          "characterIndex": 69,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an adverse medical occurrence during a study",
+              "translations": [
+                "нежелательное явление"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an organized occasion or occurrence",
+              "translations": [
+                "событие"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "нежелательное явление",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "medicine-regional-block",
+      "domain": "medicine",
+      "sourceText": "A regional block reduced pain during the procedure.",
+      "referenceTranslation": "Регионарная блокада уменьшила боль во время процедуры.",
+      "targets": [
+        {
+          "text": "block",
+          "characterIndex": 11,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a solid piece or an obstruction to movement",
+              "translations": [
+                "блок",
+                "препятствие"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an injection that interrupts nerve conduction for anesthesia",
+              "translations": [
+                "блокада"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "блокада",
+          "surfaceScorable": true
+        },
+        {
+          "text": "procedure",
+          "characterIndex": 41,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a medical intervention or operation",
+              "translations": [
+                "процедура",
+                "вмешательство"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an established administrative sequence of actions",
+              "translations": [
+                "порядок действий"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "процедура",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-field-charge-gap",
+      "domain": "physics",
+      "sourceText": "The electric field changed as opposite charges accumulated on either side of the gap.",
+      "referenceTranslation": "Электрическое поле изменялось по мере накопления разноимённых зарядов по разные стороны зазора.",
+      "targets": [
+        {
+          "text": "field",
+          "characterIndex": 13,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a physical quantity defined at every point in space",
+              "translations": [
+                "поле"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an area of open land or a sphere of activity",
+              "translations": [
+                "поле деятельности",
+                "луг",
+                "поле"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "поле",
+          "surfaceScorable": false
+        },
+        {
+          "text": "charges",
+          "characterIndex": 39,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a price demanded or a formal accusation",
+              "translations": [
+                "плата",
+                "обвинение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a physical property responsible for electromagnetic interaction",
+              "translations": [
+                "заряд",
+                "заряды"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "заряды",
+          "surfaceScorable": true
+        },
+        {
+          "text": "gap",
+          "characterIndex": 81,
+          "length": 3,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a spatial separation between objects or electrodes",
+              "translations": [
+                "промежуток",
+                "зазор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a difference between values, groups, or expectations",
+              "translations": [
+                "разрыв",
+                "разница"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "зазор",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-current-resistance",
+      "domain": "physics",
+      "sourceText": "At fixed voltage, the current fell as the resistance increased in the cold sample.",
+      "referenceTranslation": "При постоянном напряжении ток уменьшился, когда сопротивление холодного образца возросло.",
+      "targets": [
+        {
+          "text": "current",
+          "characterIndex": 22,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "present-day or flowing water",
+              "translations": [
+                "нынешний",
+                "течение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the rate of flow of electric charge",
+              "translations": [
+                "ток"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ток",
+          "surfaceScorable": true
+        },
+        {
+          "text": "resistance",
+          "characterIndex": 42,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "opposition of a material or component to electric current",
+              "translations": [
+                "сопротивление"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "opposition to authority or an invading force",
+              "translations": [
+                "сопротивление властям",
+                "противодействие",
+                "сопротивление"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "сопротивление",
+          "surfaceScorable": false
+        },
+        {
+          "text": "sample",
+          "characterIndex": 75,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a statistical subset selected from a population",
+              "translations": [
+                "выборка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a specimen of material examined experimentally",
+              "translations": [
+                "образец"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "образец",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-ground-state-spin",
+      "domain": "physics",
+      "sourceText": "The ground state changed when the spin flipped.",
+      "previousContext": "The particles had first been cooled close to absolute zero.",
+      "referenceTranslation": "Основное квантовое состояние изменилось, когда спин перевернулся.",
+      "targets": [
+        {
+          "text": "ground",
+          "characterIndex": 4,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the lowest-energy condition of a physical system",
+              "translations": [
+                "основной"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the surface of the earth or material reduced to powder",
+              "translations": [
+                "земля",
+                "молотый"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "основной",
+          "surfaceScorable": true
+        },
+        {
+          "text": "state",
+          "characterIndex": 11,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a nation, political territory, or general condition",
+              "translations": [
+                "государство",
+                "общее состояние",
+                "состояние"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a defined quantum condition of a system",
+              "translations": [
+                "квантовое состояние",
+                "состояние"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "квантовое состояние",
+          "surfaceScorable": false
+        },
+        {
+          "text": "spin",
+          "characterIndex": 34,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "intrinsic angular momentum of a particle",
+              "translations": [
+                "спин"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "rapid rotation or a biased presentation of information",
+              "translations": [
+                "вращение",
+                "трактовка"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "спин",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-wave-packet",
+      "domain": "physics",
+      "sourceText": "The wave packet spread before reaching the detector.",
+      "referenceTranslation": "Волновой пакет расширился до того, как достиг детектора.",
+      "targets": [
+        {
+          "text": "packet",
+          "characterIndex": 9,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a wrapped parcel or a unit of network data",
+              "translations": [
+                "пакет",
+                "сетевой пакет"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a localized superposition of waves",
+              "translations": [
+                "волновой пакет"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "волновой пакет",
+          "surfaceScorable": true
+        },
+        {
+          "text": "spread",
+          "characterIndex": 16,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "broadened spatially while a physical wave packet propagated",
+              "translations": [
+                "расширился"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "distributed material over an area or opened something outward",
+              "translations": [
+                "распространился",
+                "раскрылся"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "расширился",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-cross-section",
+      "domain": "physics",
+      "sourceText": "The measured cross section rose sharply near the resonance peak.",
+      "referenceTranslation": "Измеренное сечение резко возросло вблизи пика резонанса.",
+      "targets": [
+        {
+          "text": "cross section",
+          "characterIndex": 13,
+          "length": 13,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a view or slice through the interior of an object",
+              "translations": [
+                "поперечное сечение",
+                "сечение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a measure of interaction probability in scattering",
+              "translations": [
+                "сечение"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "сечение",
+          "surfaceScorable": false
+        },
+        {
+          "text": "resonance",
+          "characterIndex": 49,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "enhanced oscillation near a natural frequency",
+              "translations": [
+                "резонанс"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a strong emotional response or wider relevance",
+              "translations": [
+                "отклик",
+                "созвучие",
+                "резонанс"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "резонанс",
+          "surfaceScorable": false
+        },
+        {
+          "text": "peak",
+          "characterIndex": 59,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the pointed top of a mountain",
+              "translations": [
+                "вершина"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a local maximum in a measured spectrum",
+              "translations": [
+                "пик"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "пик",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "physics-optical-mode",
+      "domain": "physics",
+      "sourceText": "The optical mode coupled weakly to the cavity.",
+      "referenceTranslation": "Оптическая мода была слабо связана с резонатором.",
+      "targets": [
+        {
+          "text": "mode",
+          "characterIndex": 12,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an allowed electromagnetic field pattern",
+              "translations": [
+                "оптическая мода",
+                "мода"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a manner of operation, fashion, or statistical most frequent value",
+              "translations": [
+                "режим",
+                "мода в статистике",
+                "мода одежды",
+                "мода"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "оптическая мода",
+          "surfaceScorable": false
+        },
+        {
+          "text": "coupled",
+          "characterIndex": 17,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "joined two people or devices into a pair",
+              "translations": [
+                "соединилась",
+                "образовала пару",
+                "связана"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "interacted by exchanging energy between physical systems",
+              "translations": [
+                "связана"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "связана",
+          "surfaceScorable": false
+        },
+        {
+          "text": "cavity",
+          "characterIndex": 39,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a bounded resonant region for electromagnetic waves",
+              "translations": [
+                "резонатор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a hollow space, especially a hole in a tooth",
+              "translations": [
+                "полость",
+                "кариозная полость"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "резонатор",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-base-solution",
+      "domain": "chemistry",
+      "sourceText": "The strong base dissolved in the aqueous solution.",
+      "referenceTranslation": "Сильное основание растворилось в водном растворе.",
+      "targets": [
+        {
+          "text": "base",
+          "characterIndex": 11,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a substance that accepts protons or donates electron pairs",
+              "translations": [
+                "основание"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the bottom, foundation, or main place of operation",
+              "translations": [
+                "фундамент",
+                "база",
+                "основание"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "основание",
+          "surfaceScorable": false
+        },
+        {
+          "text": "solution",
+          "characterIndex": 41,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an answer to a problem",
+              "translations": [
+                "решение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a homogeneous mixture of dissolved substances",
+              "translations": [
+                "раствор"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "раствор",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-reaction-workup",
+      "domain": "chemistry",
+      "sourceText": "The reaction yielded a clean product after the acidic workup.",
+      "previousContext": "The mixture had been stirred overnight under nitrogen.",
+      "referenceTranslation": "После кислотной обработки реакция дала чистый продукт.",
+      "targets": [
+        {
+          "text": "reaction",
+          "characterIndex": 4,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a process in which chemical substances are transformed",
+              "translations": [
+                "химическая реакция",
+                "реакция"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an emotional or behavioral response",
+              "translations": [
+                "отклик",
+                "ответная реакция",
+                "реакция"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "химическая реакция",
+          "surfaceScorable": false
+        },
+        {
+          "text": "product",
+          "characterIndex": 29,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an item made for sale",
+              "translations": [
+                "товар"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a substance formed by a chemical reaction",
+              "translations": [
+                "продукт"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "продукт",
+          "surfaceScorable": true
+        },
+        {
+          "text": "workup",
+          "characterIndex": 54,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "laboratory operations used to isolate and purify a reaction product",
+              "translations": [
+                "обработка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a thorough medical examination or diagnostic assessment",
+              "translations": [
+                "обследование"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "обработка",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-salt-bridge",
+      "domain": "chemistry",
+      "sourceText": "The salt bridge maintained charge balance between the cells.",
+      "referenceTranslation": "Солевой мостик поддерживал баланс заряда между электрохимическими ячейками.",
+      "targets": [
+        {
+          "text": "bridge",
+          "characterIndex": 9,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a structure carrying a route over an obstacle",
+              "translations": [
+                "мост"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an ionic connection between electrochemical half-cells",
+              "translations": [
+                "солевой мостик",
+                "мостик"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "мостик",
+          "surfaceScorable": true
+        },
+        {
+          "text": "charge",
+          "characterIndex": 27,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an electric property carried by particles",
+              "translations": [
+                "заряд"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a fee or a formal accusation",
+              "translations": [
+                "плата",
+                "обвинение"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "заряд",
+          "surfaceScorable": true
+        },
+        {
+          "text": "cells",
+          "characterIndex": 54,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "biological units or prison rooms",
+              "translations": [
+                "клетки",
+                "камеры"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "electrochemical compartments that generate or consume current",
+              "translations": [
+                "ячейки"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ячейки",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-radical-chain",
+      "domain": "chemistry",
+      "sourceText": "The radical initiated a chain that consumed the monomer.",
+      "referenceTranslation": "Химический радикал инициировал полимерную цепь, которая расходовала мономер.",
+      "targets": [
+        {
+          "text": "radical",
+          "characterIndex": 4,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a chemical species containing an unpaired electron",
+              "translations": [
+                "химический радикал",
+                "радикал"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a person advocating extreme political change",
+              "translations": [
+                "политический радикал",
+                "радикал"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "химический радикал",
+          "surfaceScorable": false
+        },
+        {
+          "text": "chain",
+          "characterIndex": 24,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a series of linked metal rings or connected stores",
+              "translations": [
+                "металлическая цепь",
+                "сеть"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a self-propagating sequence of chemical reaction steps",
+              "translations": [
+                "полимерная цепь"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "полимерная цепь",
+          "surfaceScorable": true
+        },
+        {
+          "text": "consumed",
+          "characterIndex": 35,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "used up a reactant during a process",
+              "translations": [
+                "расходовала"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "ate or drank something",
+              "translations": [
+                "употребил",
+                "съел"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "расходовала",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-phase-drop",
+      "domain": "chemistry",
+      "sourceText": "Phase separation began after the temperature drop.",
+      "referenceTranslation": "После снижения температуры началось фазовое разделение.",
+      "targets": [
+        {
+          "text": "Phase",
+          "characterIndex": 0,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a stage in a process or development",
+              "translations": [
+                "этап"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "relating to separation into physically distinct material phases",
+              "translations": [
+                "фазовое"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "фазовое",
+          "surfaceScorable": true
+        },
+        {
+          "text": "drop",
+          "characterIndex": 45,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a decrease in a measured quantity",
+              "translations": [
+                "снижение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a small amount of liquid or a fall through space",
+              "translations": [
+                "капля",
+                "падение"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "снижение",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "chemistry-stable-complex",
+      "domain": "chemistry",
+      "sourceText": "The stable complex formed around the metal center.",
+      "referenceTranslation": "Устойчивый комплекс образовался вокруг центрального атома металла.",
+      "targets": [
+        {
+          "text": "stable",
+          "characterIndex": 4,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a building where horses are kept",
+              "translations": [
+                "конюшня"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "unlikely to change or decompose under stated conditions",
+              "translations": [
+                "устойчивый"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "устойчивый",
+          "surfaceScorable": true
+        },
+        {
+          "text": "complex",
+          "characterIndex": 11,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a coordination compound formed around a central atom",
+              "translations": [
+                "комплекс"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a group of buildings or something difficult to understand",
+              "translations": [
+                "комплекс зданий",
+                "сложный объект",
+                "комплекс"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "комплекс",
+          "surfaceScorable": false
+        },
+        {
+          "text": "center",
+          "characterIndex": 43,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the middle point or an organization providing services",
+              "translations": [
+                "центр"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the central atom or ion in a coordination complex",
+              "translations": [
+                "центральный атом",
+                "центр"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "центральный атом",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "statistics-estimate-bias",
+      "domain": "statistics",
+      "sourceText": "The estimate retained a small bias despite resampling.",
+      "referenceTranslation": "Оценка сохранила небольшое смещение, несмотря на ресэмплинг.",
+      "targets": [
+        {
+          "text": "estimate",
+          "characterIndex": 4,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a value calculated from sample data for a population parameter",
+              "translations": [
+                "оценка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an approximate cost quoted for planned work",
+              "translations": [
+                "смета",
+                "оценка"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "оценка",
+          "surfaceScorable": false
+        },
+        {
+          "text": "bias",
+          "characterIndex": 30,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a personal prejudice or inclination",
+              "translations": [
+                "предвзятость"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "systematic deviation of an estimator from its target",
+              "translations": [
+                "смещение"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "смещение",
+          "surfaceScorable": true
+        },
+        {
+          "text": "resampling",
+          "characterIndex": 43,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "repeatedly drawing observations to assess statistical variability",
+              "translations": [
+                "ресэмплинг"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "changing the sampling rate of audio or images",
+              "translations": [
+                "передискретизация"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "ресэмплинг",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "statistics-confidence-interval",
+      "domain": "statistics",
+      "sourceText": "The narrow confidence interval excluded the null value.",
+      "referenceTranslation": "Узкий доверительный интервал не включал нулевое значение.",
+      "targets": [
+        {
+          "text": "confidence",
+          "characterIndex": 11,
+          "length": 10,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "trust in a person or certainty in oneself",
+              "translations": [
+                "уверенность",
+                "доверие"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the repeated-sampling coverage property of an interval procedure",
+              "translations": [
+                "доверительный"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "доверительный",
+          "surfaceScorable": true
+        },
+        {
+          "text": "interval",
+          "characterIndex": 22,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a range bounded by two numerical limits",
+              "translations": [
+                "интервал"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a pause between performances or events",
+              "translations": [
+                "перерыв"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "интервал",
+          "surfaceScorable": true
+        },
+        {
+          "text": "null",
+          "characterIndex": 44,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "having no legal force or no value",
+              "translations": [
+                "недействительный",
+                "пустой"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the baseline value or hypothesis tested statistically",
+              "translations": [
+                "нулевой"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "нулевой",
+          "surfaceScorable": true
+        },
+        {
+          "text": "value",
+          "characterIndex": 49,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a numerical quantity assigned to a variable",
+              "translations": [
+                "значение"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "importance, usefulness, or monetary worth",
+              "translations": [
+                "ценность",
+                "стоимость"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "значение",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "statistics-test-power",
+      "domain": "statistics",
+      "sourceText": "The test had enough power to detect the weak effect.",
+      "referenceTranslation": "У теста была достаточная мощность, чтобы обнаружить слабый эффект.",
+      "targets": [
+        {
+          "text": "test",
+          "characterIndex": 4,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an examination of knowledge or a practical trial",
+              "translations": [
+                "экзамен",
+                "испытание",
+                "тест"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a statistical procedure for evaluating a hypothesis",
+              "translations": [
+                "тест"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "тест",
+          "surfaceScorable": false
+        },
+        {
+          "text": "power",
+          "characterIndex": 20,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the probability that a test rejects a false null hypothesis",
+              "translations": [
+                "мощность"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "energy, authority, or physical strength",
+              "translations": [
+                "энергия",
+                "власть",
+                "сила"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "мощность",
+          "surfaceScorable": true
+        },
+        {
+          "text": "effect",
+          "characterIndex": 45,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a consequence or personal belongings",
+              "translations": [
+                "последствие",
+                "вещи",
+                "эффект"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a measured association or treatment difference",
+              "translations": [
+                "эффект"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "эффект",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "statistics-random-effect-model",
+      "domain": "statistics",
+      "sourceText": "The random effect model included a slope for each site.",
+      "previousContext": "Participants were recruited at twelve hospitals.",
+      "referenceTranslation": "Модель со случайным эффектом включала коэффициент наклона для каждого исследовательского центра.",
+      "targets": [
+        {
+          "text": "random",
+          "characterIndex": 4,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "governed by a probability distribution",
+              "translations": [
+                "случайный"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "without purpose, plan, or relevance",
+              "translations": [
+                "произвольный"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "случайный",
+          "surfaceScorable": true
+        },
+        {
+          "text": "effect",
+          "characterIndex": 11,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a consequence of an action",
+              "translations": [
+                "последствие",
+                "эффект"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a modeled source of variation",
+              "translations": [
+                "эффект"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "эффект",
+          "surfaceScorable": false
+        },
+        {
+          "text": "model",
+          "characterIndex": 18,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a mathematical representation of data-generating structure",
+              "translations": [
+                "модель"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a person displaying clothes or a physical replica",
+              "translations": [
+                "манекенщица",
+                "макет",
+                "модель"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "модель",
+          "surfaceScorable": false
+        },
+        {
+          "text": "slope",
+          "characterIndex": 35,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the side of a hill or an inclined surface",
+              "translations": [
+                "склон"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a regression coefficient for change in an outcome",
+              "translations": [
+                "наклон",
+                "коэффициент наклона"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "коэффициент наклона",
+          "surfaceScorable": true
+        },
+        {
+          "text": "site",
+          "characterIndex": 50,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a center that recruits or observes study participants",
+              "translations": [
+                "исследовательский центр"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a physical location or a website",
+              "translations": [
+                "место",
+                "сайт"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "исследовательский центр",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "statistics-incomplete-cases",
+      "domain": "statistics",
+      "sourceText": "The analysis dropped incomplete cases before fitting the model.",
+      "previousContext": "Several questionnaires had unanswered items in the final wave.",
+      "referenceTranslation": "Перед оцениванием модели из анализа исключили неполные наблюдения.",
+      "targets": [
+        {
+          "text": "analysis",
+          "characterIndex": 4,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a general detailed examination of something",
+              "translations": [
+                "разбор",
+                "анализ"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a formal statistical evaluation of data",
+              "translations": [
+                "анализ"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "анализ",
+          "surfaceScorable": false
+        },
+        {
+          "text": "cases",
+          "characterIndex": 32,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "individual observational units in a dataset",
+              "translations": [
+                "наблюдения"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "legal matters or containers for objects",
+              "translations": [
+                "дела",
+                "футляры"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "наблюдения",
+          "surfaceScorable": true
+        },
+        {
+          "text": "fitting",
+          "characterIndex": 45,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "being suitable or installing something in place",
+              "translations": [
+                "подходящий",
+                "установка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "estimating model parameters from observed data",
+              "translations": [
+                "оценивание",
+                "подгонка"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "оценивание",
+          "surfaceScorable": true
+        },
+        {
+          "text": "model",
+          "characterIndex": 57,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a probabilistic or mathematical description of data",
+              "translations": [
+                "модель"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a fashion model or a physical prototype",
+              "translations": [
+                "манекенщица",
+                "макет",
+                "модель"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "модель",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "statistics-posterior-mass",
+      "domain": "statistics",
+      "sourceText": "Most posterior mass lay near the boundary of the parameter space.",
+      "previousContext": "The prior placed little probability near the constraint.",
+      "referenceTranslation": "Большая часть апостериорной массы лежала вблизи границы пространства параметров.",
+      "targets": [
+        {
+          "text": "posterior",
+          "characterIndex": 5,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "situated at the back of the body",
+              "translations": [
+                "задний"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "describing a probability distribution conditioned on observed data",
+              "translations": [
+                "апостериорный"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "апостериорный",
+          "surfaceScorable": true
+        },
+        {
+          "text": "mass",
+          "characterIndex": 15,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "probability assigned to a region or outcome",
+              "translations": [
+                "масса"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a religious service or a quantity of physical matter",
+              "translations": [
+                "месса",
+                "масса вещества",
+                "масса"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "масса",
+          "surfaceScorable": false
+        },
+        {
+          "text": "boundary",
+          "characterIndex": 33,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a physical border between territories or objects",
+              "translations": [
+                "территориальная граница",
+                "граница"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the limiting set of an admissible parameter region",
+              "translations": [
+                "граница пространства параметров",
+                "граница"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "граница пространства параметров",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "computer-science-thread-lock",
+      "domain": "computer-science",
+      "sourceText": "The worker thread acquired the lock before updating the shared state.",
+      "referenceTranslation": "Рабочий поток захватил блокировку перед обновлением общего состояния программы.",
+      "targets": [
+        {
+          "text": "thread",
+          "characterIndex": 11,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an independently scheduled sequence of program instructions",
+              "translations": [
+                "поток"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a thin strand of fiber or a sequence of messages",
+              "translations": [
+                "нить",
+                "ветка обсуждения"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "поток",
+          "surfaceScorable": true
+        },
+        {
+          "text": "lock",
+          "characterIndex": 31,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a device that secures a door or container",
+              "translations": [
+                "замок"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a synchronization primitive controlling concurrent access",
+              "translations": [
+                "блокировка"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "блокировка",
+          "surfaceScorable": true
+        },
+        {
+          "text": "state",
+          "characterIndex": 63,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "stored values that describe a program at a moment in time",
+              "translations": [
+                "состояние программы",
+                "состояние"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a country or a general condition",
+              "translations": [
+                "государство",
+                "общее состояние",
+                "состояние"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "состояние программы",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "computer-science-cache-miss",
+      "domain": "computer-science",
+      "sourceText": "A cache miss forced the client to fetch the remote object.",
+      "previousContext": "The requested record had expired on the previous read.",
+      "referenceTranslation": "Промах кеша заставил клиента загрузить удалённый объект.",
+      "targets": [
+        {
+          "text": "cache",
+          "characterIndex": 2,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a hidden store of supplies or weapons",
+              "translations": [
+                "тайник"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "fast storage holding copies of reusable data",
+              "translations": [
+                "кеш"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "кеш",
+          "surfaceScorable": true
+        },
+        {
+          "text": "miss",
+          "characterIndex": 8,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "failure to find a requested item in a cache",
+              "translations": [
+                "промах кеша",
+                "промах"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a failure to hit a physical target or notice something",
+              "translations": [
+                "неудача",
+                "упущение",
+                "промах"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "промах кеша",
+          "surfaceScorable": false
+        },
+        {
+          "text": "client",
+          "characterIndex": 24,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a customer receiving professional services",
+              "translations": [
+                "заказчик",
+                "клиент"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "software that requests a service from another program",
+              "translations": [
+                "клиент"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "клиент",
+          "surfaceScorable": false
+        },
+        {
+          "text": "object",
+          "characterIndex": 51,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a structured software entity or remote resource",
+              "translations": [
+                "объект"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a material thing or the aim of an action",
+              "translations": [
+                "предмет",
+                "цель",
+                "объект"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "объект",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "computer-science-model-inference",
+      "domain": "computer-science",
+      "sourceText": "The model served inference requests through a local endpoint.",
+      "referenceTranslation": "Модель обрабатывала запросы на инференс через локальный эндпоинт.",
+      "targets": [
+        {
+          "text": "model",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a person displaying clothes or a physical replica",
+              "translations": [
+                "манекенщик",
+                "макет",
+                "модель"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a learned computational representation used for prediction",
+              "translations": [
+                "модель"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "модель",
+          "surfaceScorable": false
+        },
+        {
+          "text": "served",
+          "characterIndex": 10,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "handled incoming requests from a software service",
+              "translations": [
+                "обрабатывала"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "provided food or performed a period of duty",
+              "translations": [
+                "обслуживала",
+                "служила"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "обрабатывала",
+          "surfaceScorable": true
+        },
+        {
+          "text": "inference",
+          "characterIndex": 17,
+          "length": 9,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a conclusion reached through logical reasoning",
+              "translations": [
+                "вывод"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "execution of a trained model to produce predictions",
+              "translations": [
+                "инференс"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "инференс",
+          "surfaceScorable": true
+        },
+        {
+          "text": "endpoint",
+          "characterIndex": 52,
+          "length": 8,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a network address exposing an API operation",
+              "translations": [
+                "эндпоинт"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the final point of a line or journey",
+              "translations": [
+                "конечная точка"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "эндпоинт",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "computer-science-branch-merge",
+      "domain": "computer-science",
+      "sourceText": "The feature branch conflicted with release changes during the merge.",
+      "referenceTranslation": "Ветка разработки функции конфликтовала с изменениями релиза при слиянии.",
+      "targets": [
+        {
+          "text": "branch",
+          "characterIndex": 12,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a limb growing from a tree or a division of an organization",
+              "translations": [
+                "ветвь",
+                "филиал",
+                "ветка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "an independent line of version-control development",
+              "translations": [
+                "ветка"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ветка",
+          "surfaceScorable": false
+        },
+        {
+          "text": "release",
+          "characterIndex": 35,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a published version of software",
+              "translations": [
+                "релиз"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the act of setting someone free",
+              "translations": [
+                "освобождение"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "релиз",
+          "surfaceScorable": true
+        },
+        {
+          "text": "merge",
+          "characterIndex": 62,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a place where traffic lanes combine",
+              "translations": [
+                "перестроение",
+                "слияние потоков",
+                "слияние"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "integration of version-control histories or changes",
+              "translations": [
+                "слияние"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "слияние",
+          "surfaceScorable": false
+        }
+      ]
+    },
+    {
+      "id": "computer-science-context-window",
+      "domain": "computer-science",
+      "sourceText": "The tokenizer truncated the context when the window limit was reached.",
+      "previousContext": "The prompt already contained several long passages from the paper.",
+      "referenceTranslation": "Токенизатор обрезал контекст модели при достижении предела контекстного окна.",
+      "targets": [
+        {
+          "text": "context",
+          "characterIndex": 28,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the token sequence available to a language model",
+              "translations": [
+                "контекст модели",
+                "контекст"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the surrounding circumstances that explain an event",
+              "translations": [
+                "обстоятельства",
+                "окружение",
+                "контекст"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "контекст модели",
+          "surfaceScorable": false
+        },
+        {
+          "text": "window",
+          "characterIndex": 45,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "an opening in a wall or a graphical application area",
+              "translations": [
+                "окно"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the bounded amount of context a model can process",
+              "translations": [
+                "контекстное окно"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "контекстное окно",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "computer-science-race-counter",
+      "domain": "computer-science",
+      "sourceText": "The race appeared only when two tasks updated the same counter concurrently.",
+      "referenceTranslation": "Состояние гонки возникало, только когда две задачи одновременно обновляли один счётчик.",
+      "targets": [
+        {
+          "text": "race",
+          "characterIndex": 4,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a concurrency fault whose result depends on operation timing",
+              "translations": [
+                "состояние гонки"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a contest of speed or a socially defined ethnic group",
+              "translations": [
+                "гонка",
+                "раса"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "состояние гонки",
+          "surfaceScorable": true
+        },
+        {
+          "text": "tasks",
+          "characterIndex": 32,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "pieces of work assigned to a person",
+              "translations": [
+                "задания",
+                "задачи"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "units of asynchronous or scheduled computation",
+              "translations": [
+                "задачи"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "задачи",
+          "surfaceScorable": false
+        },
+        {
+          "text": "counter",
+          "characterIndex": 55,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a variable or component that records a count",
+              "translations": [
+                "счётчик"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a shop surface or a person responding in opposition",
+              "translations": [
+                "прилавок",
+                "оппонент"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "счётчик",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "literature-court-count",
+      "domain": "literature",
+      "sourceText": "At court, the pale count weighed the charge before dawn.",
+      "previousContext": "An uneasy silence had settled over the old household.",
+      "referenceTranslation": "При дворе бледный граф обдумал обвинение перед рассветом.",
+      "targets": [
+        {
+          "text": "court",
+          "characterIndex": 3,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the household and attendants of a sovereign",
+              "translations": [
+                "двор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a tribunal where legal cases are heard",
+              "translations": [
+                "суд"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "двор",
+          "surfaceScorable": true
+        },
+        {
+          "text": "count",
+          "characterIndex": 19,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the act or result of determining a number",
+              "translations": [
+                "счёт"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a European hereditary nobleman",
+              "translations": [
+                "граф"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "граф",
+          "surfaceScorable": true
+        },
+        {
+          "text": "weighed",
+          "characterIndex": 25,
+          "length": 7,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "considered competing reasons carefully",
+              "translations": [
+                "обдумал"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "measured how heavy something was",
+              "translations": [
+                "взвесил"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "обдумал",
+          "surfaceScorable": true
+        },
+        {
+          "text": "charge",
+          "characterIndex": 37,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a price or an amount of electric charge",
+              "translations": [
+                "плата",
+                "заряд"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a formal accusation of wrongdoing",
+              "translations": [
+                "обвинение"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "обвинение",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "literature-grave-spell",
+      "domain": "literature",
+      "sourceText": "Her grave voice broke the spell that bound the room.",
+      "referenceTranslation": "Её суровый голос разрушил заклятие, сковывавшее комнату.",
+      "targets": [
+        {
+          "text": "grave",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "solemn, serious, or alarming",
+              "translations": [
+                "серьёзный",
+                "мрачный",
+                "суровый"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a place where a dead person is buried",
+              "translations": [
+                "могила"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "суровый",
+          "surfaceScorable": true
+        },
+        {
+          "text": "spell",
+          "characterIndex": 26,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a period of time or the act of naming letters",
+              "translations": [
+                "период",
+                "произносить по буквам"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a magical formula or enchantment",
+              "translations": [
+                "заклятие"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "заклятие",
+          "surfaceScorable": true
+        },
+        {
+          "text": "bound",
+          "characterIndex": 37,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "held or constrained as if tied",
+              "translations": [
+                "сковывало",
+                "связало"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "leaped, moved toward a destination, or was obliged",
+              "translations": [
+                "прыгнул",
+                "направлялся",
+                "обязан"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "сковывало",
+          "surfaceScorable": true
+        },
+        {
+          "text": "room",
+          "characterIndex": 47,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "available space or opportunity",
+              "translations": [
+                "место",
+                "простор"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a chamber within a building",
+              "translations": [
+                "комната"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "комната",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "visual-novel-route-flag",
+      "domain": "visual-novel",
+      "sourceText": "The route locked after I missed her flag at the summer fair.",
+      "previousContext": "I had skipped the rooftop scene and ignored her message.",
+      "referenceTranslation": "Ветка заблокировалась после того, как я пропустил её флаг на летней ярмарке.",
+      "targets": [
+        {
+          "text": "route",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a branching story path in a visual novel",
+              "translations": [
+                "ветка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a road or planned path between physical places",
+              "translations": [
+                "маршрут"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "ветка",
+          "surfaceScorable": true
+        },
+        {
+          "text": "locked",
+          "characterIndex": 10,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "secured with a physical lock",
+              "translations": [
+                "заперлась"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "became unavailable because game conditions were unmet",
+              "translations": [
+                "заблокировалась"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "заблокировалась",
+          "surfaceScorable": true
+        },
+        {
+          "text": "flag",
+          "characterIndex": 36,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a stored condition that unlocks a game event",
+              "translations": [
+                "флаг"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a piece of cloth used as a symbol",
+              "translations": [
+                "знамя",
+                "флаг"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "флаг",
+          "surfaceScorable": false
+        },
+        {
+          "text": "fair",
+          "characterIndex": 55,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "just and impartial or light in color",
+              "translations": [
+                "справедливый",
+                "светлый"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a public festival with stalls and entertainment",
+              "translations": [
+                "ярмарка",
+                "фестиваль"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ярмарка",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "visual-novel-cover-key",
+      "domain": "visual-novel",
+      "previousContext": "Kotori had denied entering the archive after curfew.",
+      "sourceText": "Kotori played innocent, but her cover was blown when the missing key turned up.",
+      "referenceTranslation": "Котори изображала невиновность, но её легенда рухнула, когда нашёлся пропавший ключ.",
+      "targets": [
+        {
+          "text": "played",
+          "characterIndex": 7,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "pretended to have a role or attitude",
+              "translations": [
+                "притворилась",
+                "изображала"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "participated in a game or performed music",
+              "translations": [
+                "играла"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "изображала",
+          "surfaceScorable": true
+        },
+        {
+          "text": "cover",
+          "characterIndex": 32,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a lid, protective layer, or blanket",
+              "translations": [
+                "крышка",
+                "покрывало"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a false identity or story used to conceal the truth",
+              "translations": [
+                "легенда",
+                "прикрытие"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "легенда",
+          "surfaceScorable": true
+        },
+        {
+          "text": "key",
+          "characterIndex": 65,
+          "length": 3,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a metal object used to operate a lock",
+              "translations": [
+                "ключ"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a crucial explanation, keyboard button, or map legend",
+              "translations": [
+                "ключевой фактор",
+                "клавиша"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "ключ",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "manga-panel-shot",
+      "domain": "manga",
+      "sourceText": "Across two panels, the scene cut from a close shot to a wide frame.",
+      "previousContext": "The artist wanted the reveal to feel sudden and claustrophobic.",
+      "referenceTranslation": "В двух панелях сцена перешла от крупного плана к широкому кадру.",
+      "targets": [
+        {
+          "text": "panels",
+          "characterIndex": 11,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "framed images arranged in sequence on a comic page",
+              "translations": [
+                "панели"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a board of experts or a flat control surface",
+              "translations": [
+                "коллегия",
+                "панель управления"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "панели",
+          "surfaceScorable": true
+        },
+        {
+          "text": "cut",
+          "characterIndex": 29,
+          "length": 3,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "made an incision or removed material with a blade",
+              "translations": [
+                "разрезала"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "changed abruptly from one image or shot to another",
+              "translations": [
+                "перешла",
+                "сменила кадр"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "перешла",
+          "surfaceScorable": true
+        },
+        {
+          "text": "shot",
+          "characterIndex": 46,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a continuous camera view or composition",
+              "translations": [
+                "план",
+                "кадр"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a projectile discharge or an attempt at a goal",
+              "translations": [
+                "выстрел",
+                "удар"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "план",
+          "surfaceScorable": true
+        },
+        {
+          "text": "frame",
+          "characterIndex": 61,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a rigid border or an attempt to falsely incriminate someone",
+              "translations": [
+                "рама",
+                "подстава"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "one bounded image or composition in visual media",
+              "translations": [
+                "кадр"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "кадр",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "manga-form-stakes",
+      "domain": "manga",
+      "sourceText": "His new form raised the stakes before the final round.",
+      "referenceTranslation": "Его новая форма повысила ставки перед финальным раундом.",
+      "targets": [
+        {
+          "text": "form",
+          "characterIndex": 8,
+          "length": 4,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a character's transformed state or appearance",
+              "translations": [
+                "форма"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a document with blank fields or an outward shape",
+              "translations": [
+                "бланк",
+                "очертание",
+                "форма"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "форма",
+          "surfaceScorable": false
+        },
+        {
+          "text": "stakes",
+          "characterIndex": 24,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "pointed posts driven into the ground",
+              "translations": [
+                "колья"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "the risks or potential losses in a conflict",
+              "translations": [
+                "ставки"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "ставки",
+          "surfaceScorable": true
+        },
+        {
+          "text": "round",
+          "characterIndex": 48,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "one stage of a fight or tournament",
+              "translations": [
+                "раунд"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "circular in shape or a regular circuit of visits",
+              "translations": [
+                "круглый",
+                "обход"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "раунд",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "statistics-context-sample",
+      "domain": "contextual",
+      "sourceText": "The sample was unusually small.",
+      "previousContext": "The survey drew households from every district using stratified sampling.",
+      "contrastSetId": "sample-context-v1",
+      "referenceTranslation": "Выборка была необычно малой.",
+      "targets": [
+        {
+          "text": "sample",
+          "characterIndex": 4,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a subset of observations selected from a population",
+              "translations": [
+                "выборка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a physical specimen collected for examination",
+              "translations": [
+                "образец"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "выборка",
+          "surfaceScorable": true
+        },
+        {
+          "text": "small",
+          "characterIndex": 25,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "limited in numerical size or statistical count",
+              "translations": [
+                "малый"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "limited in physical dimensions",
+              "translations": [
+                "маленький"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "малый",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "statistics-context-specimen",
+      "domain": "contextual",
+      "sourceText": "The sample was unusually small.",
+      "previousContext": "The technician excised the tissue and sealed it in a sterile vial.",
+      "contrastSetId": "sample-context-v1",
+      "referenceTranslation": "Образец был необычно маленьким.",
+      "targets": [
+        {
+          "text": "sample",
+          "characterIndex": 4,
+          "length": 6,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a subset of observations selected from a population",
+              "translations": [
+                "выборка"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a physical specimen collected for examination",
+              "translations": [
+                "образец"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "образец",
+          "surfaceScorable": true
+        },
+        {
+          "text": "small",
+          "characterIndex": 25,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "limited in numerical size or statistical count",
+              "translations": [
+                "малый"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "limited in physical dimensions",
+              "translations": [
+                "маленький"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "маленький",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "context-cells-clinical",
+      "domain": "contextual",
+      "sourceText": "The cells were checked before the trial.",
+      "previousContext": "Researchers expanded the cultures for a study of the new treatment.",
+      "contrastSetId": "cells-trial-context-v1",
+      "referenceTranslation": "Клетки проверили перед клиническим исследованием.",
+      "targets": [
+        {
+          "text": "cells",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the basic structural units of living organisms",
+              "translations": [
+                "клетки"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "small rooms used to confine prisoners",
+              "translations": [
+                "камеры"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "клетки",
+          "surfaceScorable": true
+        },
+        {
+          "text": "trial",
+          "characterIndex": 34,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a controlled study of a medical intervention",
+              "translations": [
+                "клиническое исследование"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a judicial examination of evidence in court",
+              "translations": [
+                "судебный процесс"
+              ]
+            }
+          ],
+          "goldGroupId": 0,
+          "expectedTranslation": "клиническое исследование",
+          "surfaceScorable": true
+        }
+      ]
+    },
+    {
+      "id": "context-cells-legal",
+      "domain": "contextual",
+      "sourceText": "The cells were checked before the trial.",
+      "previousContext": "The defendants had been held overnight in separate wings of the jail.",
+      "contrastSetId": "cells-trial-context-v1",
+      "referenceTranslation": "Камеры проверили перед судебным процессом.",
+      "targets": [
+        {
+          "text": "cells",
+          "characterIndex": 4,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "the basic structural units of living organisms",
+              "translations": [
+                "клетки"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "small rooms used to confine prisoners",
+              "translations": [
+                "камеры"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "камеры",
+          "surfaceScorable": true
+        },
+        {
+          "text": "trial",
+          "characterIndex": 34,
+          "length": 5,
+          "groups": [
+            {
+              "groupId": 0,
+              "gloss": "a controlled study of a medical intervention",
+              "translations": [
+                "клиническое исследование"
+              ]
+            },
+            {
+              "groupId": 1,
+              "gloss": "a judicial examination of evidence in court",
+              "translations": [
+                "судебный процесс"
+              ]
+            }
+          ],
+          "goldGroupId": 1,
+          "expectedTranslation": "судебный процесс",
+          "surfaceScorable": true
+        }
+      ]
+    }
+  ]
+}

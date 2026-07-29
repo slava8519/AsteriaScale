@@ -682,8 +682,9 @@ semantic correctness, register fidelity, over-strengthening и censorship.
   доступен под Apache-2.0, но его
   архитектурные ops и реальная NPU-производительность требуют прототипа.
 
-Решение: не удалять GlossBERT и не переносить академическую SOTA-модель
-напрямую. №8 превращён в same-build bake-off текущего hybrid baseline,
+Историческое решение 22 июля (заменено готовыми-model bake-off 29 июля): не
+удалять GlossBERT и не переносить академическую SOTA-модель напрямую. №8 был
+превращён в same-build bake-off текущего hybrid baseline,
 DeBERTa-v3-small cross-encoder и, при совместимости, ModernBERT-base с
 одинаковым domain fine-tune. Qwen используется только как необязательный
 офлайн-генератор черновых кандидатов.
@@ -1444,3 +1445,622 @@ SHA-256 исходного дампа, потому что он не лежит 
 
 Промт для GPU-машины — раздел 10 в [PROMPTS.md](PROMPTS.md). Обучение идёт вне
 этой машины, приёмка остаётся за `--ranker-benchmark` на реальном рантайме.
+
+## TranslateGemma 4B как узкий realizer после GlossBERT (26 июля 2026)
+
+Проверен официальный [`google/translategemma-4b-it`](https://huggingface.co/google/translategemma-4b-it),
+revision `10042cb0e6e7fdce748996a71dc3dc432a4e0c89`. Это направленный переводчик на
+базе Gemma 3, а не общий instruction-LLM: русский поддержан явно, вход модели
+ограничен 2K токенов. В техническом отчёте EN→RU входит в WMT24++; 4B улучшает
+MetricX относительно исходной Gemma 3 4B (`3,25` против `4,54`), но отдельной
+человеческой оценки EN→RU/VN нет. Поэтому это кандидат на A/B, не готовый
+победитель.
+
+**Prompt-контракт.** Официальный template принимает ровно один text-item с
+`source_lang_code=en`, `target_lang_code=ru`, причём `text` содержит только
+переводимый текст. Шаблон сам добавляет роль профессионального переводчика и
+требование вернуть только перевод. Добавлять туда `CONTEXT`, выбранный gloss,
+enrichment или русские anchors нельзя: модель начнёт переводить служебные
+секции, а alternate/post-edit prompts model card называет возможными, но
+официально не поддержанными. Поэтому первый lane использует точный direct-
+translation prompt, а evidence GlossBERT участвует только в детерминированной
+проверке результата. Будущий constrained/post-edit lane должен иметь отдельную
+версию prompt, кэша и метрик.
+
+**Рантайм эталонной машины.** Foundry Local 0.10.2 не содержит TranslateGemma;
+Ollama и llama.cpp до эксперимента не установлены. Выбран отдельный управляемый
+`llama-server`: text-only Ollama Q4_K_M blob — `3 298 866 368` байт,
+SHA-256 `BDBF939B402E2F88FBE3E918BEB777813009335756B4C17BE7FE008DFE4815D4`;
+первый прогон CPU-only, чтобы не конкурировать с Magpie за Radeon 860M. В
+репозиторий веса не попадают. Контекст принудительно ограничен 2048 независимо
+от 128K metadata сконвертированной базовой Gemma 3.
+
+**Production boundary эксперимента.** Генерация запускается только после
+принятого GlossBERT `GroupId`; trusted/Tatoeba/эвристика/один outcome,
+abstention и ошибка ранкера остаются контрольными ветками без генерации.
+TranslateGemma получает короткий target-centered фрагмент, а результат проходит
+проверки: русский ответ без prompt echo/объяснения, ограниченный размер,
+отсутствие нового residual English, присутствие выбранной русской поверхности с
+учётом морфологии и отсутствие отвергнутых поверхностей. Ошибка, timeout или
+невалидный ответ возвращают уже выбранную словарную форму и никогда не запускают
+скрытый полный Qwen. Генерация хранится в отдельном SHA-LRU; identity включает
+модель, prompt, exact span/anchor, `GroupId`, definitions/enrichments, русскую
+поверхность/register, dictionary version и эпоху ranking threshold.
+
+**Лицензия.** Модель распространяется по
+[Gemma Terms](https://ai.google.dev/gemma/terms), а не Apache; HF-доступ gated.
+Автоматически принимать условия за пользователя нельзя, поэтому модель остаётся
+явно включаемой пользовательской загрузкой. Отдельно требуется продуктовая
+проверка [Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy):
+есть исключение для художественных произведений, но универсальный uncensored
+18+ default до юридического решения недопустим. Frozen translation/ranker
+holdout при этом исследовании не открывался.
+
+## TranslateGemma как независимая вторая строка (27 июля 2026)
+
+**Это решение заменяет production boundary от 26 июля выше, но не переписывает
+историческую запись.** Live-проверка показала архитектурную ошибку прежнего
+ограничения. Для идиоматических `butter me up` и `feels off` требование
+обязательно повторить выбранную словарную поверхность мешало независимому
+переводчику дать естественную фразу. Случай `88-wide` показал вторую проблему:
+достаточный английский контекст уже был распознан, но словарный miss завершал
+маршрут до TranslateGemma. Эти примеры использовались как live design probes,
+а не как количественный benchmark.
+
+**Новое решение.** Словарь и GlossBERT остаются владельцами основной строки:
+она показывается сразу и впоследствии не заменяется. TranslateGemma — отдельный
+вторичный lane для любого английского результата «Умного словаря», независимо
+от его provenance: miss, abstention, trusted/Tatoeba/эвристика, единственный
+outcome, принятый или кэшированный выбор ранжировщика и сохранённая карточка при
+ошибке. Из OCR либо совпавшего text-hook берётся target-centered фрагмент от 2
+до 12 слов; только этот фрагмент поступает в официальный direct-translation
+prompt. Gloss, enrichment, GroupId, выбранные и отвергнутые поверхности и
+регистр не входят ни в prompt, ни в phrase-request.
+
+Вывод показывается отдельной строкой `Фраза · TG4B`. Generic guard сохраняет
+только общие границы безопасности формата: закреплённую identity модели,
+короткий русский ответ без управляющих символов, prompt echo, объяснения и
+постороннего английского, кроме устойчивых собственных имён. Проверка
+присутствия selected surface и конфликтов sense/register удалена намеренно:
+вторая строка семантически независима и не может изменить, закэшировать или
+подменить решение GlossBERT.
+
+Persistent cache переведён на schema/path v2
+`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v2.json`. Его fingerprint
+содержит точную фразу, устойчивые proper names, model identity и prompt version;
+словарная версия и ranking epoch исключены, поскольку этих данных модель и
+generic guard больше не используют. Cache hit всё равно начинается с проверки
+закреплённых model/runner artifacts. Ошибка запуска, timeout или отклонение
+guard сохраняет primary и показывает `Перевод фразы недоступен`. Phrase lane
+никогда не вызывает full-Qwen; полный перевод остаётся отдельным, явно
+разрешаемым пользователем fallback.
+
+На момент этой архитектурной корректировки лицензионное решение и pins от
+26 июля не менялись; последующая runtime-коррекция записана отдельным разделом
+ниже. Frozen translation/ranker holdout при этой корректировке не открывался.
+Для решения о включении режима по
+умолчанию по-прежнему нужен воспроизводимый live A/B на dev-наборе с качеством,
+идиомами/register/18+, p50/p95 и peak memory.
+
+### Коррекция артефакта и живая проверка runtime (27 июля 2026)
+
+Последующая проверка показала, что исторический Ollama Q4_K_M blob из записи
+26 июля несовместим с llama.cpp b9632: в его metadata отсутствует
+`gemma3.attention.layer_norm_rms_epsilon`, поэтому сервер не мог загрузить
+модель. Этот pin больше не используется. Установщик schema v2 закрепляет
+llama.cpp-совместимый статический quant
+[`mradermacher/translategemma-4b-it-GGUF`](https://huggingface.co/mradermacher/translategemma-4b-it-GGUF)
+revision `35a7486e128b19642cdc72d7b91b21ba388aaf42`: файл
+`translategemma-4b-it.Q4_K_M.gguf`, `2 489 909 760` байт, SHA-256
+`81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330`.
+Старый точный blob удаляется только после успешной проверки нового артефакта.
+
+Встроенный официальный мультимодальный Jinja-template нового GGUF также нельзя
+оставить на автопроверку llama-server b9632: сервер подставляет string-content,
+тогда как template требует iterable ровно из одного typed text-item, и
+завершается до readiness. Кроме того, [parser b9632](https://github.com/ggml-org/llama.cpp/blob/b9632/common/chat.cpp#L330-L360)
+сохраняет у typed content только `type` и `text`, отбрасывая необходимые модели
+`source_lang_code` и `target_lang_code`; передать официальный структурированный
+объект через этот chat-путь нельзя. Runtime поэтому запускается с `--no-jinja`
+и отправляет через raw `/completion` тот же детерминированно отрендеренный direct
+prompt из [официального template](https://huggingface.co/google/translategemma-4b-it/blob/10042cb0e6e7fdce748996a71dc3dc432a4e0c89/chat_template.jinja).
+Это не добавляет gloss, скрытую инструкцию или альтернативный post-edit prompt.
+
+Живой CPU-прогон `scripts/verify-translategemma.ps1` после этой коррекции
+успешно загрузил и прогрел модель (`MODEL_HEALTH=OK`). Получены результаты:
+
+| EN probe | TG4B RU |
+|---|---|
+| `You're trying to butter me up.` | `Вы пытаетесь меня угодить.` |
+| `This is the part that always feels off.` | `Это та часть, которая всегда вызывает ощущение неладного.` |
+| `This illness isn't normal.` | `Эта болезнь – это ненормальное состояние.` |
+| `Are you talking about these magnificent 88-wide hips?` | `Вы имеете в виду эти великолепные бедра шириной 88 сантиметров?` |
+
+Итог разделяет доступность и качество. Runtime исправен, контекст действительно
+помогает в `feels off` и словарном miss `88-wide`, но 4B-quant дал неестественный
+идиоматический `butter me up` и тяжёлую формулировку для `illness`. Поэтому
+TranslateGemma остаётся экспериментальной независимой строкой и не включается
+по умолчанию. Следующий quality-step — dev A/B и отдельное усиление устойчивых
+VN-выражений; один успешный запуск не доказывает максимального качества.
+Frozen translation/ranker holdout при этой проверке не открывался.
+
+## Контекстный слой идиом умного словаря (27 июля 2026)
+
+Полевой пример `if you wish` показал, что простое наращивание списка идиом без
+контракта контекста опасно: вложенный broad-ключ `you wish` имеет саркастический
+смысл «мечтать не вредно», но в полной конструкции нужен нейтральный перевод
+«если хотите». Сам runtime уже обходил lexical candidates от длинных к коротким;
+ошибка данных состояла в том, что `if you wish` находился лишь в exact-dialogue
+слое и потому намеренно не участвовал в substring lookup. Выражение перенесено
+в проверенный VN-hard, а dialogue-слой не превращался в нечёткий фразовый поиск.
+
+Curated VN source теперь содержит `229` записей: `130` hard-ключей, `62`
+soft-ключа / `132` definition-aligned русских поверхности и `21` scaffold
+anchor. Добавлены 16 display-safe hard-выражений и 10 structured soft keys.
+Девять неоднозначных идиом имеют парные literal/idiomatic English definitions,
+чтобы GlossBERT выбирал смысл по реплике; `butter someone up` хранится как один
+идиоматический object-slot. Runtime подставляет `someone` только вместо закрытого
+набора `me|you|him|her|us|them`, после чего всё равно требует реальное совпадение
+с phrase inventory. Поэтому `buttered him up` достигает записи, а `buttered the
+toast` не становится идиомой.
+
+Для независимой строки TranslateGemma добавлен отдельный детерминированный
+EN→EN-слой. Он не читает русские поверхности или GlossBERT evidence, не меняет
+primary и срабатывает лишь когда доказанный оборот пересекает hovered target.
+Текущий закрытый rule `idiom:butter-object-up@v4` требует локально связанный
+местоименный субъект и преобразует, например,
+`You're trying to butter me up.` в
+`You're flattering me to get what you want.`. Конструкция вроде
+`I told John to butter me up` намеренно остаётся без преобразования: лёгкая
+эвристика не может надёжно установить субъект намерения. Literal/non-overlap
+пары также остаются исходными.
+
+Phrase request теперь отдельно хранит `SourcePhrase`, `ModelInputPhrase` и
+`TransformIdentity`; raw direct prompt по-прежнему получает ровно один обычный
+английский payload — effective-фразу. Guard проверяет обе английские формы и их
+согласованность. Persistent cache переведён на schema/path v3
+`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v3.json`; fingerprint
+включает source, effective input, rule identity, proper names, model identity и
+prompt version, а сами фразы на диск не записываются. Старый v2-кэш не может
+обойти новый preprocessor.
+
+Живой CPU-прогон финального production-equivalent verifier:
+
+| Source | Model input | TG4B RU |
+|---|---|---|
+| `You're trying to butter me up.` | `You're flattering me to get what you want.` | `Вы льстите мне, чтобы получить то, что хотите.` |
+| `This is the part that always feels off.` | без изменения | `Это та часть, которая всегда вызывает ощущение неладного.` |
+| `This illness isn't normal.` | без изменения | `Эта болезнь – это ненормальное состояние.` |
+| `Are you talking about these magnificent 88-wide hips?` | без изменения | `Вы имеете в виду эти великолепные бедра шириной 88 сантиметров?` |
+
+Отдельный A/B показал, что `feel off → seems wrong` ухудшает естественность до
+«кажется неправильной». Поэтому этот оборот остаётся исходным для TranslateGemma,
+а его человеческий и неодушевлённый смыслы различаются только в основном
+definition-aligned словарном lane. Это фиксирует критерий включения будущих
+правил: наличие идиомы в словаре недостаточно — EN→EN-парафраз должен дать
+измеримое улучшение на паре idiomatic/literal и не расширять область модели.
+
+Frozen translation/ranker holdout при разработке и live A/B не открывался.
+
+## DeBERTa-кандидат и перенос обучения на RTX 5080 (27 июля 2026)
+
+Цель эксперимента — заменить не название GlossBERT, а его definition-aware
+функцию: для каждой пары «контекст с отмеченной целью — английское определение»
+получить сопоставимый score, затем выбрать GroupId или воздержаться по тому же
+margin `0.25`. Генеративная модель для этой роли не подходит: нужен быстрый,
+детерминированный и калибруемый cross-encoder на CPU.
+
+[Исследование ACL 2025](https://aclanthology.org/2025.acl-long.113/) показало,
+что средние слои DeBERTa-v3 особенно хорошо разделяют значения слов. В
+эксперименте авторов 7-layer GlossDeBERTa-small сохранил F1 полной 12-layer
+модели (`79,5`) при меньшей стоимости, тогда как указанный ими GlossBERT
+baseline имел `77,0`. Готового официального checkpoint под произвольный
+Wiktionary inventory авторы не выпустили, поэтому найденный результат нельзя
+просто скачать: необходим domain fine-tune на точном формате Asteria.
+
+Для проверки всей runtime-обвязки использован только пилот
+[`cross-encoder/nli-deberta-v3-xsmall`](https://huggingface.co/cross-encoder/nli-deberta-v3-xsmall)
+ревизии `a150876415327c80daeff35ca6f68f5ed8cf5c24` (Apache-2.0). Это не
+кандидат на production-качество. Добавлен отдельный CPU-профиль
+`Models/GlossDeberta`: NPU-запрос с ним отклоняется, manifest читается только
+после проверки pinned length/SHA-256, host проверяет точную model identity, а
+обычный production-конструктор остаётся GlossBERT.
+
+Same-build dev-сравнение текущего GlossBERT и xsmall pilot v2:
+
+| Метрика | GlossBERT CPU | DeBERTa xsmall pilot v2 |
+|---|---:|---:|
+| Принятые решения | `21` | `5` |
+| Верные среди принятых | `21/21` | `4/5` |
+| Воздержания при покрытой метке | `16` | `32` |
+| End-to-end correct coverage | `52,31 %` | `26,15 %` |
+| Median select | `160 мс` | `66 мс` |
+| Large-inventory median | `441 мс` | `173 мс` |
+| Peak working set | `681,8 МиБ` | `666,2 МиБ` |
+
+На register-dev из `135` случаев GlossBERT принял `65` решений с semantic
+precision `86,15 %`, register fidelity `92,31 %` и no-strengthening `98,46 %`;
+xsmall принял `43`, но semantic precision упал до `79,07 %` при fidelity
+`97,67 %`. Вывод однозначен: пилот быстрее примерно в `2,4×`, но quality gate
+не проходит и production не заменяет.
+
+Для обучения создан `tools/train-wsd-ranker.py`. Он проверяет split по
+нормализованной лемме, отвергает повторные semantic groups и glosses, сохраняет
+группы неделимыми, поддерживает hybrid loss (listwise выбор внутри inventory +
+взвешенный binary loss), 7-layer truncation, reset/NLI-projected head,
+безопасный resume через JSON manifest, SHA-256 и `torch.load(weights_only=True)`,
+а также явные `cpu|cuda` и `fp32|bf16` без fallback. Экспорт проверяет Torch/ORT
+на batch `1`, runtime batch и принудительном truncation; ничья считается
+ошибкой, а не победой первого кандидата.
+
+Канонический silver-набор после удаления одного case-insensitive exact duplicate:
+
+- `32 019` train / `1 089` valid групп, без пересечения лемм;
+- `120 453` train / `4 025` valid пар;
+- `32 349 487` байт;
+- SHA-256 `710c7787493da0e0776087dc08c3cdfd9275bc2ff6af64e3978bbe09085196c4`.
+
+Набор получен из sense-linked примеров English Wiktionary/Kaikki и остаётся
+silver-данными с распределительным сдвигом относительно VN-диалогов; лицензии
+и версии источника перечислены в `THIRD_PARTY_NOTICES.md`. Одношаговый CPU
+micro-pilot (`8` train / `4` valid групп) проверил только механику: hybrid
+train loss `1,569798`, valid group accuracy `25 %`, ONNX `248 425 145` байт,
+SHA-256 `b24832ce9dcbddcd01c9335f7e8f50458b14348f0367d5fa50bb293a7fb6cd64`,
+максимальная Torch/ORT delta `5,96e-08`; secure resume воспроизвёл тот же ONNX.
+Четыре validation-группы не являются оценкой качества модели.
+
+Полный эксперимент перенесён на RTX 5080: пакет создаётся
+`tools/package-wsd-ranker-training.ps1`, повторно проверяется launcher-ом и
+обучает первые 7 слоёв
+[`microsoft/deberta-v3-base`](https://huggingface.co/microsoft/deberta-v3-base/tree/8ccc9b6f36199bec6961081d44eb72fb3f7353f3)
+ревизии `8ccc9b6f36199bec6961081d44eb72fb3f7353f3` (MIT), 4 эпохи, BF16, hybrid
+loss. На исходную машину возвращается только self-describing ONNX bundle и
+аудит-логи; CPU dev/register остаются местом принятия решения. CUDA-ветвь на
+текущей машине без NVIDIA GPU не выполнялась.
+
+Среда переноса также зафиксирована: CPython `3.12.10` x64, `pip 26.1.2`,
+официальный CUDA 13 wheel `torch 2.13.0+cu130` и полный набор прямых и
+транзитивных wheels устанавливаются только по точным SHA-256. Launcher до
+старта Python устанавливает `PYTHONHASHSEED=20260727` и
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`, запрещает CPU fallback и принимает только
+канонический dataset с указанными выше размером, SHA-256 и статистикой. Режим
+`-VerifyOnly` повторно проверяет manifest и все payload-файлы без установки и
+обучения.
+
+Замороженный пакет передачи после независимого review:
+
+- `artifacts/asteria-wsd-rtx5080-20260727-204841-710c7787493d.zip`;
+- `7 453 361` байт;
+- SHA-256 `27ba23f1078d650678f305ee4c71bfa5c0d4aa5a777804364c5fce680b6512c4`;
+- `7` payload-файлов, локальный `-VerifyOnly` завершён успешно.
+
+Runtime provenance поднят до schema v3: dev/register-отчёты закрепляют хешами
+не только benchmark, но и точные worker DLL/EXE, активные словари, morphology и
+фактически выбранные model/tokenizer artifacts. Экспериментальный xsmall bundle
+по-прежнему не входит в обычную сборку; production-default остаётся GlossBERT.
+Независимый финальный аудит исходников RTX-пакета не нашёл оставшихся дефектов.
+
+### Предварительный отчёт base7 с RTX 5080 (28 июля 2026)
+
+Оператор сообщил о завершении прогона
+`wsd-deberta-base7-rtx5080-20260727-232009`: `2 004` шага, 4 эпохи примерно за
+18 минут. Артефакты ещё не переданы на исходную машину, поэтому эти значения
+считаются **непроверенным отчётом**, а не результатом приёмки:
+
+| Эпоха | Group accuracy | Pair accuracy | Validation loss | Ties |
+|---:|---:|---:|---:|---:|
+| 1 | `69,24 %` | `64,20 %` | `0,873` | `6` |
+| 2 | `74,29 %` | `72,50 %` | `0,718` | `4` |
+| 3 | `75,02 %` | `73,37 %` | `0,703` | `5` |
+| 4 | `75,48 %` | `74,31 %` | `0,712` | `4` |
+
+Предварительно выбрана эпоха 4 по заранее закреплённому `group_accuracy`.
+Первоначальное предположение, что выросший после эпохи 3 loss означает низкую
+отдачу от более длинного обучения, опровергнуто контролируемой проверкой LR:
+
+| Траектория при одинаковых первых 2 004 шагах | LR@1000 | LR@2000 | Верных групп | Group acc | Pair acc | Loss |
+|---|---:|---:|---:|---:|---:|---:|
+| штатная 4-эпохная, спад в 0 | `1,11e-5` | `4,4e-8` | `822` | `75,48 %` | `74,31 %` | `0,7115` |
+| floor 30% | `1,38e-5` | `6,0e-6` | `828` | `76,03 %` | `75,73 %` | `0,6938` |
+| форма 6-эпохной, остановка на шаге 2 004 | `1,48e-5` | `7,4e-6` | `835` | `76,68 %` | `74,76 %` | `0,6867` |
+
+Полный шестиепохный прогон (`3 006` шагов) дал `843/1 089`, или `77,41 %`
+group accuracy и `76,10 %` pair accuracy. Значит, работают оба фактора:
+пологий спад дал часть улучшения, дополнительные `1 002` шага — большую часть.
+Эти значения всё ещё являются отчётом оператора до передачи artifacts, но
+следующая architecture/head матрица обязана использовать одинаковые 6 эпох и
+3 006 шагов; прежний четырёхэпохный ZIP отозван.
+
+По отчёту ONNX parity имеет max delta `2,62e-06` при допуске `1e-4`; размер
+`definition-ranker-fp32.onnx` — `596 528 886` байт. Переданы только префиксы
+хешей bundle manifest (`f26a09f749ab19e8…`) и ONNX
+(`46f845c53326fa6f…`), поэтому их полная независимая проверка отложена до
+получения файлов.
+
+На RTX-машине обнаружено, что загрузка исходных весов без явного FP32 приводит
+к FP16 и NaN на первом шаге. Локально воспроизведена ровно та же правка: три
+train/resume вызова `from_pretrained` теперь передают `dtype=torch.float32`.
+Исторический trainer этого прогона имел размер `108 438` байт и SHA-256
+`74fe5f7d145676164c24efb9fc815dc126011a349b4e37152cc9440b0ae43605`, что
+совпадает с отчётом RTX-машины. Новый trainer сохраняет ту же логику обучения,
+но после выбора best-model повторно считает valid и атомарно записывает
+`validation-predictions.jsonl` со стабильными group ID, хешем lemma-кластера,
+gold/predicted candidate, margin и pair outcomes. Исходный текст в отчёт не
+попадает; отдельный manifest закрепляет dataset/group/trainer SHA. Это закрывает
+возможность exact McNemar и paired lemma-cluster bootstrap.
+
+Frozen holdout для настройки и оценки кандидатов не открывался. Как уже
+зафиксировано в общем журнале, прежние три ranker-holdout непригодны для
+приёмки обученной модели, потому что их target-леммы однажды повлияли на состав
+train. После окончательной фиксации модели потребуется новый слепой holdout-v4
+и единственный заранее объявленный прогон.
+
+### Шестиепохный пакет следующей матрицы (28 июля 2026)
+
+После LR-проверки создан новый переносимый пакет; предыдущий suite-ZIP с
+четырёхэпохными профилями отозван:
+
+- `artifacts/asteria-wsd-rtx5080-20260728-083924-710c7787493d.zip`;
+- `7 461 469` байт;
+- SHA-256 `1385672c281603b749ee6f77ddbf2396af17857efd33f0b9ea1f624622ad10f0`;
+- schema `3`, `27` profiles, четыре непересекающиеся suites: `reference`,
+  `next`, `capacity`, `interaction`;
+- trainer `114 355` байт, SHA-256
+  `a2e1dec5f08f9d94bbdfea24d8837caf0d74930ff2737ff920e84b3d044ede83`.
+
+Распакованная копия прошла `-VerifyOnly` и `-ListProfiles`; manifest фиксирует
+6 эпох, 3 006 шагов и `linear-to-zero`. Проверены fail-closed случаи: Resume без
+явного output и `-PythonPath` вместе с `-VerifyOnly` отвергаются до Python/GPU
+preflight. Holdout-файлов в ZIP нет. Отдельный локальный CPU micro-run на
+`8/4` группах прошёл обучение, best-model reload, ONNX parity и создал четыре
+group outcomes; SHA отчёта совпал с его manifest, открытого текста в JSONL нет.
+
+## Журнал доступа к frozen holdout (27 июля 2026)
+
+Во время независимого read-only review инструмента обучения агент по ошибке
+запустил `rg` по каталогу `assets/Ranker` целиком. Команда могла открыть для
+поиска `ranker-holdout.json`, `ranker-holdout-v2.json` и
+`ranker-holdout-v3.json`; совпадений и содержимого этих файлов в выводе не было.
+Данные holdout не использовались ни для обучения, ни для выбора гиперпараметров,
+ни для оценки кандидата. После обнаружения review был немедленно ограничен
+файлами `tools/train-wsd-ranker.py` и `tools/requirements-wsd-ranker.txt`.
+
+## Готовые WSD-модели: SANDWiCH и ConSeC (29 июля 2026)
+
+### Решение о направлении исследования
+
+Собственный DeBERTa self-training эксперимент закрыт. Более пологий LR и
+дополнительные шаги дали измеримое улучшение, но следующая большая матрица
+`NLI × depth × head × seeds` отменена: дальнейший бюджет переносится на готовые
+WSD-модели с опубликованными checkpoint. Trainer, RTX-пакеты, результаты и
+ограничения resume остаются в репозитории как воспроизводимый отрицательный
+результат, а не как текущий план обучения.
+
+Production-default пока не меняется: GlossBERT остаётся baseline/rollback до
+прохождения новым профилем тех же open-dev/register/runtime gates. Общий порог
+воздержания также не менялся и остаётся margin-only `0.25`.
+
+### SANDWiCH: provenance и интеграция CPU
+
+Проверен официальный репозиторий
+[danielguzmanolivares/sandwich](https://github.com/danielguzmanolivares/sandwich)
+на commit `daca3cad63326204d4027b9ea09fb1405ab1ca0a`. Upstream указывает MIT для
+кода и опубликованных моделей. Отдельные BabelNet-derived definitions/neighbours
+имеют собственную non-commercial границу; адаптер Asteria их не скачивает и не
+распространяет, а подаёт собственные English Wiktionary/layered-dictionary
+glosses.
+
+Закреплённые исходные артефакты:
+
+| Артефакт | Байт | SHA-256 |
+|---|---:|---|
+| официальный `sandwich-models.zip` | `957 844 471` | `98b3cda35a8599c961fc2ac36867d4687bd136e3f0ca1998d4a4754ea8c8e1de` |
+| `encoder-nv/model.safetensors` | `567 598 552` | `d759c83cf13c8d367eccbddb33d061c1db6e5d5082e39b86679dcd4dd21ef602` |
+| `encoder-v/model.safetensors` | `567 598 552` | `a63626ab5ef52cad6360624bfdaab91743716270e377f2bdf92feabc512d273d` |
+| `tokenizer.json` | `8 656 779` | `2689db9b56b94ae9fac86daeb5fe7df0be0c5f1a9dce76a0edda7afa93dd1304` |
+
+`tools/export-sandwich-onnx.py` экспортирует оба энкодера в динамический FP32
+ONNX. Torch/ONNX Runtime parity прошёл с максимальными отклонениями порядка
+`1e-6`. Закреплённый runtime bundle:
+
+| Артефакт | Байт | SHA-256 |
+|---|---:|---|
+| `Cpu/encoder-nv-fp32.onnx` | `568 094 742` | `b6a21c42c974f145a39a20e5c5b62b740cb0b63ed698499fa4c5e4b397998739` |
+| `Cpu/encoder-v-fp32.onnx` | `568 094 742` | `21b778dc9552f84732d1061ca1ace23f9f6c071e68fe4ab0615109f192e78f6b` |
+| `tokenizer.json` | `8 656 779` | `2689db9b56b94ae9fac86daeb5fe7df0be0c5f1a9dce76a0edda7afa93dd1304` |
+| `model-manifest.json` | `1 108` | `b4d20c4f82cc876805f5d4a1c848da88ae3e1c9d635a349ce1d34e7266dca0a3` |
+
+Точный model/cache identity:
+`SANDWiCH:naacl-2025:singleton-gloss:m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:s512:c2:p1:pipeline-sandwich`.
+`singleton-gloss` означает отдельную context/gloss пару на входе энкодеров;
+несколько глоссов одного стабильного GroupId всё равно агрегируются официальным
+confidence-weighted reducer. Точное вхождение target обрамляется upstream-маркером
+`[D] target [D]`. Positive-class probabilities двух энкодеров усредняются до
+редукции. Профиль CPU-only и выбирается явно; запрос NPU отклоняется, скрытого
+fallback нет.
+
+Реальный worker smoke загрузил обе ONNX-сессии, выбрал GroupId `20` с margin
+`0.802342` и selected score `0.945381`, сообщил `pipeline=sandwich`; fallback не
+использовался. Отдельный `scripts/verify-sandwich.ps1` повторно подтвердил все
+четыре pinned runtime artifacts.
+
+Общий `SemanticSenseEvidenceFactory` устранил зависимость downstream от имени
+модели. Принятый GroupId превращается в одинаковый набор: до двух английских
+определений, выбранные и отвергнутые русские поверхности и confidence. Этот
+набор используется как необязательное evidence и для второй строки
+TranslateGemma в «Умном словаре», и для full-text semantic review. Русская
+поверхность ranker никогда не становится mandatory term.
+
+### Финальный open-dev A/B GlossBERT — SANDWiCH
+
+Production-pipeline same-build A/B выполнен на открытом
+`ranker-benchmark.json`: `134` случая, включая отдельный scientific slice из
+`20` случаев; `113` ranker-запросов и `106` покрытых expected sense groups. Оба
+отчёта schema 4 закрепляют точный SHA набора и runtime provenance и отдельно
+считают выбор правильной sense group и русскую поверхность, которую видит
+пользователь. Это устраняет прежнее завышение: наличие ожидаемого синонима где-то
+в выбранной группе больше не делает автоматически правильным другой показанный
+вариант. Сравнение словоформ допускает только консервативную морфологию, а не
+общий префикс (`значимый` и `значительный` различаются).
+
+| Метрика | GlossBERT CPU | SANDWiCH CPU |
+|---|---:|---:|
+| принятые sense-решения с gold inventory | `64` | `62` |
+| верные sense-решения | `62` | `55` |
+| sense accepted precision | `96,875 %` | `88,71 %` |
+| sense-aware end-to-end | `75/134` (`55,97 %`) | `68/134` (`50,75 %`) |
+| strict visible correct / non-abstained | `51/66` (`77,27 %`) | `44/65` (`67,69 %`) |
+| strict visible end-to-end | `64/134` (`47,76 %`) | `57/134` (`42,54 %`) |
+| все ranker-воздержания | `47` | `48` |
+| median select | `156 мс` | `204 мс` |
+| peak working set | `691 МБ` | `1 691 МБ` |
+
+На обязательном 20-case scientific/technical slice GlossBERT: sense `14/14`,
+strict visible `11/14`, `6` воздержаний; SANDWiCH: sense `13/16`, strict visible
+`11/16`, `4` воздержания. То есть более высокая coverage SANDWiCH не дала ни
+одного дополнительного правильного видимого результата и снизила precision.
+
+SANDWiCH не проходит минимальный `90 %` accepted-sense gate и уступает GlossBERT
+по обеим метрикам качества, latency и памяти. Production-рекомендация не
+меняется: GlossBERT остаётся рекомендуемым ranker/rollback, SANDWiCH — явной
+экспериментальной CPU-опцией для воспроизводимости отрицательного результата.
+Подгонка margin под SANDWiCH не выполнялась; общий порог `0.25` сохранён. Frozen
+holdout не открывался.
+
+### ConSeC: upstream parity, independent runtime и sentence A/B
+
+Проверен upstream [SapienzaNLP/consec](https://github.com/SapienzaNLP/consec) на
+commit `9602b5fd69f57be08a186988d1df34fe4152b63f`. Официальный WNGT checkpoint:
+`4 864 940 005` байт, SHA-256
+`92421ed245723964db09ce396f19a0d1e55fe4d6e10d5ecb83278d9bc70ce8af`
+(MD5 `6bc51ae02a39c78c964fb78ce3d0b578`). Он содержит DeBERTa-large с
+`405 372 416` параметрами; inference state занимает около `1 621 491 712` байт,
+остальное — training optimizer/callback state. Upstream stack основан на старых
+PyTorch Lightning `1.1.7` / transformers `4.3.3`, поэтому raw окружение не
+переносится в приложение.
+
+Добавлен воспроизводимый fail-closed exporter `tools/export-consec-onnx.py`.
+До десериализации он проверяет commit/лицензию upstream, точные size/SHA
+checkpoint и полный закрытый список pickle globals; сама загрузка выполняется
+только через `torch.load(weights_only=True, mmap=True)`. Проверены `390` state
+entries, `405 372 416` tensor elements, embedding `50 468 × 1 024` и все `24`
+слоя. Локальный FP32 external-data export дал:
+
+| Артефакт | Размер | SHA-256 |
+|---|---:|---|
+| `Cpu/consec-wngt-fp32.onnx` | `843 194` | `0eb0688f3fd2af67c6e2155daeed0fec5c5b2f1c7037b91ba526d50516c630ad` |
+| `Cpu/consec-wngt-fp32.onnx.data` | `1 621 487 616` | `1257dc55ebec8886b7f5af4867f684ae44c7be4308e75b1251963595354011b9` |
+| `tokenizer.json` | `3 560 546` | `df91c443c8eac73a42ff72086f25b16ad3b244ae2bf0303625298265d50f73f1` |
+| `model-manifest.json` | `4 407` | `13a8a14e3938d4f20519f7da79a51f75543eced352bd39456b5a43c4d93402b8` |
+
+На dialogue fixture и научной `PCR/strain` fixture ONNX-friendly fixed-span
+attention совпал со stock Transformers 4.46.3 с delta `0.0`; полный
+adapted-PyTorch/ORT результат — `3,10e-6` и `5,01e-6` при допуске `1e-4`.
+После этого выполнен отдельный fail-closed gate в точном историческом
+Python 3.9.13 / Transformers 4.3.3 окружении. Официальные
+`DeBERTaTokenizer.power_tokenize`, `ConsecDebertaModel` и
+`DebertaPositionalExtractor` получили те же предложения, определения и
+feedback. Для dialogue `bank` и scientific `PCR/strain` input tensor SHA и
+выбранные кандидаты совпали; max delta **всех** logits — `3,10e-6` и `5,01e-6`.
+Научная fixture содержит mixed-case `PCR DNA` и тем самым проверяет официальный
+`str.capitalize()`, включая понижение регистра всего хвоста определения.
+Повторное parity-ревью закрепило также менее очевидный порядок
+`capitalize() → strip('.')`: ведущий пробел не удаляется до смены регистра.
+Runtime воспроизводит этот контракт явно для английского ASCII-регистра, а
+определения с Unicode-буквами, чьё изменение регистра зависит от таблиц
+Python 3.9 (`ß`, titlecase, контекстная греческая sigma), отклоняет fail-closed,
+не подменяя научный термин приближённым .NET-преобразованием. После изменения
+официальный Python-gate перезапущен; tensor hashes, logits и выборы не
+изменились, изменился только хеш reference runner.
+Golden `tools/consec-upstream-reference-golden.json` имеет SHA-256
+`d6a5a3cdf6429bf4acde6bba5a254c209eff28f76c577ad7d845a7ba086ab22e` и
+связан с точным manifest/bundle. Manifest намеренно не переписывался задним
+числом: историческое поле `officialUpstreamEndToEndReferenceVerified: false`
+компенсируется внешним хешированным доказательством.
+
+Добавлен независимый CPU runtime `pipeline=consec-independent`. Он получает
+точное полное предложение и канонический target index, строит upstream
+`<d>...</d>`/`DEF_SEP` inputs в worker, независимо ранжирует каждую цель и
+сводит определения к исходным стабильным GroupId. Feedback пока пустой — это
+контрольная точка перед joint decoder. Silent truncation запрещён: если итоговая
+последовательность длиннее 512 токенов, запрос явно падает, а hover сохраняет
+словарный результат. NPU и скрытого GlossBERT fallback нет.
+
+При финальном host-аудите устранено расхождение production/benchmark: hover и
+полнотекстовый scaffold раньше по наследству пропускали ConSeC через
+32-словный `TargetCenteredContextBuilder`, хотя sentence benchmark отдавал
+полный source. Теперь окно остаётся только у pair-профилей
+GlossBERT/GlossDeBERTa/SANDWiCH; ConSeC получает полное исходное предложение во
+всех потребителях, а оба persistent cache включают полный exact source и anchor.
+Тег `context-full-v1` делает старые усечённые решения безопасными cache miss.
+
+Точный model/cache identity:
+`ConSeC:WNGT:9602b5fd:adapter-consec-wngt-positional-extractor-v1:g-0eb0688f3fd2:d-1257dc55ebec:t-df91c443c8ea:pretokenizer-v3:context-full-v1:s512:pipeline-consec-independent`.
+`scripts/install-consec.cmd` и `verify-consec.ps1` устанавливают четыре
+закреплённых файла транзакционно только после принятия upstream terms. Bundle
+ignored и не входит в обычную публикацию; build включает его условно.
+
+Для этой фазы создан отдельный открытый
+`assets/Ranker/ranker-sentence-benchmark.json`: `46` полностью оригинальных CC0
+предложений, `138` exact target spans и `276` упорядоченных sense groups. `36`
+случаев дают ровно по шесть biology, medicine, physics, chemistry, statistics и
+computer science; ещё `4` — context-only и `6` — literature, visual novel и
+manga. В `19` случаях задан `previousContext`, который является только скрытым
+модельным входом. Две контрастные пары используют байт-в-байт одинаковый current
+sentence и одинаковый inventory, но требуют другого смысла только из-за истории.
+После независимого аудита устранена позиционная утечка: вместо прежних 100 %
+gold во второй группе распределение стало `72/66`, а валидатор запрещает сильный
+общий и per-domain перекос. `100` целей имеют непересекающиеся русские
+поверхности для surface-unambiguous WSD-среза; `38` естественно пересекающихся
+целей явно помечены `surfaceScorable=false`, вместо искусственного удаления
+правильных переводов. В обоих срезах runner проверяет GroupId, а не русский
+текст. SHA-256 набора:
+`bed4c0211b1c8e79654c630d4dcb95625e32b07d099da872f1dd4e3154ec6bca`.
+Полный русский reference сохранён для отдельного будущего измерения фактического
+результата TranslateGemma/full-text; текущий WSD-runner его не сравнивает. Это
+открытый dev-набор, не основание для
+финального quality claim и не замена будущему holdout.
+
+Same-build A/B выполнен на всех `46` предложениях / `138` целях:
+
+| Метрика | GlossBERT CPU | SANDWiCH CPU | ConSeC CPU |
+|---|---:|---:|---:|
+| правильная target group | `91/138` | `120/138` | **`131/138`** |
+| scientific | `69/108` | `96/108` | **`106/108`** |
+| все target-смыслы предложения верны | `20/46` | `31/46` | **`41/46`** |
+| surface-unambiguous target sense | `67/100` | `86/100` | **`94/100`** |
+
+Это WSD-only метрики: они не доказывают качество русского предложения.
+ConSeC: accepted precision `96,32 %`, coverage `98,55 %`, warm p50/p95
+`140/205 мс`, cold `6 420 мс`, peak working set `1 500 МБ`, runtime errors `0`,
+sequence overflow `0`. Он явный победитель sentence/scientific dev и поэтому
+в UI называется `ConSeC — лучший для науки, CPU`. Воспроизводимый локальный
+v6 report (`165 137` байт) имеет SHA-256
+`4a3b065f25ebdcc005a067b8ef709be2a17f702d57d4d464d9f3bb622b001a5f`.
+Но одна из двух пар,
+различающихся только `previousContext`, осталась ошибочной; всего есть пять
+уверенно принятых ошибок. Это подтверждает ценность следующего feedback/joint
+шага и не позволяет объявлять независимый режим окончательной заменой default.
+
+На старом pair-oriented `ranker-benchmark.json` из `134` случаев ConSeC прошёл
+90%-ный sense gate: sense `91/97`, visible `72/103`, sense-aware E2E `104/134`,
+visible E2E `85/134`, median `360 мс`, peak `1 563 МБ`. При этом accepted
+visible precision ниже GlossBERT, поэтому stable-default остаётся GlossBERT, а
+ConSeC — явный исследовательский CPU-профиль.
+
+Прямой joint runtime после этого измерения не принят: в наборе лишь два
+independent-abstain, так что консервативный rescue-only feedback может исправить
+не более двух целей и не способен дать заранее требуемые `10` net rescues или
+значимый парный тест. Следующий шаг — benchmark-only J1 на новом joint-stress
+dev-наборе ≥48 предложений с VN/manga/literature, длинными научными abstracts и
+register/18+/dialogue. Уже принятые independent-решения замораживаются; joint
+получает не более девяти peers и повторно оценивает только abstain. Лишь после
+WSD gate выполняется отдельный TranslateGemma/Qwen A/B — текущие `131/138` сами
+по себе не являются доказательством лучшего русского перевода. Если gate будет
+пройден, совместный результат поступит через тот же
+`SemanticSenseEvidenceFactory`, не становясь обязательной русской поверхностью.
+
+Лицензия ConSeC/WNGT — CC BY-NC-SA 4.0; текущая интеграция ограничена личным
+научным/некоммерческим исследованием. Checkpoint и ONNX не входят в git,
+обычный installer или публичную поставку. Во время этой работы ни один
+`ranker-holdout*.json` не открывался.

@@ -114,6 +114,22 @@ asteria-vn-curated-v2	h111	hard	gold	tell a joke	рассказать шутку
 asteria-vn-curated-v2	h112	hard	gold	on behalf of	от имени	as a representative of someone or something	standard	phrase
 asteria-vn-curated-v2	h113	hard	gold	let us inside	впусти нас; пусти нас внутрь	an imperative request to admit the speakers indoors	colloquial	phrase
 asteria-vn-curated-v2	h114	hard	gold	any time soon	в ближайшее время	within the near future	standard	phrase
+asteria-vn-curated-v2	h115	hard	gold	if you wish	если хотите; если желаете	if the addressee desires or chooses it	standard	phrase
+asteria-vn-curated-v2	h118	hard	gold	call it a day	закончить на сегодня	to stop working on something for the rest of the day	colloquial	phrase
+asteria-vn-curated-v2	h119	hard	gold	keep an eye on	присматривать за; следить за	to watch someone or something attentively	standard	phrase
+asteria-vn-curated-v2	h120	hard	gold	let the cat out of the bag	проговориться; выдать секрет	to reveal a secret unintentionally	colloquial	phrase
+asteria-vn-curated-v2	h121	hard	gold	take it easy	успокойся; не перенапрягайся	an instruction to relax or avoid excessive effort	colloquial	phrase
+asteria-vn-curated-v2	h122	hard	gold	out of the blue	внезапно; совершенно неожиданно	without warning or expectation	figurative	phrase
+asteria-vn-curated-v2	h123	hard	gold	once in a blue moon	крайне редко	very rarely	figurative	phrase
+asteria-vn-curated-v2	h124	hard	gold	go the extra mile	сделать больше, чем требуется; приложить дополнительные усилия	to make more effort than is expected	figurative	phrase
+asteria-vn-curated-v2	h125	hard	gold	make up one's mind	решиться; принять решение	to reach a decision	standard	phrase
+asteria-vn-curated-v2	h126	hard	gold	get on one's nerves	действовать на нервы; раздражать	to annoy someone persistently	colloquial	phrase
+asteria-vn-curated-v2	h127	hard	gold	have a crush on	быть влюблённым в; запасть на	to feel a usually unspoken romantic attraction to someone	colloquial	phrase
+asteria-vn-curated-v2	h128	hard	gold	no big deal	ничего страшного; ерунда	an expression that something is not important or difficult	colloquial	phrase
+asteria-vn-curated-v2	h129	hard	gold	suit yourself	как хочешь; поступай как знаешь	an often dismissive permission to make one's own choice	colloquial	phrase
+asteria-vn-curated-v2	h130	hard	gold	give it a shot	попробовать; попытаться	to attempt something	colloquial	phrase
+asteria-vn-curated-v2	h131	hard	gold	cut it out	прекрати; перестань	an instruction to stop an annoying action	colloquial	phrase
+asteria-vn-curated-v2	h132	hard	gold	hang in there	держись; не сдавайся	an encouragement to persist through difficulty	colloquial	phrase
 asteria-vn-curated-v2	s001	soft	silver	ain't	не; не является; нет	a colloquial contraction used for several negative verb forms	colloquial	verb
 asteria-vn-curated-v2	s002	soft	silver	aren't	не являются; не	a contraction of are not	colloquial	verb
 asteria-vn-curated-v2	s003	soft	silver	can't	не мочь; нельзя	a contraction of cannot	colloquial	verb
@@ -173,6 +189,25 @@ asteria-vn-curated-v2	s056	soft	silver	musta	должно быть	a colloquial 
 asteria-vn-curated-v2	s057	soft	silver	c'mon	да ладно; давай	a colloquial contraction of come on	colloquial	interj
 asteria-vn-curated-v2	s058	soft	silver	'em	их	a colloquial contraction of them	colloquial	pron
 asteria-vn-curated-v2	s059	soft	silver	yer	твой; ты	a colloquial form of your or you are	colloquial	pron
+asteria-vn-curated-v2	s060	soft	silver	feel off	плохо себя чувствовать; быть не в своей тарелке	to feel physically or emotionally unwell	standard	phrase
+asteria-vn-curated-v2	s061	soft	silver	feel off	казаться странным; вызывать ощущение, что что-то не так	to seem wrong, unusual, or inconsistent	figurative	phrase
+asteria-vn-curated-v2	s062	soft	silver	break the ice	разрядить обстановку; растопить лёд	to make people feel more comfortable at the start of a social interaction	figurative	phrase
+asteria-vn-curated-v2	s063	soft	silver	break the ice	разбить лёд; проломить лёд	to physically break a layer or block of frozen water	standard	phrase
+asteria-vn-curated-v2	s064	soft	silver	get cold feet	струсить; дать задний ход	to become too frightened to proceed with a plan	figurative	phrase
+asteria-vn-curated-v2	s065	soft	silver	get cold feet	замёрзнуть; чувствовать холод в ногах	to experience physically cold feet	standard	phrase
+asteria-vn-curated-v2	s066	soft	silver	give someone a hand	помочь кому-либо	to help a person with a task	figurative	phrase
+asteria-vn-curated-v2	s067	soft	silver	give someone a hand	подать кому-либо руку	to physically offer a hand to a person	standard	phrase
+asteria-vn-curated-v2	s068	soft	silver	hit the nail on the head	попасть в точку	to identify or describe the exact issue	figurative	phrase
+asteria-vn-curated-v2	s069	soft	silver	hit the nail on the head	ударить по шляпке гвоздя	to physically strike the head of a nail	standard	phrase
+asteria-vn-curated-v2	s070	soft	silver	on the same page	одинаково понимать ситуацию; быть на одной волне	to share the same understanding or goals	figurative	phrase
+asteria-vn-curated-v2	s071	soft	silver	on the same page	на одной странице	to be located or looking at the same physical page	standard	phrase
+asteria-vn-curated-v2	s072	soft	silver	piece of cake	проще простого; пара пустяков	something that is very easy to do	colloquial	phrase
+asteria-vn-curated-v2	s073	soft	silver	piece of cake	кусок торта	a physical portion of a cake	standard	phrase
+asteria-vn-curated-v2	s074	soft	silver	spill the beans	проболтаться; выдать секрет	to reveal secret information	figurative	phrase
+asteria-vn-curated-v2	s075	soft	silver	spill the beans	рассыпать бобы	to physically cause beans to fall from a container	standard	phrase
+asteria-vn-curated-v2	s076	soft	silver	pull one's leg	разыгрывать; подшучивать	to tease someone by making them believe something untrue	colloquial	phrase
+asteria-vn-curated-v2	s077	soft	silver	pull one's leg	тянуть за ногу	to physically pull a person's leg	standard	phrase
+asteria-vn-curated-v2	s078	soft	silver	butter someone up	льстить; подлизываться	to flatter a person in order to gain favour	colloquial	phrase
 asteria-vn-curated-v2	a001	scaffold	gold	i get that a lot	я часто это слышу	a reviewed full-translation anchor	standard	phrase
 asteria-vn-curated-v2	a002	scaffold	gold	nice to meet you	приятно познакомиться	a reviewed full-translation anchor	standard	phrase
 asteria-vn-curated-v2	a003	scaffold	gold	a shadow of doubt	тень сомнения	a reviewed full-translation anchor	standard	phrase

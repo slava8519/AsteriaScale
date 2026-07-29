@@ -215,12 +215,12 @@ internal static class MagpieSafetyTests
                 isIconic: false,
                 isCloaked: false),
             "A destroyed scaling source did not invalidate the session.");
-        Check(MagpieEngineService.IsScalingSourceLostState(
+        Check(!MagpieEngineService.IsScalingSourceLostState(
                 sourceWindow,
                 isWindow: true,
                 isIconic: true,
                 isCloaked: false),
-            "A minimized scaling source did not invalidate the session.");
+            "Magpie's intentionally minimized scaling source invalidated the session.");
         Check(MagpieEngineService.IsScalingSourceLostState(
                 sourceWindow,
                 isWindow: true,
@@ -233,6 +233,10 @@ internal static class MagpieSafetyTests
                 isIconic: false,
                 isCloaked: false),
             "A valid visible scaling source was treated as lost.");
+        Check(MagpieEngineService.IsScalingSourceForegroundState(sourceWindow, sourceWindow),
+            "The active scaling source was not recognized as foreground.");
+        Check(!MagpieEngineService.IsScalingSourceForegroundState(sourceWindow, new nint(41)),
+            "An unrelated foreground window was treated as the scaling source.");
 
         Check(!MagpieEngineService.IsWindowedScalingModeState(nint.Zero),
             "A fullscreen Magpie session selected the windowed stop action.");
@@ -281,6 +285,46 @@ internal static class MagpieSafetyTests
             "A Windows desktop shell class bypassed the cursor lifecycle guard.");
         Check(!AutoScaleService.IsDesktopWindowClass("Chrome_WidgetWin_1"),
             "An ordinary foreground application was treated as the desktop.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: true,
+                  isDesktopForeground: true,
+                  isSourceForeground: false,
+                  overrideActive: false) == AutoScaleService.DesktopCursorAction.Show,
+            "The desktop transition did not request a visible Windows cursor.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: true,
+                  isDesktopForeground: true,
+                  isSourceForeground: false,
+                  overrideActive: true) == AutoScaleService.DesktopCursorAction.None,
+            "The active desktop cursor override was repeatedly applied.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: true,
+                  isDesktopForeground: false,
+                  isSourceForeground: true,
+                  overrideActive: true) == AutoScaleService.DesktopCursorAction.Hide,
+            "Returning to the source did not return cursor ownership to Magpie.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: true,
+                  isDesktopForeground: false,
+                  isSourceForeground: false,
+                  overrideActive: true) == AutoScaleService.DesktopCursorAction.None,
+            "An unrelated application was allowed to lose the visible system cursor.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: false,
+                  isDesktopForeground: false,
+                  isSourceForeground: false,
+                  overrideActive: true) == AutoScaleService.DesktopCursorAction.Release,
+            "Ending scaling did not preserve the visible system cursor.");
+        Check(!AutoScaleService.ShouldStopForUnavailableSource(
+                  isScaling: true,
+                  isDesktopForeground: true,
+                  isSourceLost: true),
+            "A desktop transition still stops the preserved Magpie session.");
+        Check(AutoScaleService.ShouldStopForUnavailableSource(
+                  isScaling: true,
+                  isDesktopForeground: false,
+                  isSourceLost: true),
+            "An unavailable source outside a desktop transition was ignored.");
         Check(AutoScaleService.PollingIntervalFor(isScaling: true) <=
               TimeSpan.FromMilliseconds(100),
             "Active scaling is not polled quickly enough to restore the cursor.");

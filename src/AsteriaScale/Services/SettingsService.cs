@@ -46,6 +46,8 @@ public sealed class SettingsService
             settings.VisualNovelFrameRateLimit = VisualNovelFrameRates.Normalize(settings.VisualNovelFrameRateLimit);
             settings.HoverTranslationMode = HoverTranslationModes.Normalize(settings.HoverTranslationMode);
             settings.SmartDictionaryBackend = SmartDictionaryBackends.Normalize(settings.SmartDictionaryBackend);
+            settings.SmartDictionaryRankerModel =
+                SmartDictionaryRankerModels.Normalize(settings.SmartDictionaryRankerModel);
             settings.SmartDictionarySourceLanguage =
                 SmartDictionarySourceLanguages.Normalize(settings.SmartDictionarySourceLanguage);
             settings.SmartDictionaryFallbackMode =

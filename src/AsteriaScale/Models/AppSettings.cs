@@ -18,9 +18,12 @@ public sealed class AppSettings
     public string HoverTranslationMode { get; set; } = HoverTranslationModes.Smart;
     public string TranslationTargetLanguage { get; set; } = "ru";
     public string SmartDictionaryBackend { get; set; } = SmartDictionaryBackends.Auto;
+    public string SmartDictionaryRankerModel { get; set; } =
+        SmartDictionaryRankerModels.GlossBert;
     public string SmartDictionarySourceLanguage { get; set; } = SmartDictionarySourceLanguages.Auto;
     public string SmartDictionaryFallbackMode { get; set; } = SmartDictionaryFallbackModes.Never;
     public bool SmartDictionaryKeepWarm { get; set; } = true;
+    public string SmartPhraseTranslationMode { get; set; } = SmartPhraseTranslationModes.Off;
 
     // Optional Textractor text hook (roadmap #4). Off by default: OCR stays
     // the universal path; the hook only upgrades hover context for games it
@@ -137,6 +140,36 @@ public static class SmartDictionaryFallbackModes
             ? Automatic
             : Never;
     }
+}
+
+public static class SmartDictionaryRankerModels
+{
+    public const string GlossBert = "glossbert";
+    public const string Sandwich = "sandwich";
+    public const string Consec = "consec";
+
+    public static string Normalize(string? value)
+    {
+        if (string.Equals(value, Sandwich, StringComparison.OrdinalIgnoreCase))
+        {
+            return Sandwich;
+        }
+
+        return string.Equals(value, Consec, StringComparison.OrdinalIgnoreCase)
+            ? Consec
+            : GlossBert;
+    }
+}
+
+public static class SmartPhraseTranslationModes
+{
+    public const string Off = "off";
+    public const string TranslateGemma = "translategemma-4b";
+
+    public static string Normalize(string? value) =>
+        string.Equals(value, TranslateGemma, StringComparison.OrdinalIgnoreCase)
+            ? TranslateGemma
+            : Off;
 }
 
 public sealed class AutomationProfile : INotifyPropertyChanged

@@ -72,6 +72,8 @@ public partial class HoverTranslationOverlay : Window
         TranslationText.FontWeight = FontWeights.Normal;
         TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0x91, 0x87, 0x70));
         HintText.Visibility = Visibility.Collapsed;
+        PhrasePanel.Visibility = Visibility.Collapsed;
+        PhraseTranslationText.Text = string.Empty;
         Width = PreferredWidth(
             normalizedSource,
             TranslationText.Text,
@@ -90,7 +92,8 @@ public partial class HoverTranslationOverlay : Window
         bool isPhrase = false,
         string? language = null,
         double? confidence = null,
-        HoverTextSource textSource = HoverTextSource.Ocr)
+        HoverTextSource textSource = HoverTextSource.Ocr,
+        SmartHoverPhraseLine? phraseLine = null)
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
@@ -133,12 +136,14 @@ public partial class HoverTranslationOverlay : Window
 
         SourceText.Text = normalizedSource;
         SourceText.FontSize = SourceFontSize(normalizedSource);
+        string phraseDisplayText = ConfigurePhraseLine(phraseLine);
         Width = PreferredWidth(
             normalizedSource,
             normalizedTranslation,
             dictionaryMode || smartMode,
             ModeText.Text,
-            MetaText.Text);
+            MetaText.Text,
+            phraseDisplayText);
 
         bool smartCandidatesPending =
             smartMode &&
@@ -193,7 +198,8 @@ public partial class HoverTranslationOverlay : Window
         string translation,
         bool dictionaryMode,
         string? modeLabel = null,
-        string? metaLabel = null)
+        string? metaLabel = null,
+        string? phraseTranslation = null)
     {
         int sourceLength = source.Trim().Length;
         string[] visibleMeanings = translation
@@ -220,17 +226,59 @@ public partial class HoverTranslationOverlay : Window
         }
         else
         {
-            int totalLength = sourceLength + translationLength;
-            contentWidth = totalLength switch
-            {
-                <= 100 => 320,
-                <= 230 => 376,
-                _ => MaximumOverlayWidth
-            };
+            contentWidth = NonDictionaryContentWidth(sourceLength, translationLength);
+        }
+
+        if (!string.IsNullOrWhiteSpace(phraseTranslation))
+        {
+            double phraseWidth = NonDictionaryContentWidth(
+                sourceLength,
+                phraseTranslation.Trim().Length);
+            contentWidth = Math.Max(contentWidth, phraseWidth);
         }
 
         double headerWidth = PreferredHeaderWidth(modeLabel, metaLabel);
         return Math.Min(MaximumOverlayWidth, Math.Max(contentWidth, headerWidth));
+    }
+
+    private string ConfigurePhraseLine(SmartHoverPhraseLine? phraseLine)
+    {
+        if (phraseLine is null)
+        {
+            PhrasePanel.Visibility = Visibility.Collapsed;
+            PhraseTranslationText.Text = string.Empty;
+            return string.Empty;
+        }
+
+        bool translated =
+            phraseLine.Status == SmartPhraseLineStatus.Translated &&
+            !string.IsNullOrWhiteSpace(phraseLine.Translation);
+        string displayText = translated
+            ? phraseLine.Translation.Trim()
+            : "Перевод фразы недоступен";
+        PhraseTranslationText.Text = displayText;
+        PhraseTranslationText.FontSize = translated ? 14.5 : 11.5;
+        PhraseTranslationText.FontWeight = translated
+            ? FontWeights.SemiBold
+            : FontWeights.Normal;
+        PhraseTranslationText.Foreground = new SolidColorBrush(translated
+            ? MediaColor.FromRgb(0x2E, 0x2A, 0x22)
+            : MediaColor.FromRgb(0xA0, 0x96, 0x7F));
+        PhrasePanel.Visibility = Visibility.Visible;
+        return displayText;
+    }
+
+    private static double NonDictionaryContentWidth(
+        int sourceLength,
+        int translationLength)
+    {
+        int totalLength = sourceLength + translationLength;
+        return totalLength switch
+        {
+            <= 100 => 320,
+            <= 230 => 376,
+            _ => MaximumOverlayWidth
+        };
     }
 
     internal static double PreferredHeaderWidth(string? modeLabel, string? metaLabel)

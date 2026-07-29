@@ -28,9 +28,11 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import os
 import random
 import re
 import sys
+import tempfile
 import unicodedata
 from collections import defaultdict
 from pathlib import Path
@@ -117,6 +119,57 @@ STOP_WORDS = frozenset(
     """a an and are as at be by for from had has have in into is it its of on or
     that the this to was were which who with without not no such other any""".split()
 )
+
+
+def _semantic_training_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFC", value).replace("\u2019", "'")
+    return " ".join(normalized.split()).casefold()
+
+
+def semantic_group_key(group: dict) -> str:
+    """Match trainer v2 identity without depending on generation order."""
+
+    identity = {
+        "lemma": _semantic_training_text(group["lemma"]),
+        "surface": _semantic_training_text(group["surface"]),
+        "textA": _semantic_training_text(group["text_a"]),
+        "candidates": sorted(
+            (
+                {
+                    "textB": _semantic_training_text(pair["text_b"]),
+                    "label": int(pair["label"]),
+                }
+                for pair in group["pairs"]
+            ),
+            key=lambda item: (item["textB"], item["label"]),
+        ),
+    }
+    return json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def write_grouped_jsonl_atomic(output: Path, groups: list[dict]) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            delete=False,
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+        ) as handle:
+            temporary = Path(handle.name)
+            for group in groups:
+                handle.write(json.dumps(group, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output)
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _load_builder():
@@ -412,6 +465,7 @@ def build(arguments: argparse.Namespace) -> int:
                 record["examples"].append(unicodedata.normalize("NFC", text))
 
     groups: list[dict] = []
+    seen_group_keys: set[str] = set()
     random.seed(arguments.seed)
     for lemma, senses in lemmas.items():
         if arguments.shipped_only:
@@ -517,6 +571,11 @@ def build(arguments: argparse.Namespace) -> int:
                             "label": 1 if index == 0 else 0,
                         }
                     )
+                semantic_key = semantic_group_key(group)
+                if semantic_key in seen_group_keys:
+                    statistics["duplicate_groups"] += 1
+                    continue
+                seen_group_keys.add(semantic_key)
                 groups.append(group)
                 statistics["positives"] += 1
                 statistics["negatives"] += len(negatives)
@@ -531,10 +590,7 @@ def build(arguments: argparse.Namespace) -> int:
         groups = groups[: arguments.max_groups]
 
     output = Path(arguments.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    with output.open("w", encoding="utf-8", newline="\n") as handle:
-        for group in groups:
-            handle.write(json.dumps(group, ensure_ascii=False) + "\n")
+    write_grouped_jsonl_atomic(output, groups)
 
     train = sum(1 for group in groups if group["split"] == "train")
     matched = statistics["shipped_definitions_matched"]
@@ -554,6 +610,7 @@ def build(arguments: argparse.Namespace) -> int:
     print(f"dropped: no surface      : {statistics['examples_without_surface']}")
     print(f"dropped: overlaps gloss  : {statistics['examples_overlapping_definition']}")
     print(f"dropped: length          : {statistics['examples_out_of_range']}")
+    print(f"dropped: exact duplicate : {statistics['duplicate_groups']}")
     if total:
         print(
             f"sidecar parity           : {matched}/{total} definitions "
@@ -563,6 +620,91 @@ def build(arguments: argparse.Namespace) -> int:
         print(f"excluded from            : {note}")
     print(f"excluded lemmas          : {len(excluded)}")
     return 0
+
+
+def sanitize_existing(arguments: argparse.Namespace) -> int:
+    """Deterministically deduplicate an already generated grouped JSONL."""
+
+    source = Path(arguments.sanitize_existing)
+    reject_holdouts([source])
+    output = Path(arguments.output)
+    if source.expanduser().resolve() == output.expanduser().resolve():
+        raise SystemExit(
+            "--sanitize-existing requires a distinct --output for atomic review"
+        )
+    groups: list[dict] = []
+    seen: set[str] = set()
+    lemma_splits: dict[str, str] = {}
+    duplicates = 0
+    for line_number, group in enumerate(iter_entries(source, None), start=1):
+        try:
+            split = group["split"]
+            lemma = group["lemma"]
+            pairs = group["pairs"]
+            key = semantic_group_key(group)
+        except (KeyError, TypeError, ValueError) as error:
+            raise SystemExit(
+                f"{source}:{line_number}: malformed grouped record: {error}"
+            ) from error
+        if split not in {"train", "valid"}:
+            raise SystemExit(
+                f"{source}:{line_number}: split must be train or valid"
+            )
+        lemma_key = _semantic_training_text(str(lemma))
+        previous = lemma_splits.setdefault(lemma_key, split)
+        if previous != split:
+            raise SystemExit(
+                f"{source}:{line_number}: lemma {lemma!r} leaks across splits"
+            )
+        if not isinstance(pairs, list) or len(pairs) < 2:
+            raise SystemExit(f"{source}:{line_number}: invalid candidate group")
+        if sum(pair.get("label") == 1 for pair in pairs) != 1:
+            raise SystemExit(
+                f"{source}:{line_number}: expected exactly one positive"
+            )
+        candidate_keys = [
+            _semantic_training_text(str(pair.get("text_b", "")))
+            for pair in pairs
+        ]
+        if "" in candidate_keys or len(candidate_keys) != len(set(candidate_keys)):
+            raise SystemExit(
+                f"{source}:{line_number}: empty or duplicate candidate gloss"
+            )
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        groups.append(group)
+    if arguments.max_groups:
+        groups = groups[: arguments.max_groups]
+    write_grouped_jsonl_atomic(output, groups)
+    train = sum(group["split"] == "train" for group in groups)
+    print(f"groups written           : {len(groups)} (train {train}, valid {len(groups) - train})")
+    print(f"dropped: exact duplicate : {duplicates}")
+    return 0
+
+
+def run_self_checks() -> None:
+    first = {
+        "lemma": "Joe",
+        "surface": "Joe",
+        "text_a": "I'm an ordinary \"Joe\".",
+        "pairs": [
+            {"text_b": "Joe: a fellow", "label": 1},
+            {"text_b": "Joe: a name", "label": 0},
+        ],
+    }
+    reordered = {
+        "lemma": "joe",
+        "surface": "joe",
+        "text_a": "I'm an ordinary \"joe\".",
+        "pairs": list(reversed(first["pairs"])),
+    }
+    assert semantic_group_key(first) == semantic_group_key(reordered)
+    changed_label = json.loads(json.dumps(reordered))
+    changed_label["pairs"][0]["label"] = 1
+    assert semantic_group_key(first) != semantic_group_key(changed_label)
+    print("WSD dataset builder self-checks: OK")
 
 
 def main() -> int:
@@ -600,10 +742,21 @@ def main() -> int:
         help="Keep only senses present in the shipped sidecar (inference inventory).",
     )
     parser.add_argument("--output", default="artifacts/wsd-training-set.jsonl")
+    parser.add_argument(
+        "--sanitize-existing",
+        help="Deduplicate and validate an existing grouped training JSONL.",
+    )
     parser.add_argument("--max-entries", type=int, default=None)
     parser.add_argument("--max-groups", type=int, default=None)
     parser.add_argument("--seed", type=int, default=20260726)
-    return build(parser.parse_args())
+    parser.add_argument("--self-check", action="store_true")
+    arguments = parser.parse_args()
+    if arguments.self_check:
+        run_self_checks()
+        return 0
+    if arguments.sanitize_existing:
+        return sanitize_existing(arguments)
+    return build(arguments)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
-# GlossBERT ranker worker
+# Semantic ranker worker
 
 This process isolates the dictionary word-sense model from the UI process so
-its memory can be reclaimed completely. It implements JSON Lines protocol v2:
+its memory can be reclaimed completely. It implements JSON Lines protocol v4:
 one request always produces exactly one response.
 
 The pinned model is `kanishka/GlossBERT` revision
@@ -41,6 +41,116 @@ The worker validates both length and SHA-256 before loading any artifact:
 The CPU path is explicitly pinned to `Microsoft.ML.OnnxRuntime` 1.27.1 and
 uses the unquantized FP32 reference graph. The previous full dynamic-INT8
 artifact was removed because it changed both top choices and score margins.
+
+## SANDWiCH CPU profile
+
+`--provider cpu --cpu-model sandwich` selects the upstream NAACL 2025
+SANDWiCH ensemble. It is deliberately CPU-only and requires this exact
+out-of-band bundle beneath `--model-directory`:
+
+```text
+Models/
+  Sandwich/
+    model-manifest.json
+    tokenizer.json
+    Cpu/
+      encoder-nv-fp32.onnx
+      encoder-v-fp32.onnx
+```
+
+The worker validates all three files by byte length and SHA-256 before either
+session is created. Both ONNX files must load; there is no single-encoder or
+GlossBERT fallback.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Sandwich/tokenizer.json` | 8,656,779 | `2689db9b56b94ae9fac86daeb5fe7df0be0c5f1a9dce76a0edda7afa93dd1304` |
+| `Sandwich/Cpu/encoder-nv-fp32.onnx` | 568,094,742 | `b6a21c42c974f145a39a20e5c5b62b740cb0b63ed698499fa4c5e4b397998739` |
+| `Sandwich/Cpu/encoder-v-fp32.onnx` | 568,094,742 | `21b778dc9552f84732d1061ca1ace23f9f6c071e68fe4ab0615109f192e78f6b` |
+
+The immutable runtime identity is:
+
+```text
+SANDWiCH:naacl-2025:singleton-gloss:m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:s512:c2:p1:pipeline-sandwich
+```
+
+The `singleton-gloss` adapter is important: Asteria does not install or ship
+the upstream BabelNet-derived definition/neighbour files. Instead, every
+existing English candidate gloss is one ensemble member and the existing
+stable `candidateGroupIds` are its neighbourhood clusters. This keeps the
+dictionary-layer contract intact and lets the selected stable outcome feed
+the full-text TranslateGemma scaffold without exposing BabelNet data.
+
+SANDWiCH input uses the exact hovered target occurrence delimited by literal
+`[D]` tokens. For each gloss, both encoders produce a two-class softmax and
+the positive probabilities are averaged. Within each stable group, member
+weights are `softmax(abs(2p-1))`; the weighted member probabilities produce
+the group score. The best/second group-score margin then goes through the same
+sole `0.25` abstention threshold as the other rankers. Every selection response
+reports `pipeline: "sandwich"`.
+
+The upstream repository declares model and code MIT. Its optional data extracts
+are governed by the BabelNet non-commercial license; they are intentionally
+absent from this profile. The tracked reproducible-export provenance is in
+`Models/Sandwich/model-manifest.json`.
+
+## ConSeC CPU profile
+
+`--provider cpu --cpu-model consec` selects the official ConSeC-SemCor+WNGT
+checkpoint through Asteria's independent positional-extractor adapter. It is
+CPU-only, CC BY-NC-SA 4.0 and requires the separately installed personal
+scientific/non-commercial bundle:
+
+```text
+Models/
+  Consec/
+    model-manifest.json
+    tokenizer.json
+    Cpu/
+      consec-wngt-fp32.onnx
+      consec-wngt-fp32.onnx.data
+```
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `Consec/tokenizer.json` | 3,560,546 | `df91c443c8eac73a42ff72086f25b16ad3b244ae2bf0303625298265d50f73f1` |
+| `Consec/Cpu/consec-wngt-fp32.onnx` | 843,194 | `0eb0688f3fd2af67c6e2155daeed0fec5c5b2f1c7037b91ba526d50516c630ad` |
+| `Consec/Cpu/consec-wngt-fp32.onnx.data` | 1,621,487,616 | `1257dc55ebec8886b7f5af4867f684ae44c7be4308e75b1251963595354011b9` |
+| `Consec/model-manifest.json` | 4,407 | `13a8a14e3938d4f20519f7da79a51f75543eced352bd39456b5a43c4d93402b8` |
+
+All four paths, sizes, hashes, manifest fields and tokenizer special IDs are
+validated before the ONNX session is created. Read leases remain alive for the
+graph and external-data file while inference is possible, so neither can be
+replaced after validation. No ConSeC request can run on NPU or fall back to
+GlossBERT.
+
+The immutable runtime identity is:
+
+```text
+ConSeC:WNGT:9602b5fd:adapter-consec-wngt-positional-extractor-v1:g-0eb0688f3fd2:d-1257dc55ebec:t-df91c443c8ea:pretokenizer-v3:context-full-v1:s512:pipeline-consec-independent
+```
+
+The worker preserves the raw sentence and resolves the requested target span
+from the canonical anchor index. It then builds upstream `<d>...</d>`,
+`CONTEXT_DEFS`, `DEF_SEP` and `DEF_END` inputs and reads logits at candidate
+marker positions. Definition preprocessing preserves the official Python order
+`capitalize()` then `strip('.')`; lowercase Unicode letters in the tail are
+preserved unchanged, while unsupported non-ASCII case mappings fail closed
+instead of silently drifting from the pinned Python 3.9 tables. Independent
+mode passes no previous-sense feedback; each
+stable GroupId receives the maximum probability of its definitions before the
+same sole `0.25` margin threshold. Sequences over 512 tokens fail explicitly;
+there is no silent truncation. Responses report `pipeline:
+"consec-independent"`.
+
+The exact official Transformers 4.3.3 preprocessing/model path passed the
+external reference gate for dialogue and scientific fixtures: input hashes and
+choices were identical, while complete-logit maximum deltas were `3.10e-6` and
+`5.01e-6`. The scientific fixture deliberately contains mixed-case `PCR DNA`
+and therefore also pins upstream Python `str.capitalize()` preprocessing and
+its ordering relative to literal-dot stripping. The
+bound golden proof is
+`tools/consec-upstream-reference-golden.json`.
 
 ## Sense-selection contract
 
@@ -86,8 +196,11 @@ fails initialization. The provider/device reported over the protocol is
 
 ```powershell
 dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --smoke
+dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --cpu-model sandwich --model-directory src/AsteriaScale.RankerWorker/Models --smoke
+dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider npu --smoke
 ```
 
-Both checks must select the river-bank sense, report protocol v2 and the pinned
-model-version prefix, and finish without fallback.
+Every check must report the current protocol, exact pinned model identity and
+pipeline, and finish without fallback. The model-specific regression suite
+asserts the expected selected GroupId and margin behavior.

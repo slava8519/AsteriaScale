@@ -18,7 +18,17 @@ public sealed class AutoScaleService : IAsyncDisposable
     private DateTime _candidateSince;
     private nint _lastTriggeredHandle;
     private Task? _activeTick;
+    private bool _desktopCursorOverrideActive;
+    private bool _magnificationInitialized;
     private bool _disposed;
+
+    internal enum DesktopCursorAction
+    {
+        None,
+        Show,
+        Hide,
+        Release
+    }
 
     public AutoScaleService(
         AppSettings settings,
@@ -88,11 +98,27 @@ public sealed class AutoScaleService : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         // Magpie keeps the system cursor hidden while it draws its scaled
-        // cursor. Minimized and virtual-desktop source windows intentionally
-        // remain scaled upstream, so Asteria must end its owned session.
+        // cursor. A desktop-only visibility override preserves the running
+        // session across Win+D without leaving Windows without a cursor.
         bool isScaling = _engine.IsScaling;
         _timer.Interval = PollingIntervalFor(isScaling);
-        if (isScaling && (IsDesktopForeground() || _engine.IsScalingSourceLost))
+        bool isDesktopForeground = isScaling && IsDesktopForeground();
+        if (!UpdateDesktopCursorOverride(
+                PlanDesktopCursorAction(
+                    isScaling,
+                    isDesktopForeground,
+                    isScaling && _engine.IsScalingSourceForeground,
+                    _desktopCursorOverrideActive)))
+        {
+            StatusChanged?.Invoke(this, "Не удалось вернуть курсор Windows — масштабирование остановлено");
+            await _engine.StopScalingAsync(cancellationToken);
+            return;
+        }
+
+        if (ShouldStopForUnavailableSource(
+                isScaling,
+                isDesktopForeground,
+                isScaling && _engine.IsScalingSourceLost))
         {
             await _engine.StopScalingAsync(cancellationToken);
             return;
@@ -172,6 +198,84 @@ public sealed class AutoScaleService : IAsyncDisposable
     internal static bool IsDesktopWindowClass(string className) =>
         className is "Progman" or "WorkerW" or "Shell_TrayWnd";
 
+    internal static DesktopCursorAction PlanDesktopCursorAction(
+        bool isScaling,
+        bool isDesktopForeground,
+        bool isSourceForeground,
+        bool overrideActive)
+    {
+        if (isScaling && isDesktopForeground)
+        {
+            return overrideActive ? DesktopCursorAction.None : DesktopCursorAction.Show;
+        }
+
+        if (!overrideActive)
+        {
+            return DesktopCursorAction.None;
+        }
+
+        if (!isScaling)
+        {
+            return DesktopCursorAction.Release;
+        }
+
+        return isSourceForeground ? DesktopCursorAction.Hide : DesktopCursorAction.None;
+    }
+
+    internal static bool ShouldStopForUnavailableSource(
+        bool isScaling,
+        bool isDesktopForeground,
+        bool isSourceLost) =>
+        isScaling && isSourceLost && !isDesktopForeground;
+
+    private bool UpdateDesktopCursorOverride(DesktopCursorAction action)
+    {
+        switch (action)
+        {
+            case DesktopCursorAction.None:
+                return true;
+            case DesktopCursorAction.Show:
+                if (!TrySetSystemCursorVisible(visible: true))
+                {
+                    return false;
+                }
+
+                _desktopCursorOverrideActive = true;
+                return true;
+            case DesktopCursorAction.Hide:
+                if (TrySetSystemCursorVisible(visible: false))
+                {
+                    _desktopCursorOverrideActive = false;
+                }
+
+                // A visible cursor is safer than hiding it when ownership is uncertain.
+                return true;
+            case DesktopCursorAction.Release:
+                if (TrySetSystemCursorVisible(visible: true))
+                {
+                    _desktopCursorOverrideActive = false;
+                }
+
+                return true;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(action));
+        }
+    }
+
+    private bool TrySetSystemCursorVisible(bool visible)
+    {
+        if (!_magnificationInitialized)
+        {
+            _magnificationInitialized = NativeMethods.MagInitialize();
+            if (!_magnificationInitialized)
+            {
+                return false;
+            }
+        }
+
+        return NativeMethods.MagShowSystemCursor(visible);
+    }
+
     internal static TimeSpan PollingIntervalFor(bool isScaling) =>
         isScaling ? ScalingPollingInterval : IdlePollingInterval;
 
@@ -201,6 +305,18 @@ public sealed class AutoScaleService : IAsyncDisposable
             {
                 // The observer already reports operational failures; shutdown only drains the task.
             }
+        }
+
+        if (_desktopCursorOverrideActive && _magnificationInitialized)
+        {
+            NativeMethods.MagShowSystemCursor(true);
+            _desktopCursorOverrideActive = false;
+        }
+
+        if (_magnificationInitialized)
+        {
+            NativeMethods.MagUninitialize();
+            _magnificationInitialized = false;
         }
 
         _lifetimeCancellation.Dispose();

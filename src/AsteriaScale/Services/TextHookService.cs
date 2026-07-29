@@ -17,7 +17,10 @@ namespace AsteriaScale.Services;
 public sealed partial class TextHookService : IAsyncDisposable
 {
     private const int MaximumSentences = 32;
+    internal const int MaximumContextSentences = 3;
+    internal const int MaximumContextCharacters = 1_200;
     private static readonly TimeSpan SentenceLifetime = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ContextLifetime = TimeSpan.FromMinutes(2);
 
     private readonly AppSettings _settings;
     private readonly object _gate = new();
@@ -232,8 +235,11 @@ public sealed partial class TextHookService : IAsyncDisposable
 
         lock (_gate)
         {
-            foreach (HookSentence sentence in _recent)
+            for (LinkedListNode<HookSentence>? node = _recent.First;
+                 node is not null;
+                 node = node.Next)
             {
+                HookSentence sentence = node.Value;
                 if (nowUtc - sentence.ReceivedUtc > SentenceLifetime)
                 {
                     break;
@@ -246,7 +252,13 @@ public sealed partial class TextHookService : IAsyncDisposable
                         preferredOccurrenceOrdinal,
                         out int characterIndex))
                 {
-                    return new TextHookMatch(sentence.Text, characterIndex);
+                    return new TextHookMatch(sentence.Text, characterIndex)
+                    {
+                        PreviousContext = CollectPreviousContext(
+                            node,
+                            sentence,
+                            nowUtc)
+                    };
                 }
             }
         }
@@ -289,6 +301,7 @@ public sealed partial class TextHookService : IAsyncDisposable
             return;
         }
 
+        string streamIdentity = line[..(headerEnd + 1)];
         string sentence = string.Join(
             " ",
             line[(headerEnd + 1)..].Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -314,7 +327,11 @@ public sealed partial class TextHookService : IAsyncDisposable
                 return;
             }
 
-            _recent.AddFirst(new HookSentence(processId, sentence, receivedUtc));
+            _recent.AddFirst(new HookSentence(
+                processId,
+                streamIdentity,
+                sentence,
+                receivedUtc));
             while (_recent.Count > MaximumSentences)
             {
                 _recent.RemoveLast();
@@ -767,10 +784,62 @@ public sealed partial class TextHookService : IAsyncDisposable
         return null;
     }
 
+    private static IReadOnlyList<string> CollectPreviousContext(
+        LinkedListNode<HookSentence> currentNode,
+        HookSentence current,
+        DateTime nowUtc)
+    {
+        List<string> newestFirst = [];
+        HashSet<string> seen = new(StringComparer.Ordinal)
+        {
+            current.Text
+        };
+        int characters = 0;
+        for (LinkedListNode<HookSentence>? node = currentNode.Next;
+             node is not null && newestFirst.Count < MaximumContextSentences;
+             node = node.Next)
+        {
+            HookSentence candidate = node.Value;
+            if (nowUtc - candidate.ReceivedUtc > ContextLifetime)
+            {
+                break;
+            }
+
+            if (candidate.ProcessId != current.ProcessId ||
+                !string.Equals(
+                    candidate.StreamIdentity,
+                    current.StreamIdentity,
+                    StringComparison.Ordinal) ||
+                !seen.Add(candidate.Text))
+            {
+                continue;
+            }
+
+            int nextCharacters = characters + candidate.Text.Length;
+            if (nextCharacters > MaximumContextCharacters)
+            {
+                continue;
+            }
+
+            newestFirst.Add(candidate.Text);
+            characters = nextCharacters;
+        }
+
+        newestFirst.Reverse();
+        return Array.AsReadOnly(newestFirst.ToArray());
+    }
+
     [GeneratedRegex(@"[\p{L}\p{M}]+(?:['’\-][\p{L}\p{M}]+)*", RegexOptions.CultureInvariant)]
     private static partial Regex WordRegex();
 
-    private sealed record HookSentence(int ProcessId, string Text, DateTime ReceivedUtc);
+    private sealed record HookSentence(
+        int ProcessId,
+        string StreamIdentity,
+        string Text,
+        DateTime ReceivedUtc);
 }
 
-internal sealed record TextHookMatch(string Text, int CharacterIndex);
+internal sealed record TextHookMatch(string Text, int CharacterIndex)
+{
+    public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
+}

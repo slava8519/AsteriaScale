@@ -24,7 +24,12 @@ internal sealed record HoverOcrResult(
     string HoveredWord,
     int CharacterIndex,
     Drawing.Rectangle CaptureBounds,
-    HoverTextSource TextSource = HoverTextSource.Ocr);
+    HoverTextSource TextSource = HoverTextSource.Ocr)
+{
+    // Context is populated only by a process- and hook-stream-scoped
+    // Textractor match. It is never rendered as part of the current reply.
+    public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
+}
 
 internal sealed record HoverOcrDiagnostic(HoverOcrResult? Selection, string Details);
 
@@ -576,50 +581,13 @@ internal sealed class WindowsAiOcrService : IDisposable
         }
 
         int anchor = Math.Clamp(characterIndex, 0, text.Length - 1);
-        int start = 0;
-        for (int index = anchor - 1; index >= 0; index--)
+        (int start, int end) = SentenceBoundaryRules.FindContainingSpan(
+            text,
+            anchor,
+            anchor);
+        while (end < text.Length && IsClosingQuote(text[end]))
         {
-            if (!IsSentenceTerminator(text[index]))
-            {
-                continue;
-            }
-
-            int runStart = TerminatorRunStart(text, index);
-            int runEnd = TerminatorRunEnd(text, runStart);
-            if (!ClosesUtterance(text, runStart, runEnd))
-            {
-                // Skip the whole run, not one character: otherwise the next
-                // iteration lands on the previous dot of the same ellipsis.
-                index = runStart;
-                continue;
-            }
-
-            start = runEnd;
-            break;
-        }
-
-        int end = text.Length;
-        for (int index = anchor; index < text.Length; index++)
-        {
-            if (!IsSentenceTerminator(text[index]))
-            {
-                continue;
-            }
-
-            int runEnd = TerminatorRunEnd(text, index);
-            if (!ClosesUtterance(text, index, runEnd))
-            {
-                index = runEnd - 1;
-                continue;
-            }
-
-            end = runEnd;
-            while (end < text.Length && IsClosingQuote(text[end]))
-            {
-                end++;
-            }
-
-            break;
+            end++;
         }
 
         while (start < end && char.IsWhiteSpace(text[start]))
@@ -676,80 +644,6 @@ internal sealed class WindowsAiOcrService : IDisposable
         double leftTolerance = Math.Max(160, Math.Max(upperHeight, lowerHeight) * 3);
         return overlap / narrowerWidth >= 0.35 || Math.Abs(upper.Left - lower.Left) <= leftTolerance;
     }
-
-    /// <summary>
-    /// End of the terminator run starting at <paramref name="index"/>, treating
-    /// consecutive dots and the unicode ellipsis as one mark. Visual novels use
-    /// "..." constantly, and scanning it as three full stops handed the
-    /// translator a fragment (roadmap 14.3).
-    /// </summary>
-    private static int TerminatorRunEnd(string text, int index)
-    {
-        int end = index + 1;
-        if (text[index] is not ('.' or '…'))
-        {
-            return end;
-        }
-
-        while (end < text.Length && text[end] is '.' or '…')
-        {
-            end++;
-        }
-
-        return end;
-    }
-
-    private static int TerminatorRunStart(string text, int index)
-    {
-        if (text[index] is not ('.' or '…'))
-        {
-            return index;
-        }
-
-        int start = index;
-        while (start > 0 && text[start - 1] is '.' or '…')
-        {
-            start--;
-        }
-
-        return start;
-    }
-
-    /// <summary>
-    /// Whether a terminator run really ends the utterance. A single full stop
-    /// or an exclamation always does. An ellipsis only does when what follows
-    /// starts a new reply — a capital letter or an opening quote — because
-    /// mid-utterance hesitation ("I... don't know") is one line, while
-    /// "I don't know... Maybe" is two.
-    /// </summary>
-    private static bool ClosesUtterance(string text, int runStart, int runEnd)
-    {
-        bool ellipsis = text[runStart] is '.' or '…' &&
-                        (runEnd - runStart > 1 || text[runStart] == '…');
-        if (!ellipsis)
-        {
-            return true;
-        }
-
-        int next = runEnd;
-        while (next < text.Length && char.IsWhiteSpace(text[next]))
-        {
-            next++;
-        }
-
-        if (next >= text.Length)
-        {
-            return true;
-        }
-
-        return char.IsUpper(text[next]) || IsOpeningQuote(text[next]);
-    }
-
-    private static bool IsOpeningQuote(char character) =>
-        character is '"' or '‘' or '“' or '«' or '「' or '『';
-
-    private static bool IsSentenceTerminator(char character) =>
-        character is '.' or '!' or '?' or '\u3002' or '\uFF01' or '\uFF1F';
 
     private static bool IsClosingQuote(char character) =>
         character is '"' or '\'' or '\u2019' or '\u201D' or '\u00BB' or '\u300D' or '\u300F' or '\u3011';

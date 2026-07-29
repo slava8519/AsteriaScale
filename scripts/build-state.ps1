@@ -121,11 +121,61 @@ function Get-AsteriaSourceFingerprint {
     }
 }
 
+function Get-AsteriaSandwichBundleRelativeFiles {
+    return @(
+        "tokenizer.json",
+        "model-manifest.json",
+        "Cpu\encoder-nv-fp32.onnx",
+        "Cpu\encoder-v-fp32.onnx"
+    )
+}
+
+function Test-AsteriaSandwichBundleComplete {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $bundle = Join-Path $Root "src\AsteriaScale.RankerWorker\Models\Sandwich"
+    foreach ($relativePath in Get-AsteriaSandwichBundleRelativeFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $bundle $relativePath) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Get-AsteriaConsecBundleRelativeFiles {
+    return @(
+        "tokenizer.json",
+        "model-manifest.json",
+        "Cpu\consec-wngt-fp32.onnx",
+        "Cpu\consec-wngt-fp32.onnx.data"
+    )
+}
+
+function Test-AsteriaConsecBundleComplete {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $bundle = Join-Path $Root "src\AsteriaScale.RankerWorker\Models\Consec"
+    foreach ($relativePath in Get-AsteriaConsecBundleRelativeFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $bundle $relativePath) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
 function Get-AsteriaRequiredRankerFiles {
-    param([Parameter(Mandatory = $true)][string]$Output)
+    param(
+        [Parameter(Mandatory = $true)][string]$Output,
+        [string]$Root = "",
+        [switch]$IncludeExperimentalSandwichModel,
+        [switch]$IncludeExperimentalConsecModel
+    )
 
     $models = Join-Path $Output "Ranker\Models"
-    return @(
+    $required = [Collections.Generic.List[string]]::new()
+    foreach ($path in @(
         (Join-Path $Output "Ranker\AsteriaScale.RankerWorker.exe"),
         (Join-Path $models "GlossBert\tokenizer.json"),
         (Join-Path $models "GlossBert\Cpu\glossbert-fp32-dynamic.onnx"),
@@ -135,7 +185,31 @@ function Get-AsteriaRequiredRankerFiles {
         (Join-Path $models "GlossEmbeddings\eng-senses.vec"),
         (Join-Path $models "GlossEmbeddings\minilm-l6-v2.onnx"),
         (Join-Path $models "GlossEmbeddings\tokenizer.json")
-    )
+    )) {
+        $required.Add($path)
+    }
+
+    $includeSandwich = $IncludeExperimentalSandwichModel -or
+        (-not [string]::IsNullOrWhiteSpace($Root) -and
+            (Test-AsteriaSandwichBundleComplete -Root $Root))
+    if ($includeSandwich) {
+        $sandwichOutput = Join-Path $models "Sandwich"
+        foreach ($relativePath in Get-AsteriaSandwichBundleRelativeFiles) {
+            $required.Add((Join-Path $sandwichOutput $relativePath))
+        }
+    }
+
+    $includeConsec = $IncludeExperimentalConsecModel -or
+        (-not [string]::IsNullOrWhiteSpace($Root) -and
+            (Test-AsteriaConsecBundleComplete -Root $Root))
+    if ($includeConsec) {
+        $consecOutput = Join-Path $models "Consec"
+        foreach ($relativePath in Get-AsteriaConsecBundleRelativeFiles) {
+            $required.Add((Join-Path $consecOutput $relativePath))
+        }
+    }
+
+    return $required
 }
 
 <#
@@ -152,7 +226,9 @@ silently fall outside the check.
 function Get-AsteriaRequiredDistFiles {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string]$Output
+        [Parameter(Mandatory = $true)][string]$Output,
+        [switch]$IncludeExperimentalSandwichModel,
+        [switch]$IncludeExperimentalConsecModel
     )
 
     $required = [Collections.Generic.List[string]]::new()
@@ -162,7 +238,11 @@ function Get-AsteriaRequiredDistFiles {
     $required.Add((Join-Path $Output "Dictionaries\README.md"))
     $required.Add((Join-Path $Output "Dictionaries\vn-build-manifest.json"))
     $required.Add((Join-Path $Output "Dictionaries\vn-sources.lock.json"))
-    foreach ($rankerFile in Get-AsteriaRequiredRankerFiles -Output $Output) {
+    foreach ($rankerFile in Get-AsteriaRequiredRankerFiles `
+        -Output $Output `
+        -Root $Root `
+        -IncludeExperimentalSandwichModel:$IncludeExperimentalSandwichModel `
+        -IncludeExperimentalConsecModel:$IncludeExperimentalConsecModel) {
         $required.Add($rankerFile)
     }
 

@@ -9,7 +9,10 @@
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
 | Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | только для полного/экранного перевода |
+| TranslateGemma 4B Q4_K_M + llama.cpp | b9632 | опционально, независимый перевод фразы второй строкой |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
+| SANDWiCH dual encoder | NAACL 2025, upstream `daca3cad…` | опционально, экспериментальный CPU semantic ranker |
+| ConSeC/WNGT | upstream `9602b5fd…`, CC BY-NC-SA 4.0 | опционально, личный научный/некоммерческий CPU ranker |
 | Python | 3.11+ (`python` в `PATH`) | для полного smoke-набора и регенерации артефактов |
 
 ## Артефакты модели GlossBERT
@@ -31,6 +34,276 @@ CPU bi-encoder bundle `Models/GlossEmbeddings` также обязателен. 
 командой из [assets/Ranker/README.md](../assets/Ranker/README.md): скрипт создаёт
 индекс и сам помещает проверенные ONNX/tokenizer в требуемый каталог.
 
+## Экспериментальный SANDWiCH CPU
+
+Готовый [SANDWiCH](https://github.com/danielguzmanolivares/sandwich) не заменяет
+GlossBERT по умолчанию. Он устанавливается отдельно: два официальных энкодера
+скачиваются из upstream-архива, проверяются по размеру/SHA-256, экспортируются в
+FP32 ONNX и ещё раз проверяются вместе с tokenizer и manifest. Веса, tokenizer
+и ONNX больше 100 МБ не входят в git.
+
+```powershell
+.\scripts\install-sandwich.cmd
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\verify-sandwich.ps1
+```
+
+Неинтерактивный личный/CI-запуск после отдельной проверки условий upstream:
+
+```powershell
+.\scripts\install-sandwich.cmd -AcceptUpstreamTerms
+```
+
+Установщик фиксирует принятие в локальном ignored-файле
+`Models/Sandwich/UPSTREAM_TERMS_ACCEPTED.json`, а архив кэширует в
+`%LOCALAPPDATA%\AsteriaScale\Downloads`. Он устанавливает только MIT-код и два
+официальных энкодера; BabelNet-derived `data/definitions` и `data/neighbours`
+не скачиваются и не входят в Asteria. Полная таблица исходных и экспортированных
+хешей приведена в [assets/Ranker/README.md](../assets/Ranker/README.md).
+
+После пересборки выберите в настройках умного словаря
+`SANDWiCH — исследовательский CPU`. Профиль CPU-only: если ранее был выбран NPU,
+UI явно переключит ускоритель на CPU. Скрытого fallback нет. Проверка через
+production benchmark:
+
+```powershell
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj `
+  -c Release --no-build -- --benchmark-only `
+  --ranker-benchmark assets/Ranker/ranker-benchmark.json dist/AsteriaScale cpu `
+  --ranker-cpu-model sandwich `
+  --dump artifacts/Ranker/sandwich-dev-dump.json `
+  --ranker-report artifacts/Ranker/sandwich-dev-report.json
+```
+
+Открытый dev-набор содержит `134` случая visual novel, манги, литературы и
+научных статей (`20` scientific cases). Каждый отчёт закрепляет точный SHA
+набора; frozen `ranker-holdout*.json` при A/B не открываются. Финальный same-build
+A/B и причина, по которой GlossBERT остаётся default, записаны в
+[RESEARCH.md](RESEARCH.md).
+
+Для sentence-level ConSeC и downstream-проверки TranslateGemma используется
+отдельный открытый `assets/Ranker/ranker-sentence-benchmark.json`: `46` случаев,
+из них `36` научных (ровно по шесть biology, medicine, physics, chemistry,
+statistics и computer science), `4` контекстных и `6` нарративных; `138` точных
+target spans / `276` sense groups и `19` случаев со скрытым `previousContext`.
+Две пары имеют байт-в-байт одинаковый current sentence, но разные историю и
+gold-смыслы. Gold-позиции сбалансированы `72/66`; `100` целей образуют
+surface-unambiguous WSD-срез, а `38` имеют естественно пересекающиеся русские
+поверхности. В обоих случаях считается выбранный sense GroupId: русский
+reference сохранён для будущего full-text A/B, но текущий runner его не
+оценивает. SHA-256 набора:
+`bed4c0211b1c8e79654c630d4dcb95625e32b07d099da872f1dd4e3154ec6bca`.
+Это dev/research-набор, не holdout; его schema и инвариант `GroupId == index`
+проверяет полный smoke-suite.
+
+## Исследовательский ConSeC CPU
+
+ConSeC/WNGT устанавливается отдельно и только после явного принятия
+CC BY-NC-SA 4.0. Checkpoint и полученный `1,62`-ГБ external-data ONNX остаются
+вне git и обычной публикации. Установщик проверяет точный четырёхфайловый
+контракт, защищает пути/reparse points и публикует bundle транзакционно. Он не
+скачивает checkpoint: `SourceBundle` сначала создаётся по
+[`tools/README-consec.md`](../tools/README-consec.md):
+
+```powershell
+.\scripts\install-consec.cmd `
+  -SourceBundle "$env:LOCALAPPDATA\AsteriaScale\Models\Consec-WNGT-ONNX"
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\verify-consec.ps1
+```
+
+Неинтерактивный запуск разрешён только после самостоятельного ознакомления с
+upstream terms:
+
+```powershell
+.\scripts\install-consec.cmd -AcceptUpstreamTerms `
+  -SourceBundle "$env:LOCALAPPDATA\AsteriaScale\Models\Consec-WNGT-ONNX"
+```
+
+После пересборки выберите `ConSeC — лучший для науки, CPU`. Профиль строго
+CPU-only, сообщает `pipeline=consec-independent`, сохраняет полное предложение
+и отказывается от входа длиннее 512 токенов вместо скрытого усечения или
+fallback. Exact model/cache identity и размеры/SHA приведены в
+[assets/Ranker/README.md](../assets/Ranker/README.md).
+
+Безопасный export и официальный reference gate описаны в
+[`tools/README-consec.md`](../tools/README-consec.md). Gate уже пройден против
+точного upstream Transformers 4.3.3: input hashes и choices совпали, max delta
+всех logits — `3,10e-6` на dialogue и `5,01e-6` на mixed-case scientific
+fixture.
+Встроенный независимый профиль доступен для исследования, но GlossBERT остаётся
+stable-default до feedback/joint planner и full-text A/B.
+
+## Закрытый эксперимент WSD/DeBERTa на RTX 5080
+
+**Новые прогоны собственного fine-tune больше не планируются.** Ниже сохранена
+воспроизводимая инструкция исторического эксперимента для аудита уже полученных
+результатов; она не является следующим шагом разработки. Итог эксперимента и
+причина перехода к готовым SANDWiCH/ConSeC зафиксированы в
+[RESEARCH.md](RESEARCH.md).
+
+На GPU-машину переносится не рабочая копия проекта, а минимальный проверяемый
+пакет: trainer, exact requirements и канонический
+`artifacts/wsd-train-shipped.jsonl`. На исходной машине выполните:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\package-wsd-ranker-training.ps1
+```
+
+Скрипт запускает `--self-check` и `--inspect-only`, проверяет точный FP32 trainer
+hash, записывает размеры, SHA-256, 27 перечислимых profiles и четыре непересекающиеся suites в
+`package-manifest.json`, а затем атомарно создаёт новый ZIP в `artifacts`.
+Модели, checkpoints и frozen holdout в пакет не входят; существующий ZIP не
+перезаписывается. В корне ZIP лежит автономная инструкция `README.md`; её
+отслеживаемый источник — `tools/README-wsd-rtx5080.md`; полный порядок
+экспериментов копируется из `tools/WSD-EXPERIMENT-ROADMAP.md`. Распакуйте пакет на
+локальный фиксированный NTFS-диск RTX-
+машины (не в OneDrive, junction или сетевой каталог) и сначала проверьте
+целостность распакованного пакета:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -VerifyOnly
+```
+
+Этот режим сверяет manifest, размеры и SHA-256 без Python, CUDA и обучения.
+Затем создайте CPython 3.12.10 x64 venv и установите закреплённое окружение:
+
+```powershell
+py -3.12 -m venv .venv
+$python = (Resolve-Path '.\.venv\Scripts\python.exe').Path
+& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-bootstrap.txt
+& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-torch-cu130.txt
+& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-ranker.txt
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -ListProfiles
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -RunReferenceSuite
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -RunNextSuite
+```
+
+Launcher ничего не устанавливает и не делает CPU fallback: он сверяет package
+manifest, exact-версии Python-пакетов, CUDA 13.0, compute capability не ниже
+`12.0`, native BF16, полный lock зависимостей, profile-specific
+`PYTHONHASHSEED` и `CUBLAS_WORKSPACE_CONFIG=:4096:8`. Без явного выбора launcher
+fail-closed. Все профили используют полный шестиепохный schedule (`3006` шагов):
+эксперимент показал, что качество дают и более медленный спад LR, и дополнительные
+шаги. `reference` воспроизводит base7 с новым per-group отчётом; `next` сравнивает
+на одинаковых семи слоях и seed `cross-encoder/nli-deberta-v3-base` reset против
+nli-projected; `capacity` и `interaction` независимо проверяют глубину и NLI × depth.
+Confirmation seeds уже перечислены в пакете, но до CPU/dev gate запускаются только вручную.
+Произвольных model/revision/dataset/epochs аргументов нет. На Windows для CUDA
+13 нужен NVIDIA driver `580.88+`; отдельный CUDA Toolkit wheel-у PyTorch не нужен.
+Прерванный запуск продолжается только явно, с тем же каталогом:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -Profile nli7-reset-s1 -Resume -OutputDirectory '<существующий-output>'
+```
+
+Вернуть нужно целиком `<output>/bundle/GlossDeberta`, а также `metrics.jsonl`,
+`run-state.json`, `experiment-profile.json`, `validation-predictions.jsonl`,
+`validation-predictions-manifest.json`, `training-*.log` и `pip-freeze-*.txt`.
+Групповой отчёт не содержит исходного текста и используется для exact McNemar и
+paired lemma-cluster bootstrap. Только после проверки
+bundle-manifest модель устанавливается в ignored runtime-каталог и проходит
+same-build dev/register CPU-бенчмарки на исходной машине. До выбора победителя
+production остаётся на GlossBERT; frozen holdout в этом цикле не открывается.
+
+## Экспериментальная TranslateGemma 4B
+
+TranslateGemma не входит в git, публикацию или обычный `install.cmd` и никогда
+не скачивается приложением автоматически. Модель распространяется по
+[Gemma Terms](https://ai.google.dev/gemma/terms) и
+[Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy),
+а не по лицензии Asteria. Для интерактивной установки выполните:
+
+```powershell
+.\scripts\install-translategemma.cmd
+```
+
+Скрипт сначала показывает ссылки на условия и продолжает только после точного
+ответа `ПРИНИМАЮ`. Для автоматизированного запуска допустим ключ ниже, но лишь
+если текущий пользователь уже прочитал и явно принял эти условия:
+
+```powershell
+.\scripts\install-translategemma.cmd -AcceptGemmaTerms
+```
+
+Установщик загружает около `2,5 ГБ` в профиль текущего пользователя, проверяет
+размер и SHA-256 каждого файла и создаёт manifest принятия в
+`%LOCALAPPDATA%\AsteriaScale\Models\TranslateGemma`. Закреплены:
+
+- `translategemma-4b-it.Q4_K_M.gguf` — `2 489 909 760` байт,
+  SHA-256 `81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330`,
+  статический quant `mradermacher/translategemma-4b-it-GGUF` revision
+  `35a7486e128b19642cdc72d7b91b21ba388aaf42`;
+- `llama-b9632-bin-win-cpu-x64.zip` — CPU runner llama.cpp b9632,
+  `16 899 258` байт,
+  SHA-256 `b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd`;
+- локальная копия `GEMMA_TERMS.txt`.
+
+Runtime также узнаёт точный blob с тем же SHA-256 в `OLLAMA_MODELS` (либо
+`%USERPROFILE%\.ollama\models`), но не принимает другой quant или похожий тег.
+`TranslateGemmaTranslationService` проверяет pins перед запуском, распаковывает
+runner в принадлежащий приложению временный каталог и поднимает скрытый
+`llama-server` только на `127.0.0.1` со случайным API-ключом, context `2048` и
+`--n-gpu-layers 0`: этот эксперимент сейчас **CPU-only**. Встроенный в GGUF
+мультимодальный Jinja-template llama.cpp b9632 не может проверить со своим
+тестовым string-content и завершает сервер до первого запроса. Поэтому runtime
+явно использует `--no-jinja` и детерминированный raw `/completion` с тем же
+отрендеренным direct EN→RU prompt; вход по-прежнему содержит только фразу.
+
+Runtime-каталоги называются строго `Runtime/b9632-<GUID>`. Выгрузка сначала
+подтверждает завершение принадлежащего ей процесса, затем удаляет каталог с
+коротким bounded retry для блокировок DLL. Неуспешный путь не забывается, а
+каждый unload/warm-up дополнительно и без возрастной задержки очищает старые
+каталоги точного формата. Это происходит уже после single-instance mutex;
+активный каталог исключается, а переживший crash процесс защищён блокировкой
+своих DLL. Посторонние каталоги и reparse points никогда не входят в sweep,
+ownership повторно проверяется непосредственно перед каждой retry-попыткой.
+
+После установки отдельную живую проверку модели можно выполнить без запуска UI:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-translategemma.ps1
+```
+
+Скрипт перепроверяет закреплённые артефакты, запускает скрытый loopback-server
+во временном каталоге, переводит четыре диагностические фразы и гарантированно
+останавливает принадлежащий ему процесс. Это live-проверка доступности и
+контракта runtime, а не количественная оценка качества.
+
+После установки включите в UI: `Умный словарь` →
+`Перевод фразы второй строкой` →
+`TranslateGemma 4B — перевод фразы второй строкой`. Режим по умолчанию
+выключен. Основной словарный результат или решение выбранного ranker показывается сразу;
+после этого TranslateGemma независимо обрабатывает любой английский smart-result,
+включая miss, abstention, trusted/heuristic-путь и попадание в кэш. Источник —
+полное текущее предложение длиной от 2 до 64 слов. Перед prompt узкий
+`SmartPhraseIdiomRewriter` может детерминированно заменить доказанную идиому на
+однозначную английскую парафразу; русский primary и semantic evidence он не
+читает. Первый direct prompt получает только effective English. При длинном
+тексте, совпавшей истории Textractor, scaffold-терминах или принятом sense
+разрешён один отдельный APE post-edit: до трёх предыдущих строк передаются как
+`DO NOT TRANSLATE`, а provider-neutral evidence содержит английские определения
+и выбранные/отвергнутые поверхности как ограниченные, необязательные опоры.
+
+Generic guard проверяет размер и русскоязычность ответа, управляющие символы,
+prompt echo исходной и effective-фразы, объяснения и residual English с
+исключением устойчивых собственных имён. Он намеренно не требует повторить
+перевод слова из первой строки. При
+ошибке основной результат остаётся на месте, а вторая строка становится
+`Перевод фразы недоступен`; этот путь не обращается к full-Qwen. Проверенные
+результаты хранятся в
+`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v4.json`; fingerprint v4
+включает исходную и effective-фразу, identity преобразования, упорядоченную
+скрытую историю, semantic plan, устойчивые собственные имена, model identity и
+prompt version. Cache hit по-прежнему
+сначала проверяет runtime и закреплённые артефакты.
+
+Default smoke проверяет direct/APE prompt, request, parser, artifact pins, полное
+предложение 2–64 слова, идиоматические и буквальные пары, generic guard, cache v4, miss/abstention
+routing, независимость основной и второй строк и fail-open без запуска или
+загрузки живой модели.
+Систематический live A/B качества и задержки ещё не проведён.
+
 ## Сборка и тесты
 
 ```powershell
@@ -49,13 +322,35 @@ Smoke-набор — консольная программа без тестов
 | `--smart-live` / `--smart-gpu-live` | Живой умный словарь end-to-end |
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--screen-ocr-image <png>` | Диагностика экранного OCR |
-| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu]` | Бенчмарк GlossBERT через полный продакшн-конвейер |
+| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
+| `--ranker-sentence-benchmark <set.json> <workerBaseDir> --ranker-cpu-model glossbert\|sandwich\|consec [--sentence-report <report.json>] [--benchmark-only]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается |
 | `--translation-benchmark <set.json> [engine] [--ranker-base <dir>] [--dump <file>] [--benchmark-only]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность и scaffold/GlossBERT-диагностика. Требует живой Foundry Local; `--benchmark-only` не запускает default smoke/Magpie |
 
-`workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (dev, 65 случаев) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
+`workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (открытый dev, `134` случая, включая `20` научных) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
 Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
 
-Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 реплики) и `translation-holdout-v1.json` (замороженный, 30 реплик — правило то же). В dev-наборе 61 **term anchor**, а не 61 случай: chrF считается на всех 64 репликах, включая 15 реплик без терминологического якоря. Смоук-тест «Benchmark set schema» читает и проверяет только dev-наборы `ranker-benchmark.json` и `translation-benchmark.json`: default smoke никогда не открывает frozen holdout. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
+Sentence-бенчмарк запускается одинаково для всех CPU-профилей, всегда подаёт
+`previousContext` только как скрытый вход и корректирует индекс target. Он
+отказывается читать любой путь `ranker-holdout*` до открытия файла. Пример:
+
+```powershell
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj `
+  -c Release --no-build -- --benchmark-only `
+  --ranker-sentence-benchmark assets/Ranker/ranker-sentence-benchmark.json `
+  dist/AsteriaScale --ranker-cpu-model consec `
+  --sentence-report artifacts/Ranker/consec-sentence-report.json
+```
+
+Same-build итог на `46` предложениях / `138` целях: GlossBERT `91`, SANDWiCH
+`120`, ConSeC `131` верная группа; scientific `69/108`, `96/108`, `106/108`;
+все target-смыслы верны в `20`, `31`, `41` предложениях; на
+surface-unambiguous WSD-срезе `67`, `86`, `94`. Это не оценка русского перевода.
+ConSeC: accepted precision `96,32 %`, coverage `98,55 %`, warm p50/p95
+`140/205 мс`, cold `6 420 мс`, peak `1 500 МБ`, ошибок и overflow нет. Он ошибается в одной
+context-only паре и имеет пять уверенных ошибок, поэтому joint planner остаётся
+следующим этапом. Frozen holdout при измерениях не открывался.
+
+Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 реплики) и `translation-holdout-v1.json` (замороженный, 30 реплик — правило то же). В dev-наборе 61 **term anchor**, а не 61 случай: chrF считается на всех 64 репликах, включая 15 реплик без терминологического якоря. Default smoke читает и проверяет только открытые dev-наборы `ranker-benchmark.json`, `ranker-sentence-benchmark.json` и `translation-benchmark.json`; frozen holdout он никогда не открывает. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
 
 `--translation-benchmark` всегда падает на пустом наборе или пустом ответе. Dump записывается до quality gates и содержит SHA-256 набора, точные engine/model/runtime, общие и per-language агрегаты. Эталонный dev-прогон:
 
@@ -98,6 +393,18 @@ Remove-Item -LiteralPath $publicCertificatePath
 доверенного центра или сервис подписи.
 
 Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRecognizer` недоступен обычному Win32-процессу.
+Основное приложение остаётся self-contained по .NET, но Windows App SDK намеренно
+подключается как **framework-dependent** (`WindowsAppSDKSelfContained=false`).
+Asteria использует package-with-external-location и запускается из каталога
+пользователя; Windows AI не разрешает self-contained приложению работать из
+пути под `C:\Users`. В нашей схеме включение этого свойства ломает
+`TextRecognizer.EnsureReadyAsync` с `FileNotFound`, даже когда identity и пакет
+Text Recognition установлены. Windows App SDK при этом предоставляет объявленная
+в identity зависимость `Microsoft.WindowsAppRuntime.1.8`.
+Main publish также использует `PublishSingleFile=false`, поскольку single-file
+не поддерживается для package-with-external-location. .NET остаётся
+self-contained. Целостность многофайловой публикации закрывает
+`.build-output-manifest.json` с размером и SHA-256 каждого файла.
 
 Публикация сначала собирает и проверяет приложение, Ranker с обоими наборами моделей и подписанный identity-пакет
 в уникальном staging-каталоге внутри `dist`. Рабочие `dist/AsteriaScale` и `AsteriaScale.Identity.msix`
@@ -122,6 +429,12 @@ Identity-пакет нужен Windows AI API (NPU OCR): без него `TextRe
   `Models\GlossEmbeddings\` (`eng-senses.vec`, `minilm-l6-v2.onnx`,
   `tokenizer.json`). Модели не лежат в git — см.
   [assets/Ranker/README.md](../assets/Ranker/README.md);
+- если локально установлены оба ONNX SANDWiCH, `Models\Sandwich\` копируется в
+  Ranker-публикацию условно и попадает в общий output manifest. Отсутствие этого
+  экспериментального профиля не делает обычную GlossBERT-публикацию неполной;
+- если локально установлен проверенный четырёхфайловый ConSeC bundle,
+  `Models\Consec\` также копируется условно и попадает в output manifest.
+  Отсутствие личного CC BY-NC-SA профиля не делает обычную публикацию неполной;
 - `AsteriaScale.Identity.msix` рядом с каталогом публикации: проверяются
   манифест, block map, content types, обязательные PNG с точными размерами и
   подпись `CN=Asteria Scale Local`; после подписания отдельно запускается

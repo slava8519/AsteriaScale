@@ -39,6 +39,7 @@ internal static class SenseRegisters
     /// <summary>UI labels for an uncertain card, per roadmap #14.2C.</summary>
     internal static string? DisplayLabel(SenseRegister register) => register switch
     {
+        SenseRegister.Literary => "ЛИТ.",
         SenseRegister.Colloquial => "РАЗГ.",
         SenseRegister.Slang => "ЖАРГ.",
         SenseRegister.Vulgar => "ГРУБ.",

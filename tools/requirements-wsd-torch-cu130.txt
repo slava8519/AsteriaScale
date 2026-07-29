@@ -1,0 +1,2 @@
+# Official CPython 3.12 / Windows x64 CUDA 13.0 wheel from download.pytorch.org.
+torch @ https://download-r2.pytorch.org/whl/cu130/torch-2.13.0%2Bcu130-cp312-cp312-win_amd64.whl#sha256=2efab1e83604ca628c6d85b9e188c153690980498d1297081a9dad704919303c

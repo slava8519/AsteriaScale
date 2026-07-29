@@ -9,7 +9,11 @@ internal static class SmartDictionaryResultCacheTests
         Directory.CreateDirectory(root);
 
         await VerifyKeyNormalizationAsync(root);
+        await VerifySandwichKeyExactnessAsync();
+        await VerifyConsecKeyExactnessAsync();
         await VerifyPersistenceAndValidationAsync(root);
+        await VerifyRegisterLabelIdentityAsync(root);
+        await VerifyLiteraryRegisterPreservesGroupIndexAsync(root);
         await VerifyLargeCandidateInventoryAsync(root);
         await VerifyLruEvictionAsync(root);
         await VerifyConcurrentBoundedWritesAsync(root);
@@ -130,6 +134,63 @@ internal static class SmartDictionaryResultCacheTests
             "A large sense inventory did not survive cache restart.");
     }
 
+    private static async Task VerifyRegisterLabelIdentityAsync(string root)
+    {
+        string path = Path.Combine(root, "register-label.json");
+        SmartDictionaryCacheRequest request = CreateRequest(
+            "He was pissed about it.",
+            "pissed",
+            ["пьяный", "взбешённый (ГРУБ.)"]);
+
+        await using (SmartDictionaryResultCache cache = new(path, capacity: 4))
+        {
+            Check(await cache.StoreAsync(
+                    request,
+                    new SmartDictionarySelection(
+                        1,
+                        "взбешённый",
+                        0.93,
+                        string.Empty)),
+                "A register-labelled outcome was rejected by the hover cache.");
+        }
+
+        await using SmartDictionaryResultCache reopened = new(path, capacity: 4);
+        SmartDictionarySelection? hit = await reopened.TryGetAsync(request);
+        Check(hit is { Index: 1, Translation: "взбешённый" },
+            "A cached register-labelled outcome lost its clean Russian surface.");
+    }
+
+    private static async Task VerifyLiteraryRegisterPreservesGroupIndexAsync(string root)
+    {
+        string path = Path.Combine(root, "literary-register-index.json");
+        SmartDictionaryRankerOutcome[] outcomes =
+        [
+            new(0, 0, "лик") { Register = SenseRegister.Neutral },
+            new(1, 1, "лик") { Register = SenseRegister.Literary }
+        ];
+        string[] candidates = outcomes.Select(outcome => outcome.Describe()).ToArray();
+        SmartDictionaryCacheRequest request = CreateRequest(
+            "Her countenance appeared in the portrait.",
+            "countenance",
+            candidates);
+
+        Check(candidates.Distinct(StringComparer.OrdinalIgnoreCase).Count() == outcomes.Length,
+            "Literary and neutral outcomes with the same surface collapsed before ranking.");
+
+        await using (SmartDictionaryResultCache cache = new(path, capacity: 4))
+        {
+            Check(await cache.StoreAsync(
+                    request,
+                    new SmartDictionarySelection(1, "лик", 0.91, string.Empty)),
+                "The literary outcome index was rejected after candidate normalization.");
+        }
+
+        await using SmartDictionaryResultCache reopened = new(path, capacity: 4);
+        SmartDictionarySelection? hit = await reopened.TryGetAsync(request);
+        Check(hit is { Index: 1, Translation: "лик" },
+            "The literary outcome lost its GroupId-aligned index or clean surface.");
+    }
+
     private static Task VerifyKeyNormalizationAsync(string root)
     {
         const string context =
@@ -147,7 +208,6 @@ internal static class SmartDictionaryResultCacheTests
             CharacterIndex = equivalentContext.IndexOf("BANK", StringComparison.Ordinal),
             SourceLanguage = "EN",
             Backend = " NPU ",
-            ModelId = request.ModelId.ToUpperInvariant(),
             DictionaryVersion = request.DictionaryVersion.ToUpperInvariant(),
             Candidates = ["БАНК", "БЕРЕГ"]
         };
@@ -273,6 +333,9 @@ internal static class SmartDictionaryResultCacheTests
                 request with { RankingPipeline = "bi+cross" }),
             "The actual cross/bi+cross pipeline must participate in the cache key.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { RankingPipeline = "sandwich" }),
+            "The SANDWiCH pipeline must participate in the cache key.");
+        Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { DictionaryVersion = "dictionary-v2" }),
             "Dictionary version must participate in the cache key.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
@@ -300,6 +363,168 @@ internal static class SmartDictionaryResultCacheTests
         Check(trimmedWindow.Contains("near" + (flank - 1), StringComparison.Ordinal) &&
               trimmedWindow.Contains("after0", StringComparison.Ordinal),
             "Trimming must keep the words immediately around the target.");
+        return Task.CompletedTask;
+    }
+
+    private static Task VerifySandwichKeyExactnessAsync()
+    {
+        const string context = "She sat on the bank and watched the water.";
+        SmartDictionaryCacheRequest request = CreateRequest(
+            context,
+            "bank",
+            ["банк", "берег"]) with
+        {
+            Backend = "cpu",
+            ModelId = GlossBertDictionarySelectorService.SandwichCpuModelCacheId +
+                      ":pipeline-sandwich",
+            RankingPipeline = "sandwich"
+        };
+        string baseline = SmartDictionaryResultCache.CreateKeyFingerprint(request);
+
+        const string capitalizedContext =
+            "She sat on the Bank and watched the water.";
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with
+                {
+                    Context = capitalizedContext,
+                    CharacterIndex = capitalizedContext.IndexOf(
+                        "Bank",
+                        StringComparison.Ordinal)
+                }),
+            "The SANDWiCH hover key folded exact context casing.");
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { Target = "Bank" }),
+            "The SANDWiCH hover key folded exact target casing.");
+
+        char[] exactScalars = ['\u200D', '\u00AD', '\u0001', '\u000B', '\u2060'];
+        HashSet<string> contextKeys = new(StringComparer.Ordinal) { baseline };
+        foreach (char scalar in exactScalars)
+        {
+            string variant = context.Replace(
+                "She sat",
+                $"She{scalar}sat",
+                StringComparison.Ordinal);
+            string key = SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with
+                {
+                    Context = variant,
+                    CharacterIndex = variant.IndexOf("bank", StringComparison.Ordinal)
+                });
+            Check(contextKeys.Add(key),
+                $"The SANDWiCH hover context U+{(int)scalar:X4} collided with another exact input.");
+        }
+
+        const string doubleSpaced =
+            "She  sat on the bank and watched the water.";
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with
+                {
+                    Context = doubleSpaced,
+                    CharacterIndex = doubleSpaced.IndexOf("bank", StringComparison.Ordinal)
+                }),
+            "The SANDWiCH hover key folded internal whitespace.");
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { Candidates = ["БАНК", "БЕРЕГ"] }),
+            "The SANDWiCH hover key folded exact ordered candidate surfaces.");
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { Candidates = ["берег", "банк"] }),
+            "The SANDWiCH hover key ignored candidate/GroupId order.");
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { ModelId = request.ModelId.ToUpperInvariant() }),
+            "The SANDWiCH hover key folded exact model identity.");
+        Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { DictionaryVersion = "dictionary-v1.abstain-margin=0.18" }),
+            "The SANDWiCH hover key ignored its threshold-bearing dictionary epoch.");
+
+        SmartDictionaryCacheRequest deberta = request with
+        {
+            ModelId = GlossBertDictionarySelectorService.DebertaCpuModelCacheId,
+            RankingPipeline = "cross"
+        };
+        string debertaBaseline = SmartDictionaryResultCache.CreateKeyFingerprint(deberta);
+        string controlled = context.Replace(
+            "She sat",
+            "She\u000Bsat",
+            StringComparison.Ordinal);
+        Check(debertaBaseline != SmartDictionaryResultCache.CreateKeyFingerprint(
+                deberta with
+                {
+                    Context = controlled,
+                    CharacterIndex = controlled.IndexOf("bank", StringComparison.Ordinal)
+                }),
+            "A non-BERT DeBERTa profile inherited BERT control deletion in the hover key.");
+
+        return Task.CompletedTask;
+    }
+
+    private static Task VerifyConsecKeyExactnessAsync()
+    {
+        const string context = "The bank near the other bank was closed.";
+        int first = context.IndexOf("bank", StringComparison.Ordinal);
+        int second = context.LastIndexOf("bank", StringComparison.Ordinal);
+        SmartDictionaryCacheRequest request = CreateRequest(
+            context,
+            "bank",
+            ["банк", "берег"]) with
+        {
+            CharacterIndex = first,
+            Backend = "cpu",
+            ModelId = GlossBertDictionarySelectorService.ConsecCpuModelCacheId +
+                      ":pipeline-consec-independent",
+            RankingPipeline = "consec-independent"
+        };
+
+        string firstKey = SmartDictionaryResultCache.CreateKeyFingerprint(request);
+        string secondKey = SmartDictionaryResultCache.CreateKeyFingerprint(
+            request with { CharacterIndex = second });
+        Check(firstKey != secondKey,
+            "Two ConSeC target spans in one exact sentence shared a result-cache key.");
+
+        const string changedWhitespace =
+            "The  bank near the other bank was closed.";
+        Check(firstKey != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with
+                {
+                    Context = changedWhitespace,
+                    CharacterIndex = changedWhitespace.IndexOf(
+                        "bank",
+                        StringComparison.Ordinal)
+                }),
+            "The ConSeC result cache folded source whitespace that reaches its tokenizer.");
+
+        int flank = TargetCenteredContextBuilder.MaximumWords / 2;
+        string near = string.Join(
+            " ",
+            Enumerable.Range(0, flank).Select(index => "near" + index));
+        string after = string.Join(
+            " ",
+            Enumerable.Range(0, flank).Select(index => "after" + index));
+        string shared = near + " bank " + after + ".";
+        string longContext = "distant alpha evidence " + shared;
+        string longVariant = "distant omega evidence " + shared;
+        SmartDictionaryCacheRequest longRequest = request with
+        {
+            Context = longContext,
+            CharacterIndex = longContext.IndexOf("bank", StringComparison.Ordinal)
+        };
+        SmartDictionaryCacheRequest longVariantRequest = request with
+        {
+            Context = longVariant,
+            CharacterIndex = longVariant.IndexOf("bank", StringComparison.Ordinal)
+        };
+        Check(SmartDictionaryResultCache.CreateKeyFingerprint(longRequest) !=
+              SmartDictionaryResultCache.CreateKeyFingerprint(longVariantRequest),
+            "ConSeC ignored distant full-sentence evidence outside the pair-model window.");
+
+        Check(firstKey != SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with
+                {
+                    ModelId = request.ModelId.Replace(
+                        "context-full-v1",
+                        "context-full-v2",
+                        StringComparison.Ordinal)
+                }),
+            "The ConSeC full-context identity did not participate in the result-cache key.");
         return Task.CompletedTask;
     }
 
@@ -476,7 +701,7 @@ internal static class SmartDictionaryResultCacheTests
             candidates,
             "English",
             "npu",
-            NpuDictionarySelectorService.ModelId,
+            GlossBertDictionarySelectorService.NpuModelCacheId + ":pipeline-cross",
             "dictionary-v1");
 
     private static void Check(bool condition, string message)

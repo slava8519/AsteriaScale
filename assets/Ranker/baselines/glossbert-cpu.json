@@ -1,70 +1,233 @@
 {
-  "SchemaVersion": 1,
-  "GeneratedUtc": "2026-07-25T13:03:21.6636657Z",
+  "SchemaVersion": 4,
+  "GeneratedUtc": "2026-07-29T02:20:01.3655997Z",
   "Provider": "Cpu",
+  "ModelProfile": "GlossBert",
+  "ModelVersion": "GlossBERT:0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a:fp32-dynamic:bi-c9745ed1-13c0fb6d-6fd5d72f-be50c362",
   "AbstentionTag": "abstain-margin=0.25",
-  "DictionaryVersion": "E6178C791D1BBE3E69042ED7951E7F4DE321167C4D8F869F88D5775AEA3D014F.787778B1A26FE6ADE3BE037E37522F06C92793B5DD4C1223AB46193066F26595.940C68B6CA4C350BBC507E0D08178A908832381C6205248D27B8EBAA304391E4",
+  "DictionaryVersion": "F01426049F58D14D97FB23837D819D19FE0494A2FB7C00AAF9C7DAA5A56FB213.55A91E72D07C9E6FF07CBB12FD78D9D4625F3069B8E754B057FF58DA1C6C5A83.A0E4FA31C7F2F04C3D310BFCC7797B70EB7D4C07EF5CD0109D5FC18DA9690D36",
   "BenchmarkSet": {
     "Name": "ranker-benchmark.json",
-    "Bytes": 19370,
-    "Sha256": "CB51B3105ACB864557BE3B7C8ED4B6EDCE9FCAA0A9BDF219C34DC88142565253"
+    "Bytes": 40530,
+    "Sha256": "A352DCB33873F43FA976DEBCFCC926C3982A933AC0508388CA9AC78562850F8A"
   },
+  "RuntimeArtifacts": [
+    {
+      "Name": "Application/AsteriaScale.dll",
+      "Bytes": 984064,
+      "Sha256": "A9CAE7365955A6B0D913C599042E1DB1765035F9CA763F90281B7903FEA0F7C6"
+    },
+    {
+      "Name": "Harness/AsteriaScale.Tests.dll",
+      "Bytes": 871936,
+      "Sha256": "474747F85763F350BC8BE646CC57046C5D0E1B17EA13DF0247E14D3784D652BC"
+    },
+    {
+      "Name": "Protocol/AsteriaScale.RankerProtocol.dll",
+      "Bytes": 16384,
+      "Sha256": "053CC79FD23149633DF9A3C1EA927B4A8E0562C57F47F46373125AD3476C58CC"
+    },
+    {
+      "Name": "Worker/AsteriaScale.RankerProtocol.dll",
+      "Bytes": 16384,
+      "Sha256": "053CC79FD23149633DF9A3C1EA927B4A8E0562C57F47F46373125AD3476C58CC"
+    },
+    {
+      "Name": "Worker/AsteriaScale.RankerWorker.dll",
+      "Bytes": 120832,
+      "Sha256": "0DA517213EA7AB5E86FC3B2924899CDEE52476CCC96935501229068248BE1DCD"
+    },
+    {
+      "Name": "Worker/AsteriaScale.RankerWorker.exe",
+      "Bytes": 162816,
+      "Sha256": "A85608DB10F2DD3FD56836556652BAA272E39255939DF33A91FFFB643A3E1DB9"
+    },
+    {
+      "Name": "Worker/DirectML.dll",
+      "Bytes": 18710680,
+      "Sha256": "7AE717A1304253C71F0793E5D8A172AD779934E7465B0648B64013DA832FD8AE"
+    },
+    {
+      "Name": "Worker/Microsoft.ML.OnnxRuntime.dll",
+      "Bytes": 240440,
+      "Sha256": "EA768B03B1C7560AE524E65807652763163D92DCC598151BE38C3107658AE6C9"
+    },
+    {
+      "Name": "Worker/Microsoft.Windows.AI.MachineLearning.Projection.dll",
+      "Bytes": 94712,
+      "Sha256": "E7572E1FB53B8F1182F9FB5D17248A2A37CC98CCA8EF2E51620763C85F056666"
+    },
+    {
+      "Name": "Worker/Microsoft.Windows.AI.MachineLearning.dll",
+      "Bytes": 922248,
+      "Sha256": "9439653D0BBBA26414E3F5356D23EFB8E70D49B3D3FD07ACE88B2A5E3D6423C3"
+    },
+    {
+      "Name": "Worker/Microsoft.Windows.SDK.NET.dll",
+      "Bytes": 26341408,
+      "Sha256": "C633AB241CD09846C2AA409F0BEE2026962610404A7BF132C75CBD66B0E5A9F4"
+    },
+    {
+      "Name": "Worker/System.Numerics.Tensors.dll",
+      "Bytes": 410936,
+      "Sha256": "9D96DC759FDB54CBC3C26EE65CFD78FF32E3745F418119CC0811E63D3F29ECB9"
+    },
+    {
+      "Name": "Worker/Tokenizers.DotNet.dll",
+      "Bytes": 15360,
+      "Sha256": "4087309E22A8B4189A02C74ACC3C80361B5471DF410306014F94B164D81BF9D9"
+    },
+    {
+      "Name": "Worker/WinRT.Runtime.dll",
+      "Bytes": 528944,
+      "Sha256": "BCF3A14E8712A90837FC5C0D8C8A24696AF2BD7F74E9767597EC81EDEDFB23DB"
+    },
+    {
+      "Name": "Worker/hf_tokenizers.dll",
+      "Bytes": 3961652,
+      "Sha256": "A7CA979443378649AD2E18AB923F684390C2F57FF16F611F8671268E4DA5986B"
+    },
+    {
+      "Name": "Worker/onnxruntime.dll",
+      "Bytes": 15383864,
+      "Sha256": "79DF49BCBEFB604C019785925DAEF859C0348280616364E28103D73D4152F6D7"
+    },
+    {
+      "Name": "Worker/onnxruntime_providers_shared.dll",
+      "Bytes": 21856,
+      "Sha256": "B8ECC1B05E21D1226DDA18DD3CB70C7FFF16713FCDCEF050CACEA83B8CBF315C"
+    }
+  ],
+  "DictionaryArtifacts": [
+    {
+      "Name": "Dictionaries/eng-rus-dialogue.tsv.gz",
+      "Bytes": 11660923,
+      "Sha256": "E3ED64CEE3646D7E6C650CFA4E966AE15EB60D17C2CFBEDD940C0ED90ADD4A48"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-enwiktionary-senses.tsv.gz",
+      "Bytes": 8339085,
+      "Sha256": "A776B4DA02D8BE0A37D2C327D8849F3838CDF3CE791437D54AE3FCE234A13002"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-enwiktionary.tsv.gz",
+      "Bytes": 1747915,
+      "Sha256": "84DA5AEC9D3FACD4823A90FB41C8301D42D4CF4C6E09B31524E77B480AF27635"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-massive-dialogue.tsv.gz",
+      "Bytes": 217659,
+      "Sha256": "871362CD4CCCEF6AFD957AB2710228BBB05CFF3D904A1FC108973721261E219A"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-phrasal.tsv.gz",
+      "Bytes": 11614,
+      "Sha256": "4B20B8C34B22FF1D9A8ADC579A21BDEAE7DC82439F58CF0B691732D710889A28"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-vn-scaffold.tsv.gz",
+      "Bytes": 499,
+      "Sha256": "FE76E7D63BE3FB1C78BDFE19CE567569904CBA1D7AD68AAE5878F9FD2297D78E"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-vn-senses.tsv.gz",
+      "Bytes": 2610,
+      "Sha256": "BC23F71DED1A7E5A53BCD6C09FCF11924C355D3EAEED2AA45F7F48C892E7E741"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-vn-soft.tsv.gz",
+      "Bytes": 1301,
+      "Sha256": "CC00C82C7B1D5C468C3FB476FE71407F0FB7FFD794AF24F441DABC5C70145ADE"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-vn.tsv.gz",
+      "Bytes": 2421,
+      "Sha256": "346DA01C17C7F138829C14932E4BA7F84E4C356F93CEBEF60E467BE3C122ABF6"
+    },
+    {
+      "Name": "Dictionaries/eng-rus-wiktionary.tsv.gz",
+      "Bytes": 1493356,
+      "Sha256": "4B52958A675971CCE7B9263F144872190E0F518034B7A3C65916C43DBF65833B"
+    },
+    {
+      "Name": "Dictionaries/eng-rus.tsv.gz",
+      "Bytes": 1097115,
+      "Sha256": "87EAFBC088AA850F9C1087AA6EC072D2B2FF7AABF698E0C5D13465074FE1B107"
+    },
+    {
+      "Name": "Morphology/ru-morph.tsv.gz",
+      "Bytes": 717456,
+      "Sha256": "35A4652A3EB8A1F60F3AF07B0BA7EC7D6467ACC385E4B93A533BD88A8CD5A882"
+    }
+  ],
   "ModelArtifacts": [
     {
-      "Name": "glossbert-fp32-dynamic.onnx",
+      "Name": "GlossBert/Cpu/glossbert-fp32-dynamic.onnx",
       "Bytes": 438167088,
       "Sha256": "DAA4098D59B9077AF59E22F846818455CA39593567326338F88E328EBEEF18B5"
     },
     {
-      "Name": "glossbert-eager-vitis-context.onnx",
-      "Bytes": 93776750,
-      "Sha256": "152BD5B4C54D4A339A4DBB642489B950AF6C712BC7736F2B7CEB977A05573320"
+      "Name": "GlossBert/tokenizer.json",
+      "Bytes": 465642,
+      "Sha256": "04FD39DFF4BFA1B7AE42425C484EF0173F8DA60B485F66642D2B44B251C6A014"
     },
     {
-      "Name": "glossbert-eager-vitis-context.onnx_VITISAI.bin",
-      "Bytes": 123964416,
-      "Sha256": "94095699D6B7B59AB6EDC92C7471BF507B861BD14B4D57CB3EC75F49F3F5D672"
-    },
-    {
-      "Name": "eng-senses.vec",
+      "Name": "GlossEmbeddings/eng-senses.vec",
       "Bytes": 91577685,
       "Sha256": "13C0FB6DB773D85F94E2C930E2C49C8BC022BD2003550413BCF1F963CC55C2D3"
     },
     {
-      "Name": "minilm-l6-v2.onnx",
+      "Name": "GlossEmbeddings/minilm-l6-v2.onnx",
       "Bytes": 90405214,
       "Sha256": "6FD5D72FE4589F189F8EBC006442DBB529BB7CE38F8082112682524616046452"
+    },
+    {
+      "Name": "GlossEmbeddings/tokenizer.json",
+      "Bytes": 466247,
+      "Sha256": "BE50C3628F2BF5BB5E3A7F17B1F74611B2561A3A27EEAB05E5AA30F411572037"
     }
   ],
-  "ModelArtifactBytes": 837891153,
-  "WorkerPeakWorkingSetBytes": 709918720,
+  "ModelArtifactBytes": 621081876,
+  "WorkerPeakWorkingSetBytes": 724623360,
   "Routing": {
-    "Cases": 65,
-    "Ranked": 45,
-    "PhraseBypass": 16,
+    "Cases": 134,
+    "Ranked": 113,
+    "PhraseBypass": 17,
     "NoInventory": 1,
     "AutoResolved": 3,
-    "DeterministicResolved": 19,
-    "DeterministicCorrect": 12
+    "DeterministicResolved": 20,
+    "DeterministicVisibleCorrect": 13
   },
-  "Decisions": {
-    "ExpectedCovered": 37,
-    "Decided": 21,
-    "Correct": 21,
-    "Abstained": 16,
-    "AcceptedPrecision": 1,
-    "ExpectedInventoryCoverage": 0.8222222222222222,
-    "DecisionCoverage": 0.5675675675675675,
-    "EndToEndCorrectCoverage": 0.5076923076923077,
-    "MedianMargin": 0.3052414655685425
+  "SenseWsd": {
+    "ExpectedCovered": 106,
+    "Decided": 64,
+    "Correct": 62,
+    "Abstained": 42,
+    "AcceptedPrecision": 0.96875,
+    "ExpectedInventoryCoverage": 0.9380530973451328,
+    "DecisionCoverage": 0.6037735849056604,
+    "EndToEndCorrectCoverage": 0.5597014925373134,
+    "MedianMargin": 0.3524252576753497
+  },
+  "VisibleTranslations": {
+    "ExpectedCovered": 86,
+    "Decided": 66,
+    "Correct": 51,
+    "Abstained": 47,
+    "AcceptedPrecision": 0.7727272727272727,
+    "ExpectedOutcomeCoverage": 0.7610619469026548,
+    "DecisionCoverage": 0.584070796460177,
+    "RankedCorrectCoverage": 0.45132743362831856,
+    "EndToEndCorrectCoverage": 0.47761194029850745
   },
   "Latency": {
-    "MedianMilliseconds": 228,
-    "LargeInventoryMedianMilliseconds": 662,
-    "MaximumMilliseconds": 3488,
-    "SampleCount": 45
+    "MedianMilliseconds": 156,
+    "LargeInventoryMedianMilliseconds": 489,
+    "MaximumMilliseconds": 1726,
+    "SampleCount": 113
   },
   "Pipelines": {
-    "cross": 45
+    "bi\u002Bcross": 2,
+    "cross": 111
   }
 }

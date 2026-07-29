@@ -16,9 +16,33 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\AsteriaScale\AsteriaScale.csproj" />
     <ProjectReference Include="..\..\src\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
+    <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.4.1" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerException.cs"
+             Link="RankerException.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerArtifactIntegrity.cs"
+             Link="RankerArtifactIntegrity.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerOutputProbabilities.cs"
+             Link="RankerOutputProbabilities.cs" />
     <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerSelectionLogic.cs"
              Link="RankerSelectionLogic.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\WorkerOptions.cs"
+             Link="WorkerOptions.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecArtifactBundle.cs"
+             Link="ConsecArtifactBundle.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecTokenizer.cs"
+             Link="ConsecTokenizer.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecInputBuilder.cs"
+             Link="ConsecInputBuilder.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecScorer.cs"
+             Link="ConsecScorer.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\tools\consec-upstream-reference-golden.json"
+             Link="Ranker\Reference\consec-upstream-reference-golden.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>

@@ -124,7 +124,7 @@ try {
         -c $Configuration `
         -r $Runtime `
         --self-contained true `
-        -p:PublishSingleFile=true `
+        -p:PublishSingleFile=false `
         -p:EnableMsixTooling=true `
         -p:DebugType=None `
         -p:DebugSymbols=false `

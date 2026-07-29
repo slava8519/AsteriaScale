@@ -38,12 +38,14 @@ They are data files loaded independently by Asteria Scale's optional fast dictio
   because inflected occurrences canonicalize onto the base key at lookup. Unlike the other
   files it is not produced by `build-dictionaries.py`: the source of truth is the readable
   `eng-rus-phrasal.tsv` beside it, regenerated with `scripts/build-phrasal-dictionary.py`.
-- `eng-rus-vn.tsv.gz`: 114 reviewed display-safe VN overrides. This is the only bundled
+- `eng-rus-vn.tsv.gz`: 130 reviewed display-safe VN overrides. This is the only bundled
   VN layer that can replace a broad dictionary value or participate in residual-English
   repair. It no longer becomes a mandatory full-translation term merely by being curated.
-- `eng-rus-vn-soft.tsv.gz` and `eng-rus-vn-senses.tsv.gz`: 52 conversational keys and
-  102 definition-aligned Russian surfaces. They merge with broad dictionaries and stay
-  visible to GlossBERT instead of suppressing sense ranking.
+- `eng-rus-vn-soft.tsv.gz` and `eng-rus-vn-senses.tsv.gz`: 62 conversational keys and
+  132 definition-aligned Russian surfaces. They merge with broad dictionaries and stay
+  visible to GlossBERT instead of suppressing sense ranking. Ambiguous idioms carry paired
+  idiomatic/literal English definitions; neutral object slots such as `someone` are expanded
+  only from a closed list of object pronouns during lookup.
 - `eng-rus-vn-scaffold.tsv.gz`: 21 separately reviewed terminology anchors used only by
   the full-text scaffold. They are deliberately invisible to Smart Dictionary lookup.
 - `eng-rus-dialogue.tsv.gz`: short English → Russian sentence pairs from Tatoeba.

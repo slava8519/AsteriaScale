@@ -1,23 +1,23 @@
 {
   "counts": {
     "curatedVn": {
-      "hardKeys": 114,
-      "records": 194,
+      "hardKeys": 130,
+      "records": 229,
       "recordsByRole": {
-        "hard": 114,
+        "hard": 130,
         "scaffold": 21,
-        "soft": 59
+        "soft": 78
       },
       "recordsBySource": {
-        "asteria-vn-curated-v2": 194
+        "asteria-vn-curated-v2": 229
       },
       "recordsByTier": {
-        "gold": 135,
-        "silver": 59
+        "gold": 151,
+        "silver": 78
       },
       "scaffoldKeys": 21,
-      "senseRows": 102,
-      "softKeys": 52
+      "senseRows": 132,
+      "softKeys": 62
     },
     "massive": {
       "acceptedRecordsBeforeConflicts": 9915,
@@ -44,9 +44,9 @@
   },
   "inputs": {
     "curatedVn": {
-      "bytes": 24474,
+      "bytes": 30215,
       "fileName": "vn-lexicon.tsv",
-      "sha256": "8ED3DE0D0F18DCD7101C9D1837893C3BDCF6A514DE2AD286D458CB99E4B1DC96"
+      "sha256": "4256650C7786759F9955E2043B24041EA50A5457102C1DE25F1BF51EE591A9D0"
     },
     "massiveArchive": {
       "bytes": 40251390,
@@ -56,7 +56,7 @@
     "sourceLock": {
       "bytes": 2158,
       "fileName": "vn-sources.lock.json",
-      "sha256": "DEA989B3ED0108AF9D8B9F368F856A89C57389DCFC5CFD32463DACCE6C6745F7"
+      "sha256": "39EFB128A0F48D50AE902BEE164481E73205959CB1CB184B4EF32872438A52CF"
     }
   },
   "normalization": {
@@ -77,22 +77,22 @@
       "sha256": "FE76E7D63BE3FB1C78BDFE19CE567569904CBA1D7AD68AAE5878F9FD2297D78E"
     },
     {
-      "bytes": 1663,
+      "bytes": 2610,
       "fileName": "eng-rus-vn-senses.tsv.gz",
-      "rows": 102,
-      "sha256": "BAF58784E022262C93174DE55E690E1D38D52C0EC8AA8D88E401AAB121D89F82"
+      "rows": 132,
+      "sha256": "BC23F71DED1A7E5A53BCD6C09FCF11924C355D3EAEED2AA45F7F48C892E7E741"
     },
     {
-      "bytes": 814,
+      "bytes": 1301,
       "fileName": "eng-rus-vn-soft.tsv.gz",
-      "rows": 52,
-      "sha256": "89FA8612F4114220B79DF8EC539B1F159A0BDAF6F78865F01ABBEA8ED8BAF732"
+      "rows": 62,
+      "sha256": "CC00C82C7B1D5C468C3FB476FE71407F0FB7FFD794AF24F441DABC5C70145ADE"
     },
     {
-      "bytes": 1975,
+      "bytes": 2421,
       "fileName": "eng-rus-vn.tsv.gz",
-      "rows": 114,
-      "sha256": "7B0F8409245EA4997D1DA9C00EABE7E56038BBC7EA7B3D748AD018AF154D77FE"
+      "rows": 130,
+      "sha256": "346DA01C17C7F138829C14932E4BA7F84E4C356F93CEBEF60E467BE3C122ABF6"
     },
     {
       "bytes": 124222,
@@ -101,10 +101,10 @@
       "sha256": "4C707995E9EC00B21D6C73D5778A0EC8140453EA3107F787C137A82E4A8968B3"
     },
     {
-      "bytes": 6162,
+      "bytes": 7898,
       "fileName": "vn-provenance.tsv.gz",
-      "rows": 194,
-      "sha256": "AC599C75E8842C91A22A3709545B54844DA78E046C2607BE7D79AD1F1EBEC2E0"
+      "rows": 229,
+      "sha256": "E6864510D2B2ADDF319CAF9805FF0DEFBF4CB622A2CAAD48A3C66FBC86C11234"
     }
   ],
   "schemaVersion": 2,

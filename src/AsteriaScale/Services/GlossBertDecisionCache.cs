@@ -43,12 +43,12 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     /// the fingerprint itself: a caller cannot forget it, and the two paths
     /// cannot drift onto different keys for the same worker call.
     /// </summary>
-    internal const string SenseRankingEpoch = "smart-sense-v8-bicross";
+    internal const string SenseRankingEpoch = "smart-sense-v9-semantic-rankers";
 
     // 3: key text normalization now mirrors the pinned BertNormalizer clean_text
     // stage. Old entries may have merged controls that BERT deletes with spaces
     // that BERT preserves, so they must be discarded rather than reused.
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTextLength = 256;
@@ -129,17 +129,50 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         // before clean_text removes controls or collapses whitespace. Applying
         // the original cursor after normalization can select a different one of
         // two repeated targets and reuse a verdict for the wrong occurrence.
-        bool anchored = RankerTargetAnchor.TryBuildMarkedContext(
-            sentence,
-            target,
-            characterIndex,
-            out string markedSentence);
-        string normalizedSentence = NormalizeText(
-            anchored ? markedSentence : sentence);
-        string normalizedTarget = NormalizeText(target);
+        bool sandwich = IsSandwichModel(modelIdentity);
+        bool consec = IsConsecModel(modelIdentity);
+        bool exactText = !IsPinnedGlossBertModel(modelIdentity);
+        RankerTargetMarker marker = sandwich
+            ? RankerTargetMarker.SandwichD
+            : RankerTargetMarker.Quoted;
+        int consecAnchor = consec
+            ? RankerTargetAnchor.FindClosestOccurrence(sentence, target, characterIndex)
+            : -1;
+        bool anchored;
+        string markedSentence;
+        if (consec)
+        {
+            anchored = consecAnchor >= 0;
+            markedSentence = sentence;
+        }
+        else
+        {
+            anchored = RankerTargetAnchor.TryBuildMarkedContext(
+                sentence,
+                target,
+                characterIndex,
+                marker,
+                out markedSentence);
+        }
+        string fingerprintSentence = exactText
+            ? PreserveExact(anchored ? markedSentence : sentence)
+            : NormalizeText(anchored ? markedSentence : sentence);
+        string fingerprintTarget = exactText
+            ? PreserveExact(target)
+            : NormalizeText(target);
 
         StringBuilder canonical = new();
-        Append(canonical, "asteria-glossbert-decision-cache-v3");
+        // Keep the current pinned GlossBERT key domain byte-for-byte stable
+        // within this sense-ranking epoch. The epoch/schema migration already
+        // invalidates older releases globally; this branch avoids an additional
+        // unnecessary invalidation for current GlossBERT entries. Every other
+        // tokenizer gets a new exact domain and cannot read unsafe BERT-cleaned
+        // entries written by an earlier build.
+        Append(
+            canonical,
+            exactText
+                ? "asteria-semantic-ranker-decision-cache-v5-model-exact"
+                : "asteria-semantic-ranker-decision-cache-v4");
         Append(canonical, RankerProtocolV2.Version);
         Append(canonical, SenseRankingEpoch);
         // A cached verdict is only "what the ranker answered under this
@@ -149,13 +182,26 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         Append(canonical, provider.ToString());
         Append(canonical, modelIdentity);
         Append(canonical, dictionaryVersion);
-        Append(canonical, normalizedSentence);
-        Append(canonical, normalizedTarget);
-        // Quotes in the marked sentence identify the selected occurrence. A
-        // target the worker would reject has no such identity, so retain its raw
-        // index rather than merging unrelated invalid requests.
+        if (exactText)
+        {
+            // Pipeline identity is explicit even though the pinned model id
+            // also carries it. A future artifact cannot silently reuse a
+            // verdict after changing the adapter around the same weights.
+            Append(canonical, "pipeline");
+            Append(canonical, ResolvePipelineIdentity(modelIdentity));
+        }
+
+        Append(canonical, fingerprintSentence);
+        Append(canonical, fingerprintTarget);
+        // ConSeC keeps the source sentence unmodified and represents the target
+        // span in its token tensors, so its resolved anchor must be explicit.
+        // Other models carry the occurrence in their synthetic input markers.
         Append(canonical, anchored ? "anchored" : "raw");
-        if (!anchored)
+        if (consec && anchored)
+        {
+            Append(canonical, consecAnchor.ToString(CultureInfo.InvariantCulture));
+        }
+        else if (!anchored)
         {
             Append(canonical, characterIndex.ToString(CultureInfo.InvariantCulture));
         }
@@ -164,7 +210,11 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
             Append(canonical, "outcome");
             Append(canonical, outcome.GroupId.ToString(CultureInfo.InvariantCulture));
             Append(canonical, outcome.SourceIndex.ToString(CultureInfo.InvariantCulture));
-            Append(canonical, NormalizeText(outcome.Translation));
+            Append(
+                canonical,
+                exactText
+                    ? PreserveExact(outcome.Translation)
+                    : NormalizeText(outcome.Translation));
         }
 
         // The key must describe the glosses the worker actually received. A plan
@@ -177,7 +227,11 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         for (int index = 0; index < glosses.Count; index++)
         {
             Append(canonical, "candidate");
-            Append(canonical, NormalizeText(glosses[index]));
+            Append(
+                canonical,
+                exactText
+                    ? PreserveExact(glosses[index])
+                    : NormalizeText(glosses[index]));
             Append(
                 canonical,
                 plan.CandidateGroupIds[index].ToString(CultureInfo.InvariantCulture));
@@ -332,6 +386,45 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     // space from control characters BERT deletes entirely.
     private static string NormalizeText(string? value) =>
         RankerCacheTextNormalizer.Normalize(value);
+
+    private static string PreserveExact(string? value) =>
+        RankerCacheTextNormalizer.PreserveExact(value);
+
+    private static bool IsSandwichModel(string modelIdentity) =>
+        modelIdentity.StartsWith(
+            GlossBertDictionarySelectorService.SandwichExpectedModelVersionPrefix,
+            StringComparison.Ordinal);
+
+    private static bool IsConsecModel(string modelIdentity) =>
+        modelIdentity.StartsWith(
+            GlossBertDictionarySelectorService.ConsecExpectedModelVersionPrefix,
+            StringComparison.Ordinal);
+
+    private static bool IsPinnedGlossBertModel(string modelIdentity) =>
+        modelIdentity.StartsWith(
+            GlossBertDictionarySelectorService.ExpectedModelVersionPrefix,
+            StringComparison.Ordinal);
+
+    private static string ResolvePipelineIdentity(string modelIdentity)
+    {
+        if (IsSandwichModel(modelIdentity))
+        {
+            return "sandwich";
+        }
+
+        if (IsConsecModel(modelIdentity))
+        {
+            return "consec-independent";
+        }
+
+        return modelIdentity.EndsWith(
+            ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
+            StringComparison.Ordinal)
+                ? "bi+cross"
+                : modelIdentity.EndsWith(":pipeline-cross", StringComparison.Ordinal)
+                    ? "cross"
+                    : "model-bound";
+    }
 
     private static string Truncate(string value) =>
         value.Length <= MaximumStoredTextLength

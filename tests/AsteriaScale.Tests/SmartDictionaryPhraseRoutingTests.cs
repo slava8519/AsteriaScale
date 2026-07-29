@@ -65,7 +65,8 @@ internal static class SmartDictionaryPhraseRoutingTests
             Path.Combine(vnBundled, "eng-rus-vn.tsv"),
             [
                 "first time\tпервый раз",
-                "i get that a lot\tя часто это слышу"
+                "i get that a lot\tя часто это слышу",
+                "if you wish\tесли хотите; если желаете"
             ]);
         LocalDictionaryService vnDictionary = new(vnBundled, vnUser);
         await VerifyTrustedFirstTimeAsync(
@@ -98,6 +99,33 @@ internal static class SmartDictionaryPhraseRoutingTests
                 longTrustedResult.Translation == "я часто это слышу" &&
                 longTrustedResult.Engine == LocalDictionaryService.EngineLabel,
                 $"A five-token VN-hard phrase was unreachable through '{target}'.");
+        }
+
+        const string nestedIdiomContext = "You may leave if you wish.";
+        foreach (string target in new[] { "if", "wish" })
+        {
+            DictionaryLookupResult longest =
+                await vnDictionary.LookupWithSenseMetadataAsync(
+                    nestedIdiomContext,
+                    target,
+                    nestedIdiomContext.IndexOf(target, StringComparison.Ordinal));
+            SmartHoverResult longestResult = await ResolveAsync(
+                vnDictionary,
+                nestedIdiomContext,
+                target,
+                Path.Combine(root, $"vn-if-you-wish-{target}-cache.json"));
+            Check(longest is
+            {
+                Found: true,
+                Source: "if you wish",
+                Translation: "если хотите; если желаете",
+                IsPhrase: true,
+                IsTrustedPhrase: true
+            } &&
+                longest.SenseCandidates.Count == 0 &&
+                longestResult.Source == "if you wish" &&
+                longestResult.Engine == LocalDictionaryService.EngineLabel,
+                $"The nested 'you wish' idiom beat the longer curated phrase through '{target}'.");
         }
 
         string userBundled = Path.Combine(root, "user", "bundled");
@@ -190,7 +218,8 @@ internal static class SmartDictionaryPhraseRoutingTests
             Path.Combine(bundled, "eng-rus.tsv"),
             [
                 "first time\tвпервые; первый половой акт",
-                "quiet moment\tтихая минута"
+                "quiet moment\tтихая минута",
+                "you wish\tмечтать не вредно!"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus-enwiktionary-senses.tsv"),

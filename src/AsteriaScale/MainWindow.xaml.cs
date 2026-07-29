@@ -65,6 +65,17 @@ public partial class MainWindow : Window
         new("Всегда готова — быстрее", true),
         new("Экономить память — выгружать при простое", false)
     ];
+    private static readonly IReadOnlyList<TranslationSettingOption> SmartRankerModelOptions =
+    [
+        new("GlossBERT — стабильный эталон", SmartDictionaryRankerModels.GlossBert),
+        new("SANDWiCH — исследовательский CPU", SmartDictionaryRankerModels.Sandwich),
+        new("ConSeC — лучший для науки, CPU", SmartDictionaryRankerModels.Consec)
+    ];
+    private static readonly IReadOnlyList<TranslationSettingOption> SmartPhraseTranslationOptions =
+    [
+        new("Словарная форма — быстро и надёжно", SmartPhraseTranslationModes.Off),
+        new("TranslateGemma 4B — перевод фразы второй строкой", SmartPhraseTranslationModes.TranslateGemma)
+    ];
     private static readonly IReadOnlyList<FrameRateOption> FrameRateOptions =
     [
         new("30 FPS — экономно, для HQ", 30),
@@ -114,6 +125,10 @@ public partial class MainWindow : Window
         SmartBackendComboBox.ItemsSource = SmartBackendOptions;
         SmartBackendComboBox.SelectedItem = SmartBackendOptions.First(option =>
             option.Id == SmartDictionaryBackends.Normalize(_settings.SmartDictionaryBackend));
+        SmartRankerModelComboBox.ItemsSource = SmartRankerModelOptions;
+        SmartRankerModelComboBox.SelectedItem = SmartRankerModelOptions.First(option =>
+            option.Id == SmartDictionaryRankerModels.Normalize(
+                _settings.SmartDictionaryRankerModel));
         SmartSourceLanguageComboBox.ItemsSource = SmartSourceLanguageOptions;
         SmartSourceLanguageComboBox.SelectedItem = SmartSourceLanguageOptions.First(option =>
             option.Id == SmartDictionarySourceLanguages.Normalize(_settings.SmartDictionarySourceLanguage));
@@ -123,6 +138,9 @@ public partial class MainWindow : Window
         SmartMemoryPolicyComboBox.ItemsSource = SmartMemoryPolicyOptions;
         SmartMemoryPolicyComboBox.SelectedItem = SmartMemoryPolicyOptions.First(option =>
             option.KeepWarm == _settings.SmartDictionaryKeepWarm);
+        SmartPhraseTranslationComboBox.ItemsSource = SmartPhraseTranslationOptions;
+        SmartPhraseTranslationComboBox.SelectedItem = SmartPhraseTranslationOptions.First(option =>
+            option.Id == SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode));
         HoverDelayComboBox.ItemsSource = HoverDelays;
         HoverDelayComboBox.SelectedItem = HoverDelays.FirstOrDefault(
             option => option.Milliseconds == _settings.HoverTranslationDelayMs) ?? HoverDelays[1];
@@ -647,19 +665,40 @@ public partial class MainWindow : Window
     {
         if (_initializing ||
             SmartBackendComboBox.SelectedItem is not TranslationSettingOption backend ||
+            SmartRankerModelComboBox.SelectedItem is not TranslationSettingOption rankerModel ||
             SmartSourceLanguageComboBox.SelectedItem is not TranslationSettingOption sourceLanguage ||
             SmartFallbackComboBox.SelectedItem is not TranslationSettingOption fallback ||
-            SmartMemoryPolicyComboBox.SelectedItem is not MemoryPolicyOption memoryPolicy)
+            SmartMemoryPolicyComboBox.SelectedItem is not MemoryPolicyOption memoryPolicy ||
+            SmartPhraseTranslationComboBox.SelectedItem is not TranslationSettingOption phraseTranslation)
         {
             return;
         }
 
+        if (rankerModel.Id is SmartDictionaryRankerModels.Sandwich or
+                SmartDictionaryRankerModels.Consec &&
+            backend.Id == SmartDictionaryBackends.Npu)
+        {
+            backend = SmartBackendOptions.First(option =>
+                option.Id == SmartDictionaryBackends.Cpu);
+            _initializing = true;
+            SmartBackendComboBox.SelectedItem = backend;
+            _initializing = false;
+            string modelName = rankerModel.Id == SmartDictionaryRankerModels.Consec
+                ? "ConSeC"
+                : "SANDWiCH";
+            SetStatus($"{modelName} работает на CPU — ускоритель явно переключён на CPU");
+        }
+
         _settings.SmartDictionaryBackend = SmartDictionaryBackends.Normalize(backend.Id);
+        _settings.SmartDictionaryRankerModel =
+            SmartDictionaryRankerModels.Normalize(rankerModel.Id);
         _settings.SmartDictionarySourceLanguage =
             SmartDictionarySourceLanguages.Normalize(sourceLanguage.Id);
         _settings.SmartDictionaryFallbackMode =
             SmartDictionaryFallbackModes.Normalize(fallback.Id);
         _settings.SmartDictionaryKeepWarm = memoryPolicy.KeepWarm;
+        _settings.SmartPhraseTranslationMode =
+            SmartPhraseTranslationModes.Normalize(phraseTranslation.Id);
         _hoverTranslation.ApplySmartDictionarySettings();
         UpdateSmartDictionarySettingsHint();
 
@@ -704,7 +743,7 @@ public partial class MainWindow : Window
         TranslationDescriptionText.Text = mode switch
         {
             HoverTranslationModes.Smart =>
-                "Наведите мышь на слово или выражение — словарь покажет перевод, а модель уточнит значение только при наличии нескольких вариантов",
+                "Наведите мышь на слово — словарь покажет значение, а TranslateGemma добавит перевод короткой фразы второй строкой",
             HoverTranslationModes.Screen =>
                 "Нажмите горячую клавишу в игре — все найденные реплики будут переведены поверх оригинала",
             HoverTranslationModes.Dictionary =>
@@ -722,6 +761,15 @@ public partial class MainWindow : Window
             SmartDictionaryBackends.Npu => "NPU ответит быстрее, использует меньше RAM и оставит GPU свободным",
             _ => "автоматически используется рекомендуемый CPU"
         };
+        string ranker = SmartDictionaryRankerModels.Normalize(
+            _settings.SmartDictionaryRankerModel) switch
+        {
+            SmartDictionaryRankerModels.Sandwich =>
+                "модель: SANDWiCH (экспериментальный CPU-профиль)",
+            SmartDictionaryRankerModels.Consec =>
+                "модель: ConSeC (научный исследовательский CPU-профиль, около 1,5 ГБ RAM)",
+            _ => "модель: GlossBERT"
+        };
         string language = SmartDictionarySourceLanguages.Normalize(_settings.SmartDictionarySourceLanguage) switch
         {
             SmartDictionarySourceLanguages.English => "язык: английский",
@@ -737,9 +785,13 @@ public partial class MainWindow : Window
         string memory = _settings.SmartDictionaryKeepWarm
             ? "модель остаётся готовой, пока режим включён"
             : "при простое модель освобождает память";
+        string phrase = SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
+                        SmartPhraseTranslationModes.TranslateGemma
+            ? "TranslateGemma независимо переводит короткий EN→RU контекст второй строкой"
+            : "показывается только словарный результат";
 
         SmartDictionarySettingsHint.Text =
-            $"{backend}; {language}; {fallback}; {memory}.";
+            $"{backend}; {ranker}; {language}; {fallback}; {phrase}; {memory}.";
     }
 
     private async void OnRunAtStartupChanged(object sender, RoutedEventArgs e)

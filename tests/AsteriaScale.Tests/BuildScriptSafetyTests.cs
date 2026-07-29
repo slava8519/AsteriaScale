@@ -105,6 +105,68 @@ internal static class BuildScriptSafetyTests
                 }
             }
 
+            # SANDWiCH is optional for a clean checkout, but it becomes one
+            # indivisible publish unit as soon as all four source artifacts are
+            # installed. A two-model partial download must not advertise a
+            # usable profile or weaken the ordinary release contract.
+            $sandwichSource = Join-Path $assetsRoot 'src\AsteriaScale.RankerWorker\Models\Sandwich'
+            $sandwichCpu = Join-Path $sandwichSource 'Cpu'
+            $sandwichOutput = Join-Path $distOutput 'Ranker\Models\Sandwich'
+            if (Test-AsteriaSandwichBundleComplete -Root $assetsRoot) {
+                throw 'An absent SANDWiCH bundle was reported as complete.'
+            }
+            if (@(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
+                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }) {
+                throw 'An absent optional SANDWiCH bundle became release-required.'
+            }
+
+            New-Item -ItemType Directory -Path $sandwichCpu | Out-Null
+            Set-Content -LiteralPath (Join-Path $sandwichCpu 'encoder-nv-fp32.onnx') -Value 'nv'
+            Set-Content -LiteralPath (Join-Path $sandwichCpu 'encoder-v-fp32.onnx') -Value 'v'
+            if (Test-AsteriaSandwichBundleComplete -Root $assetsRoot) {
+                throw 'A two-ONNX partial SANDWiCH bundle was reported as complete.'
+            }
+            if (@(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
+                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }) {
+                throw 'A partial SANDWiCH bundle pretended to be publishable.'
+            }
+
+            Set-Content -LiteralPath (Join-Path $sandwichSource 'tokenizer.json') -Value '{}'
+            Set-Content -LiteralPath (Join-Path $sandwichSource 'model-manifest.json') -Value '{}'
+            if (-not (Test-AsteriaSandwichBundleComplete -Root $assetsRoot)) {
+                throw 'The complete four-file SANDWiCH bundle was not recognized.'
+            }
+            $sandwichRequired = @(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
+                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }
+            foreach ($relativePath in @(
+                'tokenizer.json',
+                'model-manifest.json',
+                'Cpu\encoder-nv-fp32.onnx',
+                'Cpu\encoder-v-fp32.onnx')) {
+                $expected = Join-Path $sandwichOutput $relativePath
+                if ($sandwichRequired -notcontains $expected) {
+                    throw "The enabled SANDWiCH profile does not require: $expected"
+                }
+            }
+
+            $explicitRoot = Join-Path $root 'explicit-sandwich'
+            $explicitOutput = Join-Path $explicitRoot 'dist\AsteriaScale'
+            $explicitRequired = @(Get-AsteriaRequiredDistFiles `
+                -Root $explicitRoot `
+                -Output $explicitOutput `
+                -IncludeExperimentalSandwichModel)
+            $explicitSandwichOutput = Join-Path $explicitOutput 'Ranker\Models\Sandwich'
+            foreach ($relativePath in @(
+                'tokenizer.json',
+                'model-manifest.json',
+                'Cpu\encoder-nv-fp32.onnx',
+                'Cpu\encoder-v-fp32.onnx')) {
+                $expected = Join-Path $explicitSandwichOutput $relativePath
+                if ($explicitRequired -notcontains $expected) {
+                    throw "An explicit SANDWiCH publish does not require: $expected"
+                }
+            }
+
             # The closed output manifest covers files that cannot be derived
             # from the source tree, especially the worker's self-contained
             # runtime, and detects same-size content corruption as well.

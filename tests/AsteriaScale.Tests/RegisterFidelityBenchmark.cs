@@ -69,7 +69,8 @@ internal static class RegisterFidelityBenchmark
         string setPath,
         string workerBaseDirectory,
         GlossBertRankerProvider provider,
-        string? reportPath = null)
+        string? reportPath = null,
+        RankerCpuModelProfile cpuModelProfile = RankerCpuModelProfile.GlossBert)
     {
         using JsonDocument document = JsonDocument.Parse(
             await File.ReadAllTextAsync(setPath));
@@ -102,7 +103,8 @@ internal static class RegisterFidelityBenchmark
             await dictionary.LoadSenseMetadataAsync();
             await using GlossBertDictionarySelectorService selector = new(
                 workerBaseDirectory,
-                TimeSpan.FromMinutes(10));
+                TimeSpan.FromMinutes(10),
+                cpuModelProfile);
 
             List<CaseOutcome> outcomes = [];
             foreach (RegisterCase benchmarkCase in cases)
@@ -114,7 +116,23 @@ internal static class RegisterFidelityBenchmark
                     benchmarkCase));
             }
 
-            Report(cases.Length, outcomes, reportPath);
+            string? modelVersion = selector.ActiveModelVersion;
+            if (reportPath is not null && modelVersion is null)
+            {
+                throw new InvalidOperationException(
+                    "The register report has no active loaded model identity.");
+            }
+
+            await ReportAsync(
+                cases.Length,
+                outcomes,
+                reportPath,
+                setPath,
+                workerBaseDirectory,
+                provider,
+                cpuModelProfile,
+                modelVersion,
+                dictionary.VersionToken);
         }
         finally
         {
@@ -165,10 +183,12 @@ internal static class RegisterFidelityBenchmark
         }
         else
         {
-            TargetCenteredContext rankerContext = TargetCenteredContextBuilder.Build(
+            TargetCenteredContext rankerContext = TargetCenteredContextBuilder.BuildForRanker(
                 benchmarkCase.Context,
                 lookup.Source,
-                benchmarkCase.CharacterIndex);
+                benchmarkCase.CharacterIndex,
+                provider,
+                selector.CpuModelProfile);
             GlossBertDictionarySelection ranked = await selector.SelectAsync(
                 rankerContext.Text,
                 lookup.Source,
@@ -301,10 +321,16 @@ internal static class RegisterFidelityBenchmark
         string.Join(" ", value.ToLowerInvariant().Replace('ё', 'е')
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
-    private static void Report(
+    private static async Task ReportAsync(
         int caseCount,
         IReadOnlyList<CaseOutcome> outcomes,
-        string? reportPath)
+        string? reportPath,
+        string setPath,
+        string workerBaseDirectory,
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile,
+        string? modelVersion,
+        string dictionaryVersion)
     {
         CaseOutcome[] decided = outcomes
             .Where(outcome => outcome.Resolved && !outcome.Abstained)
@@ -356,12 +382,40 @@ internal static class RegisterFidelityBenchmark
 
         if (reportPath is not null)
         {
-            File.WriteAllText(
+            RankerBenchmarkProvenanceData provenance =
+                await RankerBenchmarkProvenance.CaptureAsync(
+                    setPath,
+                    workerBaseDirectory,
+                    provider,
+                    cpuModelProfile,
+                    modelVersion!);
+            string? directory = Path.GetDirectoryName(Path.GetFullPath(reportPath));
+            if (directory is not null)
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            await File.WriteAllTextAsync(
                 reportPath,
                 JsonSerializer.Serialize(
                     new
                     {
-                        SchemaVersion = 1,
+                        SchemaVersion = 3,
+                        GeneratedUtc = DateTime.UtcNow.ToString(
+                            "O",
+                            CultureInfo.InvariantCulture),
+                        Provider = provider.ToString(),
+                        ModelProfile = cpuModelProfile.ToString(),
+                        ModelVersion = modelVersion,
+                        AbstentionTag =
+                            AsteriaScale.RankerProtocol.RankerAbstention.CacheTag,
+                        DictionaryVersion = dictionaryVersion,
+                        provenance.BenchmarkSet,
+                        provenance.RuntimeArtifacts,
+                        provenance.DictionaryArtifacts,
+                        provenance.ModelArtifacts,
+                        ModelArtifactBytes = provenance.ModelArtifacts.Sum(
+                            artifact => artifact.Bytes),
                         Cases = caseCount,
                         Decided = decided.Length,
                         Abstained = abstained,

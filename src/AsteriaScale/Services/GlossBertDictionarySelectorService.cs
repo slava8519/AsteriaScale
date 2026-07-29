@@ -11,6 +11,14 @@ public enum GlossBertRankerProvider
     Npu
 }
 
+public enum RankerCpuModelProfile
+{
+    GlossBert,
+    Deberta,
+    Sandwich,
+    Consec
+}
+
 /// <summary>
 /// A normal result may deliberately contain no index. That is a calibrated
 /// ranker abstention rather than a transport or model failure.
@@ -53,12 +61,39 @@ public sealed class GlossBertRankerException : InvalidOperationException
 /// </summary>
 public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 {
+    private readonly record struct RankerTransactionResult(
+        RankerResponse Response,
+        RankerCpuModelProfile CpuModelProfile);
+
     public const string ExpectedModelVersionPrefix =
         "GlossBERT:0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a";
     public const string CpuModelCacheId =
         ExpectedModelVersionPrefix + ":fp32-dynamic";
     public const string NpuModelCacheId =
         ExpectedModelVersionPrefix + ":vitis-epcontext-b4-s64";
+    public const string DebertaExpectedModelVersionPrefix = "GlossDeBERTa:";
+    public const string SandwichExpectedModelVersionPrefix = "SANDWiCH:";
+    public const string ConsecExpectedModelVersionPrefix = "ConSeC:";
+    // Exact identity of the current v2 pilot. Replace this in lockstep with the
+    // worker manifest pins when a final candidate is promoted.
+    public const string DebertaCpuModelCacheId =
+        "GlossDeBERTa:DeBERTa-WSD:" +
+        "cross-encoder/nli-deberta-v3-xsmall@" +
+        "a150876415327c80daeff35ca6f68f5ed8cf5c24:" +
+        "8c85154563ac9950:m-8c85154563ac:t-8e71d5c91216:" +
+        "s96:b16:c2:p1:fp32-dynamic";
+    public const long DebertaManifestLength = 527;
+    public const string DebertaManifestSha256 =
+        "f4028fe04c8a138dfef3d4e453907c6d2ad9e14ed8a44af75d4410be51149b89";
+    public const string SandwichCpuModelCacheId =
+        "SANDWiCH:naacl-2025:singleton-gloss:" +
+        "m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:" +
+        "s512:c2:p1";
+    public const string ConsecCpuModelCacheId =
+        "ConSeC:WNGT:9602b5fd:" +
+        "adapter-consec-wngt-positional-extractor-v1:" +
+        "g-0eb0688f3fd2:d-1257dc55ebec:t-df91c443c8ea:" +
+        "pretokenizer-v3:context-full-v1:s512";
     public const string CpuEmbeddingBundleCacheTag =
         "bi-c9745ed1-13c0fb6d-6fd5d72f-be50c362";
     public const string CpuExecutionProvider = "CPUExecutionProvider";
@@ -79,6 +114,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     private readonly TimeSpan _idleTimeout;
     private readonly TimeSpan _responseTimeout;
     private readonly Func<GlossBertRankerProvider, ProcessStartInfo>? _workerStartInfoFactory;
+    private RankerCpuModelProfile _cpuModelProfile;
     private Process? _worker;
     private StreamWriter? _workerInput;
     private StreamReader? _workerOutput;
@@ -88,12 +124,27 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     private volatile bool _keepWarm = true;
     private volatile bool _disposed;
 
+    // Lets the regression test deterministically pause in the only interval where
+    // a completed response can race a profile reconfiguration. Production never
+    // assigns this hook.
+    internal Func<Task>? BeforeSelectionMaterializationForTests { get; set; }
+
     public GlossBertDictionarySelectorService()
         : this(
             ResolveCompanionBaseDirectory(
                 Environment.ProcessPath,
                 AppContext.BaseDirectory),
             DefaultIdleTimeout)
+    {
+    }
+
+    public GlossBertDictionarySelectorService(RankerCpuModelProfile cpuModelProfile)
+        : this(
+            ResolveCompanionBaseDirectory(
+                Environment.ProcessPath,
+                AppContext.BaseDirectory),
+            DefaultIdleTimeout,
+            cpuModelProfile)
     {
     }
 
@@ -120,7 +171,21 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             baseDirectory,
             idleTimeout,
             DefaultResponseTimeout,
-            workerStartInfoFactory: null)
+            workerStartInfoFactory: null,
+            RankerCpuModelProfile.GlossBert)
+    {
+    }
+
+    internal GlossBertDictionarySelectorService(
+        string baseDirectory,
+        TimeSpan idleTimeout,
+        RankerCpuModelProfile cpuModelProfile)
+        : this(
+            baseDirectory,
+            idleTimeout,
+            DefaultResponseTimeout,
+            workerStartInfoFactory: null,
+            cpuModelProfile)
     {
     }
 
@@ -129,6 +194,21 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         TimeSpan idleTimeout,
         TimeSpan responseTimeout,
         Func<GlossBertRankerProvider, ProcessStartInfo>? workerStartInfoFactory)
+        : this(
+            baseDirectory,
+            idleTimeout,
+            responseTimeout,
+            workerStartInfoFactory,
+            RankerCpuModelProfile.GlossBert)
+    {
+    }
+
+    internal GlossBertDictionarySelectorService(
+        string baseDirectory,
+        TimeSpan idleTimeout,
+        TimeSpan responseTimeout,
+        Func<GlossBertRankerProvider, ProcessStartInfo>? workerStartInfoFactory,
+        RankerCpuModelProfile cpuModelProfile)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
         if (idleTimeout <= TimeSpan.Zero)
@@ -141,6 +221,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(responseTimeout));
         }
 
+        if (!Enum.IsDefined(cpuModelProfile))
+        {
+            throw new ArgumentOutOfRangeException(nameof(cpuModelProfile));
+        }
+
         string rankerDirectory = Path.Combine(Path.GetFullPath(baseDirectory), "Ranker");
         _workerExecutable = Path.Combine(
             rankerDirectory,
@@ -149,6 +234,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         _idleTimeout = idleTimeout;
         _responseTimeout = responseTimeout;
         _workerStartInfoFactory = workerStartInfoFactory;
+        _cpuModelProfile = cpuModelProfile;
         _idleTimer = new System.Threading.Timer(
             static state =>
             {
@@ -187,6 +273,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     public string? ActiveModelVersion =>
         IsWorkerRunning ? _activeModelVersion : null;
 
+    public RankerCpuModelProfile CpuModelProfile => _cpuModelProfile;
+
     internal int? WorkerProcessId
     {
         get
@@ -209,6 +297,58 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     public static string GetModelCacheId(GlossBertRankerProvider provider) =>
         provider == GlossBertRankerProvider.Npu ? NpuModelCacheId : CpuModelCacheId;
 
+    public static string GetModelCacheId(
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        ValidateProviderModel(provider, cpuModelProfile);
+        return cpuModelProfile switch
+        {
+            RankerCpuModelProfile.Deberta => DebertaCpuModelCacheId,
+            RankerCpuModelProfile.Sandwich => SandwichCpuModelCacheId,
+            RankerCpuModelProfile.Consec => ConsecCpuModelCacheId,
+            _ => GetModelCacheId(provider)
+        };
+    }
+
+    public static string GetExpectedModelVersionPrefix(
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        ValidateProviderModel(provider, cpuModelProfile);
+        return cpuModelProfile switch
+        {
+            RankerCpuModelProfile.Deberta => DebertaExpectedModelVersionPrefix,
+            RankerCpuModelProfile.Sandwich => SandwichExpectedModelVersionPrefix,
+            RankerCpuModelProfile.Consec => ConsecExpectedModelVersionPrefix,
+            _ => ExpectedModelVersionPrefix
+        };
+    }
+
+    internal static void AddWorkerArguments(
+        ProcessStartInfo startInfo,
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile,
+        string modelDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelDirectory);
+        ValidateProviderModel(provider, cpuModelProfile);
+        startInfo.ArgumentList.Add("--provider");
+        startInfo.ArgumentList.Add(
+            provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
+        startInfo.ArgumentList.Add("--cpu-model");
+        startInfo.ArgumentList.Add(cpuModelProfile switch
+        {
+            RankerCpuModelProfile.Deberta => "deberta",
+            RankerCpuModelProfile.Sandwich => "sandwich",
+            RankerCpuModelProfile.Consec => "consec",
+            _ => "glossbert"
+        });
+        startInfo.ArgumentList.Add("--model-directory");
+        startInfo.ArgumentList.Add(modelDirectory);
+    }
+
     public void ConfigureKeepWarm(bool keepWarm)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -220,6 +360,33 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         else
         {
             ScheduleIdleUnload();
+        }
+    }
+
+    public async Task ConfigureCpuModelProfileAsync(
+        RankerCpuModelProfile cpuModelProfile,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!Enum.IsDefined(cpuModelProfile))
+        {
+            throw new ArgumentOutOfRangeException(nameof(cpuModelProfile));
+        }
+
+        await _transactionLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_cpuModelProfile == cpuModelProfile)
+            {
+                return;
+            }
+
+            await StopWorkerLockedAsync(attemptGracefulShutdown: true);
+            _cpuModelProfile = cpuModelProfile;
+        }
+        finally
+        {
+            _transactionLock.Release();
         }
     }
 
@@ -261,12 +428,21 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             stableGroupIds,
             sourceLanguage);
 
-        RankerResponse response = await SendAsync(
+        RankerTransactionResult transaction = await SendAsync(
             request,
             provider,
             stableGroupIds,
             cancellationToken);
-        return CreateSelection(response, provider, stableGroupIds);
+        if (BeforeSelectionMaterializationForTests is { } beforeMaterialization)
+        {
+            await beforeMaterialization();
+        }
+
+        return CreateSelection(
+            transaction.Response,
+            provider,
+            stableGroupIds,
+            transaction.CpuModelProfile);
     }
 
     public async Task UnloadAsync()
@@ -283,7 +459,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
     }
 
-    private async Task<RankerResponse> SendAsync(
+    private async Task<RankerTransactionResult> SendAsync(
         RankerRequest request,
         GlossBertRankerProvider provider,
         IReadOnlyCollection<int>? expectedGroupIds,
@@ -292,14 +468,15 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         ResetIdleTimerForActivity();
 
-        Task<RankerResponse> transaction = ExecuteTransactionAsync(
+        Task<RankerTransactionResult> transaction = ExecuteTransactionAsync(
             request,
             provider,
             expectedGroupIds,
             cancellationToken);
         try
         {
-            RankerResponse response = await transaction.WaitAsync(cancellationToken);
+            RankerTransactionResult response =
+                await transaction.WaitAsync(cancellationToken);
             ScheduleIdleUnload();
             return response;
         }
@@ -313,7 +490,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
     }
 
-    private async Task<RankerResponse> ExecuteTransactionAsync(
+    private async Task<RankerTransactionResult> ExecuteTransactionAsync(
         RankerRequest request,
         GlossBertRankerProvider provider,
         IReadOnlyCollection<int>? expectedGroupIds,
@@ -322,7 +499,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         await _transactionLock.WaitAsync(startCancellationToken);
         try
         {
-            await EnsureWorkerLockedAsync(provider, startCancellationToken);
+            RankerCpuModelProfile transactionCpuModelProfile = _cpuModelProfile;
+            await EnsureWorkerLockedAsync(
+                provider,
+                transactionCpuModelProfile,
+                startCancellationToken);
             startCancellationToken.ThrowIfCancellationRequested();
 
             // Deliberately non-cancellable from the write onward. Cancelling a
@@ -334,9 +515,12 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 request.RequestId,
                 provider,
                 expectedGroupIds,
-                expectedCommand: request.Command);
+                expectedCommand: request.Command,
+                transactionCpuModelProfile);
             _activeModelVersion = response.ModelVersion;
-            return response;
+            return new RankerTransactionResult(
+                response,
+                transactionCpuModelProfile);
         }
         catch (OperationCanceledException) when (startCancellationToken.IsCancellationRequested)
         {
@@ -356,9 +540,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
     private async Task EnsureWorkerLockedAsync(
         GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ValidateProviderModel(provider, cpuModelProfile);
         if (_worker is { HasExited: false } && _activeProvider == provider)
         {
             return;
@@ -387,11 +573,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
         if (_workerStartInfoFactory is null)
         {
-            startInfo.ArgumentList.Add("--provider");
-            startInfo.ArgumentList.Add(
-                provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
-            startInfo.ArgumentList.Add("--model-directory");
-            startInfo.ArgumentList.Add(_modelDirectory);
+            AddWorkerArguments(
+                startInfo,
+                provider,
+                cpuModelProfile,
+                _modelDirectory);
         }
 
         Process worker;
@@ -427,7 +613,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 hello.RequestId,
                 provider,
                 expectedGroupIds: null,
-                expectedCommand: hello.Command);
+                expectedCommand: hello.Command,
+                cpuModelProfile);
             _activeModelVersion = response.ModelVersion;
         }
         catch
@@ -523,8 +710,10 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         string expectedRequestId,
         GlossBertRankerProvider requestedProvider,
         IReadOnlyCollection<int>? expectedGroupIds,
-        string expectedCommand)
+        string expectedCommand,
+        RankerCpuModelProfile cpuModelProfile)
     {
+        ValidateProviderModel(requestedProvider, cpuModelProfile);
         bool requireSelection = string.Equals(
             expectedCommand,
             RankerProtocolV2.Select,
@@ -574,9 +763,12 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 $"'{response.Device ?? "<null>"}'.");
         }
 
+        string expectedModelVersionPrefix = GetExpectedModelVersionPrefix(
+            requestedProvider,
+            cpuModelProfile);
         if (string.IsNullOrWhiteSpace(response.ModelVersion) ||
             !response.ModelVersion.StartsWith(
-                ExpectedModelVersionPrefix,
+                expectedModelVersionPrefix,
                 StringComparison.Ordinal))
         {
             throw ProtocolError(
@@ -595,9 +787,10 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
 
         if (requireLoadedIdentity &&
-            !response.ModelVersion.StartsWith(
-                GetModelCacheId(requestedProvider),
-                StringComparison.Ordinal))
+            !HasPinnedArtifactIdentity(
+                response.ModelVersion,
+                requestedProvider,
+                cpuModelProfile))
         {
             throw ProtocolError(
                 $"Ranker artifact '{response.ModelVersion}' does not match the " +
@@ -605,7 +798,10 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
 
         if (requireLoadedIdentity &&
-            !HasPinnedPipelineIdentity(response.ModelVersion, requestedProvider))
+            !HasPinnedPipelineIdentity(
+                response.ModelVersion,
+                requestedProvider,
+                cpuModelProfile))
         {
             throw ProtocolError(
                 $"Ranker artifact '{response.ModelVersion}' does not declare " +
@@ -644,11 +840,31 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 "A selection response must include margin, score and confidence diagnostics.");
         }
 
-        if (response.Pipeline is not ("cross" or "bi+cross"))
+        if (response.Pipeline is not (
+                "cross" or "bi+cross" or "sandwich" or "consec-independent"))
         {
             throw ProtocolError(
                 $"A selection response must declare its ranking pipeline; " +
                 $"received '{response.Pipeline ?? "<null>"}'.");
+        }
+
+        string? requiredDedicatedPipeline = cpuModelProfile switch
+        {
+            RankerCpuModelProfile.Sandwich => "sandwich",
+            RankerCpuModelProfile.Consec => "consec-independent",
+            _ => null
+        };
+        bool dedicatedPipeline = response.Pipeline is "sandwich" or "consec-independent";
+        if (requiredDedicatedPipeline is not null
+                ? !string.Equals(
+                    response.Pipeline,
+                    requiredDedicatedPipeline,
+                    StringComparison.Ordinal)
+                : dedicatedPipeline)
+        {
+            throw ProtocolError(
+                $"Worker pipeline '{response.Pipeline}' does not match CPU model profile " +
+                $"'{cpuModelProfile}'.");
         }
 
         bool allowsBiEncoderPipeline =
@@ -691,14 +907,16 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     private static GlossBertDictionarySelection CreateSelection(
         RankerResponse response,
         GlossBertRankerProvider requestedProvider,
-        IReadOnlyCollection<int> expectedGroupIds)
+        IReadOnlyCollection<int> expectedGroupIds,
+        RankerCpuModelProfile cpuModelProfile)
     {
         ValidateResponse(
             response,
             response.RequestId,
             requestedProvider,
             expectedGroupIds,
-            expectedCommand: RankerProtocolV2.Select);
+            expectedCommand: RankerProtocolV2.Select,
+            cpuModelProfile);
         return new GlossBertDictionarySelection(
             response.Index,
             response.Abstained,
@@ -829,7 +1047,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                     shutdown.RequestId,
                     requestedProvider,
                     expectedGroupIds: null,
-                    expectedCommand: shutdown.Command);
+                    expectedCommand: shutdown.Command,
+                    _cpuModelProfile);
 
                 using CancellationTokenSource exitTimeout =
                     new(ShutdownExitTimeout);
@@ -891,7 +1110,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     }
 
     private async Task ObserveAbandonedTransactionAsync(
-        Task<RankerResponse> transaction)
+        Task<RankerTransactionResult> transaction)
     {
         try
         {
@@ -993,17 +1212,84 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
     }
 
+    private static bool HasPinnedArtifactIdentity(
+        string modelVersion,
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        if (cpuModelProfile == RankerCpuModelProfile.GlossBert)
+        {
+            return modelVersion.StartsWith(
+                GetModelCacheId(provider),
+                StringComparison.Ordinal);
+        }
+
+        if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
+        {
+            return provider == GlossBertRankerProvider.Cpu &&
+                   modelVersion.StartsWith(
+                       SandwichCpuModelCacheId,
+                       StringComparison.Ordinal);
+        }
+
+        if (cpuModelProfile == RankerCpuModelProfile.Consec)
+        {
+            return provider == GlossBertRankerProvider.Cpu &&
+                   modelVersion.StartsWith(
+                       ConsecCpuModelCacheId,
+                       StringComparison.Ordinal);
+        }
+
+        return provider == GlossBertRankerProvider.Cpu &&
+               TrySplitDebertaArtifactIdentity(modelVersion, out _);
+    }
+
     private static bool HasPinnedPipelineIdentity(
         string modelVersion,
-        GlossBertRankerProvider provider)
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
     {
-        string artifactIdentity = GetModelCacheId(provider);
-        if (!modelVersion.StartsWith(artifactIdentity, StringComparison.Ordinal))
+        string suffix;
+        if (cpuModelProfile == RankerCpuModelProfile.GlossBert)
+        {
+            string artifactIdentity = GetModelCacheId(provider);
+            if (!modelVersion.StartsWith(artifactIdentity, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            suffix = modelVersion[artifactIdentity.Length..];
+        }
+        else if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
+        {
+            if (provider != GlossBertRankerProvider.Cpu ||
+                !modelVersion.StartsWith(
+                    SandwichCpuModelCacheId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            suffix = modelVersion[SandwichCpuModelCacheId.Length..];
+        }
+        else if (cpuModelProfile == RankerCpuModelProfile.Consec)
+        {
+            if (provider != GlossBertRankerProvider.Cpu ||
+                !modelVersion.StartsWith(
+                    ConsecCpuModelCacheId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            suffix = modelVersion[ConsecCpuModelCacheId.Length..];
+        }
+        else if (provider != GlossBertRankerProvider.Cpu ||
+                 !TrySplitDebertaArtifactIdentity(modelVersion, out suffix))
         {
             return false;
         }
 
-        string suffix = modelVersion[artifactIdentity.Length..];
         if (suffix.StartsWith(":onnx-", StringComparison.Ordinal))
         {
             int tagEnd = suffix.IndexOf(':', 6);
@@ -1026,11 +1312,65 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             return true;
         }
 
+        if (cpuModelProfile == RankerCpuModelProfile.Sandwich &&
+            string.Equals(suffix, ":pipeline-sandwich", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (cpuModelProfile == RankerCpuModelProfile.Consec &&
+            string.Equals(
+                suffix,
+                ":pipeline-consec-independent",
+                StringComparison.Ordinal))
+        {
+            return true;
+        }
+
         return provider == GlossBertRankerProvider.Cpu &&
                string.Equals(
                    suffix,
                    ":" + CpuEmbeddingBundleCacheTag,
                    StringComparison.Ordinal);
+    }
+
+    private static bool TrySplitDebertaArtifactIdentity(
+        string modelVersion,
+        out string suffix)
+    {
+        suffix = string.Empty;
+        if (!modelVersion.StartsWith(
+                DebertaCpuModelCacheId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        suffix = modelVersion[DebertaCpuModelCacheId.Length..];
+        return true;
+    }
+
+    private static void ValidateProviderModel(
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        if (!Enum.IsDefined(provider))
+        {
+            throw new ArgumentOutOfRangeException(nameof(provider));
+        }
+
+        if (!Enum.IsDefined(cpuModelProfile))
+        {
+            throw new ArgumentOutOfRangeException(nameof(cpuModelProfile));
+        }
+
+        if (provider == GlossBertRankerProvider.Npu &&
+            cpuModelProfile != RankerCpuModelProfile.GlossBert)
+        {
+            throw new GlossBertRankerException(
+                "unsupported_provider_model",
+                "The selected semantic ranker is CPU-only; NPU remains pinned to GlossBERT.");
+        }
     }
 
     private static GlossBertRankerException ProtocolError(string message) =>
@@ -1040,27 +1380,35 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         RankerResponse response,
         string expectedRequestId,
         GlossBertRankerProvider requestedProvider,
-        IReadOnlyCollection<int> expectedGroupIds)
+        IReadOnlyCollection<int> expectedGroupIds,
+        RankerCpuModelProfile cpuModelProfile = RankerCpuModelProfile.GlossBert)
     {
         ValidateResponse(
             response,
             expectedRequestId,
             requestedProvider,
             expectedGroupIds,
-            expectedCommand: RankerProtocolV2.Select);
-        return CreateSelection(response, requestedProvider, expectedGroupIds);
+            expectedCommand: RankerProtocolV2.Select,
+            cpuModelProfile);
+        return CreateSelection(
+            response,
+            requestedProvider,
+            expectedGroupIds,
+            cpuModelProfile);
     }
 
     internal static void ValidateWarmResponseForTests(
         RankerResponse response,
         string expectedRequestId,
-        GlossBertRankerProvider requestedProvider) =>
+        GlossBertRankerProvider requestedProvider,
+        RankerCpuModelProfile cpuModelProfile = RankerCpuModelProfile.GlossBert) =>
         ValidateResponse(
             response,
             expectedRequestId,
             requestedProvider,
             expectedGroupIds: null,
-            expectedCommand: RankerProtocolV2.Warm);
+            expectedCommand: RankerProtocolV2.Warm,
+            cpuModelProfile);
 
     public async ValueTask DisposeAsync()
     {

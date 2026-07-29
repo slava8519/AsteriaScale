@@ -29,13 +29,23 @@ internal static class RankerCalibrationBenchmark
 
     private sealed record CaseResult(
         string Id,
+        string Route,
         int GlossCount,
         int OutcomeCount,
-        bool ExpectedCovered,
+        bool SenseExpectedCovered,
+        bool VisibleExpectedCovered,
         bool Abstained,
         double? Margin,
-        bool? Correct,
-        string Selected);
+        bool? SenseCorrect,
+        bool? VisibleCorrect,
+        string Selected,
+        string ExpectedTranslation);
+
+    internal readonly record struct RankedCorrectness(
+        bool SenseExpectedCovered,
+        bool VisibleExpectedCovered,
+        bool? SenseCorrect,
+        bool? VisibleCorrect);
 
     /// <summary>
     /// Machine-readable baseline record for roadmap #8. Its purpose is to make
@@ -49,18 +59,21 @@ internal static class RankerCalibrationBenchmark
         int SchemaVersion,
         string GeneratedUtc,
         string Provider,
+        string ModelProfile,
+        string ModelVersion,
         string AbstentionTag,
         string DictionaryVersion,
-        ArtifactRecord BenchmarkSet,
-        IReadOnlyList<ArtifactRecord> ModelArtifacts,
+        BenchmarkArtifactRecord BenchmarkSet,
+        IReadOnlyList<BenchmarkArtifactRecord> RuntimeArtifacts,
+        IReadOnlyList<BenchmarkArtifactRecord> DictionaryArtifacts,
+        IReadOnlyList<BenchmarkArtifactRecord> ModelArtifacts,
         long ModelArtifactBytes,
         long WorkerPeakWorkingSetBytes,
         RoutingRecord Routing,
-        DecisionRecord Decisions,
+        DecisionRecord SenseWsd,
+        VisibleTranslationRecord VisibleTranslations,
         LatencyRecord Latency,
         IReadOnlyDictionary<string, int> Pipelines);
-
-    private sealed record ArtifactRecord(string Name, long Bytes, string Sha256);
 
     private sealed record RoutingRecord(
         int Cases,
@@ -69,7 +82,7 @@ internal static class RankerCalibrationBenchmark
         int NoInventory,
         int AutoResolved,
         int DeterministicResolved,
-        int DeterministicCorrect);
+        int DeterministicVisibleCorrect);
 
     private sealed record DecisionRecord(
         int ExpectedCovered,
@@ -82,6 +95,17 @@ internal static class RankerCalibrationBenchmark
         double EndToEndCorrectCoverage,
         double? MedianMargin);
 
+    private sealed record VisibleTranslationRecord(
+        int ExpectedCovered,
+        int Decided,
+        int Correct,
+        int Abstained,
+        double? AcceptedPrecision,
+        double? ExpectedOutcomeCoverage,
+        double? DecisionCoverage,
+        double RankedCorrectCoverage,
+        double EndToEndCorrectCoverage);
+
     private sealed record LatencyRecord(
         long? MedianMilliseconds,
         long? LargeInventoryMedianMilliseconds,
@@ -93,7 +117,8 @@ internal static class RankerCalibrationBenchmark
         string workerBaseDirectory,
         GlossBertRankerProvider provider,
         string? dumpPath = null,
-        string? reportPath = null)
+        string? reportPath = null,
+        RankerCpuModelProfile cpuModelProfile = RankerCpuModelProfile.GlossBert)
     {
         using JsonDocument document = JsonDocument.Parse(
             await File.ReadAllTextAsync(benchmarkPath));
@@ -124,7 +149,8 @@ internal static class RankerCalibrationBenchmark
             await dictionary.LoadSenseMetadataAsync();
             await using GlossBertDictionarySelectorService selector = new(
                 workerBaseDirectory,
-                TimeSpan.FromMinutes(10));
+                TimeSpan.FromMinutes(10),
+                cpuModelProfile);
 
             List<CaseResult> results = [];
             List<(int Glosses, long Milliseconds)> selectLatencies = [];
@@ -150,16 +176,46 @@ internal static class RankerCalibrationBenchmark
                         lookup.Translation,
                         benchmarkCase.ExpectedTranslation);
                     deterministicCorrect += phraseCorrect ? 1 : 0;
+                    results.Add(new CaseResult(
+                        benchmarkCase.Id,
+                        "phrase-bypass",
+                        0,
+                        1,
+                        SenseExpectedCovered: false,
+                        VisibleExpectedCovered: phraseCorrect,
+                        Abstained: false,
+                        Margin: null,
+                        SenseCorrect: null,
+                        VisibleCorrect: phraseCorrect,
+                        lookup.Translation,
+                        benchmarkCase.ExpectedTranslation));
                     Console.WriteLine(
                         $"  {benchmarkCase.Id,-24} phrase-bypass ({lookup.Source}) " +
-                        $"correct={(phraseCorrect ? "yes" : "NO")}");
+                        $"visible='{lookup.Translation}' " +
+                        $"visibleCorrect={(phraseCorrect ? "yes" : "NO")} " +
+                        $"expected='{benchmarkCase.ExpectedTranslation}'");
                     continue;
                 }
 
                 if (!lookup.Found || lookup.SenseCandidates.Count == 0)
                 {
                     skippedNoInventory++;
-                    Console.WriteLine($"  {benchmarkCase.Id,-24} no aligned sense inventory");
+                    results.Add(new CaseResult(
+                        benchmarkCase.Id,
+                        "no-inventory",
+                        0,
+                        0,
+                        SenseExpectedCovered: false,
+                        VisibleExpectedCovered: false,
+                        Abstained: false,
+                        Margin: null,
+                        SenseCorrect: null,
+                        VisibleCorrect: null,
+                        "<none>",
+                        benchmarkCase.ExpectedTranslation));
+                    Console.WriteLine(
+                        $"  {benchmarkCase.Id,-24} no aligned sense inventory " +
+                        $"expected='{benchmarkCase.ExpectedTranslation}'");
                     continue;
                 }
 
@@ -179,46 +235,36 @@ internal static class RankerCalibrationBenchmark
                 {
                     autoResolved++;
                     SmartDictionaryRankerOutcome? outcome = plan.Outcomes.FirstOrDefault();
+                    bool? autoCorrect = null;
                     if (outcome is not null)
                     {
                         deterministicResolved++;
-                        bool autoCorrect = RussianLabelsMatch(
+                        autoCorrect = RussianLabelsMatch(
                             outcome.Translation,
                             NormalizeRussian(benchmarkCase.ExpectedTranslation));
-                        deterministicCorrect += autoCorrect ? 1 : 0;
+                        deterministicCorrect += autoCorrect.Value ? 1 : 0;
                     }
+                    results.Add(new CaseResult(
+                        benchmarkCase.Id,
+                        "auto-resolved",
+                        plan.CandidateGlosses.Count,
+                        plan.Outcomes.Count,
+                        SenseExpectedCovered: false,
+                        VisibleExpectedCovered: autoCorrect == true,
+                        Abstained: false,
+                        Margin: null,
+                        SenseCorrect: null,
+                        VisibleCorrect: autoCorrect,
+                        outcome?.Translation ?? "<none>",
+                        benchmarkCase.ExpectedTranslation));
                     Console.WriteLine(
                         $"  {benchmarkCase.Id,-24} auto-resolved without the model " +
                         $"({outcome?.Translation ?? "<none>"})" +
                         (outcome is null
                             ? string.Empty
-                            : $" correct={(RussianLabelsMatch(outcome.Translation, NormalizeRussian(benchmarkCase.ExpectedTranslation)) ? "yes" : "NO")}"));
+                            : $" visibleCorrect={(autoCorrect == true ? "yes" : "NO")}") +
+                        $" expected='{benchmarkCase.ExpectedTranslation}'");
                     continue;
-                }
-
-                string expected = NormalizeRussian(benchmarkCase.ExpectedTranslation);
-                HashSet<int> expectedGroupIds = [];
-                foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
-                {
-                    if (RussianLabelsMatch(outcome.Translation, expected))
-                    {
-                        expectedGroupIds.Add(outcome.GroupId);
-                    }
-                }
-
-                SmartDictionarySenseGroup[] orderedSenses = inventory.Groups
-                    .OrderBy(group => group.SourceIndex)
-                    .ToArray();
-                if (orderedSenses.Length == plan.CandidateGroupIds.Count)
-                {
-                    for (int index = 0; index < orderedSenses.Length; index++)
-                    {
-                        if (orderedSenses[index].Surfaces.Any(surface =>
-                                RussianLabelsMatch(surface.Translation, expected)))
-                        {
-                            expectedGroupIds.Add(plan.CandidateGroupIds[index]);
-                        }
-                    }
                 }
 
                 System.Diagnostics.Stopwatch selectTimer = System.Diagnostics.Stopwatch.StartNew();
@@ -237,42 +283,71 @@ internal static class RankerCalibrationBenchmark
                 string selected = selection.SelectedGroupId is { } groupId
                     ? plan.Outcomes.First(outcome => outcome.GroupId == groupId).Translation
                     : "<abstained>";
-                bool? correct = selection.Abstained || expectedGroupIds.Count == 0
-                    ? null
-                    : expectedGroupIds.Contains(selection.SelectedGroupId!.Value);
+                RankedCorrectness correctness = EvaluateRankedCorrectness(
+                    plan,
+                    inventory.Groups,
+                    selection.SelectedGroupId,
+                    selection.Abstained,
+                    benchmarkCase.ExpectedTranslation);
                 CaseResult result = new(
                     benchmarkCase.Id,
+                    "ranked",
                     plan.CandidateGlosses.Count,
                     plan.Outcomes.Count,
-                    expectedGroupIds.Count > 0,
+                    correctness.SenseExpectedCovered,
+                    correctness.VisibleExpectedCovered,
                     selection.Abstained,
                     selection.Margin,
-                    correct,
-                    selected);
+                    correctness.SenseCorrect,
+                    correctness.VisibleCorrect,
+                    selected,
+                    benchmarkCase.ExpectedTranslation);
                 results.Add(result);
                 Console.WriteLine(
                     $"  {result.Id,-24} glosses={result.GlossCount,3} outcomes={result.OutcomeCount,3} " +
                     $"margin={FormatMargin(result.Margin),6} " +
                     (result.Abstained
                         ? "abstained"
-                        : $"selected='{result.Selected}' correct={FormatCorrect(result.Correct)}") +
+                        : $"selected='{result.Selected}' " +
+                          $"senseCorrect={FormatCorrect(result.SenseCorrect)} " +
+                          $"visibleCorrect={FormatCorrect(result.VisibleCorrect)}") +
                     $" expected='{benchmarkCase.ExpectedTranslation}'" +
-                    (result.ExpectedCovered ? "" : " [expected-not-covered]"));
+                    (result.SenseExpectedCovered ? "" : " [expected-not-in-senses]") +
+                    (result.VisibleExpectedCovered ? "" : " [expected-not-visible]"));
             }
 
             Console.WriteLine();
-            int coveredCount = results.Count(result => result.ExpectedCovered);
-            int decidedCount = results.Count(result => result.ExpectedCovered && !result.Abstained);
-            int correctCount = results.Count(result => result.Correct == true);
+            if (results.Count != cases.Length)
+            {
+                throw new InvalidDataException(
+                    $"The ranker benchmark recorded {results.Count} case results for " +
+                    $"{cases.Length} inputs.");
+            }
+
+            CaseResult[] rankedResults = results
+                .Where(result => result.Route == "ranked")
+                .ToArray();
+            int coveredCount = rankedResults.Count(result => result.SenseExpectedCovered);
+            int decidedCount = rankedResults.Count(result =>
+                result.SenseExpectedCovered && !result.Abstained);
+            int correctCount = rankedResults.Count(result => result.SenseCorrect == true);
+            int visibleCoveredCount = rankedResults.Count(result => result.VisibleExpectedCovered);
+            int visibleDecidedCount = rankedResults.Count(result => !result.Abstained);
+            int visibleCorrectCount = rankedResults.Count(result => result.VisibleCorrect == true);
             Console.WriteLine(
-                $"  cases={cases.Length} ranked={results.Count} phrase-bypass={skippedPhrase} " +
+                $"  cases={cases.Length} ranked={rankedResults.Length} phrase-bypass={skippedPhrase} " +
                 $"no-inventory={skippedNoInventory} auto-resolved={autoResolved}");
             Console.WriteLine(
-                $"  expected-label coverage: {coveredCount}/{results.Count} ranked cases");
+                $"  sense inventory coverage: {coveredCount}/{rankedResults.Length} ranked cases; " +
+                $"sense decisions correct: {correctCount}/{decidedCount}");
             Console.WriteLine(
-                $"  deterministic resolutions: {deterministicCorrect}/{deterministicResolved} correct; " +
-                $"end-to-end correct coverage: " +
-                $"{correctCount + deterministicCorrect}/{cases.Length}");
+                $"  visible-outcome coverage: {visibleCoveredCount}/{rankedResults.Length} ranked cases; " +
+                $"visible decisions correct: {visibleCorrectCount}/{visibleDecidedCount}");
+            Console.WriteLine(
+                $"  deterministic visible translations: " +
+                $"{deterministicCorrect}/{deterministicResolved} correct; " +
+                $"sense-aware end-to-end: {correctCount + deterministicCorrect}/{cases.Length}; " +
+                $"visible end-to-end: {visibleCorrectCount + deterministicCorrect}/{cases.Length}");
             if (selectLatencies.Count > 0)
             {
                 long[] ordered = selectLatencies.Select(entry => entry.Milliseconds)
@@ -304,11 +379,16 @@ internal static class RankerCalibrationBenchmark
             long workerPeakBytes = ReadWorkerPeakWorkingSet(selector);
             if (reportPath is not null)
             {
+                string modelVersion = selector.ActiveModelVersion
+                    ?? throw new InvalidOperationException(
+                        "The ranker report has no active loaded model identity.");
                 await WriteBaselineReportAsync(
                     reportPath,
                     benchmarkPath,
                     workerBaseDirectory,
                     provider,
+                    cpuModelProfile,
+                    modelVersion,
                     dictionary.VersionToken,
                     cases.Length,
                     results,
@@ -328,12 +408,12 @@ internal static class RankerCalibrationBenchmark
                 (workerPeakBytes > 0
                     ? $"{workerPeakBytes / (1024 * 1024)} MB"
                     : "unavailable"));
-            PrintBucket("small inventories (<=32 glosses)", results.Where(result => result.GlossCount <= 32));
-            PrintBucket("large inventories (>32 glosses)", results.Where(result => result.GlossCount > 32));
-            PrintBucket("all ranked", results);
+            PrintBucket("small inventories (<=32 glosses)", rankedResults.Where(result => result.GlossCount <= 32));
+            PrintBucket("large inventories (>32 glosses)", rankedResults.Where(result => result.GlossCount > 32));
+            PrintBucket("all ranked", rankedResults);
             VerifyMeasurementCounts(
                 cases.Length,
-                results.Count,
+                rankedResults.Length,
                 coveredCount,
                 decidedCount,
                 correctCount,
@@ -351,6 +431,66 @@ internal static class RankerCalibrationBenchmark
                 // Benchmark isolation matters more than best-effort temp cleanup.
             }
         }
+    }
+
+    /// <summary>
+    /// Separates semantic sense selection from the Russian surface that the
+    /// product actually shows. A group may contain the expected synonym while
+    /// deterministic surface selection chooses another one; that is a correct
+    /// WSD decision but an incorrect visible translation for this benchmark.
+    /// </summary>
+    internal static RankedCorrectness EvaluateRankedCorrectness(
+        SmartDictionaryRankerPlan plan,
+        IReadOnlyList<SmartDictionarySenseGroup> senses,
+        int? selectedGroupId,
+        bool abstained,
+        string expectedTranslation)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(senses);
+
+        string expected = NormalizeRussian(expectedTranslation);
+        HashSet<int> expectedSenseGroupIds = [];
+        foreach (SmartDictionaryRankerOutcome outcome in plan.Outcomes)
+        {
+            if (RussianLabelsMatch(outcome.Translation, expected))
+            {
+                expectedSenseGroupIds.Add(outcome.GroupId);
+            }
+        }
+
+        SmartDictionarySenseGroup[] orderedSenses = senses
+            .OrderBy(group => group.SourceIndex)
+            .ToArray();
+        if (orderedSenses.Length == plan.CandidateGroupIds.Count)
+        {
+            for (int index = 0; index < orderedSenses.Length; index++)
+            {
+                if (orderedSenses[index].Surfaces.Any(surface =>
+                        RussianLabelsMatch(surface.Translation, expected)))
+                {
+                    expectedSenseGroupIds.Add(plan.CandidateGroupIds[index]);
+                }
+            }
+        }
+
+        bool visibleExpectedCovered = plan.Outcomes.Any(outcome =>
+            RussianLabelsMatch(outcome.Translation, expected));
+        SmartDictionaryRankerOutcome? selectedOutcome = selectedGroupId is { } groupId
+            ? plan.Outcomes.FirstOrDefault(outcome => outcome.GroupId == groupId)
+            : null;
+        bool? senseCorrect = abstained || expectedSenseGroupIds.Count == 0
+            ? null
+            : selectedGroupId is { } selected && expectedSenseGroupIds.Contains(selected);
+        bool? visibleCorrect = abstained
+            ? null
+            : selectedOutcome is not null &&
+              RussianLabelsMatch(selectedOutcome.Translation, expected);
+        return new RankedCorrectness(
+            expectedSenseGroupIds.Count > 0,
+            visibleExpectedCovered,
+            senseCorrect,
+            visibleCorrect);
     }
 
     internal static void VerifyMeasurementCounts(
@@ -471,20 +611,13 @@ internal static class RankerCalibrationBenchmark
         }
     }
 
-    private static async Task<ArtifactRecord> DescribeArtifactAsync(string path)
-    {
-        FileInfo file = new(path);
-        await using FileStream stream = File.OpenRead(path);
-        string hash = Convert.ToHexString(
-            await System.Security.Cryptography.SHA256.HashDataAsync(stream));
-        return new ArtifactRecord(file.Name, file.Length, hash);
-    }
-
     private static async Task WriteBaselineReportAsync(
         string reportPath,
         string benchmarkPath,
         string workerBaseDirectory,
         GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile,
+        string modelVersion,
         string dictionaryVersion,
         int caseCount,
         IReadOnlyList<CaseResult> results,
@@ -497,10 +630,17 @@ internal static class RankerCalibrationBenchmark
         int deterministicCorrect,
         long workerPeakBytes)
     {
-        int covered = results.Count(result => result.ExpectedCovered);
-        int decided = results.Count(result => result.ExpectedCovered && !result.Abstained);
-        int correct = results.Count(result => result.Correct == true);
-        double[] margins = results
+        CaseResult[] ranked = results
+            .Where(result => result.Route == "ranked")
+            .ToArray();
+        int senseCovered = ranked.Count(result => result.SenseExpectedCovered);
+        int senseDecided = ranked.Count(result =>
+            result.SenseExpectedCovered && !result.Abstained);
+        int senseCorrect = ranked.Count(result => result.SenseCorrect == true);
+        int visibleCovered = ranked.Count(result => result.VisibleExpectedCovered);
+        int visibleDecided = ranked.Count(result => !result.Abstained);
+        int visibleCorrect = ranked.Count(result => result.VisibleCorrect == true);
+        double[] margins = ranked
             .Where(result => result.Margin is { } margin && double.IsFinite(margin))
             .Select(result => result.Margin!.Value)
             .OrderBy(value => value)
@@ -515,50 +655,57 @@ internal static class RankerCalibrationBenchmark
             .OrderBy(value => value)
             .ToArray();
 
-        List<ArtifactRecord> artifacts = [];
-        string modelDirectory = Path.Combine(workerBaseDirectory, "Ranker", "Models");
-        if (Directory.Exists(modelDirectory))
-        {
-            foreach (string path in Directory
-                         .EnumerateFiles(modelDirectory, "*", SearchOption.AllDirectories)
-                         .Where(path =>
-                             path.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ||
-                             path.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) ||
-                             path.EndsWith(".vec", StringComparison.OrdinalIgnoreCase))
-                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                artifacts.Add(await DescribeArtifactAsync(path));
-            }
-        }
+        RankerBenchmarkProvenanceData provenance =
+            await RankerBenchmarkProvenance.CaptureAsync(
+                benchmarkPath,
+                workerBaseDirectory,
+                provider,
+                cpuModelProfile,
+                modelVersion);
 
         BaselineReport report = new(
-            SchemaVersion: 1,
+            SchemaVersion: 4,
             GeneratedUtc: DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             Provider: provider.ToString(),
+            ModelProfile: cpuModelProfile.ToString(),
+            ModelVersion: modelVersion,
             AbstentionTag: AsteriaScale.RankerProtocol.RankerAbstention.CacheTag,
             DictionaryVersion: dictionaryVersion,
-            BenchmarkSet: await DescribeArtifactAsync(benchmarkPath),
-            ModelArtifacts: artifacts,
-            ModelArtifactBytes: artifacts.Sum(artifact => artifact.Bytes),
+            BenchmarkSet: provenance.BenchmarkSet,
+            RuntimeArtifacts: provenance.RuntimeArtifacts,
+            DictionaryArtifacts: provenance.DictionaryArtifacts,
+            ModelArtifacts: provenance.ModelArtifacts,
+            ModelArtifactBytes: provenance.ModelArtifacts.Sum(
+                artifact => artifact.Bytes),
             WorkerPeakWorkingSetBytes: workerPeakBytes,
             Routing: new RoutingRecord(
                 caseCount,
-                results.Count,
+                ranked.Length,
                 phraseBypass,
                 noInventory,
                 autoResolved,
                 deterministicResolved,
                 deterministicCorrect),
-            Decisions: new DecisionRecord(
-                covered,
-                decided,
-                correct,
-                covered - decided,
-                decided == 0 ? null : correct / (double)decided,
-                results.Count == 0 ? null : covered / (double)results.Count,
-                covered == 0 ? null : decided / (double)covered,
-                (correct + deterministicCorrect) / (double)caseCount,
+            SenseWsd: new DecisionRecord(
+                senseCovered,
+                senseDecided,
+                senseCorrect,
+                senseCovered - senseDecided,
+                senseDecided == 0 ? null : senseCorrect / (double)senseDecided,
+                ranked.Length == 0 ? null : senseCovered / (double)ranked.Length,
+                senseCovered == 0 ? null : senseDecided / (double)senseCovered,
+                (senseCorrect + deterministicCorrect) / (double)caseCount,
                 margins.Length == 0 ? null : margins[margins.Length / 2]),
+            VisibleTranslations: new VisibleTranslationRecord(
+                visibleCovered,
+                visibleDecided,
+                visibleCorrect,
+                ranked.Length - visibleDecided,
+                visibleDecided == 0 ? null : visibleCorrect / (double)visibleDecided,
+                ranked.Length == 0 ? null : visibleCovered / (double)ranked.Length,
+                ranked.Length == 0 ? null : visibleDecided / (double)ranked.Length,
+                ranked.Length == 0 ? 0 : visibleCorrect / (double)ranked.Length,
+                (visibleCorrect + deterministicCorrect) / (double)caseCount),
             Latency: new LatencyRecord(
                 latencies.Length == 0 ? null : latencies[latencies.Length / 2],
                 largeLatencies.Length == 0
@@ -583,6 +730,17 @@ internal static class RankerCalibrationBenchmark
                 new JsonSerializerOptions { WriteIndented = true }));
     }
 
+    internal static IReadOnlyList<string> EnumerateActiveModelArtifactPaths(
+        string workerBaseDirectory,
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile,
+        string modelVersion) =>
+        RankerBenchmarkProvenance.EnumerateActiveModelArtifactPaths(
+            workerBaseDirectory,
+            provider,
+            cpuModelProfile,
+            modelVersion);
+
     private static void PrintBucket(string label, IEnumerable<CaseResult> bucket)
     {
         CaseResult[] items = bucket.ToArray();
@@ -592,9 +750,16 @@ internal static class RankerCalibrationBenchmark
             return;
         }
 
-        CaseResult[] covered = items.Where(item => item.ExpectedCovered).ToArray();
-        CaseResult[] decided = covered.Where(item => !item.Abstained).ToArray();
-        int correct = decided.Count(item => item.Correct == true);
+        CaseResult[] senseCovered = items
+            .Where(item => item.SenseExpectedCovered)
+            .ToArray();
+        CaseResult[] senseDecided = senseCovered
+            .Where(item => !item.Abstained)
+            .ToArray();
+        int senseCorrect = senseDecided.Count(item => item.SenseCorrect == true);
+        int visibleCovered = items.Count(item => item.VisibleExpectedCovered);
+        CaseResult[] visibleDecided = items.Where(item => !item.Abstained).ToArray();
+        int visibleCorrect = visibleDecided.Count(item => item.VisibleCorrect == true);
         double[] margins = items
             .Where(item => item.Margin is { } margin && double.IsFinite(margin))
             .Select(item => item.Margin!.Value)
@@ -604,9 +769,11 @@ internal static class RankerCalibrationBenchmark
             ? "n/a"
             : margins[margins.Length / 2].ToString("0.000", CultureInfo.InvariantCulture);
         Console.WriteLine(
-            $"  {label}: ranked={items.Length} labeled={covered.Length} " +
-            $"decided={decided.Length} correct={correct} " +
-            $"abstained={covered.Length - decided.Length} medianMargin={medianMargin}");
+            $"  {label}: ranked={items.Length} " +
+            $"sense-covered={senseCovered.Length} sense-decided={senseDecided.Length} " +
+            $"sense-correct={senseCorrect}; visible-covered={visibleCovered} " +
+            $"visible-decided={visibleDecided.Length} visible-correct={visibleCorrect} " +
+            $"abstained={items.Count(item => item.Abstained)} medianMargin={medianMargin}");
     }
 
     private static string FormatMargin(double? margin) =>
@@ -620,7 +787,9 @@ internal static class RankerCalibrationBenchmark
     /// <summary>
     /// Inflection-tolerant label comparison for single words: the runtime
     /// shows the dictionary lemma, so "серьёзный" correctly serves an
-    /// expected "серьёзным". Multi-word labels stay exact.
+    /// expected "серьёзным". Multi-word labels stay exact. A shared prefix is
+    /// deliberately insufficient: scientific near-neighbours such as
+    /// "значимый" and "значительный" are different visible translations.
     /// </summary>
     private static bool RussianLabelsMatch(string candidate, string normalizedExpected)
     {
@@ -636,19 +805,7 @@ internal static class RankerCalibrationBenchmark
             return false;
         }
 
-        int limit = Math.Min(a.Length, b.Length);
-        if (limit < 4 || Math.Abs(a.Length - b.Length) > 4)
-        {
-            return false;
-        }
-
-        int prefix = 0;
-        while (prefix < limit && a[prefix] == b[prefix])
-        {
-            prefix++;
-        }
-
-        return prefix >= (limit <= 5 ? 4 : 5);
+        return RussianMorphology.AreConservativeInflectionVariants(a, b);
     }
 
     private static bool TranslationContainsExpected(

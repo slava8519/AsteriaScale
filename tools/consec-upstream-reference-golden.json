@@ -1,0 +1,210 @@
+{
+  "baseModel": {
+    "legacyBpeLoadPolicy": "guarded torch.load(weights_only=True)",
+    "repository": "microsoft/deberta-large",
+    "revision": "a97e054da5f34feed3d26951db4a25831dfcb486",
+    "sourceFiles": [
+      {
+        "bytes": 475,
+        "file": "config.json",
+        "sha256": "71ed32326d68dc14aa63294acdfec1fe3fcaf1f9cb4f0744ee71c2fe59fd7aaa"
+      },
+      {
+        "bytes": 52,
+        "file": "tokenizer_config.json",
+        "sha256": "052b1ce2b5b3bf119a72dee8cbb2de441dd4ff8f2255be61cd8aa63fb24d8149"
+      },
+      {
+        "bytes": 898825,
+        "file": "vocab.json",
+        "sha256": "ef13b2af772bf95f74e5512265bbe22b786bf25861df22d9f19fde0b3937fdea"
+      },
+      {
+        "bytes": 456318,
+        "file": "merges.txt",
+        "sha256": "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5"
+      },
+      {
+        "bytes": 3917897,
+        "file": "bpe_encoder.bin",
+        "sha256": "e7c6f9eecb461c01e09c00656ccf3e27944b9e74bfe29e51632b13d3cd9d6c8e"
+      }
+    ]
+  },
+  "bundle": {
+    "artifacts": [
+      {
+        "bytes": 843194,
+        "file": "Cpu/consec-wngt-fp32.onnx",
+        "sha256": "0eb0688f3fd2af67c6e2155daeed0fec5c5b2f1c7037b91ba526d50516c630ad"
+      },
+      {
+        "bytes": 1621487616,
+        "file": "Cpu/consec-wngt-fp32.onnx.data",
+        "sha256": "1257dc55ebec8886b7f5af4867f684ae44c7be4308e75b1251963595354011b9"
+      },
+      {
+        "bytes": 3560546,
+        "file": "tokenizer.json",
+        "sha256": "df91c443c8eac73a42ff72086f25b16ad3b244ae2bf0303625298265d50f73f1"
+      }
+    ],
+    "manifestSha256": "13a8a14e3938d4f20519f7da79a51f75543eced352bd39456b5a43c4d93402b8"
+  },
+  "checkpoint": {
+    "bytes": 4864940005,
+    "file": "consec_wngt_best.ckpt",
+    "loadPolicy": "torch.load(weights_only=True,mmap=True)",
+    "pickleGlobals": [
+      "__builtin__ dict",
+      "__builtin__ list",
+      "__builtin__ long",
+      "collections OrderedDict",
+      "collections defaultdict",
+      "omegaconf.base ContainerMetadata",
+      "omegaconf.base Metadata",
+      "omegaconf.dictconfig DictConfig",
+      "omegaconf.listconfig ListConfig",
+      "omegaconf.nodes AnyNode",
+      "pytorch_lightning.callbacks.early_stopping EarlyStopping",
+      "src.pl_callbacks ModelCheckpointWithBest",
+      "torch FloatStorage",
+      "torch LongStorage",
+      "torch._utils _rebuild_tensor_v2",
+      "typing Any"
+    ],
+    "sha256": "92421ed245723964db09ce396f19a0d1e55fe4d6e10d5ecb83278d9bc70ce8af"
+  },
+  "environment": {
+    "numpy": "1.26.4",
+    "onnxruntime": "1.19.2",
+    "packaging": "20.9",
+    "python": "3.9.13",
+    "six": "1.16.0",
+    "tokenizers": "0.10.3",
+    "torch": "2.5.1",
+    "transformers": "4.3.3"
+  },
+  "fixtures": [
+    {
+      "candidateMaximumAbsoluteDelta": 2.384185791015625e-06,
+      "currentOnnxVsRecordedCandidateLogitsMaximumAbsoluteDelta": 0.0,
+      "id": "dialogue-feedback-bank",
+      "inputSha256": "c20dc93bcdd1daa2b005dbcc038f30455cc1265707fa76867c91ed588cfe91a8",
+      "markerPositions": [
+        11,
+        19
+      ],
+      "maximumAbsoluteDelta": 3.0994415283203125e-06,
+      "officialCandidateLogits": [
+        -5.453348636627197,
+        3.09131121635437
+      ],
+      "officialChoice": 1,
+      "officialVsRecordedExporterDeltaDifference": 0.0,
+      "onnxCandidateLogits": [
+        -5.453351020812988,
+        3.091313600540161
+      ],
+      "onnxChoice": 1,
+      "recordedExporterMaximumAbsoluteDelta": 3.0994415283203125e-06,
+      "sequenceLength": 36
+    },
+    {
+      "candidateMaximumAbsoluteDelta": 3.814697265625e-06,
+      "currentOnnxVsRecordedCandidateLogitsMaximumAbsoluteDelta": 0.0,
+      "id": "scientific-acronym-pcr-strain",
+      "inputSha256": "efc5bf2cee347d30941cf6c07cc31c50ff4b176e98ebee8746dd846fc21f81b3",
+      "markerPositions": [
+        12,
+        25,
+        33
+      ],
+      "maximumAbsoluteDelta": 5.0067901611328125e-06,
+      "officialCandidateLogits": [
+        2.754472255706787,
+        -7.14597749710083,
+        -8.441686630249023
+      ],
+      "officialChoice": 0,
+      "officialVsRecordedExporterDeltaDifference": 0.0,
+      "onnxCandidateLogits": [
+        2.7544710636138916,
+        -7.1459736824035645,
+        -8.441686630249023
+      ],
+      "onnxChoice": 0,
+      "recordedExporterMaximumAbsoluteDelta": 5.0067901611328125e-06,
+      "sequenceLength": 61
+    }
+  ],
+  "gates": {
+    "candidateChoiceMatches": true,
+    "currentOnnxMatchesParityObservedCandidateLogits": true,
+    "historicalTokenizerBpeLoadWasWeightsOnly": true,
+    "maximumAbsoluteDeltaTolerance": 0.0001,
+    "officialDeltaMatchesParityObservedExporterDelta": true,
+    "officialModelMatchesExportedOnnx": true,
+    "officialPreprocessingMatchesExportedInputs": true,
+    "officialSourceClean": true
+  },
+  "schemaVersion": 1,
+  "scope": "official-upstream-4.3.3-preprocessing-and-model-to-exported-onnx",
+  "status": "passed",
+  "tooling": {
+    "requirements": {
+      "file": "requirements-consec-reference.txt",
+      "sha256": "dd33feb1bf83e99cb77999bd530af6ef685e0cf5ed2cee0e73cf92b64a66bf0c"
+    },
+    "runner": {
+      "file": "run-consec-upstream-reference.py",
+      "sha256": "588f200b1243d19c8e8ab65374d5028debef3c87fee3044f08ceb24d302adbad"
+    }
+  },
+  "upstream": {
+    "commit": "9602b5fd69f57be08a186988d1df34fe4152b63f",
+    "importedModules": [
+      {
+        "file": "src/consec_tokenizer.py",
+        "module": "src.consec_tokenizer"
+      },
+      {
+        "file": "src/sense_extractors.py",
+        "module": "src.sense_extractors"
+      },
+      {
+        "file": "src/utils/collections.py",
+        "module": "src.utils.collections"
+      }
+    ],
+    "license": "CC-BY-NC-SA-4.0",
+    "repository": "https://github.com/SapienzaNLP/consec",
+    "sourceFiles": [
+      {
+        "bytes": 15668,
+        "file": "src/consec_tokenizer.py",
+        "sha256": "58de905258986d655b051e350051a93859e6049772abe6058056c79b22e51b3d"
+      },
+      {
+        "bytes": 11121,
+        "file": "src/sense_extractors.py",
+        "sha256": "9d8db130341e8987eebb1f38986d8a82bd2a05460d84c4ac0ad5208737b1e8e5"
+      },
+      {
+        "bytes": 263,
+        "file": "src/utils/collections.py",
+        "sha256": "a1cfa7dc50dcbc5b5466da6e47f3d6d287788a80562b0c9df94ddc0da53ca422"
+      },
+      {
+        "bytes": 452,
+        "file": "conf/tokenizer/deberta.yaml",
+        "sha256": "7d7cb26a14497f7570a71602afa7eb81e6beaabdfed9aa344de104fee2b4021d"
+      },
+      {
+        "bytes": 222,
+        "file": "conf/model/deberta.yaml",
+        "sha256": "5a89df3b2a3f3724cec083a6e21adba9c188bc055b9ef8c5f2d78394063319af"
+      }
+    ]
+  }
+}

@@ -524,6 +524,558 @@
       "characterIndex": 13,
       "candidates": ["в ближайшее время", "в любое время скоро"],
       "expectedTranslation": "в ближайшее время"
+    },
+    {
+      "id": "vn-date-romantic",
+      "context": "This isn't a date, so stop blushing.",
+      "target": "date",
+      "characterIndex": 13,
+      "candidates": ["дата", "свидание", "финик", "срок"],
+      "expectedTranslation": "свидание"
+    },
+    {
+      "id": "vn-date-calendar",
+      "context": "Circle the date on the club calendar.",
+      "target": "date",
+      "characterIndex": 11,
+      "candidates": ["дата", "свидание", "финик", "срок"],
+      "expectedTranslation": "дата"
+    },
+    {
+      "id": "vn-crush-infatuation",
+      "context": "Wait... is Ren actually your crush?",
+      "target": "crush",
+      "characterIndex": 29,
+      "candidates": ["увлечение", "раздавливание", "давить", "сокрушить"],
+      "expectedTranslation": "увлечение"
+    },
+    {
+      "id": "vn-crush-verb",
+      "context": "Don't crush the charm in your fist!",
+      "target": "crush",
+      "characterIndex": 6,
+      "candidates": ["увлечение", "раздавливание", "давить", "сокрушить"],
+      "expectedTranslation": "давить"
+    },
+    {
+      "id": "vn-tease-playful",
+      "context": "Don't tease me about that kiss.",
+      "target": "tease",
+      "characterIndex": 6,
+      "candidates": ["дразнить", "манить", "чесать", "провоцировать"],
+      "expectedTranslation": "дразнить"
+    },
+    {
+      "id": "vn-tease-entice",
+      "context": "The locked diary seemed to tease her with answers.",
+      "target": "tease",
+      "characterIndex": 27,
+      "candidates": ["дразнить", "манить", "чесать", "провоцировать"],
+      "expectedTranslation": "манить"
+    },
+    {
+      "id": "vn-touch-physical",
+      "context": "Don't touch the seal; it may be cursed.",
+      "target": "touch",
+      "characterIndex": 6,
+      "candidates": ["трогать", "растрогать", "прикосновение", "оттенок"],
+      "expectedTranslation": "трогать"
+    },
+    {
+      "id": "vn-touch-emotional",
+      "context": "Her clumsy confession managed to touch him.",
+      "target": "touch",
+      "characterIndex": 33,
+      "candidates": ["трогать", "растрогать", "прикосновение", "оттенок"],
+      "expectedTranslation": "растрогать"
+    },
+    {
+      "id": "vn-affair-romance",
+      "context": "Everyone at court knew about their secret affair.",
+      "target": "affair",
+      "characterIndex": 42,
+      "candidates": ["дело", "роман", "схватка", "причиндалы"],
+      "expectedTranslation": "роман"
+    },
+    {
+      "id": "vn-affair-business",
+      "context": "This affair concerns the missing royal ledger.",
+      "target": "affair",
+      "characterIndex": 5,
+      "candidates": ["дело", "роман", "схватка", "причиндалы"],
+      "expectedTranslation": "дело"
+    },
+    {
+      "id": "dialogue-snap-abrupt",
+      "context": "Don't snap at her just because you're scared.",
+      "target": "snap",
+      "characterIndex": 6,
+      "candidates": ["рявкнуть", "сломаться", "щелчок", "снимок"],
+      "expectedTranslation": "рявкнуть"
+    },
+    {
+      "id": "dialogue-snap-break",
+      "context": "One more pull and the silver chain will snap.",
+      "target": "snap",
+      "characterIndex": 40,
+      "candidates": ["рявкнуть", "сломаться", "щелчок", "снимок"],
+      "expectedTranslation": "сломаться"
+    },
+    {
+      "id": "manga-crack-taunt",
+      "context": "That cheap crack about her dress wasn't funny.",
+      "target": "crack",
+      "characterIndex": 11,
+      "candidates": ["острота", "трещина", "треск", "щель"],
+      "expectedTranslation": "острота"
+    },
+    {
+      "id": "literary-crack-fissure",
+      "context": "Moonlight leaked through a crack in the ceiling.",
+      "target": "crack",
+      "characterIndex": 27,
+      "candidates": ["острота", "трещина", "треск", "щель"],
+      "expectedTranslation": "трещина"
+    },
+    {
+      "id": "coarse-bitch-insult",
+      "context": "That spiteful bitch sold us out to the guards.",
+      "target": "bitch",
+      "characterIndex": 14,
+      "candidates": ["стерва", "сука", "волчица", "скулить"],
+      "expectedTranslation": "стерва"
+    },
+    {
+      "id": "coarse-ass-body",
+      "context": "Get your ass off my pillow.",
+      "target": "ass",
+      "characterIndex": 9,
+      "candidates": ["жопа", "осёл", "трах", "ишак"],
+      "expectedTranslation": "жопа"
+    },
+    {
+      "id": "coarse-suck-disparagement",
+      "context": "You suck at keeping secrets.",
+      "target": "suck",
+      "characterIndex": 4,
+      "candidates": ["отстой", "сосать", "всасывать", "высасывать"],
+      "expectedTranslation": "отстой"
+    },
+    {
+      "id": "sexual-screw",
+      "context": "Did you really screw him after the party?",
+      "target": "screw",
+      "characterIndex": 15,
+      "candidates": ["трахнуть", "винт", "привинтить", "вертухай"],
+      "expectedTranslation": "трахнуть"
+    },
+    {
+      "id": "object-screw",
+      "context": "The loose screw rolled under the cabinet.",
+      "target": "screw",
+      "characterIndex": 10,
+      "candidates": ["трахнуть", "винт", "привинтить", "вертухай"],
+      "expectedTranslation": "винт"
+    },
+    {
+      "id": "sexual-come",
+      "context": "She whispered that she was about to come.",
+      "target": "come",
+      "characterIndex": 36,
+      "candidates": ["кончить", "прийти", "стать", "комма"],
+      "expectedTranslation": "кончить"
+    },
+    {
+      "id": "coarse-prick-insult",
+      "context": "You smug prick, you read my letter!",
+      "target": "prick",
+      "characterIndex": 9,
+      "candidates": ["придурок", "укол", "шип", "член"],
+      "expectedTranslation": "придурок"
+    },
+    {
+      "id": "prick-puncture",
+      "context": "A thorn's prick drew a bead of blood.",
+      "target": "prick",
+      "characterIndex": 10,
+      "candidates": ["придурок", "укол", "шип", "член"],
+      "expectedTranslation": "укол"
+    },
+    {
+      "id": "sexual-pussy",
+      "context": "He used the crude word pussy just to embarrass her.",
+      "target": "pussy",
+      "characterIndex": 23,
+      "candidates": ["пизда", "котик", "трус", "гнойный"],
+      "expectedTranslation": "пизда"
+    },
+    {
+      "id": "animal-pussy-cat",
+      "context": "The child called the stray cat a sweet pussy.",
+      "target": "pussy",
+      "characterIndex": 39,
+      "candidates": ["пизда", "котик", "трус", "гнойный"],
+      "expectedTranslation": "котик"
+    },
+    {
+      "id": "sexual-lay",
+      "context": "He bragged that he could lay anyone at the festival.",
+      "target": "lay",
+      "characterIndex": 25,
+      "candidates": ["переспать", "положить", "луг", "баллада"],
+      "expectedTranslation": "переспать"
+    },
+    {
+      "id": "dialogue-lay-place",
+      "context": "Please lay the letter beside the candle.",
+      "target": "lay",
+      "characterIndex": 7,
+      "candidates": ["переспать", "положить", "луг", "баллада"],
+      "expectedTranslation": "положить"
+    },
+    {
+      "id": "literary-grave-noun",
+      "context": "Wild lilies had swallowed the forgotten grave.",
+      "target": "grave",
+      "characterIndex": 40,
+      "candidates": ["могила", "серьёзный", "низкий", "гравировать"],
+      "expectedTranslation": "могила"
+    },
+    {
+      "id": "literary-grave-adjective",
+      "context": "Her smile faded when his voice turned grave.",
+      "target": "grave",
+      "characterIndex": 38,
+      "candidates": ["могила", "серьёзный", "низкий", "гравировать"],
+      "expectedTranslation": "серьёзный"
+    },
+    {
+      "id": "literary-shade-shadow",
+      "context": "They rested in the shade of the ruined bell tower.",
+      "target": "shade",
+      "characterIndex": 19,
+      "candidates": ["тень", "оттенок", "штора", "затенять"],
+      "expectedTranslation": "тень"
+    },
+    {
+      "id": "literary-shade-nuance",
+      "context": "A shade of regret softened her reply.",
+      "target": "shade",
+      "characterIndex": 2,
+      "candidates": ["тень", "оттенок", "штора", "затенять"],
+      "expectedTranslation": "оттенок"
+    },
+    {
+      "id": "fantasy-spell-magic",
+      "context": "The witch traced a spell across the fogged glass.",
+      "target": "spell",
+      "characterIndex": 19,
+      "candidates": ["заклинание", "период", "произносить по буквам", "время"],
+      "expectedTranslation": "заклинание"
+    },
+    {
+      "id": "prose-spell-period",
+      "context": "After a brief spell of silence, he laughed.",
+      "target": "spell",
+      "characterIndex": 14,
+      "candidates": ["заклинание", "период", "произносить по буквам", "время"],
+      "expectedTranslation": "период"
+    },
+    {
+      "id": "fantasy-charm-amulet",
+      "context": "The tiny charm at her throat began to glow.",
+      "target": "charm",
+      "characterIndex": 9,
+      "candidates": ["амулет", "обаяние", "брелок", "околдовать"],
+      "expectedTranslation": "амулет"
+    },
+    {
+      "id": "dialogue-charm-personality",
+      "context": "His easy charm fooled almost everyone.",
+      "target": "charm",
+      "characterIndex": 9,
+      "candidates": ["амулет", "обаяние", "брелок", "околдовать"],
+      "expectedTranslation": "обаяние"
+    },
+    {
+      "id": "fantasy-spirit-ghost",
+      "context": "A restless spirit watched from the empty window.",
+      "target": "spirit",
+      "characterIndex": 11,
+      "candidates": ["призрак", "алкоголь", "душа", "характер"],
+      "expectedTranslation": "призрак"
+    },
+    {
+      "id": "prose-spirit-alcohol",
+      "context": "The spirit in this bottle smells unusually strong.",
+      "target": "spirit",
+      "characterIndex": 4,
+      "candidates": ["призрак", "алкоголь", "душа", "характер"],
+      "expectedTranslation": "алкоголь"
+    },
+    {
+      "id": "literary-wound-injury",
+      "context": "Rain stung the open wound on his shoulder.",
+      "target": "wound",
+      "characterIndex": 20,
+      "candidates": ["рана", "обвить", "заводить", "ранить"],
+      "expectedTranslation": "рана"
+    },
+    {
+      "id": "literary-wound-coil",
+      "context": "She wound the red thread around his wrist.",
+      "target": "wound",
+      "characterIndex": 4,
+      "candidates": ["рана", "обвить", "заводить", "ранить"],
+      "expectedTranslation": "обвить"
+    },
+    {
+      "id": "literary-tear-drop",
+      "context": "A single tear shone on her cheek.",
+      "target": "tear",
+      "characterIndex": 9,
+      "candidates": ["слеза", "разрыв", "рвать", "нестись"],
+      "expectedTranslation": "слеза"
+    },
+    {
+      "id": "literary-tear-rip",
+      "context": "The sharp clasp left a tear in the silk.",
+      "target": "tear",
+      "characterIndex": 23,
+      "candidates": ["слеза", "разрыв", "рвать", "нестись"],
+      "expectedTranslation": "разрыв"
+    },
+    {
+      "id": "manga-bow-weapon",
+      "context": "She raised the bow and aimed at the shadow.",
+      "target": "bow",
+      "characterIndex": 15,
+      "candidates": ["лук", "поклон", "смычок", "нос"],
+      "expectedTranslation": "лук"
+    },
+    {
+      "id": "court-bow-gesture",
+      "context": "He answered the princess with a formal bow.",
+      "target": "bow",
+      "characterIndex": 39,
+      "candidates": ["лук", "поклон", "смычок", "нос"],
+      "expectedTranslation": "поклон"
+    },
+    {
+      "id": "mystery-seal-stamp",
+      "context": "The crimson seal on the letter was broken.",
+      "target": "seal",
+      "characterIndex": 12,
+      "candidates": ["печать", "тюлень", "уплотнение", "запечатывать"],
+      "expectedTranslation": "печать"
+    },
+    {
+      "id": "animal-seal",
+      "context": "A young seal slept on the moonlit rocks.",
+      "target": "seal",
+      "characterIndex": 8,
+      "candidates": ["печать", "тюлень", "уплотнение", "запечатывать"],
+      "expectedTranslation": "тюлень"
+    },
+    {
+      "id": "literary-draft-breeze",
+      "context": "A cold draft crept under the library door.",
+      "target": "draft",
+      "characterIndex": 7,
+      "candidates": ["сквозняк", "черновик", "призыв", "глоток"],
+      "expectedTranslation": "сквозняк"
+    },
+    {
+      "id": "prose-draft-manuscript",
+      "context": "She burned the first draft of her confession.",
+      "target": "draft",
+      "characterIndex": 21,
+      "candidates": ["сквозняк", "черновик", "призыв", "глоток"],
+      "expectedTranslation": "черновик"
+    },
+    {
+      "id": "mystery-plot-scheme",
+      "context": "Their plot to poison the duke failed at dawn.",
+      "target": "plot",
+      "characterIndex": 6,
+      "candidates": ["заговор", "сюжет", "участок", "график"],
+      "expectedTranslation": "заговор"
+    },
+    {
+      "id": "prose-plot-story",
+      "context": "The plot grows darker after the second chapter.",
+      "target": "plot",
+      "characterIndex": 4,
+      "candidates": ["заговор", "сюжет", "участок", "график"],
+      "expectedTranslation": "сюжет"
+    },
+    {
+      "id": "manga-frame-incriminate",
+      "context": "Someone tried to frame me for the murder.",
+      "target": "frame",
+      "characterIndex": 17,
+      "candidates": ["подставить", "рамка", "кадр", "телосложение"],
+      "expectedTranslation": "подставить"
+    },
+    {
+      "id": "scientific-paper-article",
+      "context": "The paper reports a new method for detecting faint signals.",
+      "target": "paper",
+      "characterIndex": 4,
+      "candidates": ["статья", "бумага", "документ", "бумажный"],
+      "expectedTranslation": "статья"
+    },
+    {
+      "id": "technical-paper-material",
+      "context": "She sketched the circuit on a scrap of paper.",
+      "target": "paper",
+      "characterIndex": 39,
+      "candidates": ["статья", "бумага", "документ", "бумажный"],
+      "expectedTranslation": "бумага"
+    },
+    {
+      "id": "scientific-cell-biology",
+      "context": "Each cell was stained before microscopy.",
+      "target": "cell",
+      "characterIndex": 5,
+      "candidates": ["клетка", "камера", "мобильник", "батарейка"],
+      "expectedTranslation": "клетка"
+    },
+    {
+      "id": "legal-cell-prison",
+      "context": "The witness spent the night alone in a cell.",
+      "target": "cell",
+      "characterIndex": 39,
+      "candidates": ["клетка", "камера", "мобильник", "батарейка"],
+      "expectedTranslation": "камера"
+    },
+    {
+      "id": "technical-current-electric",
+      "context": "The current dropped when the resistor began to heat.",
+      "target": "current",
+      "characterIndex": 4,
+      "candidates": ["ток", "течение", "нынешний", "ход"],
+      "expectedTranslation": "ток"
+    },
+    {
+      "id": "scientific-current-water",
+      "context": "The coastal current carried the sensor north.",
+      "target": "current",
+      "characterIndex": 12,
+      "candidates": ["ток", "течение", "нынешний", "ход"],
+      "expectedTranslation": "течение"
+    },
+    {
+      "id": "scientific-significant-statistical",
+      "context": "The correlation was statistically significant after correction.",
+      "target": "significant",
+      "characterIndex": 34,
+      "candidates": ["значимый", "значительный", "существенный", "очень важный"],
+      "expectedTranslation": "значимый"
+    },
+    {
+      "id": "scientific-model-simulation",
+      "context": "The climate model predicted a sharper rise in temperature.",
+      "target": "model",
+      "characterIndex": 12,
+      "candidates": ["модель", "образец", "макет", "эталон"],
+      "expectedTranslation": "модель"
+    },
+    {
+      "id": "scientific-trial-clinical",
+      "context": "The trial compared the new vaccine with a placebo.",
+      "target": "trial",
+      "characterIndex": 4,
+      "candidates": ["испытание", "суд", "эксперимент", "неприятность"],
+      "expectedTranslation": "испытание"
+    },
+    {
+      "id": "legal-trial-court",
+      "context": "The trial ended when the judge dismissed the evidence.",
+      "target": "trial",
+      "characterIndex": 4,
+      "candidates": ["испытание", "суд", "эксперимент", "неприятность"],
+      "expectedTranslation": "суд"
+    },
+    {
+      "id": "scientific-culture-verb",
+      "context": "Researchers culture the cells in sterile flasks.",
+      "target": "culture",
+      "characterIndex": 12,
+      "candidates": ["культура", "культивировать", "возделывать"],
+      "expectedTranslation": "культивировать"
+    },
+    {
+      "id": "scientific-medium-growth",
+      "context": "The bacteria grew slowly in the nutrient medium.",
+      "target": "medium",
+      "characterIndex": 41,
+      "candidates": ["среда", "медиум", "средний", "носитель"],
+      "expectedTranslation": "среда"
+    },
+    {
+      "id": "paranormal-medium-person",
+      "context": "The medium claimed to hear a voice from the attic.",
+      "target": "medium",
+      "characterIndex": 4,
+      "candidates": ["среда", "медиум", "средний", "носитель"],
+      "expectedTranslation": "медиум"
+    },
+    {
+      "id": "scientific-control-experimental",
+      "context": "The untreated group served as the control.",
+      "target": "control",
+      "characterIndex": 34,
+      "candidates": ["контроль", "власть", "управлять", "руководство"],
+      "expectedTranslation": "контроль"
+    },
+    {
+      "id": "technical-bias-electronic",
+      "context": "A stable bias kept the transistor in its linear range.",
+      "target": "bias",
+      "characterIndex": 9,
+      "candidates": ["смещение", "предубеждение", "предвзятость", "пристрастность"],
+      "expectedTranslation": "смещение"
+    },
+    {
+      "id": "scientific-bias-observer",
+      "context": "Observer bias distorted the interview ratings.",
+      "target": "bias",
+      "characterIndex": 9,
+      "candidates": ["смещение", "предубеждение", "предвзятость", "пристрастность"],
+      "expectedTranslation": "предвзятость"
+    },
+    {
+      "id": "scientific-strain-microbial",
+      "context": "This strain resists the standard antibiotic.",
+      "target": "strain",
+      "characterIndex": 5,
+      "candidates": ["штамм", "напряжение", "фильтровать", "порода"],
+      "expectedTranslation": "штамм"
+    },
+    {
+      "id": "technical-strain-stress",
+      "context": "The cable failed under excessive strain.",
+      "target": "strain",
+      "characterIndex": 33,
+      "candidates": ["штамм", "напряжение", "фильтровать", "порода"],
+      "expectedTranslation": "напряжение"
+    },
+    {
+      "id": "scientific-sample-statistics",
+      "context": "The sample included two hundred households.",
+      "target": "sample",
+      "characterIndex": 4,
+      "candidates": ["выборка", "образец", "семпл", "проба"],
+      "expectedTranslation": "выборка"
+    },
+    {
+      "id": "scientific-sample-specimen",
+      "context": "The technician sealed the sample in a sterile vial.",
+      "target": "sample",
+      "characterIndex": 26,
+      "candidates": ["выборка", "образец", "семпл", "проба"],
+      "expectedTranslation": "образец"
     }
   ]
 }

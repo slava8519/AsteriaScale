@@ -54,6 +54,27 @@ internal static class TextHookSafetyTests
                 DateTime.UtcNow.AddSeconds(5)) is null,
             "A hook sentence older than the five-second relevance window was reused.");
 
+        hook.IngestLine(
+            "[AAA:2C64:0:0:0:TextOutA] The gate was still closed.",
+            processId: 303);
+        hook.IngestLine(
+            "[NOISE:2C64:0:0:0:TextOutA] Wrong hook thread output.",
+            processId: 303);
+        hook.IngestLine(
+            "[AAA:2C64:0:0:0:TextOutA] She reached for the handle.",
+            processId: 303);
+        hook.IngestLine(
+            "[AAA:2C64:0:0:0:TextOutA] Then she opened the gate.",
+            processId: 404);
+        hook.IngestLine(
+            "[AAA:2C64:0:0:0:TextOutA] At last she opened the gate.",
+            processId: 303);
+        TextHookMatch? contextual = hook.TryGetSentenceContaining(303, "opened");
+        Assert(contextual is not null &&
+               contextual.PreviousContext.SequenceEqual(
+                   ["The gate was still closed.", "She reached for the handle."]),
+            "Hidden history crossed a process or exact Textractor hook-stream boundary.");
+
         HoverOcrResult ocrResult = new(
             "bank and another bank",
             "bank",
@@ -65,13 +86,16 @@ internal static class TextHookSafetyTests
             "A missing hook match changed the pure OCR result.");
         HoverOcrResult hookedResult = HoverTranslationService.ApplyTextHookMatch(
             ocrResult,
-            new TextHookMatch("LongSpeaker: bank and another bank", 13));
+            new TextHookMatch("LongSpeaker: bank and another bank", 13)
+            {
+                PreviousContext = ["The river was quiet."]
+            });
         Assert(hookedResult is
         {
             Text: "LongSpeaker: bank and another bank",
             CharacterIndex: 13,
             TextSource: HoverTextSource.TextHook
-        },
+        } && hookedResult.PreviousContext.SequenceEqual(["The river was quiet."]),
             "A fresh hook match did not preserve explicit Textractor provenance.");
         // Roadmap 14.3 requires the card to name the text source in both
         // directions. Labelling only HOOK left OCR to be inferred from the

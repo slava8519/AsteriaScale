@@ -10,9 +10,12 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly WindowsAiOcrService _ocr = new();
     private readonly FoundryTranslationService _translator;
     private readonly LocalDictionaryService _dictionary;
-    private readonly GlossBertDictionarySelectorService _glossBertSelector = new();
+    private readonly GlossBertDictionarySelectorService _glossBertSelector;
+    private readonly SemanticRankerProfileApplicator _semanticRankerProfile;
     private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
     private readonly SmartDictionaryResultCache _smartResultCache = new();
+    private readonly SmartPhraseTranslationCache _smartPhraseCache = new();
+    private readonly TranslateGemmaTranslationService _translateGemma = new();
     // Shared by the hover pipeline and the full-text scaffold: both ask the
     // worker the same question, so neither may pay for the other's inference.
     private readonly GlossBertDecisionCache _decisionCache = new();
@@ -31,6 +34,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly HoverTracking _tracking;
     private readonly TextHookService _textHook;
     private readonly TranslationHistoryService _history = new();
+    private readonly HoverUnloadIntentState _unloadIntent = new();
     private Task _pendingUnload = Task.CompletedTask;
     private long _unloadRevision;
     private bool _unloadWorkerRunning;
@@ -46,11 +50,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private SmartFallbackRequest? _lastSmartFallbackRequest;
     private int _textHookDiagnosticProcessId;
     private bool _textHookMatchReported;
+    private bool? _translateGemmaReady;
 
     public HoverTranslationService(AppSettings settings, Func<bool>? isScaling = null)
     {
         _settings = settings;
         _ = isScaling; // Kept for source compatibility with existing callers.
+        RankerCpuModelProfile initialRankerProfile =
+            SemanticRankerProfileResolver.FromSettings(settings);
+        _glossBertSelector = new GlossBertDictionarySelectorService(initialRankerProfile);
+        _semanticRankerProfile = new SemanticRankerProfileApplicator(
+            settings,
+            _glossBertSelector);
         _dictionary = new LocalDictionaryService();
         _scaffoldGlossBertRanker = new(
             _glossBertSelector,
@@ -79,7 +90,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
             TranslateSmartFallbackAsync,
             ReportStatus,
             (text, cursor) => _lastSmartFallbackRequest =
-                new SmartFallbackRequest(text, cursor, DateTime.UtcNow));
+                new SmartFallbackRequest(text, cursor, DateTime.UtcNow),
+            _translateGemma,
+            _smartPhraseCache);
         _screenFlow = new ScreenTranslationFlow(
             _ocr,
             _translator,
@@ -103,7 +116,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         if (!_enabled || IsDictionaryMode || IsSmartMode || IsScreenMode)
         {
-            QueueUnload();
+            QueueUnload(HoverUnloadReason.Startup);
         }
 
         if (_enabled)
@@ -133,7 +146,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _hotkeys.UnregisterScreenTranslation();
             _hotkeys.UnregisterSmartFallback();
             HideAllOverlays();
-            QueueUnload();
+            QueueUnload(HoverUnloadReason.ExplicitDisable);
             ReportStatus("Перевод текста выключен");
         }
     }
@@ -183,12 +196,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         RestartModeCancellation();
         _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
+        _translateGemmaReady = null;
         _lastSmartFallbackRequest = null;
         ResetTracking();
         ConfigureActiveMode();
         if (_enabled && !IsDictionaryMode)
         {
-            QueueUnload();
+            QueueUnload(HoverUnloadReason.SmartSettingsChanged);
             QueueWarmUpAfterPendingUnload();
         }
     }
@@ -220,18 +234,19 @@ public sealed class HoverTranslationService : IAsyncDisposable
         ConfigureActiveMode();
         if (_enabled)
         {
-            QueueUnload();
+            QueueUnload(HoverUnloadReason.ModeChanged);
             QueueWarmUpAfterPendingUnload();
         }
     }
 
-    private void QueueUnload()
+    private void QueueUnload(HoverUnloadReason reason)
     {
         TaskCompletionSource? completion = null;
         Task pendingUnload;
         lock (_lifecycleLock)
         {
             _unloadRevision++;
+            _unloadIntent.Request(reason);
             if (!_unloadWorkerRunning)
             {
                 _unloadWorkerRunning = true;
@@ -257,12 +272,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
             while (true)
             {
                 long revision;
+                bool releaseDictionaryMemoryRequested;
                 lock (_lifecycleLock)
                 {
                     revision = _unloadRevision;
+                    releaseDictionaryMemoryRequested =
+                        _unloadIntent.ConsumeReleaseRequest();
                 }
 
-                await UnloadWhenIdleSafeAsync();
+                await UnloadWhenIdleSafeAsync(releaseDictionaryMemoryRequested);
 
                 lock (_lifecycleLock)
                 {
@@ -314,11 +332,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private async Task UnloadWhenIdleSafeAsync()
+    private async Task UnloadWhenIdleSafeAsync(bool releaseDictionaryMemoryRequested)
     {
         try
         {
-            await UnloadWhenIdleAsync();
+            await UnloadWhenIdleAsync(releaseDictionaryMemoryRequested);
         }
         catch (Exception ex)
         {
@@ -326,7 +344,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
     }
 
-    private async Task UnloadWhenIdleAsync()
+    private async Task UnloadWhenIdleAsync(bool releaseDictionaryMemoryRequested)
     {
         using IDisposable maintenance =
             await _modelActivity.BeginMaintenanceWhenIdleAsync();
@@ -335,18 +353,29 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _enabled &&
             _glossBertSelector.ActiveProvider is { } activeProvider &&
             activeProvider != ResolveGlossBertProvider();
+        bool unloadDictionary = !_enabled || (!IsDictionaryMode && !IsSmartMode);
         await UnloadModelOwnersAsync(
             unloadTranslator: !_enabled || IsDictionaryMode || IsScreenMode || IsSmartMode,
-            unloadDictionary: !_enabled || (!IsDictionaryMode && !IsSmartMode),
+            unloadDictionary: unloadDictionary,
             unloadRanker: !_enabled || !ActiveModeUsesGlossBert || backendChanged,
-            forgetSmartBackend: !_enabled || !IsSmartMode);
+            unloadPhraseTranslator: !_enabled ||
+                                      !IsSmartMode ||
+                                      !SmartPhraseTranslationEnabled ||
+                                      !_settings.SmartDictionaryKeepWarm,
+            forgetSmartBackend: !_enabled || !IsSmartMode,
+            releaseDictionaryMemory:
+                HoverUnloadIntentState.ShouldReleaseDictionaryMemory(
+                    releaseDictionaryMemoryRequested,
+                    unloadDictionary));
     }
 
     private async Task UnloadModelOwnersAsync(
         bool unloadTranslator,
         bool unloadDictionary,
         bool unloadRanker,
-        bool forgetSmartBackend)
+        bool unloadPhraseTranslator,
+        bool forgetSmartBackend,
+        bool releaseDictionaryMemory = false)
     {
         List<Exception> failures = [];
         if (unloadTranslator)
@@ -356,12 +385,22 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
         if (unloadDictionary)
         {
-            await CaptureUnloadFailureAsync(_dictionary.UnloadAsync, failures);
+            Func<Task> unload = releaseDictionaryMemory
+                ? _dictionary.UnloadAndReleaseMemoryAsync
+                : _dictionary.UnloadAsync;
+            await CaptureUnloadFailureAsync(
+                unload,
+                failures);
         }
 
         if (unloadRanker)
         {
             await CaptureUnloadFailureAsync(_smartPipeline.UnloadRankerAsync, failures);
+        }
+
+        if (unloadPhraseTranslator)
+        {
+            await CaptureUnloadFailureAsync(_translateGemma.UnloadAsync, failures);
         }
 
         if (forgetSmartBackend)
@@ -399,14 +438,23 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 HoverTranslationModes.Smart =>
                     $"Подготовка NPU OCR, словарей и контекстной модели на {ResolveSmartBackend().ToUpperInvariant()}…",
                 HoverTranslationModes.Dictionary => "Подготовка NPU OCR и локального словаря…",
-                HoverTranslationModes.Screen => "Подготовка экранного NPU OCR…",
-                _ => "Подготовка NPU OCR и локального переводчика…"
+                HoverTranslationModes.Screen =>
+                    $"Подготовка экранного NPU OCR и модели значений {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))}…",
+                _ =>
+                    $"Подготовка NPU OCR, модели значений {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))} и локального переводчика…"
             });
             await _ocr.EnsureReadyAsync();
             cancellationToken.ThrowIfCancellationRequested();
             if (!_enabled || requestedMode != HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
             {
                 return;
+            }
+
+            if (requestedMode is HoverTranslationModes.Smart or
+                HoverTranslationModes.Neural or
+                HoverTranslationModes.Screen)
+            {
+                await _semanticRankerProfile.ApplyAsync(cancellationToken);
             }
 
             if (requestedMode == HoverTranslationModes.Smart)
@@ -426,6 +474,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     await _smartPipeline.PrepareSmartBackendAsync(
                         ResolveSmartBackend(),
                         cancellationToken);
+                }
+
+                if (SmartRankerApplicable &&
+                    SmartPhraseTranslationEnabled &&
+                    _settings.SmartDictionaryKeepWarm)
+                {
+                    await WarmTranslateGemmaSafeAsync(cancellationToken);
                 }
             }
             else if (requestedMode == HoverTranslationModes.Dictionary)
@@ -455,17 +510,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 ReportStatus(requestedMode switch
                 {
-                    HoverTranslationModes.Smart =>
-                        $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; " +
-                        (!SmartRankerApplicable
-                            ? "японское направление работает напрямую по словарям"
-                            : _settings.SmartDictionaryKeepWarm
-                                ? $"модель значений прогрета на {ResolveSmartBackend().ToUpperInvariant()}"
-                                : $"модель значений загрузится по требованию на {ResolveSmartBackend().ToUpperInvariant()}"),
+                    HoverTranslationModes.Smart => BuildSmartReadyStatus(),
                     HoverTranslationModes.Dictionary =>
                         $"Быстрый перевод готов: {_dictionary.EntryCount:N0} записей из {_dictionary.SourceCount} словарей",
-                    HoverTranslationModes.Screen => "Экранный перевод готов: Alt+Shift+T — перевести все реплики",
-                    _ => "Перевод под курсором готов: NPU OCR + GlossBERT + локальная Qwen"
+                    HoverTranslationModes.Screen =>
+                        $"Экранный перевод готов: Alt+Shift+T — перевести все реплики; модель значений: {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))}",
+                    _ =>
+                        $"Перевод под курсором готов: NPU OCR + {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))} + локальная Qwen"
                 });
             }
         }
@@ -477,6 +528,46 @@ public sealed class HoverTranslationService : IAsyncDisposable
             LogError(ex);
             ReportStatus("Перевод текста: " + ex.Message);
         }
+    }
+
+    private async Task WarmTranslateGemmaSafeAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _translateGemma.WarmUpAsync(cancellationToken);
+            _translateGemmaReady = true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _translateGemmaReady = false;
+            LogError(exception);
+        }
+    }
+
+    private string BuildSmartReadyStatus()
+    {
+        string ranking = !SmartRankerApplicable
+            ? "японское направление работает напрямую по словарям"
+            : _settings.SmartDictionaryKeepWarm
+                ? $"модель значений прогрета на {ResolveSmartBackend().ToUpperInvariant()}"
+                : $"модель значений загрузится по требованию на {ResolveSmartBackend().ToUpperInvariant()}";
+        if (!SmartRankerApplicable || !SmartPhraseTranslationEnabled)
+        {
+            return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}";
+        }
+
+        string phrase = _settings.SmartDictionaryKeepWarm switch
+        {
+            true when _translateGemmaReady == true => "TranslateGemma 4B прогрета",
+            true when _translateGemmaReady == false =>
+                "TranslateGemma 4B не установлена; словарный результат остаётся рабочим",
+            _ => "TranslateGemma 4B загрузится по требованию"
+        };
+        return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}; {phrase}";
     }
 
     private void OnScreenTranslationPressed(object? sender, EventArgs e) => TranslateScreen();
@@ -613,9 +704,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     _lifetimeCancellation.Token,
                     CurrentModeToken,
                     targetMonitorToken);
-            translated = await _screenFlow.ProcessAsync(
-                foregroundWindow,
-                foregroundProcessId,
+            translated = await _semanticRankerProfile.RunAfterApplyAsync(
+                token => _screenFlow.ProcessAsync(
+                    foregroundWindow,
+                    foregroundProcessId,
+                    token),
                 linkedCancellation.Token);
         }
         catch (OperationCanceledException)
@@ -684,9 +777,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
             bool usedFullFallback = false;
             SmartDictionaryCacheRequest? resultCacheRequest = null;
             SmartDictionarySelection? resultCacheSelection = null;
+            SmartHoverResult? resolvedSmartResult = null;
             if (IsSmartMode)
             {
-                SmartHoverResult smartResult = await _smartPipeline.ResolveSmartHoverAsync(
+                resolvedSmartResult = await _smartPipeline.ResolveSmartHoverAsync(
                     recognized,
                     cursor,
                     smartBackend,
@@ -700,16 +794,16 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     };
                 }
 
-                source = smartResult.Source;
-                translation = smartResult.Translation;
-                engine = smartResult.Engine;
-                dictionaryFound = smartResult.DictionaryFound;
-                isPhrase = smartResult.IsPhrase;
-                language = smartResult.Language;
-                confidence = smartResult.Confidence;
-                usedFullFallback = smartResult.UsedFullFallback;
-                resultCacheRequest = smartResult.CacheRequest;
-                resultCacheSelection = smartResult.CacheSelection;
+                source = resolvedSmartResult.Source;
+                translation = resolvedSmartResult.Translation;
+                engine = resolvedSmartResult.Engine;
+                dictionaryFound = resolvedSmartResult.DictionaryFound;
+                isPhrase = resolvedSmartResult.IsPhrase;
+                language = resolvedSmartResult.Language;
+                confidence = resolvedSmartResult.Confidence;
+                usedFullFallback = resolvedSmartResult.UsedFullFallback;
+                resultCacheRequest = resolvedSmartResult.CacheRequest;
+                resultCacheSelection = resolvedSmartResult.CacheSelection;
             }
             else if (IsDictionaryMode)
             {
@@ -732,27 +826,38 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 engine = FoundryTranslationService.EngineLabel;
             }
 
-            if (!_enabled || !CursorIsNear(cursor) ||
-                string.IsNullOrWhiteSpace(translation) ||
-                string.Equals(source, translation, StringComparison.CurrentCultureIgnoreCase))
+            if (!_enabled || !CursorIsNear(cursor))
             {
                 HideOverlay();
                 return;
             }
 
-            ShowTranslation(
-                source,
-                translation,
-                engine,
-                cursor,
-                dictionaryFound,
-                isPhrase,
-                language,
-                confidence,
-                recognized.Text,
-                displayGeneration,
-                requireCursorNear: true,
-                textSource: recognized.TextSource);
+            bool primaryDisplayable =
+                resolvedSmartResult is not null ||
+                !string.IsNullOrWhiteSpace(translation) &&
+                !string.Equals(
+                    source,
+                    translation,
+                    StringComparison.CurrentCultureIgnoreCase);
+            if (primaryDisplayable)
+            {
+                // Keep the dictionary fast: render its result before the
+                // optional 4B phrase model starts or reads its own cache.
+                ShowTranslation(
+                    source,
+                    translation,
+                    engine,
+                    cursor,
+                    dictionaryFound,
+                    isPhrase,
+                    language,
+                    confidence,
+                    recognized.Text,
+                    displayGeneration,
+                    requireCursorNear: true,
+                    textSource: recognized.TextSource);
+            }
+
             if (resultCacheRequest is not null && resultCacheSelection is not null)
             {
                 await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
@@ -762,6 +867,35 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 ScheduleSmartFallbackUnload();
             }
+
+            SmartHoverPhraseLine? phraseLine = resolvedSmartResult is null
+                ? null
+                : await _smartPipeline.TranslatePhraseLineAsync(
+                    recognized,
+                    resolvedSmartResult,
+                    cancellationToken);
+            if (phraseLine is not null)
+            {
+                ShowTranslation(
+                    source,
+                    translation,
+                    engine,
+                    cursor,
+                    dictionaryFound,
+                    isPhrase,
+                    language,
+                    confidence,
+                    recognized.Text,
+                    displayGeneration,
+                    requireCursorNear: true,
+                    textSource: recognized.TextSource,
+                    phraseLine: phraseLine);
+            }
+            else if (!primaryDisplayable)
+            {
+                HideOverlay();
+            }
+
         }
         catch (OperationCanceledException)
         {
@@ -776,6 +910,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
         finally
         {
             EndProcessing();
+            // A rejected or cancelled generation still loaded the optional
+            // phrase model. In memory-saving mode every Smart hover therefore
+            // schedules an idempotent unload, including fail-open results.
+            if (SmartPhraseTranslationEnabled && !_settings.SmartDictionaryKeepWarm)
+            {
+                QueueUnload(HoverUnloadReason.PhraseMemorySaving);
+            }
         }
     }
 
@@ -858,7 +999,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 Text = match.Text,
                 CharacterIndex = match.CharacterIndex,
-                TextSource = HoverTextSource.TextHook
+                TextSource = HoverTextSource.TextHook,
+                PreviousContext = match.PreviousContext
             };
 
     private static bool CursorIsNear(NativeMethods.Point expected) =>
@@ -897,6 +1039,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private bool IsSmartMode =>
         HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
+
+    private bool SmartPhraseTranslationEnabled =>
+        SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
+        SmartPhraseTranslationModes.TranslateGemma;
 
     private bool IsScreenMode =>
         HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Screen;
@@ -951,7 +1097,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         string context,
         long displayGeneration,
         bool requireCursorNear,
-        HoverTextSource textSource = HoverTextSource.Ocr)
+        HoverTextSource textSource = HoverTextSource.Ocr,
+        SmartHoverPhraseLine? phraseLine = null)
     {
         _dispatcher.BeginInvoke(
             () =>
@@ -973,10 +1120,28 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     isPhrase,
                     language,
                     confidence,
-                    textSource);
-                if (dictionaryFound)
+                    textSource,
+                    phraseLine);
+                // The progressive phrase update redraws the same primary card.
+                // Record that answer only on its first render; otherwise every
+                // successful TranslateGemma call would duplicate history.
+                if (dictionaryFound && phraseLine is null)
                 {
                     _history.Record(source, translation, engine, context);
+                }
+
+                if (phraseLine is
+                    {
+                        Status: SmartPhraseLineStatus.Translated,
+                        Translation.Length: > 0
+                    })
+                {
+                    _history.Record(
+                        phraseLine.Source,
+                        phraseLine.Translation,
+                        phraseLine.Engine,
+                        context,
+                        "EN");
                 }
             },
             DispatcherPriority.Normal);
@@ -1114,6 +1279,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                         unloadTranslator: true,
                         unloadDictionary: false,
                         unloadRanker: true,
+                        unloadPhraseTranslator: true,
                         forgetSmartBackend: false);
 
                     ReportStatus("Экранный перевод готов: модели выгружены после простоя, Alt+Shift+T загрузит их снова");
@@ -1158,6 +1324,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                         unloadTranslator: true,
                         unloadDictionary: false,
                         unloadRanker: false,
+                        unloadPhraseTranslator: false,
                         forgetSmartBackend: false);
                     ReportStatus("Умный словарь готов: резервная полная модель выгружена после простоя");
                 }
@@ -1382,8 +1549,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _history.Dispose();
         await _textHook.DisposeAsync();
         await _translator.DisposeAsync();
+        await _translateGemma.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();
+        await _smartPhraseCache.DisposeAsync();
         await _decisionCache.DisposeAsync();
         _smartPipeline.Dispose();
         modeCancellation?.Dispose();

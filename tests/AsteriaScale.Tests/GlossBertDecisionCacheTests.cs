@@ -1,5 +1,6 @@
 using AsteriaScale.RankerProtocol;
 using AsteriaScale.Services;
+using System.Text.Json;
 
 /// <summary>
 /// The shared GlossBERT decision cache is the single place where a hover
@@ -21,6 +22,9 @@ internal static class GlossBertDecisionCacheTests
         VerifyAbstentionThresholdIsKeyed();
         VerifyEnrichmentGateIsClosed();
         VerifyBertCleanTextParity();
+        VerifyPinnedSandwichTokenizerEvidence();
+        VerifySandwichExactFingerprint();
+        VerifyConsecExactFingerprint();
         VerifyStorageFingerprintFollowsResponseIdentity();
         VerifyFingerprintSeparation();
         await VerifyRoundTripAndPersistenceAsync(root);
@@ -111,6 +115,212 @@ internal static class GlossBertDecisionCacheTests
                   repeated.LastIndexOf(Target, StringComparison.Ordinal),
                   plan),
             "The cache key no longer follows the worker's marked context through clean_text.");
+    }
+
+    private static void VerifySandwichExactFingerprint()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        int tokenStart = Sentence.IndexOf(Target, StringComparison.Ordinal);
+        string baseline = SandwichFingerprint(
+            Sentence,
+            Target,
+            tokenStart,
+            plan);
+
+        const string capitalizedSentence =
+            "She sat on the Bank and watched the water.";
+        Check(baseline != SandwichFingerprint(
+                capitalizedSentence,
+                Target,
+                capitalizedSentence.IndexOf("Bank", StringComparison.Ordinal),
+                plan),
+            "SANDWiCH context casing was folded into one decision key.");
+        Check(baseline != SandwichFingerprint(
+                Sentence,
+                "Bank",
+                tokenStart,
+                plan),
+            "SANDWiCH target casing was folded into one decision key.");
+
+        // The pinned SentencePiece tokenizer does not have BERT clean_text.
+        // Keep every potentially distinguishable control/format scalar exact;
+        // conservative misses are safer than serving a foreign verdict.
+        char[] exactScalars =
+        [
+            '\u200D', // zero-width joiner
+            '\u00AD', // soft hyphen
+            '\u0001', // control
+            '\u000B', // BERT-deleted vertical tab
+            '\u2060'  // word joiner
+        ];
+        HashSet<string> contextKeys = new(StringComparer.Ordinal) { baseline };
+        foreach (char scalar in exactScalars)
+        {
+            string variant = Sentence.Replace(
+                "She sat",
+                $"She{scalar}sat",
+                StringComparison.Ordinal);
+            string key = SandwichFingerprint(
+                variant,
+                Target,
+                variant.IndexOf(Target, StringComparison.Ordinal),
+                plan);
+            Check(contextKeys.Add(key),
+                $"SANDWiCH context U+{(int)scalar:X4} collided with another exact input.");
+        }
+
+        const string doubleSpaced =
+            "She  sat on the bank and watched the water.";
+        Check(baseline != SandwichFingerprint(
+                doubleSpaced,
+                Target,
+                doubleSpaced.IndexOf(Target, StringComparison.Ordinal),
+                plan),
+            "SANDWiCH internal whitespace was folded into one decision key.");
+
+        foreach (char scalar in exactScalars)
+        {
+            SmartDictionaryRankerPlan changedGloss = new(
+                plan.Outcomes,
+                [$"a financial{scalar}institution", plan.CandidateGlosses[1]],
+                plan.CandidateGroupIds);
+            Check(baseline != SandwichFingerprint(
+                    Sentence,
+                    Target,
+                    tokenStart,
+                    changedGloss),
+                $"SANDWiCH gloss U+{(int)scalar:X4} was removed from the decision key.");
+        }
+
+        SmartDictionaryRankerPlan swappedGlossOrder = new(
+            plan.Outcomes,
+            [plan.CandidateGlosses[1], plan.CandidateGlosses[0]],
+            [1, 0]);
+        Check(baseline != SandwichFingerprint(
+                Sentence,
+                Target,
+                tokenStart,
+                swappedGlossOrder),
+            "SANDWiCH gloss order and GroupIds did not participate in the key.");
+
+        const string repeated = "The bank near the other bank was closed.";
+        int first = repeated.IndexOf(Target, StringComparison.Ordinal);
+        int second = repeated.IndexOf(Target, first + 1, StringComparison.Ordinal);
+        Check(SandwichFingerprint(repeated, Target, first, plan) !=
+              SandwichFingerprint(repeated, Target, second, plan),
+            "Two SANDWiCH [D]-marked target occurrences shared one decision key.");
+
+        Check(baseline != GlossBertDecisionCache.CreateFingerprint(
+                Sentence,
+                Target,
+                tokenStart,
+                plan,
+                GlossBertRankerProvider.Cpu,
+                SandwichModelIdentity,
+                "dictionary-v1",
+                "abstain-margin=0.18"),
+            "SANDWiCH abstention threshold did not participate in the key.");
+        Check(baseline != SandwichFingerprint(
+                Sentence,
+                Target,
+                tokenStart,
+                plan,
+                modelIdentity: SandwichModelIdentity + ":revision-2"),
+            "SANDWiCH model/pipeline identity did not participate in the key.");
+
+        const string joined = "Shesat on the bank and watched the water.";
+        const string controlled = "She\u000Bsat on the bank and watched the water.";
+        string debertaIdentity =
+            GlossBertDictionarySelectorService.DebertaCpuModelCacheId +
+            ":pipeline-cross";
+        Check(Fingerprint(
+                  joined,
+                  joined.IndexOf(Target, StringComparison.Ordinal),
+                  plan,
+                  modelIdentity: debertaIdentity) !=
+              Fingerprint(
+                  controlled,
+                  controlled.IndexOf(Target, StringComparison.Ordinal),
+                  plan,
+                  modelIdentity: debertaIdentity),
+            "A non-BERT DeBERTa profile inherited BERT control deletion in the decision key.");
+    }
+
+    private static void VerifyConsecExactFingerprint()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        const string repeated = "The bank near the other bank was closed.";
+        int first = repeated.IndexOf(Target, StringComparison.Ordinal);
+        int second = repeated.LastIndexOf(Target, StringComparison.Ordinal);
+        string firstKey = ConsecFingerprint(repeated, Target, first, plan);
+        string secondKey = ConsecFingerprint(repeated, Target, second, plan);
+        Check(firstKey != secondKey,
+            "Two ConSeC target spans in one exact sentence shared a decision key.");
+
+        const string changedWhitespace =
+            "The  bank near the other bank was closed.";
+        Check(firstKey != ConsecFingerprint(
+                changedWhitespace,
+                Target,
+                changedWhitespace.IndexOf(Target, StringComparison.Ordinal),
+                plan),
+            "ConSeC exact source whitespace was folded into one decision key.");
+
+        Check(firstKey != ConsecFingerprint(
+                repeated,
+                Target,
+                first,
+                plan,
+                ConsecModelIdentity.Replace(
+                    "context-full-v1",
+                    "context-full-v2",
+                    StringComparison.Ordinal)),
+            "ConSeC pretokenizer identity did not participate in the cache key.");
+
+        Check(firstKey != GlossBertDecisionCache.CreateFingerprint(
+                repeated,
+                Target,
+                first,
+                plan,
+                GlossBertRankerProvider.Cpu,
+                ConsecModelIdentity,
+                "dictionary-v1",
+                "abstain-margin=0.18"),
+            "ConSeC abstention threshold did not participate in the cache key.");
+    }
+
+    private static void VerifyPinnedSandwichTokenizerEvidence()
+    {
+        string tokenizerPath = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "AsteriaScale.RankerWorker",
+            "Models",
+            "Sandwich",
+            "tokenizer.json");
+        if (!File.Exists(tokenizerPath))
+        {
+            // SANDWiCH is an optional ignored bundle in a clean clone. The
+            // exact cache contract itself is covered below without artifacts;
+            // installer/package tests own partial-bundle validation.
+            return;
+        }
+
+        using JsonDocument tokenizer = JsonDocument.Parse(
+            File.ReadAllBytes(tokenizerPath));
+        JsonElement normalizer = tokenizer.RootElement.GetProperty("normalizer");
+        JsonElement[] stages = normalizer.GetProperty("normalizers")
+            .EnumerateArray()
+            .ToArray();
+        string[] stageTypes = stages
+            .Select(stage => stage.GetProperty("type").GetString() ?? string.Empty)
+            .ToArray();
+        Check(normalizer.GetProperty("type").GetString() == "Sequence" &&
+              stageTypes.SequenceEqual(["Strip", "Precompiled", "Replace"]),
+            "The pinned SANDWiCH tokenizer no longer exposes its SentencePiece normalizer pipeline.");
+        Check(!stageTypes.Contains("BertNormalizer", StringComparer.Ordinal) &&
+              stages.All(stage => !stage.TryGetProperty("lowercase", out _)),
+            "The pinned SANDWiCH tokenizer unexpectedly adopted BERT clean_text/lowercase semantics.");
     }
 
     private static void VerifyStorageFingerprintFollowsResponseIdentity()
@@ -215,6 +425,27 @@ internal static class GlossBertDecisionCacheTests
             $"A leading target lost its position: '{atStart.Text}'");
         Check(atStart.Text.Split(' ').Length >= budget - 1,
             "A leading target did not receive the remaining budget on its right.");
+
+        TargetCenteredContext consec = TargetCenteredContextBuilder.BuildForRanker(
+            sentence,
+            Target,
+            rawIndex,
+            GlossBertRankerProvider.Cpu,
+            RankerCpuModelProfile.Consec);
+        Check(!consec.Trimmed &&
+              string.Equals(consec.Text, sentence, StringComparison.Ordinal) &&
+              consec.CharacterIndex == rawIndex,
+            "ConSeC did not preserve the complete source sentence and exact target anchor.");
+
+        TargetCenteredContext sandwich = TargetCenteredContextBuilder.BuildForRanker(
+            sentence,
+            Target,
+            rawIndex,
+            GlossBertRankerProvider.Cpu,
+            RankerCpuModelProfile.Sandwich);
+        Check(sandwich.Trimmed &&
+              string.Equals(sandwich.Text, centered.Text, StringComparison.Ordinal),
+            "A pair scorer stopped using the bounded target-centred context.");
     }
 
     private static void VerifyScaffoldAndHoverAgree()
@@ -267,7 +498,7 @@ internal static class GlossBertDecisionCacheTests
             tokenStart,
             plan,
             GlossBertRankerProvider.Cpu,
-            "model-v1",
+            GlossBertModelIdentity,
             "dictionary-v1",
             RankerAbstention.CacheTag);
         Check(current == Fingerprint(Sentence, tokenStart, plan),
@@ -279,7 +510,7 @@ internal static class GlossBertDecisionCacheTests
             tokenStart,
             plan,
             GlossBertRankerProvider.Cpu,
-            "model-v1",
+            GlossBertModelIdentity,
             "dictionary-v1",
             "abstain-margin=0.18");
         Check(current != recalibrated,
@@ -633,12 +864,73 @@ internal static class GlossBertDecisionCacheTests
             ["a financial institution", "land alongside a river"],
             [0, 1]);
 
+    private const string SandwichModelIdentity =
+        GlossBertDictionarySelectorService.SandwichCpuModelCacheId +
+        ":pipeline-sandwich";
+
+    private const string ConsecModelIdentity =
+        GlossBertDictionarySelectorService.ConsecCpuModelCacheId +
+        ":pipeline-consec-independent";
+
+    private const string GlossBertModelIdentity =
+        GlossBertDictionarySelectorService.CpuModelCacheId +
+        ":pipeline-cross";
+
+    private static string SandwichFingerprint(
+        string sentence,
+        string target,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        string modelIdentity = SandwichModelIdentity) =>
+        GlossBertDecisionCache.CreateFingerprint(
+            sentence,
+            target,
+            characterIndex,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            modelIdentity,
+            "dictionary-v1",
+            RankerAbstention.CacheTag);
+
+    private static string ConsecFingerprint(
+        string sentence,
+        string target,
+        int characterIndex,
+        SmartDictionaryRankerPlan plan,
+        string modelIdentity = ConsecModelIdentity) =>
+        GlossBertDecisionCache.CreateFingerprint(
+            sentence,
+            target,
+            characterIndex,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            modelIdentity,
+            "dictionary-v1",
+            RankerAbstention.CacheTag);
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "AsteriaScale.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException(
+            "Could not locate the Asteria Scale repository root.");
+    }
+
     private static string Fingerprint(
         string sentence,
         int characterIndex,
         SmartDictionaryRankerPlan plan,
         GlossBertRankerProvider provider = GlossBertRankerProvider.Cpu,
-        string modelIdentity = "model-v1",
+        string modelIdentity = GlossBertModelIdentity,
         string dictionaryVersion = "dictionary-v1",
         bool enrichmentEnabled = SmartDictionaryRankerPlan.EnrichmentEnabled) =>
         GlossBertDecisionCache.CreateFingerprint(

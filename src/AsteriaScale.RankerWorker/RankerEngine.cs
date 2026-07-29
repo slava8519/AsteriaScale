@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using AsteriaScale.RankerProtocol;
 using Microsoft.ML.OnnxRuntime;
@@ -21,6 +21,30 @@ internal sealed class RankerEngine : IDisposable
     // leave stale verdicts readable.
     private const double AbstentionMargin = RankerAbstention.MarginThreshold;
     private const string ModelBundleDirectoryName = "GlossBert";
+    private const string DebertaBundleDirectoryName = "GlossDeberta";
+    private const string SandwichBundleDirectoryName = "Sandwich";
+    private const string DebertaManifestFileName = "model-manifest.json";
+    // This is the current v2 pilot bundle pin. The final candidate intentionally
+    // changes only these two values and the host's exact cache identity together.
+    private const long DebertaManifestLength = 527;
+    private const string DebertaManifestSha256 =
+        "f4028fe04c8a138dfef3d4e453907c6d2ad9e14ed8a44af75d4410be51149b89";
+    private const string SandwichNonVerbModelFileName = "encoder-nv-fp32.onnx";
+    private const string SandwichVerbModelFileName = "encoder-v-fp32.onnx";
+    private const long SandwichNonVerbModelLength = 568_094_742;
+    private const string SandwichNonVerbModelSha256 =
+        "b6a21c42c974f145a39a20e5c5b62b740cb0b63ed698499fa4c5e4b397998739";
+    private const long SandwichVerbModelLength = 568_094_742;
+    private const string SandwichVerbModelSha256 =
+        "21b778dc9552f84732d1061ca1ace23f9f6c071e68fe4ab0615109f192e78f6b";
+    private const long SandwichTokenizerLength = 8_656_779;
+    private const string SandwichTokenizerSha256 =
+        "2689db9b56b94ae9fac86daeb5fe7df0be0c5f1a9dce76a0edda7afa93dd1304";
+    private const int SandwichMaximumSequenceLength = 512;
+    private const int SandwichBatchSize = 8;
+    internal const string SandwichModelCacheId =
+        "SANDWiCH:naacl-2025:singleton-gloss:" +
+        "m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:s512:c2:p1";
     private const string CpuModelFileName = "glossbert-fp32-dynamic.onnx";
     private const string NpuModelFileName = "glossbert-eager-vitis-context.onnx";
     private const string NpuContextBinaryFileName =
@@ -88,7 +112,11 @@ internal sealed class RankerEngine : IDisposable
     private readonly WorkerOptions _options;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private InferenceSession? _session;
+    private InferenceSession? _sandwichVerbSession;
     private PairTokenizer? _tokenizer;
+    private ConsecArtifactBundle? _consecBundle;
+    private ConsecTokenizer? _consecTokenizer;
+    private ConsecInputBuilder? _consecInputBuilder;
     private GlossEmbeddingIndex? _embeddingIndex;
     private ContextEncoder? _contextEncoder;
     private bool _embeddingLoadAttempted;
@@ -96,17 +124,39 @@ internal sealed class RankerEngine : IDisposable
     private RankerException? _initializationFailure;
     private bool _warmupCompleted;
     private bool _npuExecutionVerified;
+    private CpuModelConfiguration? _cpuModelConfiguration;
     private string _crossModelVersion;
 
     public RankerEngine(WorkerOptions options)
     {
+        if (options.Provider == RankerProvider.Npu &&
+            options.CpuModel != CpuRankerModel.GlossBert)
+        {
+            throw new RankerException(
+                "unsupported_provider_model",
+                $"The {options.CpuModel} ranker is CPU-only; " +
+                "NPU remains pinned to GlossBERT.");
+        }
+
         _options = options;
         Provider = options.Provider == RankerProvider.Npu
             ? "VitisAIExecutionProvider"
             : "CPUExecutionProvider";
         Device = options.Provider == RankerProvider.Npu ? "NPU" : "CPU";
-        _crossModelVersion = DefaultModelVersion;
-        ModelVersion = DefaultModelVersion;
+        _crossModelVersion = options.CpuModel switch
+        {
+            CpuRankerModel.Deberta => "GlossDeBERTa:manifest-pending",
+            CpuRankerModel.Sandwich => SandwichModelCacheId,
+            CpuRankerModel.Consec => ConsecArtifactBundle.ModelCacheId,
+            _ => DefaultModelVersion
+        };
+        ModelVersion = options.CpuModel switch
+        {
+            CpuRankerModel.Sandwich => _crossModelVersion + ":pipeline-sandwich",
+            CpuRankerModel.Consec =>
+                _crossModelVersion + ":pipeline-consec-independent",
+            _ => _crossModelVersion
+        };
     }
 
     public string Provider { get; private set; }
@@ -118,7 +168,8 @@ internal sealed class RankerEngine : IDisposable
     public async Task WarmAsync()
     {
         await EnsureLoadedAsync();
-        if (_options.Provider == RankerProvider.Cpu)
+        if (_options.Provider == RankerProvider.Cpu &&
+            _options.CpuModel is not (CpuRankerModel.Sandwich or CpuRankerModel.Consec))
         {
             EnsureEmbeddingPipelineLoaded();
         }
@@ -128,10 +179,25 @@ internal sealed class RankerEngine : IDisposable
             return;
         }
 
-        _ = Score(
-            "The \"warmup\" pass prepares the dictionary ranker.",
-            "warmup",
-            ["a preparatory operation"]);
+        if (_options.CpuModel == CpuRankerModel.Consec)
+        {
+            ConsecInput input = GetConsecInputBuilder().BuildFromTokens(
+                ["The", "warmup", "pass", "prepares", "the", "ranker", "."],
+                targetIndex: 1,
+                ["a preparatory operation"],
+                []);
+            _ = RunConsec(input);
+        }
+        else
+        {
+            string warmupContext = _options.CpuModel == CpuRankerModel.Sandwich
+                ? "The [D] warmup [D] pass prepares the dictionary ranker."
+                : "The \"warmup\" pass prepares the dictionary ranker.";
+            _ = Score(
+                warmupContext,
+                "warmup",
+                ["a preparatory operation"]);
+        }
         if (_options.Provider == RankerProvider.Npu && !_npuExecutionVerified)
         {
             try
@@ -159,14 +225,46 @@ internal sealed class RankerEngine : IDisposable
         ValidateSelection(request);
         await WarmAsync();
 
-        var markedContext = BuildMarkedContext(
-            request.Context!,
-            request.Target!,
-            request.CharacterIndex);
-        var (candidates, candidateGroupIds, pipeline) =
-            ApplyBiEncoderPrefilter(request, markedContext);
+        if (_options.CpuModel == CpuRankerModel.Consec)
+        {
+            ConsecInput input = GetConsecInputBuilder().BuildFromContext(
+                request.Context!,
+                request.Target!,
+                request.CharacterIndex,
+                request.Candidates!);
+            float[] tokenLogits = RunConsec(input);
+            ConsecSelection result = ConsecScorer.Select(
+                tokenLogits,
+                input.MarkerPositions,
+                request.CandidateGroupIds!);
+            return new RankerSelection(
+                result.GroupId,
+                result.Abstained,
+                result.Margin,
+                result.Score,
+                result.Score,
+                "consec-independent");
+        }
+
+        bool useSandwich = _options.CpuModel == CpuRankerModel.Sandwich;
+        var markedContext = useSandwich
+            ? BuildSandwichMarkedContext(
+                request.Context!,
+                request.Target!,
+                request.CharacterIndex)
+            : BuildMarkedContext(
+                request.Context!,
+                request.Target!,
+                request.CharacterIndex);
+        var (candidates, candidateGroupIds, pipeline) = useSandwich
+            ? (request.Candidates!, request.CandidateGroupIds!, "sandwich")
+            : ApplyBiEncoderPrefilter(request, markedContext);
         var scores = Score(markedContext, request.Target!, candidates);
-        var groupedScores = GroupScores(scores, candidateGroupIds);
+        var groupedScores = useSandwich
+            ? RankerSelectionLogic.AggregateSandwichGroups(
+                scores.Select(score => score.Score).ToArray(),
+                candidateGroupIds)
+            : GroupScores(scores, candidateGroupIds);
         var best = groupedScores[0];
         var margin = groupedScores.Count == 1
             ? 1.0
@@ -308,37 +406,32 @@ internal sealed class RankerEngine : IDisposable
             throw _embeddingFailure;
         }
 
-        try
-        {
-            ValidateFileIntegrity(
-                indexPath,
-                EmbeddingIndexLength,
-                EmbeddingIndexSha256,
-                "embedding_bundle_integrity_failed",
-                "gloss embedding index");
-            ValidateFileIntegrity(
-                modelPath,
-                EmbeddingModelLength,
-                EmbeddingModelSha256,
-                "embedding_bundle_integrity_failed",
-                "MiniLM context encoder");
-            ValidateFileIntegrity(
-                tokenizerPath,
-                EmbeddingTokenizerLength,
-                EmbeddingTokenizerSha256,
-                "embedding_bundle_integrity_failed",
-                "MiniLM tokenizer");
-        }
-        catch (RankerException ex)
-        {
-            _embeddingFailure = ex;
-            throw;
-        }
-
         GlossEmbeddingIndex? index = null;
         ContextEncoder? encoder = null;
         try
         {
+            using RankerArtifactReadLease indexLease =
+                RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                    indexPath,
+                    EmbeddingIndexLength,
+                    EmbeddingIndexSha256,
+                    "embedding_bundle_integrity_failed",
+                    "gloss embedding index");
+            using RankerArtifactReadLease modelLease =
+                RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                    modelPath,
+                    EmbeddingModelLength,
+                    EmbeddingModelSha256,
+                    "embedding_bundle_integrity_failed",
+                    "MiniLM context encoder");
+            using RankerArtifactReadLease tokenizerLease =
+                RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                    tokenizerPath,
+                    EmbeddingTokenizerLength,
+                    EmbeddingTokenizerSha256,
+                    "embedding_bundle_integrity_failed",
+                    "MiniLM tokenizer");
+
             index = new GlossEmbeddingIndex(indexPath);
             ValidateEmbeddingMetadata(index);
             encoder = new ContextEncoder(
@@ -400,7 +493,10 @@ internal sealed class RankerEngine : IDisposable
     public void Dispose()
     {
         _session?.Dispose();
+        _sandwichVerbSession?.Dispose();
         _tokenizer?.Dispose();
+        _consecTokenizer?.Dispose();
+        _consecBundle?.Dispose();
         _embeddingIndex?.Dispose();
         _contextEncoder?.Dispose();
         _initializationLock.Dispose();
@@ -408,7 +504,7 @@ internal sealed class RankerEngine : IDisposable
 
     private async Task EnsureLoadedAsync()
     {
-        if (_session is not null)
+        if (IsModelLoaded())
         {
             return;
         }
@@ -417,7 +513,7 @@ internal sealed class RankerEngine : IDisposable
         await _initializationLock.WaitAsync();
         try
         {
-            if (_session is not null)
+            if (IsModelLoaded())
             {
                 return;
             }
@@ -425,28 +521,52 @@ internal sealed class RankerEngine : IDisposable
             ThrowCachedInitializationFailure();
             try
             {
+                if (_options.CpuModel == CpuRankerModel.Consec)
+                {
+                    LoadConsecCpuModel();
+                    return;
+                }
+
+                var cpuModel = GetCpuModelConfiguration();
                 var tokenizerPath = Path.Combine(
-                    GetBundleDirectory(),
+                    cpuModel.BundleDirectory,
                     "tokenizer.json");
                 if (!File.Exists(tokenizerPath))
                 {
                     throw new RankerException(
                         "tokenizer_missing",
-                        $"Expected tokenizer.json in '{_options.ModelDirectory}'.");
+                        $"Expected tokenizer.json in '{cpuModel.BundleDirectory}'.");
                 }
-                ValidateFileIntegrity(
-                    tokenizerPath,
-                    TokenizerLength,
-                    TokenizerSha256,
-                    "tokenizer_integrity_failed",
-                    "tokenizer");
-
-                var modelPath = _options.Provider == RankerProvider.Npu
-                    ? ValidateNpuArtifacts()
-                    : ValidateCpuArtifacts();
+                using RankerArtifactReadLease tokenizerLease =
+                    RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                        tokenizerPath,
+                        cpuModel.TokenizerLength,
+                        cpuModel.TokenizerSha256,
+                        "tokenizer_integrity_failed",
+                        "tokenizer");
+                using NpuArtifactLeases? npuArtifacts =
+                    _options.Provider == RankerProvider.Npu
+                        ? AcquireNpuArtifacts()
+                        : null;
+                using RankerArtifactReadLease? cpuModelLease =
+                    _options.Provider == RankerProvider.Cpu
+                        ? AcquireCpuArtifact(cpuModel)
+                        : null;
+                using RankerArtifactReadLease? sandwichVerbModelLease =
+                    _options.Provider == RankerProvider.Cpu &&
+                    _options.CpuModel == CpuRankerModel.Sandwich
+                        ? AcquireSandwichVerbArtifact(cpuModel.BundleDirectory)
+                        : null;
+                string modelPath = npuArtifacts?.Model.Path ??
+                    cpuModelLease?.Path ??
+                    throw new RankerException(
+                        "model_missing",
+                        "No ranker model artifact was selected.");
                 PairTokenizer? tokenizer = null;
                 SessionOptions? sessionOptions = null;
+                SessionOptions? sandwichVerbSessionOptions = null;
                 InferenceSession? session = null;
+                InferenceSession? sandwichVerbSession = null;
                 NpuSessionSetup? npuSetup = null;
                 try
                 {
@@ -454,7 +574,8 @@ internal sealed class RankerEngine : IDisposable
                     if (_options.Provider == RankerProvider.Npu)
                     {
                         npuSetup = await CreateNpuSessionOptionsAsync(
-                            ReadNpuCompatibilitySidecar());
+                            ReadNpuCompatibilitySidecar(
+                                npuArtifacts!.CompatibilitySidecar));
                         sessionOptions = npuSetup.Options;
                     }
                     else
@@ -463,7 +584,24 @@ internal sealed class RankerEngine : IDisposable
                     }
 
                     session = new InferenceSession(modelPath, sessionOptions);
-                    ValidateModelInputs(session, _options.Provider);
+                    ValidateModelInputs(
+                        session,
+                        _options.Provider,
+                        _options.CpuModel,
+                        cpuModel.OutputClassCount);
+                    if (_options.CpuModel == CpuRankerModel.Sandwich)
+                    {
+                        sandwichVerbSessionOptions = CreateCpuSessionOptions();
+                        sandwichVerbSession = new InferenceSession(
+                            sandwichVerbModelLease!.Path,
+                            sandwichVerbSessionOptions);
+                        ValidateModelInputs(
+                            sandwichVerbSession,
+                            RankerProvider.Cpu,
+                            CpuRankerModel.Sandwich,
+                            cpuModel.OutputClassCount);
+                    }
+
                     if (npuSetup is not null)
                     {
                         ValidateLoadedNpuContext(
@@ -472,9 +610,11 @@ internal sealed class RankerEngine : IDisposable
                             npuSetup.CompatibilityInfo);
                     }
 
-                    UpdateModelVersion(session);
+                    UpdateModelVersion(session, cpuModel);
                     _tokenizer = tokenizer;
                     tokenizer = null;
+                    _sandwichVerbSession = sandwichVerbSession;
+                    sandwichVerbSession = null;
                     _session = session;
                     session = null;
                 }
@@ -491,8 +631,10 @@ internal sealed class RankerEngine : IDisposable
                 }
                 finally
                 {
+                    sandwichVerbSession?.Dispose();
                     session?.Dispose();
                     tokenizer?.Dispose();
+                    sandwichVerbSessionOptions?.Dispose();
                     sessionOptions?.Dispose();
                 }
             }
@@ -508,12 +650,207 @@ internal sealed class RankerEngine : IDisposable
         }
     }
 
-    private string ValidateCpuArtifacts()
+    private bool IsModelLoaded() =>
+        _session is not null &&
+        (_options.CpuModel != CpuRankerModel.Sandwich ||
+            _sandwichVerbSession is not null) &&
+        (_options.CpuModel != CpuRankerModel.Consec ||
+            (_consecBundle is not null &&
+             _consecTokenizer is not null &&
+             _consecInputBuilder is not null));
+
+    private void LoadConsecCpuModel()
+    {
+        if (_options.Provider != RankerProvider.Cpu)
+        {
+            throw new RankerException(
+                "unsupported_provider_model",
+                "The ConSeC ranker is CPU-only.");
+        }
+
+        ConsecArtifactBundle? bundle = null;
+        ConsecTokenizer? tokenizer = null;
+        SessionOptions? sessionOptions = null;
+        InferenceSession? session = null;
+        try
+        {
+            bundle = ConsecArtifactBundle.Open(_options.ModelDirectory);
+            tokenizer = new ConsecTokenizer(
+                bundle.TokenizerPath,
+                bundle.ReadTokenizerBytes());
+            sessionOptions = CreateCpuSessionOptions();
+            session = new InferenceSession(bundle.GraphPath, sessionOptions);
+            ValidateConsecModelInputs(session);
+
+            _crossModelVersion = ConsecArtifactBundle.ModelCacheId;
+            ModelVersion = _crossModelVersion + ":pipeline-consec-independent";
+            _consecInputBuilder = new ConsecInputBuilder(tokenizer);
+            _consecTokenizer = tokenizer;
+            tokenizer = null;
+            _consecBundle = bundle;
+            bundle = null;
+            _session = session;
+            session = null;
+        }
+        catch (RankerException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new RankerException(
+                "model_load_failed",
+                $"Could not load the pinned ConSeC CPU model: {ex.Message}",
+                ex);
+        }
+        finally
+        {
+            session?.Dispose();
+            sessionOptions?.Dispose();
+            tokenizer?.Dispose();
+            bundle?.Dispose();
+        }
+    }
+
+    private ConsecInputBuilder GetConsecInputBuilder() =>
+        _consecInputBuilder ?? throw new RankerException(
+            "model_not_ready",
+            "The ConSeC tokenizer and input builder are not initialized.");
+
+    private float[] RunConsec(ConsecInput input)
+    {
+        InferenceSession session = _session ?? throw new RankerException(
+            "model_not_ready",
+            "The ConSeC CPU session is not initialized.");
+        if (input.SequenceLength is <= 0 or > ConsecInputBuilder.MaximumSequenceLength ||
+            input.InputIds.Length != input.SequenceLength ||
+            input.AttentionMask.Length != input.SequenceLength ||
+            input.TokenTypeIds.Length != input.SequenceLength ||
+            input.RelativePositions.Length !=
+                checked(input.SequenceLength * input.SequenceLength))
+        {
+            throw new RankerException(
+                "consec_invalid_input",
+                "The ConSeC input tensors do not have the pinned batch-1 shape.");
+        }
+
+        try
+        {
+            int sequenceLength = input.SequenceLength;
+            var inputs = new List<NamedOnnxValue>
+            {
+                NamedOnnxValue.CreateFromTensor(
+                    "input_ids",
+                    new DenseTensor<long>(
+                        input.InputIds,
+                        [1, sequenceLength])),
+                NamedOnnxValue.CreateFromTensor(
+                    "attention_mask",
+                    new DenseTensor<long>(
+                        input.AttentionMask,
+                        [1, sequenceLength])),
+                NamedOnnxValue.CreateFromTensor(
+                    "token_type_ids",
+                    new DenseTensor<long>(
+                        input.TokenTypeIds,
+                        [1, sequenceLength])),
+                NamedOnnxValue.CreateFromTensor(
+                    "relative_pos",
+                    new DenseTensor<long>(
+                        input.RelativePositions,
+                        [1, sequenceLength, sequenceLength]))
+            };
+            using IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs =
+                session.Run(inputs);
+            DisposableNamedOnnxValue? output = outputs.FirstOrDefault(item =>
+                string.Equals(item.Name, "token_logits", StringComparison.Ordinal));
+            if (output is null)
+            {
+                throw new RankerException(
+                    "consec_invalid_output",
+                    "The ConSeC model returned no 'token_logits' tensor.");
+            }
+
+            Tensor<float> logits = output.AsTensor<float>();
+            if (logits.Dimensions.Length != 2 ||
+                logits.Dimensions[0] != 1 ||
+                logits.Dimensions[1] != sequenceLength)
+            {
+                throw new RankerException(
+                    "consec_invalid_output",
+                    $"ConSeC token_logits must be [1,{sequenceLength}], received " +
+                    $"[{string.Join(',', logits.Dimensions.ToArray())}].");
+            }
+
+            return logits.ToArray();
+        }
+        catch (RankerException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new RankerException(
+                "inference_failed",
+                $"ConSeC CPU inference failed: {ex.Message}",
+                ex);
+        }
+    }
+
+    private static void ValidateConsecModelInputs(InferenceSession session)
+    {
+        (string Name, int Rank)[] expectedInputs =
+        [
+            ("input_ids", 2),
+            ("attention_mask", 2),
+            ("token_type_ids", 2),
+            ("relative_pos", 3)
+        ];
+        if (session.InputMetadata.Count != expectedInputs.Length ||
+            !session.InputMetadata.Keys.ToHashSet(StringComparer.Ordinal)
+                .SetEquals(expectedInputs.Select(item => item.Name)))
+        {
+            throw new RankerException(
+                "unsupported_model",
+                "The ConSeC model does not expose the exact pinned four-input ABI.");
+        }
+
+        foreach ((string name, int rank) in expectedInputs)
+        {
+            NodeMetadata metadata = session.InputMetadata[name];
+            if (metadata.ElementType != typeof(long) ||
+                metadata.Dimensions.Length != rank ||
+                metadata.Dimensions.Any(dimension => dimension > 0))
+            {
+                throw new RankerException(
+                    "unsupported_model",
+                    $"ConSeC input '{name}' must be a dynamic rank-{rank} Int64 tensor; " +
+                    $"received [{string.Join(',', metadata.Dimensions)}] " +
+                    $"{metadata.ElementType.Name}.");
+            }
+        }
+
+        if (session.OutputMetadata.Count != 1 ||
+            !session.OutputMetadata.TryGetValue(
+                "token_logits",
+                out NodeMetadata? output) ||
+            output.ElementType != typeof(float) ||
+            output.Dimensions.Length != 2 ||
+            output.Dimensions.Any(dimension => dimension > 0))
+        {
+            throw new RankerException(
+                "unsupported_model",
+                "ConSeC must expose one dynamic rank-2 Float output named 'token_logits'.");
+        }
+    }
+
+    private static RankerArtifactReadLease AcquireCpuArtifact(
+        CpuModelConfiguration cpuModel)
     {
         var modelPath = Path.Combine(
-            GetBundleDirectory(),
+            cpuModel.BundleDirectory,
             "Cpu",
-            CpuModelFileName);
+            cpuModel.ModelFileName);
         if (!File.Exists(modelPath) || new FileInfo(modelPath).Length == 0)
         {
             throw new RankerException(
@@ -521,18 +858,39 @@ internal sealed class RankerEngine : IDisposable
                 $"Expected the dynamic FP32 CPU model at '{modelPath}'.");
         }
 
-        ValidateFileIntegrity(
+        return RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
             modelPath,
-            CpuModelLength,
-            CpuModelSha256,
+            cpuModel.ModelLength,
+            cpuModel.ModelSha256,
             "cpu_model_integrity_failed",
             "dynamic FP32 CPU model");
-        return modelPath;
     }
 
-    private string ValidateNpuArtifacts()
+    private static RankerArtifactReadLease AcquireSandwichVerbArtifact(
+        string bundleDirectory)
     {
-        var npuDirectory = Path.Combine(GetBundleDirectory(), "Npu");
+        var modelPath = Path.Combine(
+            bundleDirectory,
+            "Cpu",
+            SandwichVerbModelFileName);
+        if (!File.Exists(modelPath) || new FileInfo(modelPath).Length == 0)
+        {
+            throw new RankerException(
+                "model_missing",
+                $"Expected the SANDWiCH verb encoder at '{modelPath}'.");
+        }
+
+        return RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+            modelPath,
+            SandwichVerbModelLength,
+            SandwichVerbModelSha256,
+            "cpu_model_integrity_failed",
+            "SANDWiCH verb FP32 CPU model");
+    }
+
+    private NpuArtifactLeases AcquireNpuArtifacts()
+    {
+        var npuDirectory = Path.Combine(GetGlossBertBundleDirectory(), "Npu");
         var modelPath = Path.Combine(npuDirectory, NpuModelFileName);
         var binaryPath = Path.Combine(npuDirectory, NpuContextBinaryFileName);
         var compatibilityPath = Path.Combine(npuDirectory, NpuCompatibilityFileName);
@@ -549,73 +907,52 @@ internal sealed class RankerEngine : IDisposable
                 $". Expected all files in '{npuDirectory}'.");
         }
 
-        ValidateFileIntegrity(
-            modelPath,
-            NpuModelLength,
-            NpuModelSha256,
-            "npu_context_integrity_failed",
-            "Vitis EPContext ONNX");
-        ValidateFileIntegrity(
-            binaryPath,
-            NpuContextBinaryLength,
-            NpuContextBinarySha256,
-            "npu_context_integrity_failed",
-            "Vitis EPContext binary");
-        ValidateFileIntegrity(
-            compatibilityPath,
-            NpuCompatibilityLength,
-            NpuCompatibilitySha256,
-            "npu_context_integrity_failed",
-            "Vitis compatibility sidecar");
-        return modelPath;
-    }
-
-    private static void ValidateFileIntegrity(
-        string path,
-        long expectedLength,
-        string expectedSha256,
-        string errorCode,
-        string description)
-    {
-        var actualLength = new FileInfo(path).Length;
-        if (actualLength != expectedLength)
-        {
-            throw new RankerException(
-                errorCode,
-                $"The pinned {description} has length {actualLength}, expected {expectedLength}: '{path}'.");
-        }
-
-        string actualSha256;
+        RankerArtifactReadLease? model = null;
+        RankerArtifactReadLease? binary = null;
+        RankerArtifactReadLease? compatibility = null;
         try
         {
-            using var stream = File.OpenRead(path);
-            actualSha256 = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+            model = RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                modelPath,
+                NpuModelLength,
+                NpuModelSha256,
+                "npu_context_integrity_failed",
+                "Vitis EPContext ONNX");
+            binary = RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                binaryPath,
+                NpuContextBinaryLength,
+                NpuContextBinarySha256,
+                "npu_context_integrity_failed",
+                "Vitis EPContext binary");
+            compatibility = RankerArtifactIntegrity.AcquireReadLeaseAndValidate(
+                compatibilityPath,
+                NpuCompatibilityLength,
+                NpuCompatibilitySha256,
+                "npu_context_integrity_failed",
+                "Vitis compatibility sidecar");
+            NpuArtifactLeases leases = new(model!, binary!, compatibility!);
+            model = null;
+            binary = null;
+            compatibility = null;
+            return leases;
         }
-        catch (Exception ex)
+        finally
         {
-            throw new RankerException(
-                errorCode,
-                $"Could not hash the pinned {description} '{path}': {ex.Message}",
-                ex);
-        }
-
-        if (!string.Equals(actualSha256, expectedSha256, StringComparison.Ordinal))
-        {
-            throw new RankerException(
-                errorCode,
-                $"The pinned {description} SHA-256 is {actualSha256}, expected {expectedSha256}: '{path}'.");
+            compatibility?.Dispose();
+            binary?.Dispose();
+            model?.Dispose();
         }
     }
 
-    private string ReadNpuCompatibilitySidecar()
+    private static string ReadNpuCompatibilitySidecar(
+        RankerArtifactReadLease compatibilitySidecar)
     {
-        var path = Path.Combine(
-            GetBundleDirectory(),
-            "Npu",
-            NpuCompatibilityFileName);
+        string path = compatibilitySidecar.Path;
         try
         {
-            var compatibilityInfo = File.ReadAllText(path).Trim();
+            var compatibilityInfo = Encoding.UTF8
+                .GetString(compatibilitySidecar.ReadAllBytes())
+                .Trim();
             if (compatibilityInfo.Length == 0)
             {
                 throw new RankerException(
@@ -638,8 +975,279 @@ internal sealed class RankerEngine : IDisposable
         }
     }
 
-    private string GetBundleDirectory() =>
+    private string GetGlossBertBundleDirectory() =>
         Path.Combine(_options.ModelDirectory, ModelBundleDirectoryName);
+
+    private CpuModelConfiguration GetCpuModelConfiguration()
+    {
+        if (_cpuModelConfiguration is not null)
+        {
+            return _cpuModelConfiguration;
+        }
+
+        _cpuModelConfiguration = _options.CpuModel switch
+        {
+            CpuRankerModel.GlossBert => new CpuModelConfiguration(
+                BundleDirectory: GetGlossBertBundleDirectory(),
+                ModelFileName: CpuModelFileName,
+                ModelLength: CpuModelLength,
+                ModelSha256: CpuModelSha256,
+                TokenizerLength: TokenizerLength,
+                TokenizerSha256: TokenizerSha256,
+                MaximumSequenceLength: CpuMaximumSequenceLength,
+                BatchSize: CpuBatchSize,
+                OutputClassCount: 2,
+                PositiveLabelIndex: 1,
+                BaseModelVersion: DefaultModelVersion),
+            CpuRankerModel.Deberta => LoadDebertaCpuModelConfiguration(
+                _options.ModelDirectory),
+            CpuRankerModel.Sandwich => new CpuModelConfiguration(
+                BundleDirectory: Path.Combine(
+                    _options.ModelDirectory,
+                    SandwichBundleDirectoryName),
+                ModelFileName: SandwichNonVerbModelFileName,
+                ModelLength: SandwichNonVerbModelLength,
+                ModelSha256: SandwichNonVerbModelSha256,
+                TokenizerLength: SandwichTokenizerLength,
+                TokenizerSha256: SandwichTokenizerSha256,
+                MaximumSequenceLength: SandwichMaximumSequenceLength,
+                BatchSize: SandwichBatchSize,
+                OutputClassCount: 2,
+                PositiveLabelIndex: 1,
+                BaseModelVersion: SandwichModelCacheId),
+            _ => throw new RankerException(
+                "unsupported_cpu_model",
+                $"Unsupported CPU model profile '{_options.CpuModel}'.")
+        };
+        return _cpuModelConfiguration;
+    }
+
+    internal static CpuModelConfiguration LoadDebertaCpuModelConfiguration(
+        string modelDirectory)
+    {
+        var bundleDirectory = Path.Combine(
+            modelDirectory,
+            DebertaBundleDirectoryName);
+        var manifestPath = Path.Combine(bundleDirectory, DebertaManifestFileName);
+        if (!File.Exists(manifestPath))
+        {
+            throw new RankerException(
+                "cpu_model_manifest_missing",
+                $"Expected the DeBERTa CPU manifest at '{manifestPath}'.");
+        }
+
+        // The manifest controls every other path, hash, tensor shape and cache
+        // identity. Parse the authenticated byte array itself so a file swap
+        // cannot replace it between verification and field deserialization.
+        byte[] json = RankerArtifactIntegrity.ReadAllBytesAndValidate(
+            manifestPath,
+            DebertaManifestLength,
+            DebertaManifestSha256,
+            "cpu_model_manifest_integrity_failed",
+            "DeBERTa CPU manifest");
+
+        DebertaCpuModelManifest manifest;
+        try
+        {
+            using var document = JsonDocument.Parse(
+                json,
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow,
+                    MaxDepth = 8
+                });
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw InvalidDebertaManifest(manifestPath, "root must be a JSON object");
+            }
+
+            var allowedProperties = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "schemaVersion",
+                "modelId",
+                "modelFile",
+                "modelLength",
+                "modelSha256",
+                "tokenizerLength",
+                "tokenizerSha256",
+                "maximumSequenceLength",
+                "batchSize",
+                "outputClassCount",
+                "positiveLabelIndex"
+            };
+            var observedProperties = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (!allowedProperties.Contains(property.Name))
+                {
+                    throw InvalidDebertaManifest(
+                        manifestPath,
+                        $"unknown property '{property.Name}'");
+                }
+
+                if (!observedProperties.Add(property.Name))
+                {
+                    throw InvalidDebertaManifest(
+                        manifestPath,
+                        $"duplicate property '{property.Name}'");
+                }
+            }
+
+            var missingProperties = allowedProperties
+                .Where(property => !observedProperties.Contains(property))
+                .OrderBy(property => property, StringComparer.Ordinal)
+                .ToArray();
+            if (missingProperties.Length > 0)
+            {
+                throw InvalidDebertaManifest(
+                    manifestPath,
+                    $"missing properties: {string.Join(", ", missingProperties)}");
+            }
+
+            manifest = document.RootElement.Deserialize<DebertaCpuModelManifest>(
+                new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = false,
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                }) ?? throw InvalidDebertaManifest(
+                    manifestPath,
+                    "manifest deserialized to null");
+        }
+        catch (RankerException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException)
+        {
+            throw new RankerException(
+                "cpu_model_manifest_invalid",
+                $"Invalid DeBERTa CPU manifest '{manifestPath}': {ex.Message}",
+                ex);
+        }
+
+        ValidateDebertaManifest(manifestPath, manifest);
+        var modelSha256 = manifest.ModelSha256!.ToLowerInvariant();
+        var tokenizerSha256 = manifest.TokenizerSha256!.ToLowerInvariant();
+        var baseModelVersion =
+            $"GlossDeBERTa:{manifest.ModelId}:" +
+            $"m-{modelSha256[..12]}:t-{tokenizerSha256[..12]}:" +
+            $"s{manifest.MaximumSequenceLength}:b{manifest.BatchSize}:" +
+            $"c{manifest.OutputClassCount}:p{manifest.PositiveLabelIndex}";
+        return new CpuModelConfiguration(
+            BundleDirectory: bundleDirectory,
+            ModelFileName: manifest.ModelFile!,
+            ModelLength: manifest.ModelLength,
+            ModelSha256: modelSha256,
+            TokenizerLength: manifest.TokenizerLength,
+            TokenizerSha256: tokenizerSha256,
+            MaximumSequenceLength: manifest.MaximumSequenceLength,
+            BatchSize: manifest.BatchSize,
+            OutputClassCount: manifest.OutputClassCount,
+            PositiveLabelIndex: manifest.PositiveLabelIndex,
+            BaseModelVersion: baseModelVersion);
+    }
+
+    private static void ValidateDebertaManifest(
+        string manifestPath,
+        DebertaCpuModelManifest manifest)
+    {
+        if (manifest.SchemaVersion != 1)
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                $"schemaVersion must be 1, received {manifest.SchemaVersion}");
+        }
+
+        if (string.IsNullOrWhiteSpace(manifest.ModelId) ||
+            manifest.ModelId.Length > 256 ||
+            !string.Equals(manifest.ModelId, manifest.ModelId.Trim(), StringComparison.Ordinal) ||
+            manifest.ModelId.Any(char.IsControl))
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "modelId must be a trimmed, non-empty identifier of at most 256 characters");
+        }
+
+        if (string.IsNullOrWhiteSpace(manifest.ModelFile) ||
+            manifest.ModelFile.Length > 128 ||
+            Path.IsPathRooted(manifest.ModelFile) ||
+            manifest.ModelFile.Contains('/') ||
+            manifest.ModelFile.Contains('\\') ||
+            !string.Equals(
+                Path.GetFileName(manifest.ModelFile),
+                manifest.ModelFile,
+                StringComparison.Ordinal) ||
+            !manifest.ModelFile.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "modelFile must name one ONNX file directly inside the Cpu directory");
+        }
+
+        if (manifest.ModelLength <= 0)
+        {
+            throw InvalidDebertaManifest(manifestPath, "modelLength must be positive");
+        }
+
+        if (manifest.TokenizerLength <= 0)
+        {
+            throw InvalidDebertaManifest(manifestPath, "tokenizerLength must be positive");
+        }
+
+        if (!IsSha256(manifest.ModelSha256))
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "modelSha256 must contain exactly 64 hexadecimal characters");
+        }
+
+        if (!IsSha256(manifest.TokenizerSha256))
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "tokenizerSha256 must contain exactly 64 hexadecimal characters");
+        }
+
+        if (manifest.MaximumSequenceLength is < 16 or > 512)
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "maximumSequenceLength must be between 16 and 512");
+        }
+
+        if (manifest.BatchSize is < 1 or > MaximumCandidates)
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                $"batchSize must be between 1 and {MaximumCandidates}");
+        }
+
+        if (manifest.OutputClassCount is < 2 or > 16)
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "outputClassCount must be between 2 and 16");
+        }
+
+        if (manifest.PositiveLabelIndex < 0 ||
+            manifest.PositiveLabelIndex >= manifest.OutputClassCount)
+        {
+            throw InvalidDebertaManifest(
+                manifestPath,
+                "positiveLabelIndex must identify one output class");
+        }
+    }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
+
+    private static RankerException InvalidDebertaManifest(
+        string manifestPath,
+        string detail) =>
+        new(
+            "cpu_model_manifest_invalid",
+            $"Invalid DeBERTa CPU manifest '{manifestPath}': {detail}.");
 
     private async Task<NpuSessionSetup> CreateNpuSessionOptionsAsync(
         string compatibilityInfo)
@@ -801,14 +1409,33 @@ internal sealed class RankerEngine : IDisposable
         var tokenizer = _tokenizer
             ?? throw new RankerException("tokenizer_not_ready", "The tokenizer is not initialized.");
         var glossPairs = candidateDefinitions
-            .Select(definition => $"{target.Trim()}: {definition.Trim()}")
+            .Select(definition => _options.CpuModel == CpuRankerModel.Sandwich
+                ? definition.Trim()
+                : $"{target.Trim()}: {definition.Trim()}")
             .ToArray();
 
         try
         {
-            return _options.Provider == RankerProvider.Npu
-                ? ScoreNpu(session, tokenizer, markedContext, glossPairs)
-                : ScoreCpu(session, tokenizer, markedContext, glossPairs);
+            if (_options.Provider == RankerProvider.Npu)
+            {
+                return ScoreNpu(session, tokenizer, markedContext, glossPairs);
+            }
+
+            if (_options.CpuModel == CpuRankerModel.Sandwich)
+            {
+                var verbSession = _sandwichVerbSession
+                    ?? throw new RankerException(
+                        "model_not_ready",
+                        "The SANDWiCH verb encoder session is not initialized.");
+                return ScoreSandwich(
+                    session,
+                    verbSession,
+                    tokenizer,
+                    markedContext,
+                    glossPairs);
+            }
+
+            return ScoreCpu(session, tokenizer, markedContext, glossPairs);
         }
         catch (RankerException)
         {
@@ -820,16 +1447,21 @@ internal sealed class RankerEngine : IDisposable
         }
     }
 
-    private static CandidateScore[] ScoreCpu(
+    private CandidateScore[] ScoreCpu(
         InferenceSession session,
         PairTokenizer tokenizer,
         string markedContext,
         IReadOnlyList<string> candidates)
     {
+        var cpuModel = GetCpuModelConfiguration();
         var scores = new CandidateScore[candidates.Count];
-        for (var chunkOffset = 0; chunkOffset < candidates.Count; chunkOffset += CpuBatchSize)
+        for (var chunkOffset = 0;
+            chunkOffset < candidates.Count;
+            chunkOffset += cpuModel.BatchSize)
         {
-            var realCount = Math.Min(CpuBatchSize, candidates.Count - chunkOffset);
+            var realCount = Math.Min(
+                cpuModel.BatchSize,
+                candidates.Count - chunkOffset);
             var chunk = candidates
                 .Skip(chunkOffset)
                 .Take(realCount)
@@ -837,15 +1469,70 @@ internal sealed class RankerEngine : IDisposable
             var encoded = tokenizer.EncodePairs(
                 markedContext,
                 chunk,
-                CpuMaximumSequenceLength,
+                cpuModel.MaximumSequenceLength,
                 padToLongest: true);
-            var rawScores = RunBatch(session, encoded);
+            var rawScores = RunBatch(
+                session,
+                encoded,
+                cpuModel.OutputClassCount,
+                cpuModel.PositiveLabelIndex);
             for (var lane = 0; lane < realCount; lane++)
             {
                 var originalIndex = chunkOffset + lane;
                 scores[originalIndex] = new CandidateScore(
                     originalIndex,
                     rawScores[lane]);
+            }
+        }
+
+        return scores;
+    }
+
+    private CandidateScore[] ScoreSandwich(
+        InferenceSession nonVerbSession,
+        InferenceSession verbSession,
+        PairTokenizer tokenizer,
+        string markedContext,
+        IReadOnlyList<string> candidates)
+    {
+        var cpuModel = GetCpuModelConfiguration();
+        var scores = new CandidateScore[candidates.Count];
+        for (var chunkOffset = 0;
+            chunkOffset < candidates.Count;
+            chunkOffset += cpuModel.BatchSize)
+        {
+            var realCount = Math.Min(
+                cpuModel.BatchSize,
+                candidates.Count - chunkOffset);
+            var chunk = candidates
+                .Skip(chunkOffset)
+                .Take(realCount)
+                .ToArray();
+            var encoded = tokenizer.EncodePairs(
+                markedContext,
+                chunk,
+                cpuModel.MaximumSequenceLength,
+                padToLongest: true);
+            var nonVerbProbabilities = RunBatch(
+                nonVerbSession,
+                encoded,
+                cpuModel.OutputClassCount,
+                cpuModel.PositiveLabelIndex);
+            var verbProbabilities = RunBatch(
+                verbSession,
+                encoded,
+                cpuModel.OutputClassCount,
+                cpuModel.PositiveLabelIndex);
+            var combinedProbabilities =
+                RankerSelectionLogic.AverageSandwichProbabilities(
+                    nonVerbProbabilities,
+                    verbProbabilities);
+            for (var lane = 0; lane < realCount; lane++)
+            {
+                var originalIndex = chunkOffset + lane;
+                scores[originalIndex] = new CandidateScore(
+                    originalIndex,
+                    combinedProbabilities[lane]);
             }
         }
 
@@ -893,7 +1580,11 @@ internal sealed class RankerEngine : IDisposable
                     $"The NPU requires [{NpuBatchSize},{NpuSequenceLength}] input tensors.");
             }
 
-            var chunkScores = RunBatch(session, encoded);
+            var chunkScores = RunBatch(
+                session,
+                encoded,
+                outputClassCount: 2,
+                positiveLabelIndex: 1);
             for (var lane = 0; lane < realCount; lane++)
             {
                 var originalIndex = originalIndexes[lane];
@@ -906,7 +1597,11 @@ internal sealed class RankerEngine : IDisposable
         return scores;
     }
 
-    private static float[] RunBatch(InferenceSession session, EncodedBatch encoded)
+    private static float[] RunBatch(
+        InferenceSession session,
+        EncodedBatch encoded,
+        int outputClassCount,
+        int positiveLabelIndex)
     {
         var dimensions = new[] { encoded.BatchSize, encoded.SequenceLength };
         var inputs = new List<NamedOnnxValue>
@@ -928,41 +1623,23 @@ internal sealed class RankerEngine : IDisposable
 
         using var outputs = session.Run(inputs);
         var tensor = outputs.First().AsTensor<float>();
-        return ExtractCandidateScores(tensor, encoded.BatchSize);
+        return ExtractCandidateScores(
+            tensor,
+            encoded.BatchSize,
+            outputClassCount,
+            positiveLabelIndex);
     }
 
-    private static float[] ExtractCandidateScores(Tensor<float> logits, int batchSize)
-    {
-        var raw = logits.ToArray();
-        if (raw.Length != batchSize * 2)
-        {
-            throw new RankerException(
-                "invalid_model_output",
-                $"Expected two class logits per candidate, received {raw.Length} values " +
-                $"for {batchSize} candidates.");
-        }
-
-        var scores = new float[batchSize];
-        for (var batchIndex = 0; batchIndex < batchSize; batchIndex++)
-        {
-            var negativeLogit = raw[batchIndex * 2];
-            var positiveLogit = raw[(batchIndex * 2) + 1];
-            if (!float.IsFinite(negativeLogit) || !float.IsFinite(positiveLogit))
-            {
-                throw new RankerException("invalid_model_output", "The model returned a non-finite score.");
-            }
-
-            // For a two-class classifier, softmax(positive) is exactly the
-            // stable sigmoid of the logit difference.
-            var difference = (double)positiveLogit - negativeLogit;
-            var probability = difference >= 0
-                ? 1.0 / (1.0 + Math.Exp(-difference))
-                : Math.Exp(difference) / (1.0 + Math.Exp(difference));
-            scores[batchIndex] = (float)probability;
-        }
-
-        return scores;
-    }
+    internal static float[] ExtractCandidateScores(
+        Tensor<float> logits,
+        int batchSize,
+        int outputClassCount,
+        int positiveLabelIndex) =>
+        RankerOutputProbabilities.ExtractPositiveClass(
+            logits.ToArray(),
+            batchSize,
+            outputClassCount,
+            positiveLabelIndex);
 
     private static string FindInputName(InferenceSession session, string conventionalName)
     {
@@ -988,40 +1665,56 @@ internal sealed class RankerEngine : IDisposable
 
     private static void ValidateModelInputs(
         InferenceSession session,
-        RankerProvider provider)
+        RankerProvider provider,
+        CpuRankerModel cpuModel,
+        int outputClassCount)
     {
-        if (session.InputMetadata.Count != 3 ||
+        var tokenTypeIdsRequired = provider == RankerProvider.Npu ||
+            cpuModel == CpuRankerModel.GlossBert;
+        var expectedInputCount = tokenTypeIdsRequired ? 3 :
+            session.InputMetadata.ContainsKey("token_type_ids") ? 3 : 2;
+        if (session.InputMetadata.Count != expectedInputCount ||
             !session.InputMetadata.ContainsKey("input_ids") ||
             !session.InputMetadata.ContainsKey("attention_mask") ||
-            !session.InputMetadata.ContainsKey("token_type_ids"))
+            (tokenTypeIdsRequired &&
+                !session.InputMetadata.ContainsKey("token_type_ids")))
         {
             throw new RankerException(
                 "unsupported_model",
-                "GlossBERT must expose exactly the Int64 inputs " +
-                "'input_ids', 'attention_mask', and 'token_type_ids'.");
+                tokenTypeIdsRequired
+                    ? "GlossBERT must expose exactly the Int64 inputs " +
+                        "'input_ids', 'attention_mask', and 'token_type_ids'."
+                    : "The CPU definition ranker must expose exactly the Int64 inputs " +
+                        "'input_ids' and 'attention_mask', with optional 'token_type_ids'.");
         }
 
         const string inputIdsName = "input_ids";
         const string attentionMaskName = "attention_mask";
-        const string tokenTypeIdsName = "token_type_ids";
         ValidateRankTwoInput(session, inputIdsName);
         ValidateRankTwoInput(session, attentionMaskName);
-        ValidateRankTwoInput(session, tokenTypeIdsName);
         ValidateInputType(session, inputIdsName);
         ValidateInputType(session, attentionMaskName);
-        ValidateInputType(session, tokenTypeIdsName);
+        if (session.InputMetadata.ContainsKey("token_type_ids"))
+        {
+            const string tokenTypeIdsName = "token_type_ids";
+            ValidateRankTwoInput(session, tokenTypeIdsName);
+            ValidateInputType(session, tokenTypeIdsName);
+        }
 
         if (provider == RankerProvider.Npu)
         {
             ValidateFixedNpuInput(session, inputIdsName);
             ValidateFixedNpuInput(session, attentionMaskName);
-            ValidateFixedNpuInput(session, tokenTypeIdsName);
+            ValidateFixedNpuInput(session, "token_type_ids");
         }
         else
         {
             ValidateDynamicCpuInput(session, inputIdsName);
             ValidateDynamicCpuInput(session, attentionMaskName);
-            ValidateDynamicCpuInput(session, tokenTypeIdsName);
+            if (session.InputMetadata.ContainsKey("token_type_ids"))
+            {
+                ValidateDynamicCpuInput(session, "token_type_ids");
+            }
         }
 
         if (session.OutputMetadata.Count != 1 ||
@@ -1036,14 +1729,16 @@ internal sealed class RankerEngine : IDisposable
 
         var outputDimensions = logitsMetadata.Dimensions;
         var outputShapeIsValid = provider == RankerProvider.Npu
-            ? outputDimensions[0] == NpuBatchSize && outputDimensions[1] == 2
-            : outputDimensions[0] <= 0 && outputDimensions[1] == 2;
+            ? outputDimensions[0] == NpuBatchSize && outputDimensions[1] == outputClassCount
+            : outputDimensions[0] <= 0 && outputDimensions[1] == outputClassCount;
         if (!outputShapeIsValid)
         {
             throw new RankerException(
                 "unsupported_model",
                 $"Output 'logits' must be " +
-                (provider == RankerProvider.Npu ? "[4,2]" : "[dynamic,2]") +
+                (provider == RankerProvider.Npu
+                    ? $"[{NpuBatchSize},{outputClassCount}]"
+                    : $"[dynamic,{outputClassCount}]") +
                 $", received [{string.Join(",", outputDimensions)}].");
         }
     }
@@ -1417,8 +2112,20 @@ internal sealed class RankerEngine : IDisposable
         return true;
     }
 
-    private void UpdateModelVersion(InferenceSession session)
+    private void UpdateModelVersion(
+        InferenceSession session,
+        CpuModelConfiguration cpuModel)
     {
+        if (_options.CpuModel == CpuRankerModel.Sandwich)
+        {
+            // This identity is a host/cache contract. The two artifact hashes,
+            // literal-[D] singleton-gloss adapter and tensor contract are all
+            // encoded explicitly rather than delegated to mutable ONNX metadata.
+            _crossModelVersion = SandwichModelCacheId;
+            RefreshModelVersion();
+            return;
+        }
+
         var metadata = session.ModelMetadata;
         var artifactTag = _options.Provider == RankerProvider.Npu
             ? ":vitis-epcontext-b4-s64"
@@ -1426,12 +2133,25 @@ internal sealed class RankerEngine : IDisposable
         var onnxVersionTag = metadata.Version > 0 && metadata.Version < long.MaxValue
             ? $":onnx-{metadata.Version}"
             : string.Empty;
-        _crossModelVersion = DefaultModelVersion + artifactTag + onnxVersionTag;
+        _crossModelVersion =
+            cpuModel.BaseModelVersion + artifactTag + onnxVersionTag;
         RefreshModelVersion();
     }
 
     private void RefreshModelVersion()
     {
+        if (_options.CpuModel == CpuRankerModel.Consec)
+        {
+            ModelVersion = _crossModelVersion + ":pipeline-consec-independent";
+            return;
+        }
+
+        if (_options.CpuModel == CpuRankerModel.Sandwich)
+        {
+            ModelVersion = _crossModelVersion + ":pipeline-sandwich";
+            return;
+        }
+
         ModelVersion = _embeddingIndex is null
             ? _crossModelVersion + ":pipeline-cross"
             : _crossModelVersion + ":" + EmbeddingBundleCacheTag;
@@ -1527,6 +2247,27 @@ internal sealed class RankerEngine : IDisposable
         return markedContext;
     }
 
+    internal static string BuildSandwichMarkedContext(
+        string context,
+        string target,
+        int? characterIndex)
+    {
+        int anchor = Math.Clamp(characterIndex ?? 0, 0, context.Length);
+        if (!RankerTargetAnchor.TryBuildMarkedContext(
+            context,
+            target,
+            anchor,
+            RankerTargetMarker.SandwichD,
+            out string markedContext))
+        {
+            throw new RankerException(
+                "target_not_in_context",
+                "The selected target does not occur in the source context.");
+        }
+
+        return markedContext;
+    }
+
     private static IReadOnlyList<GroupScore> GroupScores(
         IReadOnlyList<CandidateScore> scores,
         IReadOnlyList<int> candidateGroupIds)
@@ -1567,7 +2308,43 @@ internal sealed record RankerSelection(
 
 internal readonly record struct CandidateScore(int OriginalIndex, float Score);
 
-internal readonly record struct GroupScore(int GroupId, float Score, int Order);
+internal sealed record CpuModelConfiguration(
+    string BundleDirectory,
+    string ModelFileName,
+    long ModelLength,
+    string ModelSha256,
+    long TokenizerLength,
+    string TokenizerSha256,
+    int MaximumSequenceLength,
+    int BatchSize,
+    int OutputClassCount,
+    int PositiveLabelIndex,
+    string BaseModelVersion);
+
+internal sealed record DebertaCpuModelManifest
+{
+    public int SchemaVersion { get; init; }
+
+    public string? ModelId { get; init; }
+
+    public string? ModelFile { get; init; }
+
+    public long ModelLength { get; init; }
+
+    public string? ModelSha256 { get; init; }
+
+    public long TokenizerLength { get; init; }
+
+    public string? TokenizerSha256 { get; init; }
+
+    public int MaximumSequenceLength { get; init; }
+
+    public int BatchSize { get; init; }
+
+    public int OutputClassCount { get; init; }
+
+    public int PositiveLabelIndex { get; init; }
+}
 
 internal sealed record TensorShapeExpectation(
     string ElementType,
@@ -1577,3 +2354,29 @@ internal sealed record NpuSessionSetup(
     SessionOptions Options,
     OrtEpDevice Device,
     string CompatibilityInfo);
+
+internal sealed class NpuArtifactLeases : IDisposable
+{
+    internal NpuArtifactLeases(
+        RankerArtifactReadLease model,
+        RankerArtifactReadLease contextBinary,
+        RankerArtifactReadLease compatibilitySidecar)
+    {
+        Model = model;
+        ContextBinary = contextBinary;
+        CompatibilitySidecar = compatibilitySidecar;
+    }
+
+    internal RankerArtifactReadLease Model { get; }
+
+    internal RankerArtifactReadLease ContextBinary { get; }
+
+    internal RankerArtifactReadLease CompatibilitySidecar { get; }
+
+    public void Dispose()
+    {
+        CompatibilitySidecar.Dispose();
+        ContextBinary.Dispose();
+        Model.Dispose();
+    }
+}

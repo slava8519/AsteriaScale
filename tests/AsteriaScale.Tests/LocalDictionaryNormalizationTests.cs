@@ -292,6 +292,51 @@ internal static class LocalDictionaryNormalizationTests
         await VerifyMaskedSpellingsAsync(dictionary);
 
         await VerifyTranslationScaffoldAsync(root);
+        await dictionary.UnloadAsync();
+        await VerifyManagedMemoryReleaseIntentAsync(root);
+    }
+
+    private static async Task VerifyManagedMemoryReleaseIntentAsync(string root)
+    {
+        string bundled = Path.Combine(root, "memory-release", "bundled");
+        string user = Path.Combine(root, "memory-release", "user");
+        Directory.CreateDirectory(bundled);
+        Directory.CreateDirectory(user);
+        await File.WriteAllTextAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            "memory\tпамять\n");
+        await File.WriteAllTextAsync(
+            Path.Combine(bundled, "jpn-rus.tsv"),
+            "記憶\tпамять\n");
+
+        int releaseCount = 0;
+        LocalDictionaryService observed = null!;
+        observed = new LocalDictionaryService(
+            bundled,
+            user,
+            managedMemoryRelease: () =>
+            {
+                Check(observed.EntryCount == 0 &&
+                      observed.SourceCount == 0 &&
+                      observed.SenseMetadataKeyCount == 0 &&
+                      observed.SenseMetadataCandidateCount == 0 &&
+                      observed.VersionToken == "unloaded",
+                    "Managed-memory release ran before dictionary state was cleared.");
+                releaseCount++;
+            });
+
+        await observed.LoadAsync();
+        await observed.UnloadAsync();
+        Check(releaseCount == 0,
+            "An ordinary dictionary reload path triggered an aggressive full GC.");
+
+        await observed.LoadAsync();
+        await observed.UnloadAndReleaseMemoryAsync();
+        Check(releaseCount == 1,
+            "An explicit mode exit did not request managed dictionary-memory release.");
+        await observed.UnloadAndReleaseMemoryAsync();
+        Check(releaseCount == 1,
+            "An empty dictionary repeated the expensive managed-memory release.");
     }
 
     /// <summary>

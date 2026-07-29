@@ -8,9 +8,46 @@ internal static class ApplicationLifecycleSafetyTests
     {
         VerifyShowRequestSurvivesStartup();
         VerifyAutoResetSignalSurvivesListenerDelay();
+        VerifyHoverUnloadReleaseIntent();
         VerifyPrimaryButtonHoverContrast();
-        VerifyWindowsAppSdkSingleFileDeployment();
+        VerifyWindowsAiFrameworkDeployment();
         return Task.CompletedTask;
+    }
+
+    private static void VerifyHoverUnloadReleaseIntent()
+    {
+        HoverUnloadIntentState state = new();
+        foreach (HoverUnloadReason reason in new[]
+                 {
+                     HoverUnloadReason.Startup,
+                     HoverUnloadReason.SmartSettingsChanged,
+                     HoverUnloadReason.PhraseMemorySaving
+                 })
+        {
+            state.Request(reason);
+            Check(!state.ConsumeReleaseRequest(),
+                $"Routine unload reason {reason} requested an aggressive dictionary GC.");
+        }
+
+        state.Request(HoverUnloadReason.ExplicitDisable);
+        Check(state.ConsumeReleaseRequest(),
+            "Explicitly disabling translation did not request dictionary-memory release.");
+        state.Request(HoverUnloadReason.ModeChanged);
+        Check(state.ConsumeReleaseRequest(),
+            "An actual mode transition did not request dictionary-memory release.");
+
+        state.Request(HoverUnloadReason.SmartSettingsChanged);
+        state.Request(HoverUnloadReason.ExplicitDisable);
+        state.Request(HoverUnloadReason.PhraseMemorySaving);
+        Check(state.ConsumeReleaseRequest() && !state.ConsumeReleaseRequest(),
+            "Coalesced unload requests did not preserve exactly one release intent.");
+        Check(HoverUnloadIntentState.ShouldReleaseDictionaryMemory(
+                  releaseRequested: true,
+                  unloadDictionary: true) &&
+              !HoverUnloadIntentState.ShouldReleaseDictionaryMemory(
+                  releaseRequested: true,
+                  unloadDictionary: false),
+            "A quick return to Smart/Dictionary mode would release a live dictionary.");
     }
 
     private static void VerifyShowRequestSurvivesStartup()
@@ -84,7 +121,7 @@ internal static class ApplicationLifecycleSafetyTests
             $"Primary button hover contrast is {contrast:F3}:1; 14 DIP text requires at least 4.5:1.");
     }
 
-    private static void VerifyWindowsAppSdkSingleFileDeployment()
+    private static void VerifyWindowsAiFrameworkDeployment()
     {
         string root = FindRepositoryRoot();
         string projectPath = Path.Combine(
@@ -98,9 +135,58 @@ internal static class ApplicationLifecycleSafetyTests
             .Single();
         Check(string.Equals(
                 selfContained.Value.Trim(),
+                "false",
+                StringComparison.OrdinalIgnoreCase),
+            "A sparse Windows AI app launched below C:\\Users must use the framework-dependent Windows App SDK.");
+
+        string buildScript = File.ReadAllText(Path.Combine(root, "scripts", "build.ps1"));
+        int applicationPublish = buildScript.IndexOf(
+            "& $dotnetPath publish $mainProject",
+            StringComparison.Ordinal);
+        int rankerPublish = buildScript.IndexOf(
+            "& $dotnetPath publish $rankerProject",
+            StringComparison.Ordinal);
+        Check(applicationPublish >= 0 && rankerPublish > applicationPublish,
+            "The application publish block was not found in build.ps1.");
+        string applicationPublishBlock = buildScript[applicationPublish..rankerPublish];
+        Check(applicationPublishBlock.Contains(
+                "-p:PublishSingleFile=false",
+                StringComparison.Ordinal),
+            "Package-with-external-location deployment cannot use PublishSingleFile.");
+        Check(applicationPublishBlock.Contains(
+                "--self-contained true",
+                StringComparison.Ordinal),
+            "Framework-dependent Windows App SDK must not make the .NET application framework-dependent.");
+
+        XDocument manifest = XDocument.Load(Path.Combine(
+            root,
+            "packaging",
+            "Identity",
+            "AppxManifest.xml"));
+        XNamespace foundation = "http://schemas.microsoft.com/appx/manifest/foundation/windows10";
+        XNamespace uap10 = "http://schemas.microsoft.com/appx/manifest/uap/windows10/10";
+        XNamespace systemAi = "http://schemas.microsoft.com/appx/manifest/systemai/windows10";
+        XElement properties = manifest.Root?.Element(foundation + "Properties")
+            ?? throw new InvalidDataException("Identity manifest has no Properties element.");
+        Check(string.Equals(
+                properties.Element(uap10 + "AllowExternalContent")?.Value.Trim(),
                 "true",
                 StringComparison.OrdinalIgnoreCase),
-            "Single-file publish no longer bundles the Windows App SDK runtime.");
+            "The sparse identity no longer allows the external published application.");
+        Check(manifest
+                .Descendants(foundation + "PackageDependency")
+                .Any(element => string.Equals(
+                    (string?)element.Attribute("Name"),
+                    "Microsoft.WindowsAppRuntime.1.8",
+                    StringComparison.Ordinal)),
+            "The framework-dependent Windows App SDK runtime dependency is missing from the identity manifest.");
+        Check(manifest
+                .Descendants(systemAi + "Capability")
+                .Any(element => string.Equals(
+                    (string?)element.Attribute("Name"),
+                    "systemAIModels",
+                    StringComparison.Ordinal)),
+            "The sparse identity no longer grants access to Windows AI system models.");
     }
 
     private static string SetterValue(XElement style, XNamespace presentation, string property) =>

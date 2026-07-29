@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.Services;
 
@@ -30,7 +31,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
 
     // 4: key text normalization now mirrors the pinned BertNormalizer clean_text
     // stage, separating controls BERT deletes from whitespace BERT preserves.
-    internal const int SchemaVersion = 4;
+    internal const int SchemaVersion = 5;
     private const int MaximumCandidates = 128;
     private const int MaximumStoredTextLength = 1_024;
     private const int DefaultCapacity = 4_096;
@@ -89,7 +90,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             access.MarkDirty();
             return new SmartDictionarySelection(
                 entry.Index,
-                normalized.Candidates[entry.Index],
+                RemoveRegisterLabel(entry.Translation),
                 entry.Confidence,
                 entry.ContextTranslation);
         }, cancellationToken);
@@ -107,10 +108,9 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
         NormalizedRequest normalized = NormalizeRequest(request);
         if (selection.Index < 0 ||
             selection.Index >= normalized.Candidates.Length ||
-            !string.Equals(
-                NormalizeCandidate(selection.Translation),
+            !CandidateMatchesTranslation(
                 normalized.Candidates[selection.Index],
-                StringComparison.OrdinalIgnoreCase))
+                NormalizeCandidate(selection.Translation)))
         {
             return Task.FromResult(false);
         }
@@ -121,7 +121,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             {
                 Key = normalized.Key,
                 Index = selection.Index,
-                Translation = normalized.Candidates[selection.Index],
+                Translation = NormalizeCandidate(selection.Translation),
                 Confidence = NormalizeConfidence(selection.Confidence),
                 ContextTranslation = Truncate(NormalizeText(selection.ContextTranslation)),
                 LastAccess = access.Touch()
@@ -154,10 +154,9 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
         NormalizeRequest(request).Key;
 
     /// <summary>
-    /// The window this key describes is the same one the ranker receives
-    /// (roadmap #14.2B). Before that it was narrower than the model's input, so
-    /// two replies sharing a neighbourhood could reuse each other's verdict —
-    /// a deliberate trade for hit rate that no longer has to be made.
+    /// Compatibility component for pair-model cache keys. ConSeC additionally
+    /// keys its complete exact source below, because its worker receives the
+    /// full sentence rather than this bounded target-centred window.
     /// </summary>
     internal static string CreateLocalContextWindow(
         string context,
@@ -231,15 +230,27 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             throw new ArgumentException("Smart Dictionary cache dictionary version cannot be empty.", nameof(request));
         }
 
-        if (rankingPipeline is not ("cross" or "bi+cross"))
+        if (rankingPipeline is not (
+                "cross" or "bi+cross" or "sandwich" or "consec-independent"))
         {
             throw new ArgumentException(
-                "Smart Dictionary cache ranking pipeline must be cross or bi+cross.",
+                "Smart Dictionary cache ranking pipeline must be cross, bi+cross, " +
+                "sandwich or consec-independent.",
                 nameof(request));
         }
 
+        bool sandwich = rankingPipeline == "sandwich";
+        bool consec = rankingPipeline == "consec-independent";
+        bool exactText = sandwich || !IsPinnedGlossBertModel(request.ModelId);
         StringBuilder canonical = new();
-        AppendComponent(canonical, "asteria-smart-dictionary-cache-key-v4");
+        // Preserve the existing pinned GlossBERT key space. Earlier builds
+        // applied BERT clean_text/lowercase to every model; non-BERT profiles
+        // get a new exact domain, making those old entries harmless misses.
+        AppendComponent(
+            canonical,
+            exactText
+                ? "asteria-smart-dictionary-cache-key-v5-model-exact"
+                : "asteria-smart-dictionary-cache-key-v4");
         AppendComponent(canonical, NormalizeLanguage(request.SourceLanguage));
         AppendComponent(canonical, CreateLocalContextWindow(
             request.Context,
@@ -256,6 +267,52 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             AppendComponent(canonical, candidate.ToLowerInvariant());
         }
 
+        if (exactText)
+        {
+            ExactMarkedContext exactContext = consec
+                ? CreateConsecExactContext(
+                    request.Context,
+                    request.Target,
+                    request.CharacterIndex)
+                : CreateExactMarkedContext(
+                    request.Context,
+                    request.Target,
+                    request.CharacterIndex,
+                    sandwich ? RankerTargetMarker.SandwichD : RankerTargetMarker.Quoted);
+            AppendComponent(canonical, "pipeline");
+            AppendComponent(canonical, rankingPipeline);
+            AppendComponent(canonical, exactContext.MarkedContext);
+            AppendComponent(canonical, PreserveExact(request.Target));
+            AppendComponent(canonical, exactContext.Anchored ? "anchored" : "raw");
+            if (consec || !exactContext.Anchored)
+            {
+                AppendComponent(
+                    canonical,
+                    exactContext.CharacterIndex.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            // These identifiers are validated through their normalized forms
+            // above, but their exact spelling is retained for the experimental
+            // tokenizer's fail-safe key contract.
+            AppendComponent(canonical, PreserveExact(request.SourceLanguage));
+            AppendComponent(canonical, PreserveExact(request.Backend));
+            AppendComponent(canonical, PreserveExact(request.ModelId));
+            AppendComponent(canonical, PreserveExact(request.RankingPipeline));
+            AppendComponent(canonical, PreserveExact(request.DictionaryVersion));
+            AppendComponent(
+                canonical,
+                request.Candidates.Count.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
+            for (int index = 0; index < request.Candidates.Count; index++)
+            {
+                AppendComponent(
+                    canonical,
+                    index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                AppendComponent(canonical, PreserveExact(request.Candidates[index]));
+            }
+        }
+
         byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()));
         return new NormalizedRequest(Convert.ToHexString(digest), candidates);
     }
@@ -263,10 +320,40 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
     private static bool EntryMatchesCandidates(PersistedEntry entry, IReadOnlyList<string> candidates) =>
         entry.Index >= 0 &&
         entry.Index < candidates.Count &&
-        string.Equals(
-            NormalizeCandidate(entry.Translation),
+        CandidateMatchesTranslation(
             candidates[entry.Index],
+            NormalizeCandidate(entry.Translation));
+
+    // Register labels are part of candidate identity and therefore of the key,
+    // but they are not part of the Russian surface shown to the user. Keeping
+    // those two representations separate lets a labelled sense be cached
+    // without either losing its identity or leaking the label into the card.
+    private static bool CandidateMatchesTranslation(string candidate, string translation) =>
+        string.Equals(candidate, translation, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            RemoveRegisterLabel(candidate),
+            translation,
             StringComparison.OrdinalIgnoreCase);
+
+    private static string RemoveRegisterLabel(string value)
+    {
+        foreach (SenseRegister register in Enum.GetValues<SenseRegister>())
+        {
+            string? label = SenseRegisters.DisplayLabel(register);
+            if (label is null)
+            {
+                continue;
+            }
+
+            string suffix = " (" + label + ")";
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return value[..^suffix.Length];
+            }
+        }
+
+        return value;
+    }
 
     private static bool IsStructurallyValid(PersistedEntry entry) =>
         entry.Key.Length == 64 &&
@@ -313,6 +400,55 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
     private static string NormalizeText(string? value) =>
         RankerCacheTextNormalizer.Normalize(value);
 
+    private static string PreserveExact(string? value) =>
+        RankerCacheTextNormalizer.PreserveExact(value);
+
+    private static ExactMarkedContext CreateExactMarkedContext(
+        string context,
+        string target,
+        int characterIndex,
+        RankerTargetMarker marker)
+    {
+        TargetCenteredContext centered = TargetCenteredContextBuilder.Build(
+            context ?? string.Empty,
+            target ?? string.Empty,
+            characterIndex);
+        bool anchored = RankerTargetAnchor.TryBuildMarkedContext(
+            centered.Text,
+            target ?? string.Empty,
+            centered.CharacterIndex,
+            marker,
+            out string markedContext);
+        return new ExactMarkedContext(
+            PreserveExact(markedContext),
+            centered.CharacterIndex,
+            anchored);
+    }
+
+    private static ExactMarkedContext CreateConsecExactContext(
+        string context,
+        string target,
+        int characterIndex)
+    {
+        TargetCenteredContext centered = TargetCenteredContextBuilder.PreserveFull(
+            context ?? string.Empty,
+            target ?? string.Empty,
+            characterIndex);
+        int anchor = RankerTargetAnchor.FindClosestOccurrence(
+            centered.Text,
+            target ?? string.Empty,
+            centered.CharacterIndex);
+        return new ExactMarkedContext(
+            PreserveExact(centered.Text),
+            anchor >= 0 ? anchor : centered.CharacterIndex,
+            anchor >= 0);
+    }
+
+    private static bool IsPinnedGlossBertModel(string? modelIdentity) =>
+        modelIdentity?.StartsWith(
+            GlossBertDictionarySelectorService.ExpectedModelVersionPrefix,
+            StringComparison.Ordinal) == true;
+
     private static string Truncate(string value) =>
         value.Length <= MaximumStoredTextLength ? value : value[..MaximumStoredTextLength];
 
@@ -329,6 +465,11 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
 
 
     private sealed record NormalizedRequest(string Key, string[] Candidates);
+
+    private readonly record struct ExactMarkedContext(
+        string MarkedContext,
+        int CharacterIndex,
+        bool Anchored);
 
     private sealed class CacheDocument
     {

@@ -13,8 +13,10 @@ internal readonly record struct TargetCenteredContext(
     bool Trimmed);
 
 /// <summary>
-/// Builds one target-centered window that is used for **both** the worker input
-/// and the decision cache keys (roadmap #14.2B).
+/// Selects the context contract used for both worker input and decision-cache
+/// keys. Pair scorers receive a bounded target-centred window; ConSeC receives
+/// the complete source sentence because its independent extractor was trained
+/// to reason over the full sentence and has its own 512-token fail-closed cap.
 ///
 /// Two defects motivate it:
 ///
@@ -45,6 +47,38 @@ internal static partial class TargetCenteredContextBuilder
     /// `--ranker-benchmark` run.
     /// </summary>
     internal const int MaximumWords = 32;
+
+    public static TargetCenteredContext BuildForRanker(
+        string context,
+        string target,
+        int characterIndex,
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile) =>
+        provider == GlossBertRankerProvider.Cpu &&
+        cpuModelProfile == RankerCpuModelProfile.Consec
+            ? PreserveFull(context, target, characterIndex)
+            : Build(context, target, characterIndex);
+
+    public static TargetCenteredContext PreserveFull(
+        string context,
+        string target,
+        int characterIndex)
+    {
+        string fullContext = context ?? string.Empty;
+        if (fullContext.Length == 0 || string.IsNullOrEmpty(target))
+        {
+            return new TargetCenteredContext(fullContext, characterIndex, false);
+        }
+
+        int anchor = RankerTargetAnchor.FindClosestOccurrence(
+            fullContext,
+            target,
+            characterIndex);
+        return new TargetCenteredContext(
+            fullContext,
+            anchor >= 0 ? anchor : characterIndex,
+            Trimmed: false);
+    }
 
     public static TargetCenteredContext Build(
         string context,

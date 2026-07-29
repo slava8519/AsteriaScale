@@ -503,6 +503,57 @@ internal static class VnDictionaryLayerTests
               damning.Source == "damning" &&
               damning.Translation != "чёрт; проклятье",
             $"The packaged VN-hard 'damn' entry displaced exact 'damning': {damning}");
+
+        const string wishContext = "You may leave if you wish.";
+        DictionaryLookupResult wish = await dictionary.LookupWithSenseMetadataAsync(
+            wishContext,
+            "wish",
+            wishContext.IndexOf("wish", StringComparison.Ordinal));
+        Check(wish is
+        {
+            Found: true,
+            Source: "if you wish",
+            IsPhrase: true,
+            IsTrustedPhrase: true
+        } &&
+              wish.Translation.Contains("если хотите", StringComparison.Ordinal),
+            $"The packaged longest phrase did not suppress nested 'you wish': {wish}");
+
+        const string butterContext = "She buttered him up before the meeting.";
+        DictionaryLookupResult butter = await dictionary.LookupWithSenseMetadataAsync(
+            butterContext,
+            "buttered",
+            butterContext.IndexOf("buttered", StringComparison.Ordinal));
+        Check(butter is
+        {
+            Found: true,
+            IsPhrase: true,
+            IsTrustedPhrase: false,
+            MatchedEnglishKey: "butter someone up"
+        } &&
+              butter.Translation.Contains("льстить", StringComparison.Ordinal) &&
+              butter.SenseCandidates.Count == 2,
+            $"The packaged object-pronoun idiom pattern was unreachable: {butter}");
+
+        const string feelContext = "This part always feels off.";
+        DictionaryLookupResult feel = await dictionary.LookupWithSenseMetadataAsync(
+            feelContext,
+            "feels",
+            feelContext.IndexOf("feels", StringComparison.Ordinal));
+        Check(feel is
+        {
+            Found: true,
+            IsPhrase: true,
+            IsTrustedPhrase: false,
+            HasMultipleMeanings: true,
+            MatchedEnglishKey: "feel off"
+        } &&
+              feel.SenseCandidates.Count == 4 &&
+              feel.SenseCandidates
+                  .Select(candidate => candidate.EnglishDefinition)
+                  .Distinct(StringComparer.Ordinal)
+                  .Count() == 2,
+            $"The packaged contextual 'feel off' senses were not rankable: {feel}");
         await dictionary.UnloadAsync();
     }
 

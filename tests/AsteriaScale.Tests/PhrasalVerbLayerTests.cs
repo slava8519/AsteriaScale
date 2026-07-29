@@ -30,13 +30,15 @@ internal static class PhrasalVerbLayerTests
                 "up\tвверх",
                 "burst\tвзрыв; лопаться",
                 "out\tнаружу",
-                "laughing\tсмеясь"
+                "laughing\tсмеясь",
+                "butter\tнамазывать маслом"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus-phrasal.tsv"),
             [
                 "give up\tсдаваться; бросать",
-                "burst out\tвоскликнуть; вырваться; разразиться"
+                "burst out\tвоскликнуть; вырваться; разразиться",
+                "butter someone up\tльстить; подлизываться"
             ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "jpn-rus.tsv"),
@@ -72,6 +74,28 @@ internal static class PhrasalVerbLayerTests
         Check(inflectedPhrase is
         { Found: true, IsPhrase: true, Translation: "воскликнуть; вырваться; разразиться" },
             $"An inflected phrasal verb did not canonicalize onto its base key: {inflectedPhrase}");
+
+        const string objectSlot = "She buttered him up before the meeting.";
+        DictionaryLookupResult objectIdiom = await dictionary.LookupAsync(
+            objectSlot,
+            "buttered",
+            objectSlot.IndexOf("buttered", StringComparison.Ordinal));
+        Check(objectIdiom is
+        {
+            Found: true,
+            IsPhrase: true,
+            Translation: "льстить; подлизываться",
+            MatchedEnglishKey: "butter someone up"
+        }, $"An inflected object-pronoun idiom did not reach its neutral pattern: {objectIdiom}");
+
+        const string literalButter = "She buttered the toast.";
+        DictionaryLookupResult literal = await dictionary.LookupAsync(
+            literalButter,
+            "buttered",
+            literalButter.IndexOf("buttered", StringComparison.Ordinal));
+        Check(literal is { Found: true, IsPhrase: false } &&
+              !literal.Translation.Contains("льстить", StringComparison.Ordinal),
+            $"The idiom object slot swallowed a literal butter context: {literal}");
     }
 
     private static async Task VerifyPackagedLayerAsync(string tempRoot)

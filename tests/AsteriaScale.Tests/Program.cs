@@ -14,6 +14,88 @@ try
 {
     if (args.Any(arg => string.Equals(arg, "--benchmark-only", StringComparison.OrdinalIgnoreCase)))
     {
+        int benchmarkOnlyRankerArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--ranker-benchmark", StringComparison.OrdinalIgnoreCase));
+        int benchmarkOnlyRegisterArgument = Array.FindIndex(args, arg =>
+            string.Equals(arg, "--register-benchmark", StringComparison.OrdinalIgnoreCase));
+        int benchmarkOnlySentenceArgument = Array.FindIndex(args, arg =>
+            string.Equals(
+                arg,
+                "--ranker-sentence-benchmark",
+                StringComparison.OrdinalIgnoreCase));
+        int benchmarkFamilyCount =
+            (benchmarkOnlyRankerArgument >= 0 ? 1 : 0) +
+            (benchmarkOnlyRegisterArgument >= 0 ? 1 : 0) +
+            (benchmarkOnlySentenceArgument >= 0 ? 1 : 0);
+        Assert(benchmarkFamilyCount <= 1,
+            "--benchmark-only accepts one benchmark family per invocation.");
+
+        if (benchmarkOnlySentenceArgument >= 0)
+        {
+            SentenceRankerBenchmarkOptions options =
+                SentenceRankerBenchmarkOptions.Parse(
+                    args,
+                    benchmarkOnlySentenceArgument);
+            await RunAsync(
+                $"Sentence semantic benchmark (CPU/{options.CpuModel})",
+                () => RankerSentenceBenchmark.RunAsync(options));
+            Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
+            return 0;
+        }
+
+        if (benchmarkOnlyRankerArgument >= 0)
+        {
+            const string usage =
+                "Usage: --benchmark-only --ranker-benchmark <benchmark.json> " +
+                "<workerBaseDirectory> [cpu|npu] " +
+                "[--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+                "[--dump <path>] [--ranker-report <path>]";
+            Assert(args.Length > benchmarkOnlyRankerArgument + 2, usage);
+            ParsedRankerBenchmarkOptions options = ParseRankerBenchmarkOptions(
+                args,
+                benchmarkOnlyRankerArgument + 3,
+                allowDump: true,
+                reportOption: "--ranker-report",
+                usage: usage);
+            await RunAsync(
+                $"Sense-ranker calibration benchmark ({options.Provider}/{options.CpuModel})",
+                () => RankerCalibrationBenchmark.RunAsync(
+                    args[benchmarkOnlyRankerArgument + 1],
+                    args[benchmarkOnlyRankerArgument + 2],
+                    options.Provider,
+                    options.DumpPath,
+                    options.ReportPath,
+                    options.CpuModel));
+            Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
+            return 0;
+        }
+
+        if (benchmarkOnlyRegisterArgument >= 0)
+        {
+            const string usage =
+                "Usage: --benchmark-only --register-benchmark <register-set.json> " +
+                "<workerBaseDirectory> [cpu|npu] " +
+                "[--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+                "[--register-report <path>]";
+            Assert(args.Length > benchmarkOnlyRegisterArgument + 2, usage);
+            ParsedRankerBenchmarkOptions options = ParseRankerBenchmarkOptions(
+                args,
+                benchmarkOnlyRegisterArgument + 3,
+                allowDump: false,
+                reportOption: "--register-report",
+                usage: usage);
+            await RunAsync(
+                $"Register fidelity benchmark ({options.Provider}/{options.CpuModel})",
+                () => RegisterFidelityBenchmark.RunAsync(
+                    args[benchmarkOnlyRegisterArgument + 1],
+                    args[benchmarkOnlyRegisterArgument + 2],
+                    options.Provider,
+                    options.ReportPath,
+                    options.CpuModel));
+            Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
+            return 0;
+        }
+
         (string translationSet, string translationEngine, string? translationDump,
             string? translationRankerBase) =
             ParseTranslationBenchmarkArguments(args);
@@ -62,9 +144,11 @@ try
             HoverTranslationDelayMs = 450,
             HoverTranslationMode = HoverTranslationModes.Dictionary,
             SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
+            SmartDictionaryRankerModel = SmartDictionaryRankerModels.Sandwich,
             SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.Japanese,
             SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.OnDemand,
             SmartDictionaryKeepWarm = false,
+            SmartPhraseTranslationMode = SmartPhraseTranslationModes.TranslateGemma,
             DpiOverrides =
             [
                 new ManagedDpiOverride
@@ -95,9 +179,11 @@ try
         Assert(loaded.HoverTranslationMode == HoverTranslationModes.Dictionary,
             "Hover translation mode was not preserved.");
         Assert(loaded.SmartDictionaryBackend == SmartDictionaryBackends.Cpu &&
+               loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.Sandwich &&
                loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Japanese &&
                loaded.SmartDictionaryFallbackMode == SmartDictionaryFallbackModes.OnDemand &&
-               !loaded.SmartDictionaryKeepWarm,
+               !loaded.SmartDictionaryKeepWarm &&
+               loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.TranslateGemma,
             "Smart dictionary settings were not preserved.");
         Assert(HoverTranslationModes.Normalize("SCREEN") == HoverTranslationModes.Screen,
             "Screen translation mode was not recognized.");
@@ -108,6 +194,13 @@ try
                SmartDictionaryBackends.Normalize("GPU") == SmartDictionaryBackends.Cpu &&
                SmartDictionaryBackends.Normalize("unsupported") == SmartDictionaryBackends.Auto,
             "Smart dictionary backend normalization failed.");
+        Assert(SmartDictionaryRankerModels.Normalize("SANDWICH") ==
+                   SmartDictionaryRankerModels.Sandwich &&
+               SmartDictionaryRankerModels.Normalize("CONSEC") ==
+                   SmartDictionaryRankerModels.Consec &&
+               SmartDictionaryRankerModels.Normalize("unsupported") ==
+                   SmartDictionaryRankerModels.GlossBert,
+            "Smart dictionary ranker-model normalization failed.");
         Assert(HoverTranslationOverlay.SmartAccelerator(
                    GlossBertDictionarySelectorService.CpuEngineLabel + " • НЕ УВЕРЕН") == "CPU" &&
                HoverTranslationOverlay.SmartAccelerator(
@@ -124,6 +217,10 @@ try
         Assert(SmartDictionaryFallbackModes.Normalize("AUTOMATIC") == SmartDictionaryFallbackModes.Automatic &&
                SmartDictionaryFallbackModes.Normalize("unsupported") == SmartDictionaryFallbackModes.Never,
             "Smart dictionary fallback normalization failed.");
+        Assert(SmartPhraseTranslationModes.Normalize("TRANSLATEGEMMA-4B") ==
+               SmartPhraseTranslationModes.TranslateGemma &&
+               SmartPhraseTranslationModes.Normalize("unsupported") == SmartPhraseTranslationModes.Off,
+            "Smart phrase translation mode normalization failed.");
         Assert(loaded.Profiles.Count == 1 && loaded.Profiles[0].ProcessName == "novel", "Profile was not preserved.");
         Assert(loaded.DpiOverrides.Count == 1 &&
                loaded.DpiOverrides[0].OriginalCompatibilityLayers == "~ WIN7RTM",
@@ -141,12 +238,16 @@ try
         AppSettings loaded = await new SettingsService(path).LoadAsync();
         Assert(loaded.SmartDictionaryBackend == SmartDictionaryBackends.Auto,
             "Existing settings must default to automatic backend selection.");
+        Assert(loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.GlossBert,
+            "Existing settings must retain GlossBERT as the stable default ranker.");
         Assert(loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Auto,
             "Existing settings must default to automatic source-language detection.");
         Assert(loaded.SmartDictionaryFallbackMode == SmartDictionaryFallbackModes.Never,
             "Existing settings must not enable full-translation fallback.");
         Assert(loaded.SmartDictionaryKeepWarm,
             "Existing settings must keep the smart dictionary model warm by default.");
+        Assert(loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.Off,
+            "Existing settings must not silently enable the optional phrase model.");
 
         string gpuPath = Path.Combine(tempRoot, "legacy-gpu-settings", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(gpuPath)!);
@@ -168,6 +269,10 @@ try
         "Application lifecycle and theme safety",
         ApplicationLifecycleSafetyTests.RunAsync);
 
+    await RunAsync(
+        "Screen semantic-ranker cold start",
+        SemanticRankerColdStartTests.RunAsync);
+
     await RunAsync("Local dictionary lookup", async () =>
     {
         string mergedMeanings = LocalDictionaryService.MergeBundledMeanings(
@@ -188,9 +293,11 @@ try
         string bundledDictionaries = Path.Combine(AppContext.BaseDirectory, "Dictionaries");
         string isolatedUserDictionaries = Path.Combine(tempRoot, "local-dictionary-user");
         Directory.CreateDirectory(isolatedUserDictionaries);
+        int managedMemoryReleaseCount = 0;
         LocalDictionaryService dictionary = new(
             bundledDictionaries,
-            isolatedUserDictionaries);
+            isolatedUserDictionaries,
+            managedMemoryRelease: () => managedMemoryReleaseCount++);
         await dictionary.LoadAsync();
         loadTimer.Stop();
         Assert(dictionary.EntryCount > 880_000,
@@ -619,9 +726,17 @@ try
                 $"The exact first-person remark was split into ambiguous words: {frequentRemarkPhrase}");
         }
         GC.KeepAlive(dictionary);
-        await dictionary.UnloadAsync();
-        Assert(dictionary.EntryCount == 0 && dictionary.SourceCount == 0,
+        await dictionary.UnloadAndReleaseMemoryAsync();
+        Assert(dictionary.EntryCount == 0 &&
+               dictionary.SourceCount == 0 &&
+               dictionary.SenseMetadataKeyCount == 0 &&
+               dictionary.SenseMetadataCandidateCount == 0 &&
+               dictionary.VersionToken == "unloaded" &&
+               managedMemoryReleaseCount == 1,
             "Dictionary layers were not released after leaving dictionary mode.");
+        await dictionary.UnloadAndReleaseMemoryAsync();
+        Assert(managedMemoryReleaseCount == 1,
+            "An already-empty dictionary repeated the expensive managed-memory release.");
     });
 
     await RunAsync("Aligned dictionary sense metadata", async () =>
@@ -1296,6 +1411,22 @@ try
                 unavailableLabel) &&
             unavailableWidth <= 430,
             "Longer Russian smart status labels do not reserve enough header width.");
+        double phraseBaseWidth = HoverTranslationOverlay.PreferredWidth(
+            "88-wide",
+            "Нет записи в локальном словаре",
+            dictionaryMode: true,
+            smartModeLabel,
+            "EN → RU  ·  НЕТ · OCR");
+        double phraseWidth = HoverTranslationOverlay.PreferredWidth(
+            "88-wide",
+            "Нет записи в локальном словаре",
+            dictionaryMode: true,
+            smartModeLabel,
+            "EN → RU  ·  НЕТ · OCR",
+            "Вы говорите об этих великолепных бёдрах шириной восемьдесят восемь дюймов?");
+        Assert(
+            phraseWidth > phraseBaseWidth && phraseWidth >= 320 && phraseWidth <= 430,
+            "The independent TranslateGemma line does not reserve a readable card width.");
 
         Assert(SmartDictionarySenseResolver.CanonicalizePartOfSpeech("Adjective") == "adj" &&
                SmartDictionarySenseResolver.CanonicalizePartOfSpeech("ADV") == "adv" &&
@@ -2066,9 +2197,64 @@ try
         "Build artifact rollback",
         () => BuildScriptSafetyTests.RunAsync(tempRoot));
 
+    await RunAsync(
+        "SANDWiCH installer atomic publish",
+        () => SandwichInstallerTransactionTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "ConSeC bundle install and publish contract",
+        () => ConsecBundleInfrastructureTests.RunAsync(tempRoot));
+
     await RunAsync("Benchmark set schema", async () =>
     {
         TranslationBenchmark.VerifyMetrics();
+        SmartDictionarySenseGroup synonymSense = new(
+            0,
+            "Authority or command over something.",
+            "noun",
+            [
+                new SmartDictionarySenseSurface(0, "власть", ""),
+                new SmartDictionarySenseSurface(1, "контроль", "")
+            ]);
+        SmartDictionaryRankerPlan synonymPlan = new(
+            [new SmartDictionaryRankerOutcome(0, 0, "власть")],
+            [synonymSense.EnglishDefinition],
+            [0]);
+        RankerCalibrationBenchmark.RankedCorrectness synonymCorrectness =
+            RankerCalibrationBenchmark.EvaluateRankedCorrectness(
+                synonymPlan,
+                [synonymSense],
+                selectedGroupId: 0,
+                abstained: false,
+                expectedTranslation: "контроль");
+        Assert(
+            synonymCorrectness.SenseExpectedCovered &&
+            !synonymCorrectness.VisibleExpectedCovered &&
+            synonymCorrectness.SenseCorrect == true &&
+            synonymCorrectness.VisibleCorrect == false,
+            "The ranker benchmark conflated a correct sense group with a different visible synonym.");
+
+        SmartDictionarySenseGroup scientificNearNeighbourSense = new(
+            0,
+            "Having statistical importance rather than merely large magnitude.",
+            "adjective",
+            [new SmartDictionarySenseSurface(0, "значимый", "")]);
+        SmartDictionaryRankerPlan scientificNearNeighbourPlan = new(
+            [new SmartDictionaryRankerOutcome(0, 0, "значительный")],
+            [scientificNearNeighbourSense.EnglishDefinition],
+            [0]);
+        RankerCalibrationBenchmark.RankedCorrectness scientificNearNeighbourCorrectness =
+            RankerCalibrationBenchmark.EvaluateRankedCorrectness(
+                scientificNearNeighbourPlan,
+                [scientificNearNeighbourSense],
+                selectedGroupId: 0,
+                abstained: false,
+                expectedTranslation: "значимый");
+        Assert(
+            scientificNearNeighbourCorrectness.SenseCorrect == true &&
+            scientificNearNeighbourCorrectness.VisibleCorrect == false,
+            "The visible benchmark accepted a scientific near-neighbour as an inflection.");
+
         RankerCalibrationBenchmark.VerifyMeasurementCounts(20, 12, 10, 5, 5, 8, 5);
         foreach ((int cases, int ranked, int covered, int decided, int correct,
                      int deterministic, int deterministicCorrect) in new[]
@@ -2199,16 +2385,175 @@ try
                 unresolvedCount: 0),
             "A bucket deciding more cases than it contains passed the gate.");
 
-        const string providerUsage = "provider must be cpu or npu";
-        Assert(ParseBenchmarkProvider(["cpu"], 0, providerUsage) == GlossBertRankerProvider.Cpu,
-            "The benchmark parser rejected the explicit CPU provider.");
-        Assert(ParseBenchmarkProvider(["NPU"], 0, providerUsage) == GlossBertRankerProvider.Npu,
-            "The benchmark parser rejected the explicit NPU provider.");
-        Assert(ParseBenchmarkProvider(["--report"], 0, providerUsage) == GlossBertRankerProvider.Cpu,
-            "An omitted benchmark provider did not retain the documented CPU default.");
+        const string benchmarkUsage = "strict benchmark tail";
+        ParsedRankerBenchmarkOptions defaultOptions = ParseRankerBenchmarkOptions(
+            [], 0, allowDump: true, reportOption: "--ranker-report", usage: benchmarkUsage);
+        Assert(
+            defaultOptions.Provider == GlossBertRankerProvider.Cpu &&
+            defaultOptions.CpuModel == RankerCpuModelProfile.GlossBert,
+            "Omitted benchmark options did not retain the CPU GlossBERT default.");
+        ParsedRankerBenchmarkOptions reorderedOptions = ParseRankerBenchmarkOptions(
+            [
+                "--ranker-report", "report.json",
+                "--ranker-cpu-model", "DeBERTa",
+                "--dump", "scores.json",
+                "cpu"
+            ],
+            0,
+            allowDump: true,
+            reportOption: "--ranker-report",
+            usage: benchmarkUsage);
+        Assert(
+            reorderedOptions.Provider == GlossBertRankerProvider.Cpu &&
+            reorderedOptions.CpuModel == RankerCpuModelProfile.Deberta &&
+            reorderedOptions.DumpPath == "scores.json" &&
+            reorderedOptions.ReportPath == "report.json",
+            "Benchmark provider/options were not accepted in arbitrary order.");
+        ParsedRankerBenchmarkOptions consecOptions = ParseRankerBenchmarkOptions(
+            ["--ranker-cpu-model", "ConSeC", "cpu"],
+            0,
+            allowDump: false,
+            reportOption: "--register-report",
+            usage: benchmarkUsage);
+        Assert(
+            consecOptions.Provider == GlossBertRankerProvider.Cpu &&
+            consecOptions.CpuModel == RankerCpuModelProfile.Consec,
+            "The strict benchmark parser rejected the ConSeC CPU profile.");
+        ParsedRankerBenchmarkOptions npuOptions = ParseRankerBenchmarkOptions(
+            ["--ranker-cpu-model", "glossbert", "NPU"],
+            0,
+            allowDump: false,
+            reportOption: "--register-report",
+            usage: benchmarkUsage);
+        Assert(npuOptions.Provider == GlossBertRankerProvider.Npu,
+            "The strict benchmark parser rejected the explicit NPU provider.");
+        foreach (string[] invalid in new[]
+                 {
+                     new[] { "gpu" },
+                     new[] { "cpu", "cpu" },
+                     new[] { "--ranker-cpu-model", "deberta", "--ranker-cpu-model", "deberta" },
+                     new[] { "--ranker-report" },
+                     new[] { "--ranker-report", "one", "--ranker-report", "two" },
+                     new[] { "cpu", "trailing" },
+                     new[] { "--unknown", "value" },
+                     new[] { "--ranker-cpu-model", "deberta", "npu" }
+                 })
+        {
+            AssertThrows<InvalidOperationException>(
+                () => ParseRankerBenchmarkOptions(
+                    invalid,
+                    0,
+                    allowDump: true,
+                    reportOption: "--ranker-report",
+                    usage: benchmarkUsage),
+                $"Invalid benchmark tail was accepted: {string.Join(' ', invalid)}");
+        }
         AssertThrows<InvalidOperationException>(
-            () => ParseBenchmarkProvider(["gpu"], 0, providerUsage),
-            "A provider typo silently fell back to CPU.");
+            () => ParseRankerBenchmarkOptions(
+                ["--dump", "scores.json"],
+                0,
+                allowDump: false,
+                reportOption: "--register-report",
+                usage: benchmarkUsage),
+            "The register benchmark parser accepted a ranker-only dump option.");
+
+        string artifactBase = Path.Combine(tempRoot, "ranker-artifact-profile");
+        string artifactModels = Path.Combine(artifactBase, "Ranker", "Models");
+        string glossCpu = Path.Combine(artifactModels, "GlossBert", "Cpu");
+        string glossNpu = Path.Combine(artifactModels, "GlossBert", "Npu");
+        string debertaCpu = Path.Combine(artifactModels, "GlossDeberta", "Cpu");
+        string embeddings = Path.Combine(artifactModels, "GlossEmbeddings");
+        Directory.CreateDirectory(glossCpu);
+        Directory.CreateDirectory(glossNpu);
+        Directory.CreateDirectory(debertaCpu);
+        Directory.CreateDirectory(embeddings);
+        File.WriteAllBytes(Path.Combine(artifactModels, "GlossBert", "tokenizer.json"), [1]);
+        File.WriteAllBytes(Path.Combine(glossCpu, "glossbert-fp32-dynamic.onnx"), [2]);
+        File.WriteAllBytes(Path.Combine(glossCpu, "stale.onnx"), [3]);
+        File.WriteAllBytes(Path.Combine(glossNpu, "glossbert-eager-vitis-context.onnx"), [4]);
+        File.WriteAllBytes(Path.Combine(artifactModels, "GlossDeberta", "tokenizer.json"), [4]);
+        string pinnedDebertaManifest = string.Join('\n',
+            [
+                "{",
+                "  \"batchSize\": 16,",
+                "  \"maximumSequenceLength\": 96,",
+                "  \"modelFile\": \"definition-ranker-fp32.onnx\",",
+                "  \"modelId\": \"DeBERTa-WSD:cross-encoder/nli-deberta-v3-xsmall@a150876415327c80daeff35ca6f68f5ed8cf5c24:8c85154563ac9950\",",
+                "  \"modelLength\": 284328578,",
+                "  \"modelSha256\": \"8c85154563ac9950f53387eee1346209249c64f7ec9a1d7f5c5011a02fe21190\",",
+                "  \"outputClassCount\": 2,",
+                "  \"positiveLabelIndex\": 1,",
+                "  \"schemaVersion\": 1,",
+                "  \"tokenizerLength\": 8340127,",
+                "  \"tokenizerSha256\": \"8e71d5c9121679076ee7582b048973119bd8f2d742b57f1d8e6a5585697a5620\"",
+                "}"
+            ]) + '\n';
+        File.WriteAllText(
+            Path.Combine(artifactModels, "GlossDeberta", "model-manifest.json"),
+            pinnedDebertaManifest,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllBytes(Path.Combine(debertaCpu, "definition-ranker-fp32.onnx"), [6]);
+        File.WriteAllBytes(Path.Combine(debertaCpu, "stale-candidate.onnx"), [8]);
+        File.WriteAllBytes(Path.Combine(embeddings, "eng-senses.vec"), [7]);
+        File.WriteAllBytes(Path.Combine(embeddings, "minilm-l6-v2.onnx"), [8]);
+        File.WriteAllBytes(Path.Combine(embeddings, "tokenizer.json"), [9]);
+        File.WriteAllBytes(Path.Combine(embeddings, "stale-experiment.onnx"), [10]);
+
+        IReadOnlyList<string> debertaArtifacts =
+            RankerCalibrationBenchmark.EnumerateActiveModelArtifactPaths(
+                artifactBase,
+                GlossBertRankerProvider.Cpu,
+                RankerCpuModelProfile.Deberta,
+                GlossBertDictionarySelectorService.DebertaCpuModelCacheId + ":" +
+                GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag);
+        Assert(
+            debertaArtifacts.Any(path => path.EndsWith("definition-ranker-fp32.onnx", StringComparison.Ordinal)) &&
+            debertaArtifacts.Any(path => path.EndsWith("model-manifest.json", StringComparison.Ordinal)) &&
+            debertaArtifacts.Any(path => path.EndsWith("eng-senses.vec", StringComparison.Ordinal)) &&
+            debertaArtifacts.Any(path => path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)) &&
+            debertaArtifacts.Any(path =>
+                path.EndsWith("GlossEmbeddings\\tokenizer.json", StringComparison.Ordinal)) &&
+            debertaArtifacts.All(path => !path.EndsWith("stale-candidate.onnx", StringComparison.Ordinal)) &&
+            debertaArtifacts.All(path => !path.EndsWith("stale-experiment.onnx", StringComparison.Ordinal)) &&
+            debertaArtifacts.All(path => !path.Contains("GlossBert", StringComparison.Ordinal)),
+            "The DeBERTa report mixed inactive GlossBERT artifacts into candidate bytes.");
+
+        IReadOnlyList<string> glossArtifacts =
+            RankerCalibrationBenchmark.EnumerateActiveModelArtifactPaths(
+                artifactBase,
+                GlossBertRankerProvider.Cpu,
+                RankerCpuModelProfile.GlossBert,
+                GlossBertDictionarySelectorService.CpuModelCacheId + ":pipeline-cross");
+        Assert(
+            glossArtifacts.Any(path => path.EndsWith("glossbert-fp32-dynamic.onnx", StringComparison.Ordinal)) &&
+            glossArtifacts.All(path =>
+                !path.EndsWith("stale.onnx", StringComparison.Ordinal) &&
+                !path.EndsWith("glossbert-eager-vitis-context.onnx", StringComparison.Ordinal) &&
+                !path.EndsWith("definition-ranker-fp32.onnx", StringComparison.Ordinal) &&
+                !path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)),
+            "The GlossBERT cross-only report counted inactive model bundles.");
+
+        string provenanceBase = Path.Combine(tempRoot, "ranker-provenance-inputs");
+        string provenanceDictionaries = Path.Combine(provenanceBase, "Dictionaries");
+        string provenanceMorphology = Path.Combine(provenanceBase, "Morphology");
+        Directory.CreateDirectory(provenanceDictionaries);
+        Directory.CreateDirectory(provenanceMorphology);
+        File.WriteAllBytes(Path.Combine(provenanceDictionaries, "eng-rus.tsv.gz"), [1]);
+        File.WriteAllBytes(
+            Path.Combine(provenanceDictionaries, "eng-rus-vn-senses.tsv.gz"),
+            [2]);
+        File.WriteAllBytes(Path.Combine(provenanceDictionaries, "jpn-rus.tsv.gz"), [3]);
+        File.WriteAllBytes(Path.Combine(provenanceDictionaries, "eng-rus-not-data.json"), [4]);
+        File.WriteAllBytes(Path.Combine(provenanceMorphology, "ru-morph.tsv.gz"), [5]);
+        File.WriteAllBytes(Path.Combine(provenanceMorphology, "stale.tsv.gz"), [6]);
+        IReadOnlyList<string> dictionaryArtifacts =
+            RankerBenchmarkProvenance.EnumerateDictionaryArtifactPaths(provenanceBase);
+        Assert(
+            dictionaryArtifacts.Count == 3 &&
+            dictionaryArtifacts.Any(path => path.EndsWith("eng-rus.tsv.gz", StringComparison.Ordinal)) &&
+            dictionaryArtifacts.Any(path => path.EndsWith("eng-rus-vn-senses.tsv.gz", StringComparison.Ordinal)) &&
+            dictionaryArtifacts.Any(path => path.EndsWith("ru-morph.tsv.gz", StringComparison.Ordinal)),
+            "Benchmark provenance did not isolate the exact English dictionary and morphology inputs.");
 
         string? repositoryRoot = AppContext.BaseDirectory;
         while (repositoryRoot is not null &&
@@ -2218,6 +2563,45 @@ try
         }
 
         Assert(repositoryRoot is not null, "Repository root was not found above the test binary.");
+        string rankerProjectText = await File.ReadAllTextAsync(Path.Combine(
+            repositoryRoot!,
+            "src",
+            "AsteriaScale.RankerWorker",
+            "AsteriaScale.RankerWorker.csproj"));
+        Assert(
+            rankerProjectText.Contains(
+                "<IncludeExperimentalDebertaModel Condition=\"'$(IncludeExperimentalDebertaModel)' == ''\">false</IncludeExperimentalDebertaModel>",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Condition=\"'$(IncludeExperimentalDebertaModel)' == 'true'\"",
+                StringComparison.Ordinal),
+            "The experimental DeBERTa bundle is not opt-in at build time.");
+        Assert(
+            rankerProjectText.Contains(
+                "<IncludeExperimentalSandwichModel Condition=\"'$(IncludeExperimentalSandwichModel)' == ''\">false</IncludeExperimentalSandwichModel>",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Exists('$(SandwichBundleRoot)\\tokenizer.json')",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Exists('$(SandwichBundleRoot)\\model-manifest.json')",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Exists('$(SandwichBundleRoot)\\Cpu\\encoder-nv-fp32.onnx')",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Exists('$(SandwichBundleRoot)\\Cpu\\encoder-v-fp32.onnx')",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "<PublishExperimentalSandwichModel Condition=\"'$(IncludeExperimentalSandwichModel)' == 'true' Or '$(SandwichBundleComplete)' == 'true'\">true</PublishExperimentalSandwichModel>",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Condition=\"'$(PublishExperimentalSandwichModel)' == 'true'\"",
+                StringComparison.Ordinal) &&
+            rankerProjectText.Contains(
+                "Condition=\"'$(IncludeExperimentalSandwichModel)' == 'true' And '$(SandwichBundleComplete)' != 'true'\"",
+                StringComparison.Ordinal),
+            "The experimental SANDWiCH bundle is not gated as one complete four-file unit.");
         string schemaUserDirectory = Path.Combine(tempRoot, "benchmark-schema-user");
         Directory.CreateDirectory(schemaUserDirectory);
         LocalDictionaryService schemaDictionary = new(
@@ -2307,8 +2691,32 @@ try
     });
 
     await RunAsync(
+        "Sentence semantic benchmark schema",
+        () => RankerSentenceBenchmarkTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Sentence semantic benchmark metric math",
+        () => RankerSentenceBenchmarkMetricTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "ConSeC benchmark provenance pins official reference golden",
+        () => RankerBenchmarkProvenanceTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Persistent Smart dictionary LRU cache",
         () => SmartDictionaryResultCacheTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Smart phrase translation foundation",
+        () => SmartPhraseTranslationFoundationTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Smart phrase translation hover integration",
+        () => SmartHoverPhraseIntegrationTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "Provider-neutral semantic sense evidence",
+        SemanticSenseEvidenceFactoryTests.RunAsync);
 
     await RunAsync(
         "GlossBERT ranker protocol and host validation",
@@ -2317,6 +2725,10 @@ try
     await RunAsync(
         "Shared GlossBERT decision cache",
         () => GlossBertDecisionCacheTests.RunAsync(tempRoot));
+
+    await RunAsync(
+        "TranslateGemma isolated runtime protocol",
+        () => TranslateGemmaTranslationServiceTests.RunAsync(tempRoot));
 
     await RunAsync(
         "WSD training-set safety and runtime parity",
@@ -2329,6 +2741,10 @@ try
     await RunAsync(
         "Ranker worker fail-open and target anchoring",
         RankerWorkerRegressionTests.RunAsync);
+
+    await RunAsync(
+        "ConSeC official-reference input and scoring parity",
+        () => ConsecRankerTests.RunAsync(tempRoot));
 
     await RunAsync("Magpie visible cursor mapping", () =>
     {
@@ -2988,35 +3404,44 @@ try
         string.Equals(arg, "--ranker-benchmark", StringComparison.OrdinalIgnoreCase));
     if (rankerBenchmarkArgument >= 0)
     {
+        const string rankerBenchmarkUsage =
+            "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> " +
+            "[cpu|npu] [--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+            "[--dump <path>] [--ranker-report <path>]";
         Assert(args.Length > rankerBenchmarkArgument + 2,
-            "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> [cpu|npu]");
-        GlossBertRankerProvider benchmarkProvider = ParseBenchmarkProvider(
+            rankerBenchmarkUsage);
+        ParsedRankerBenchmarkOptions benchmarkOptions = ParseRankerBenchmarkOptions(
             args,
             rankerBenchmarkArgument + 3,
-            "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> [cpu|npu]");
-        int dumpArgument = Array.FindIndex(args, arg =>
-            string.Equals(arg, "--dump", StringComparison.OrdinalIgnoreCase));
-        string? dumpPath = dumpArgument >= 0 && args.Length > dumpArgument + 1
-            ? args[dumpArgument + 1]
-            : null;
+            allowDump: true,
+            reportOption: "--ranker-report",
+            usage: rankerBenchmarkUsage);
         // Roadmap #8 compares candidates same-build. The report is the artifact
         // that makes that comparison mechanical instead of narrative.
-        int reportArgument = Array.FindIndex(args, arg =>
-            string.Equals(arg, "--ranker-report", StringComparison.OrdinalIgnoreCase));
-        Assert(reportArgument < 0 ||
-               args.Length > reportArgument + 1 &&
-               !args[reportArgument + 1].StartsWith("--", StringComparison.Ordinal),
-            "--ranker-report requires a file path.");
-        string? reportPath = reportArgument >= 0
-            ? args[reportArgument + 1]
-            : null;
-        await RunAsync($"GlossBERT calibration benchmark ({benchmarkProvider})", () =>
+        await RunAsync(
+            $"Sense-ranker calibration benchmark ({benchmarkOptions.Provider}/{benchmarkOptions.CpuModel})",
+            () =>
             RankerCalibrationBenchmark.RunAsync(
                 args[rankerBenchmarkArgument + 1],
                 args[rankerBenchmarkArgument + 2],
-                benchmarkProvider,
-                dumpPath,
-                reportPath));
+                benchmarkOptions.Provider,
+                benchmarkOptions.DumpPath,
+                benchmarkOptions.ReportPath,
+                benchmarkOptions.CpuModel));
+    }
+
+    int sentenceBenchmarkArgument = Array.FindIndex(args, arg =>
+        string.Equals(
+            arg,
+            "--ranker-sentence-benchmark",
+            StringComparison.OrdinalIgnoreCase));
+    if (sentenceBenchmarkArgument >= 0)
+    {
+        SentenceRankerBenchmarkOptions sentenceOptions =
+            SentenceRankerBenchmarkOptions.Parse(args, sentenceBenchmarkArgument);
+        await RunAsync(
+            $"Sentence semantic benchmark (CPU/{sentenceOptions.CpuModel})",
+            () => RankerSentenceBenchmark.RunAsync(sentenceOptions));
     }
 
     // Live Qwen through Foundry Local: gated behind its own flag, like the other
@@ -3045,26 +3470,27 @@ try
         string.Equals(arg, "--register-benchmark", StringComparison.OrdinalIgnoreCase));
     if (registerBenchmarkArgument >= 0)
     {
+        const string registerBenchmarkUsage =
+            "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> " +
+            "[cpu|npu] [--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+            "[--register-report <path>]";
         Assert(args.Length > registerBenchmarkArgument + 2,
-            "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> [cpu|npu]");
-        GlossBertRankerProvider registerProvider = ParseBenchmarkProvider(
+            registerBenchmarkUsage);
+        ParsedRankerBenchmarkOptions registerOptions = ParseRankerBenchmarkOptions(
             args,
             registerBenchmarkArgument + 3,
-            "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> [cpu|npu]");
-        int registerReportArgument = Array.FindIndex(args, arg =>
-            string.Equals(arg, "--register-report", StringComparison.OrdinalIgnoreCase));
-        Assert(registerReportArgument < 0 ||
-               args.Length > registerReportArgument + 1 &&
-               !args[registerReportArgument + 1].StartsWith("--", StringComparison.Ordinal),
-            "--register-report requires a file path.");
-        await RunAsync($"Register fidelity benchmark ({registerProvider})", () =>
+            allowDump: false,
+            reportOption: "--register-report",
+            usage: registerBenchmarkUsage);
+        await RunAsync(
+            $"Register fidelity benchmark ({registerOptions.Provider}/{registerOptions.CpuModel})",
+            () =>
             RegisterFidelityBenchmark.RunAsync(
                 args[registerBenchmarkArgument + 1],
                 args[registerBenchmarkArgument + 2],
-                registerProvider,
-                registerReportArgument >= 0
-                    ? args[registerReportArgument + 1]
-                    : null));
+                registerOptions.Provider,
+                registerOptions.ReportPath,
+                registerOptions.CpuModel));
     }
 
     if (args.Any(arg => string.Equals(arg, "--live", StringComparison.OrdinalIgnoreCase)))
@@ -3262,22 +3688,117 @@ static (string SetPath, string Engine, string? DumpPath, string? RankerBaseDirec
 // Anything that was not exactly "npu" used to become CPU without a word, so a
 // typo produced a full benchmark report attributed to the wrong device — the
 // measurement equivalent of the silent provider fallback invariant 3 forbids.
-static GlossBertRankerProvider ParseBenchmarkProvider(string[] args, int index, string usage)
+static ParsedRankerBenchmarkOptions ParseRankerBenchmarkOptions(
+    string[] args,
+    int firstOptionalArgument,
+    bool allowDump,
+    string reportOption,
+    string usage)
 {
-    if (args.Length <= index || args[index].StartsWith("--", StringComparison.Ordinal))
+    GlossBertRankerProvider provider = GlossBertRankerProvider.Cpu;
+    RankerCpuModelProfile cpuModel = RankerCpuModelProfile.GlossBert;
+    string? dumpPath = null;
+    string? reportPath = null;
+    bool providerSeen = false;
+    bool modelSeen = false;
+    bool dumpSeen = false;
+    bool reportSeen = false;
+
+    for (int index = firstOptionalArgument; index < args.Length; index++)
     {
-        return GlossBertRankerProvider.Cpu;
+        string argument = args[index];
+        if (string.Equals(argument, "cpu", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(argument, "npu", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert(!providerSeen,
+                $"The ranker provider may be specified only once. {usage}");
+            providerSeen = true;
+            provider = string.Equals(argument, "npu", StringComparison.OrdinalIgnoreCase)
+                ? GlossBertRankerProvider.Npu
+                : GlossBertRankerProvider.Cpu;
+            continue;
+        }
+
+        if (string.Equals(
+                argument,
+                "--ranker-cpu-model",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            Assert(!modelSeen,
+                $"--ranker-cpu-model may be specified only once. {usage}");
+            modelSeen = true;
+            string requested = RequireBenchmarkOptionValue(
+                args,
+                ref index,
+                argument,
+                usage);
+            if (string.Equals(requested, "glossbert", StringComparison.OrdinalIgnoreCase))
+            {
+                cpuModel = RankerCpuModelProfile.GlossBert;
+            }
+            else if (string.Equals(requested, "deberta", StringComparison.OrdinalIgnoreCase))
+            {
+                cpuModel = RankerCpuModelProfile.Deberta;
+            }
+            else if (string.Equals(requested, "sandwich", StringComparison.OrdinalIgnoreCase))
+            {
+                cpuModel = RankerCpuModelProfile.Sandwich;
+            }
+            else
+            {
+                Assert(string.Equals(requested, "consec", StringComparison.OrdinalIgnoreCase),
+                    $"Unknown CPU ranker model '{requested}'. {usage}");
+                cpuModel = RankerCpuModelProfile.Consec;
+            }
+
+            continue;
+        }
+
+        if (allowDump &&
+            string.Equals(argument, "--dump", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert(!dumpSeen, $"--dump may be specified only once. {usage}");
+            dumpSeen = true;
+            dumpPath = RequireBenchmarkOptionValue(args, ref index, argument, usage);
+            continue;
+        }
+
+        if (string.Equals(argument, reportOption, StringComparison.OrdinalIgnoreCase))
+        {
+            Assert(!reportSeen,
+                $"{reportOption} may be specified only once. {usage}");
+            reportSeen = true;
+            reportPath = RequireBenchmarkOptionValue(args, ref index, argument, usage);
+            continue;
+        }
+
+        throw new InvalidOperationException(
+            $"Unknown or trailing benchmark argument '{argument}'. {usage}");
     }
 
-    string requested = args[index];
-    if (string.Equals(requested, "npu", StringComparison.OrdinalIgnoreCase))
-    {
-        return GlossBertRankerProvider.Npu;
-    }
+    Assert(
+        provider == GlossBertRankerProvider.Cpu ||
+        cpuModel == RankerCpuModelProfile.GlossBert,
+        $"The selected semantic ranker is CPU-only; NPU remains pinned to GlossBERT. {usage}");
+    return new ParsedRankerBenchmarkOptions(
+        provider,
+        cpuModel,
+        dumpPath,
+        reportPath);
+}
 
-    Assert(string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase),
-        $"Unknown ranker provider '{requested}'. {usage}");
-    return GlossBertRankerProvider.Cpu;
+static string RequireBenchmarkOptionValue(
+    string[] args,
+    ref int index,
+    string option,
+    string usage)
+{
+    Assert(
+        index + 1 < args.Length &&
+        !args[index + 1].StartsWith("--", StringComparison.Ordinal),
+        $"{option} requires a value. {usage}");
+    index++;
+    return args[index];
 }
 
 static void Assert(bool condition, string message)
@@ -3330,3 +3851,9 @@ static bool IsProcessRunning(int processId)
         return false;
     }
 }
+
+internal readonly record struct ParsedRankerBenchmarkOptions(
+    GlossBertRankerProvider Provider,
+    RankerCpuModelProfile CpuModel,
+    string? DumpPath,
+    string? ReportPath);

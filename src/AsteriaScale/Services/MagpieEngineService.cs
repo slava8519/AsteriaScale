@@ -88,6 +88,23 @@ public sealed class MagpieEngineService : IAsyncDisposable
                 isWindow && NativeMethods.IsCloaked(sourceWindow));
         }
     }
+    internal bool IsScalingSourceForeground
+    {
+        get
+        {
+            nint scalingWindow = FindOwnedWindow(ScalingWindowClass);
+            if (!IsScalingWindowActiveState(
+                    scalingWindow,
+                    scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow)))
+            {
+                return false;
+            }
+
+            return IsScalingSourceForegroundState(
+                NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND"),
+                NativeMethods.GetForegroundWindow());
+        }
+    }
     internal bool IsOwnedEngineRunning => IsOwnedProcessRunning();
     public string EffectsDirectory => IsAvailable
         ? Path.Combine(Path.GetDirectoryName(EnginePath)!, "effects")
@@ -597,8 +614,19 @@ public sealed class MagpieEngineService : IAsyncDisposable
         nint sourceWindow,
         bool isWindow,
         bool isIconic,
-        bool isCloaked) =>
-        sourceWindow == nint.Zero || !isWindow || isIconic || isCloaked;
+        bool isCloaked)
+    {
+        // Fullscreen Magpie intentionally iconifies some source windows while
+        // its scaling window remains active. Treating that transition as a
+        // lost source stops and immediately restarts automatic scaling.
+        _ = isIconic;
+        return sourceWindow == nint.Zero || !isWindow || isCloaked;
+    }
+
+    internal static bool IsScalingSourceForegroundState(
+        nint sourceWindow,
+        nint foregroundWindow) =>
+        sourceWindow != nint.Zero && sourceWindow == foregroundWindow;
 
     internal static bool IsScalingWindowActiveState(
         nint scalingWindow,

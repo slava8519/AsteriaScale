@@ -11,6 +11,15 @@ namespace AsteriaScale.Services;
 /// </summary>
 internal static class RankerCacheTextNormalizer
 {
+    /// <summary>
+    /// Preserves the exact UTF-16 text supplied to a tokenizer whose
+    /// normalization contract is not BERT clean_text. This deliberately does
+    /// not apply Unicode normalization, case folding, whitespace folding or
+    /// control removal: an extra cache miss is safe, while merging two inputs
+    /// that a model can distinguish is not.
+    /// </summary>
+    internal static string PreserveExact(string? value) => value ?? string.Empty;
+
     internal static string Normalize(string? value)
     {
         if (value is null)

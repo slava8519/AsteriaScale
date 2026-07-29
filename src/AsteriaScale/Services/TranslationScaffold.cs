@@ -688,10 +688,11 @@ internal sealed class TranslationScaffoldBuilder
                     $"GlossBERT selected unknown GroupId {selectedGroupId}.");
             }
 
-            IReadOnlyList<ScaffoldSenseHint> selectedSenseHints = CreateSenseHints(
+            IReadOnlyList<ScaffoldSenseHint> selectedSenseHints = SemanticSenseEvidenceFactory.Create(
                 target,
                 plan,
-                selectedGroupId);
+                selectedGroupId,
+                MinimumConfidence);
             return new NeuralSelectionAttempt(
                 selectedSenseHints,
                 CreateNeuralDiagnostic(
@@ -759,52 +760,7 @@ internal sealed class TranslationScaffoldBuilder
             FromCache: result.FromCache,
             Provenance: provenance);
 
-    private static IReadOnlyList<ScaffoldSenseHint> CreateSenseHints(
-        string source,
-        SmartDictionaryRankerPlan plan,
-        int selectedGroupId)
-    {
-        string normalizedSource = NormalizeSource(source);
-        SmartDictionaryRankerOutcome? selectedOutcome = plan.Outcomes.FirstOrDefault(
-            outcome => outcome.GroupId == selectedGroupId);
-        if (selectedOutcome is null)
-        {
-            throw new InvalidOperationException(
-                $"GlossBERT selected unknown GroupId {selectedGroupId}.");
-        }
-
-        string selectedTranslation = NormalizeRussianTerm(selectedOutcome.Translation);
-        IReadOnlyList<string> rejectedTranslations = Array.AsReadOnly(plan.Outcomes
-            .Where(outcome => outcome.GroupId != selectedGroupId)
-            .Select(outcome => NormalizeRussianTerm(outcome.Translation))
-            .Where(translation => translation.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray());
-        ScaffoldSenseHint[] hints = Enumerable.Range(0, plan.CandidateGlosses.Count)
-            .Where(index => plan.CandidateGroupIds[index] == selectedGroupId)
-            .Select(index => NormalizeEnglishDefinition(plan.CandidateGlosses[index]))
-            .Where(definition => definition.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .Take(2)
-            .Select(definition => new ScaffoldSenseHint(
-                normalizedSource,
-                definition,
-                selectedTranslation,
-                rejectedTranslations,
-                MinimumConfidence))
-            .ToArray();
-        if (normalizedSource.Length == 0 ||
-            selectedTranslation.Length == 0 ||
-            hints.Length == 0)
-        {
-            throw new InvalidOperationException(
-                $"GlossBERT selected GroupId {selectedGroupId} without a usable English sense hint.");
-        }
-
-        return Array.AsReadOnly(hints);
-    }
-
-    private static string NormalizeEnglishDefinition(string value)
+    internal static string NormalizeEnglishDefinition(string value)
     {
         string withoutControls = new(value
             .Select(character => char.IsControl(character) ? ' ' : character)
@@ -840,7 +796,7 @@ internal sealed class TranslationScaffoldBuilder
             ErrorCode: detail,
             Detail: detail);
 
-    private static string NormalizeSource(string value)
+    internal static string NormalizeSource(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl))
         {
@@ -856,7 +812,7 @@ internal sealed class TranslationScaffoldBuilder
             : string.Empty;
     }
 
-    private static string NormalizeRussianTerm(string? value)
+    internal static string NormalizeRussianTerm(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl))
         {

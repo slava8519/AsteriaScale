@@ -147,6 +147,18 @@ internal static class NativeMethods
     [DllImport("dwmapi.dll")]
     internal static extern int DwmSetWindowAttribute(nint hWnd, int attribute, ref int value, int valueSize);
 
+    [DllImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool MagInitialize();
+
+    [DllImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool MagShowSystemCursor([MarshalAs(UnmanagedType.Bool)] bool showCursor);
+
+    [DllImport("Magnification.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool MagUninitialize();
+
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     internal static extern nint GetWindowLongPtr(nint hWnd, int index);
 

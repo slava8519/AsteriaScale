@@ -9,6 +9,15 @@
     <AssemblyName>AsteriaScale.RankerWorker</AssemblyName>
     <RootNamespace>AsteriaScale.RankerWorker</RootNamespace>
     <Version>1.0.0</Version>
+    <IncludeExperimentalDebertaModel Condition="'$(IncludeExperimentalDebertaModel)' == ''">false</IncludeExperimentalDebertaModel>
+    <IncludeExperimentalSandwichModel Condition="'$(IncludeExperimentalSandwichModel)' == ''">false</IncludeExperimentalSandwichModel>
+    <SandwichBundleRoot>$(MSBuildProjectDirectory)\Models\Sandwich</SandwichBundleRoot>
+    <SandwichBundleComplete Condition="Exists('$(SandwichBundleRoot)\tokenizer.json') And Exists('$(SandwichBundleRoot)\model-manifest.json') And Exists('$(SandwichBundleRoot)\Cpu\encoder-nv-fp32.onnx') And Exists('$(SandwichBundleRoot)\Cpu\encoder-v-fp32.onnx')">true</SandwichBundleComplete>
+    <PublishExperimentalSandwichModel Condition="'$(IncludeExperimentalSandwichModel)' == 'true' Or '$(SandwichBundleComplete)' == 'true'">true</PublishExperimentalSandwichModel>
+    <IncludeExperimentalConsecModel Condition="'$(IncludeExperimentalConsecModel)' == ''">false</IncludeExperimentalConsecModel>
+    <ConsecBundleRoot>$(MSBuildProjectDirectory)\Models\Consec</ConsecBundleRoot>
+    <ConsecBundleComplete Condition="Exists('$(ConsecBundleRoot)\tokenizer.json') And Exists('$(ConsecBundleRoot)\model-manifest.json') And Exists('$(ConsecBundleRoot)\Cpu\consec-wngt-fp32.onnx') And Exists('$(ConsecBundleRoot)\Cpu\consec-wngt-fp32.onnx.data')">true</ConsecBundleComplete>
+    <PublishExperimentalConsecModel Condition="'$(IncludeExperimentalConsecModel)' == 'true' Or '$(ConsecBundleComplete)' == 'true'">true</PublishExperimentalConsecModel>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
@@ -26,5 +35,30 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+    <Content Include="Models\GlossDeberta\**\*"
+             Condition="'$(IncludeExperimentalDebertaModel)' == 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Models\Sandwich\**\*"
+             Condition="'$(PublishExperimentalSandwichModel)' == 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
+    <Content Include="Models\Consec\**\*"
+             Condition="'$(PublishExperimentalConsecModel)' == 'true'">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
   </ItemGroup>
+  <Target Name="ValidateExperimentalSandwichBundle"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(IncludeExperimentalSandwichModel)' == 'true' And '$(SandwichBundleComplete)' != 'true'">
+    <Error Text="IncludeExperimentalSandwichModel=true requires tokenizer.json, model-manifest.json, encoder-nv-fp32.onnx and encoder-v-fp32.onnx under Models\Sandwich." />
+  </Target>
+  <Target Name="ValidateExperimentalConsecBundle"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(IncludeExperimentalConsecModel)' == 'true' And '$(ConsecBundleComplete)' != 'true'">
+    <Error Text="IncludeExperimentalConsecModel=true requires tokenizer.json, model-manifest.json, consec-wngt-fp32.onnx and consec-wngt-fp32.onnx.data under Models\Consec." />
+  </Target>
 </Project>

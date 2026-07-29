@@ -3,6 +3,12 @@ using System.Text;
 
 namespace AsteriaScale.RankerProtocol;
 
+public enum RankerTargetMarker
+{
+    Quoted,
+    SandwichD
+}
+
 /// <summary>
 /// Resolves which occurrence of a target surface a request refers to.
 ///
@@ -24,10 +30,33 @@ public static class RankerTargetAnchor
         string context,
         string target,
         int characterIndex,
+        out string markedContext) =>
+        TryBuildMarkedContext(
+            context,
+            target,
+            characterIndex,
+            RankerTargetMarker.Quoted,
+            out markedContext);
+
+    /// <summary>
+    /// Builds the model-specific marked context while reusing the one canonical
+    /// target occurrence resolver. SANDWiCH was trained with literal [D]
+    /// delimiters; feeding it GlossBERT quotation marks is a material input
+    /// change and therefore also participates in the host cache fingerprint.
+    /// </summary>
+    public static bool TryBuildMarkedContext(
+        string context,
+        string target,
+        int characterIndex,
+        RankerTargetMarker marker,
         out string markedContext)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(target);
+        if (!Enum.IsDefined(marker))
+        {
+            throw new ArgumentOutOfRangeException(nameof(marker));
+        }
 
         int index = FindClosestOccurrence(context, target, characterIndex);
         if (index < 0)
@@ -36,9 +65,11 @@ public static class RankerTargetAnchor
             return false;
         }
 
+        string prefix = marker == RankerTargetMarker.SandwichD ? "[D] " : "\"";
+        string suffix = marker == RankerTargetMarker.SandwichD ? " [D]" : "\"";
         markedContext = (
             context[..index] +
-            "\"" + context.Substring(index, target.Length) + "\"" +
+            prefix + context.Substring(index, target.Length) + suffix +
             context[(index + target.Length)..]).Trim();
         return true;
     }

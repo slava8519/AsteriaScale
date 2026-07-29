@@ -4,6 +4,19 @@ using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.Services;
 
+internal enum SmartPhraseLineStatus
+{
+    Translated,
+    Unavailable
+}
+
+internal sealed record SmartHoverPhraseLine(
+    string Source,
+    string Translation,
+    string Engine,
+    SmartPhraseLineStatus Status,
+    bool FromCache);
+
 internal sealed record SmartHoverResult(
         string Source,
         string Translation,
@@ -14,7 +27,11 @@ internal sealed record SmartHoverResult(
         double? Confidence,
         bool UsedFullFallback,
         SmartDictionaryCacheRequest? CacheRequest = null,
-        SmartDictionarySelection? CacheSelection = null);
+        SmartDictionarySelection? CacheSelection = null)
+{
+    public IReadOnlyList<ScaffoldSenseHint> SelectedSenseHints { get; init; } =
+        Array.Empty<ScaffoldSenseHint>();
+}
 
 /// <summary>
 /// The Smart-dictionary hover pipeline: dictionary lookup with sense metadata,
@@ -34,11 +51,15 @@ internal sealed class SmartHoverPipeline : IDisposable
     private readonly GlossBertDictionarySelectorService _glossBertSelector;
     private readonly SmartDictionaryResultCache _smartResultCache;
     private readonly GlossBertDecisionCache _decisionCache;
+    private readonly ISmartPhraseTranslator? _smartPhraseTranslator;
+    private readonly SmartPhraseTranslationCache? _smartPhraseCache;
+    private readonly TranslationScaffoldBuilder _phraseScaffoldBuilder;
     private readonly Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> _translateFallback;
     private readonly Action<string> _reportStatus;
     private readonly Action<string, NativeMethods.Point> _onDemandFallbackObserved;
     private readonly SemaphoreSlim _smartBackendLock = new(1, 1);
     private string? _activeSmartBackend;
+    private bool _phraseSetupFailureReported;
 
     public SmartHoverPipeline(
         AppSettings settings,
@@ -48,13 +69,22 @@ internal sealed class SmartHoverPipeline : IDisposable
         GlossBertDecisionCache decisionCache,
         Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> translateFallback,
         Action<string> reportStatus,
-        Action<string, NativeMethods.Point> onDemandFallbackObserved)
+        Action<string, NativeMethods.Point> onDemandFallbackObserved,
+        ISmartPhraseTranslator? smartPhraseTranslator = null,
+        SmartPhraseTranslationCache? smartPhraseCache = null)
     {
         _settings = settings;
         _dictionary = dictionary;
         _glossBertSelector = glossBertSelector;
         _smartResultCache = smartResultCache;
         _decisionCache = decisionCache;
+        _smartPhraseTranslator = smartPhraseTranslator;
+        _smartPhraseCache = smartPhraseCache;
+        // The hovered target has already paid for any GlossBERT decision. The
+        // sentence scaffold therefore adds deterministic user/VN/MWE anchors
+        // only; re-ranking every other token would add up to twelve serial
+        // worker calls to an optional second line.
+        _phraseScaffoldBuilder = new TranslationScaffoldBuilder(dictionary);
         _translateFallback = translateFallback;
         _reportStatus = reportStatus;
         _onDemandFallbackObserved = onDemandFallbackObserved;
@@ -301,7 +331,10 @@ internal sealed class SmartHoverPipeline : IDisposable
             }
 
             GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
+            RankerCpuModelProfile modelProfile =
+                SemanticRankerProfileResolver.FromSettings(_settings);
             if (!string.Equals(_activeSmartBackend, smartBackend, StringComparison.Ordinal) ||
+                _glossBertSelector.CpuModelProfile != modelProfile ||
                 _glossBertSelector.ActiveProvider != provider ||
                 string.IsNullOrWhiteSpace(_glossBertSelector.ActiveModelVersion))
             {
@@ -309,7 +342,9 @@ internal sealed class SmartHoverPipeline : IDisposable
             }
 
             string modelVersion = _glossBertSelector.ActiveModelVersion
-                ?? GlossBertDictionarySelectorService.GetModelCacheId(provider);
+                ?? GlossBertDictionarySelectorService.GetModelCacheId(
+                    provider,
+                    modelProfile);
             string expectedPipeline = ExpectedRankingPipeline(
                 provider,
                 labelledTranslations.Length,
@@ -339,7 +374,7 @@ internal sealed class SmartHoverPipeline : IDisposable
 
             if (cachedSelection is not null)
             {
-                return new SmartHoverResult(
+                SmartHoverResult cachedResult = new(
                     displaySource,
                     cachedSelection.Translation,
                     SmartDictionaryResultCache.EngineLabel,
@@ -347,7 +382,15 @@ internal sealed class SmartHoverPipeline : IDisposable
                     displayIsPhrase,
                     lookup.Language,
                     cachedSelection.Confidence,
-                    UsedFullFallback: false);
+                    UsedFullFallback: false)
+                {
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                        displaySource,
+                        plan,
+                        cachedSelection.Index,
+                        cachedSelection.Confidence)
+                };
+                return cachedResult;
             }
 
             // Second chance before inference: the shared decision cache keys on
@@ -355,12 +398,15 @@ internal sealed class SmartHoverPipeline : IDisposable
             // full-text scaffold for this word in this line is reusable here.
             // Warm-up above already validated provider and model identity — a
             // cache hit may skip inference, never that validation.
-            // One window feeds both the key and the worker (roadmap #14.2B), so
-            // the key can no longer describe a wider context than the model saw.
-            TargetCenteredContext rankerContext = TargetCenteredContextBuilder.Build(
+            // Pair scorers use the bounded target-centred window; ConSeC keeps
+            // the complete sentence. In both cases the key and worker see the
+            // same text.
+            TargetCenteredContext rankerContext = TargetCenteredContextBuilder.BuildForRanker(
                 recognized.Text,
                 lookup.Source,
-                recognized.CharacterIndex);
+                recognized.CharacterIndex,
+                provider,
+                modelProfile);
             // Enrichment is spent only where the sequence budget allows it:
             // measured, an NPU pair already truncates above the median gloss.
             IReadOnlyList<string> rankerGlosses =
@@ -390,7 +436,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     sharedOutcome.Translation,
                     sharedDecision.Confidence ?? 0,
                     string.Empty);
-                return new SmartHoverResult(
+                SmartHoverResult sharedResult = new(
                     displaySource,
                     sharedOutcome.Translation,
                     SmartDictionaryResultCache.EngineLabel,
@@ -410,7 +456,15 @@ internal sealed class SmartHoverPipeline : IDisposable
                         smartBackend,
                         sharedDecision.ModelVersion,
                         sharedDecision.Pipeline),
-                    promoted);
+                    promoted)
+                {
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                        displaySource,
+                        plan,
+                        sharedOutcome.GroupId,
+                        promoted.Confidence)
+                };
+                return sharedResult;
             }
 
             // No intermediate candidate card: the overlay keeps its loading
@@ -519,7 +573,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 selectedOutcome.Translation,
                 ranked.Confidence ?? 0,
                 string.Empty);
-            return new SmartHoverResult(
+            SmartHoverResult selectedResult = new(
                 displaySource,
                 selectedOutcome.Translation,
                 SmartEngineLabel(smartBackend),
@@ -529,7 +583,15 @@ internal sealed class SmartHoverPipeline : IDisposable
                 cacheSelection.Confidence,
                 UsedFullFallback: false,
                 cacheRequest,
-                cacheSelection);
+                cacheSelection)
+            {
+                SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                    displaySource,
+                    plan,
+                    selectedOutcome.GroupId,
+                    cacheSelection.Confidence)
+            };
+            return selectedResult;
         }
         catch (OperationCanceledException)
         {
@@ -609,6 +671,181 @@ internal sealed class SmartHoverPipeline : IDisposable
             Confidence: null,
             UsedFullFallback: false);
 
+    private bool PhraseTranslationEnabled =>
+        SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
+        SmartPhraseTranslationModes.TranslateGemma;
+
+    internal async Task<SmartHoverPhraseLine?> TranslatePhraseLineAsync(
+        HoverOcrResult recognized,
+        SmartHoverResult dictionaryResult,
+        CancellationToken cancellationToken)
+    {
+        if (!PhraseTranslationEnabled ||
+            _smartPhraseTranslator is null ||
+            _smartPhraseCache is null ||
+            !string.Equals(dictionaryResult.Language, "EN", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        SmartPhraseContext? phrase = SmartPhraseContextBuilder.Build(
+            recognized.Text,
+            recognized.HoveredWord,
+            recognized.CharacterIndex);
+        if (phrase is null || !phrase.Value.Text.Any(char.IsWhiteSpace))
+        {
+            return null;
+        }
+
+        SmartPhraseModelInput modelInput = SmartPhraseIdiomRewriter.Rewrite(
+            phrase.Value.Text,
+            recognized.HoveredWord,
+            phrase.Value.CharacterIndex);
+        TranslationScaffold scaffold = await _phraseScaffoldBuilder.BuildAsync(
+            modelInput.ModelInputPhrase,
+            cancellationToken);
+        IReadOnlyList<ScaffoldSenseHint> senseHints = scaffold.SenseHints
+            .Concat(dictionaryResult.SelectedSenseHints)
+            .GroupBy(
+                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+            .Select(group => group.Last())
+            .ToArray();
+        SmartPhraseTranslationRequest request = CreatePhraseTranslationRequest(
+            modelInput,
+            recognized.PreviousContext,
+            scaffold.Terms,
+            senseHints,
+            scaffold.ProperNames);
+        if (SmartPhraseTranslationGuard.ValidateRequest(request) !=
+            SmartPhraseRejectionReason.None)
+        {
+            return UnavailablePhraseLine(phrase.Value.Text);
+        }
+        try
+        {
+            // A phrase-cache hit may skip generation, never artifact/provider
+            // validation: otherwise replacing the GGUF could keep serving an
+            // answer that claims the pinned model identity.
+            await _smartPhraseTranslator.PrepareAsync(cancellationToken);
+            SmartPhraseTranslationResult? translated =
+                await _smartPhraseCache.TryGetAsync(request, cancellationToken);
+            if (translated is null)
+            {
+                translated = await _smartPhraseTranslator.TranslateAsync(
+                    request,
+                    cancellationToken);
+            }
+
+            SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.Validate(
+                request,
+                translated);
+            if (!guarded.Accepted)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"TranslateGemma phrase rejected: {guarded.Reason}");
+                return UnavailablePhraseLine(phrase.Value.Text);
+            }
+
+            if (!translated.FromCache)
+            {
+                await _smartPhraseCache.StoreAsync(
+                    request,
+                    translated,
+                    CancellationToken.None);
+            }
+
+            _phraseSetupFailureReported = false;
+            return new SmartHoverPhraseLine(
+                phrase.Value.Text,
+                guarded.Translation,
+                TranslateGemmaTranslationService.EngineLabel,
+                SmartPhraseLineStatus.Translated,
+                translated.FromCache);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // The primary dictionary result is already visible. Keeping this
+            // failure inside the optional phase prevents the outer ranker catch
+            // from escalating it into an automatic full-Qwen call.
+            LogError(exception);
+            if (!_phraseSetupFailureReported)
+            {
+                _phraseSetupFailureReported = true;
+                ReportStatus(
+                    "TranslateGemma недоступна — словарный результат сохранён без перевода фразы");
+            }
+
+            return UnavailablePhraseLine(phrase.Value.Text);
+        }
+    }
+
+    private static SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
+        SmartPhraseModelInput modelInput,
+        IReadOnlyList<string> previousContext,
+        IReadOnlyList<ScaffoldTerm> semanticTerms,
+        IReadOnlyList<ScaffoldSenseHint> senseHints,
+        IReadOnlyList<string> scaffoldProperNames) =>
+        new SmartPhraseTranslationRequest(
+            modelInput.SourcePhrase,
+            modelInput.ModelInputPhrase,
+            modelInput.TransformIdentity,
+            ExtractStableProperNames(modelInput.SourcePhrase)
+                .Concat(scaffoldProperNames)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            TranslateGemmaTranslationService.ModelIdentity,
+            TranslateGemmaTranslationService.PromptIdentity)
+        {
+            PreviousContext = previousContext,
+            SemanticTerms = semanticTerms,
+            SenseHints = senseHints
+        };
+
+    private static SmartHoverPhraseLine UnavailablePhraseLine(string source) =>
+        new(
+            source,
+            string.Empty,
+            TranslateGemmaTranslationService.EngineLabel,
+            SmartPhraseLineStatus.Unavailable,
+            FromCache: false);
+
+    internal static IReadOnlyList<string> ExtractStableProperNames(string phrase) =>
+        phrase.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Select(segment => new string(segment
+                .Where(character =>
+                    character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9')
+                .ToArray()))
+            .Where(token => token.Length >= 2)
+            .Where(IsStableProperName)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool IsStableProperName(string token)
+    {
+        bool hasUppercase = token.Any(character => character is >= 'A' and <= 'Z');
+        bool hasLowercase = token.Any(character => character is >= 'a' and <= 'z');
+        if (!hasUppercase || !hasLowercase)
+        {
+            // OCR frequently capitalizes whole UI words. Treating BANK as a
+            // name would let untranslated English through the output guard.
+            return false;
+        }
+
+        string normalized = EnglishContextLexicon.NormalizeToken(token);
+        return !EnglishContextLexicon.DefinitionStopWords.Contains(normalized) &&
+               !EnglishContextLexicon.SubjectPronouns.Contains(normalized) &&
+               !EnglishContextLexicon.AuxiliaryBe.Contains(normalized) &&
+               !EnglishContextLexicon.AuxiliaryHave.Contains(normalized) &&
+               !EnglishContextLexicon.AuxiliaryDo.Contains(normalized) &&
+               !EnglishContextLexicon.Modals.Contains(normalized) &&
+               !EnglishContextLexicon.Determiners.Contains(normalized) &&
+               !EnglishContextLexicon.Possessives.Contains(normalized);
+    }
+
     private static string FormatVisibleOutcomes(IReadOnlyList<string> translations)
     {
         const int maximumVisibleOutcomes = 8;
@@ -686,13 +923,21 @@ internal sealed class SmartHoverPipeline : IDisposable
         GlossBertRankerProvider provider,
         int distinctGroupCount,
         string modelVersion) =>
-        provider == GlossBertRankerProvider.Cpu &&
-        distinctGroupCount > 16 &&
-        modelVersion.EndsWith(
-            ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
+        modelVersion.StartsWith(
+            GlossBertDictionarySelectorService.ConsecExpectedModelVersionPrefix,
             StringComparison.Ordinal)
-            ? "bi+cross"
-            : "cross";
+            ? "consec-independent"
+            : modelVersion.StartsWith(
+                GlossBertDictionarySelectorService.SandwichExpectedModelVersionPrefix,
+                StringComparison.Ordinal)
+                ? "sandwich"
+                : provider == GlossBertRankerProvider.Cpu &&
+                  distinctGroupCount > 16 &&
+                  modelVersion.EndsWith(
+                      ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
+                      StringComparison.Ordinal)
+                    ? "bi+cross"
+                    : "cross";
 
     private string CreateDecisionKey(
         string context,
@@ -796,6 +1041,9 @@ internal sealed class SmartHoverPipeline : IDisposable
         try
         {
             _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
+            await _glossBertSelector.ConfigureCpuModelProfileAsync(
+                SemanticRankerProfileResolver.FromSettings(_settings),
+                cancellationToken);
             await _glossBertSelector.WarmUpAsync(
                 ResolveRankerProvider(backend),
                 cancellationToken);

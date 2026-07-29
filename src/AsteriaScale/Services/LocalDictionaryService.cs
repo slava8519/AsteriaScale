@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.IO.Compression;
 using System.Globalization;
+using System.Runtime;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -68,6 +69,7 @@ public sealed partial class LocalDictionaryService
     private readonly string? _senseMetadataFileOverride;
     private readonly string? _bundledDirectoryOverride;
     private readonly string? _userDirectoryOverride;
+    private readonly Action _managedMemoryRelease = ReleaseManagedDictionaryMemory;
     private Task? _loadTask;
     private Task? _trustedLoadTask;
     private Task? _senseMetadataLoadTask;
@@ -107,11 +109,13 @@ public sealed partial class LocalDictionaryService
     internal LocalDictionaryService(
         string bundledDirectoryOverride,
         string userDirectoryOverride,
-        string? senseMetadataFileOverride = null)
+        string? senseMetadataFileOverride = null,
+        Action? managedMemoryRelease = null)
     {
         _bundledDirectoryOverride = bundledDirectoryOverride;
         _userDirectoryOverride = userDirectoryOverride;
         _senseMetadataFileOverride = senseMetadataFileOverride;
+        _managedMemoryRelease = managedMemoryRelease ?? ReleaseManagedDictionaryMemory;
     }
 
     private (string BundledDirectory, string UserDirectory) ResolveDictionaryDirectories()
@@ -280,11 +284,17 @@ public sealed partial class LocalDictionaryService
         }
     }
 
-    public async Task UnloadAsync()
+    public Task UnloadAsync() => UnloadCoreAsync(releaseManagedMemory: false);
+
+    internal Task UnloadAndReleaseMemoryAsync() =>
+        UnloadCoreAsync(releaseManagedMemory: true);
+
+    private async Task UnloadCoreAsync(bool releaseManagedMemory)
     {
         Task? loadTask;
         Task? trustedLoadTask;
         Task? senseMetadataLoadTask;
+        bool releasedDictionaryState;
         lock (_loadLock)
         {
             loadTask = _loadTask;
@@ -310,6 +320,18 @@ public sealed partial class LocalDictionaryService
                 return;
             }
 
+            releasedDictionaryState =
+                _english.Count > 0 ||
+                _japanese.Count > 0 ||
+                _scaffoldEnglishTranslations.Count > 0 ||
+                _trustedEnglishExact.Count > 0 ||
+                _englishSenseMetadata.Count > 0 ||
+                _userEnglishKeys.Count > 0 ||
+                _preferredEnglishSurfaceForms.Count > 0 ||
+                _softEnglishSurfaceForms.Count > 0 ||
+                _lexicalEnglishPhrases.Count > 0 ||
+                _dialogueEnglishTranslations.Count > 0 ||
+                _dialogueJapaneseTranslations.Count > 0;
             _english = new Dictionary<string, string>(StringComparer.Ordinal);
             _japanese = new Dictionary<string, string>(StringComparer.Ordinal);
             _scaffoldEnglishTranslations = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -331,6 +353,25 @@ public sealed partial class LocalDictionaryService
             _trustedLoadTask = null;
             _senseMetadataLoadTask = null;
         }
+
+        if (releasedDictionaryState && releaseManagedMemory)
+        {
+            // Explicit mode exit is rare and follows ModelActivityGate. A
+            // compacting gen-2 collection here returns the 200+ MB dictionary
+            // segment instead of retaining it until unrelated memory pressure.
+            await Task.Run(_managedMemoryRelease);
+        }
+    }
+
+    internal static void ReleaseManagedDictionaryMemory()
+    {
+        GCSettings.LargeObjectHeapCompactionMode =
+            GCLargeObjectHeapCompactionMode.CompactOnce;
+        GC.Collect(
+            GC.MaxGeneration,
+            GCCollectionMode.Aggressive,
+            blocking: true,
+            compacting: true);
     }
 
     public async Task<DictionaryLookupResult> LookupAsync(
@@ -1757,13 +1798,15 @@ public sealed partial class LocalDictionaryService
         int length,
         string exactKey)
     {
+        string[] normalized = new string[length];
         string[] canonical = new string[length];
         for (int offset = 0; offset < length; offset++)
         {
-            canonical[offset] =
-                NormalizeEnglishPossessive(context.NormalizedTokens[start + offset]);
+            normalized[offset] = context.NormalizedTokens[start + offset];
+            canonical[offset] = NormalizeEnglishPossessive(normalized[offset]);
         }
         HashSet<string> yielded = new(StringComparer.Ordinal) { exactKey };
+        List<string[]> canonicalBases = [canonical];
 
         string possessiveNormalized = string.Join(" ", canonical);
         if (yielded.Add(possessiveNormalized))
@@ -1771,21 +1814,47 @@ public sealed partial class LocalDictionaryService
             yield return possessiveNormalized;
         }
 
+        // A small set of idioms is stored with the neutral object slot
+        // "someone" (for example "butter someone up"). Generate that slot
+        // only from closed-class object pronouns; the final candidate still
+        // has to exist in the lexical phrase inventory, so ordinary pronouns
+        // cannot manufacture arbitrary dictionary entries.
+        for (int tokenOffset = 0; tokenOffset < normalized.Length; tokenOffset++)
+        {
+            if (!IsEnglishObjectPronoun(normalized[tokenOffset]))
+            {
+                continue;
+            }
+
+            string[] personCanonical = (string[])canonical.Clone();
+            personCanonical[tokenOffset] = "someone";
+            canonicalBases.Add(personCanonical);
+            string candidate = string.Join(" ", personCanonical);
+            if (yielded.Add(candidate))
+            {
+                yield return candidate;
+            }
+        }
+
         // Keep morphology bounded: normalize one inflected token at a time on
         // top of possessive normalization. This covers lexical MWEs such as
-        // "shook her head" -> "shake one's head" without producing an
-        // exponential number of sentence guesses.
-        for (int tokenOffset = 0; tokenOffset < canonical.Length; tokenOffset++)
+        // "shook her head" -> "shake one's head" and one object slot such as
+        // "buttered him up" -> "butter someone up" without an exponential
+        // number of sentence guesses.
+        foreach (string[] canonicalBase in canonicalBases)
         {
-            foreach (string lemma in context.LemmasFor(canonical[tokenOffset]))
+            for (int tokenOffset = 0; tokenOffset < canonicalBase.Length; tokenOffset++)
             {
-                string original = canonical[tokenOffset];
-                canonical[tokenOffset] = lemma;
-                string candidate = string.Join(" ", canonical);
-                canonical[tokenOffset] = original;
-                if (yielded.Add(candidate))
+                foreach (string lemma in context.LemmasFor(canonicalBase[tokenOffset]))
                 {
-                    yield return candidate;
+                    string original = canonicalBase[tokenOffset];
+                    canonicalBase[tokenOffset] = lemma;
+                    string candidate = string.Join(" ", canonicalBase);
+                    canonicalBase[tokenOffset] = original;
+                    if (yielded.Add(candidate))
+                    {
+                        yield return candidate;
+                    }
                 }
             }
         }
@@ -1795,6 +1864,9 @@ public sealed partial class LocalDictionaryService
         value is "my" or "your" or "his" or "her" or "its" or "our" or "their"
             ? "one's"
             : value;
+
+    private static bool IsEnglishObjectPronoun(string value) =>
+        value is "me" or "you" or "him" or "her" or "us" or "them";
 
     private static bool ShouldPreferEnglishLemma(MatchCollection tokens, int tokenIndex)
     {
