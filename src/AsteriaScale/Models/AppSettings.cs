@@ -24,6 +24,7 @@ public sealed class AppSettings
     public string SmartDictionaryFallbackMode { get; set; } = SmartDictionaryFallbackModes.Never;
     public bool SmartDictionaryKeepWarm { get; set; } = true;
     public string SmartPhraseTranslationMode { get; set; } = SmartPhraseTranslationModes.Off;
+    public string SmartPhraseTranslationBackend { get; set; } = SmartPhraseTranslationBackends.Cpu;
 
     // Optional Textractor text hook (roadmap #4). Off by default: OCR stays
     // the universal path; the hook only upgrades hover context for games it
@@ -77,6 +78,11 @@ public static class HoverTranslationModes
             ? Screen
             : Neural;
     }
+
+    public static string NormalizeUserMode(string? value) =>
+        string.Equals(value, Dictionary, StringComparison.OrdinalIgnoreCase)
+            ? Dictionary
+            : Smart;
 }
 
 public static class SmartDictionaryBackends
@@ -170,6 +176,34 @@ public static class SmartPhraseTranslationModes
         string.Equals(value, TranslateGemma, StringComparison.OrdinalIgnoreCase)
             ? TranslateGemma
             : Off;
+}
+
+public static class SmartPhraseTranslationBackends
+{
+    public const string Cpu = "cpu";
+    public const string Vulkan = "vulkan";
+
+    public static string Normalize(string? value) =>
+        TryNormalize(value, out string normalized) ? normalized : Cpu;
+
+    public static bool TryNormalize(string? value, out string normalized)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            string.Equals(value, Cpu, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = Cpu;
+            return true;
+        }
+
+        if (string.Equals(value, Vulkan, StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = Vulkan;
+            return true;
+        }
+
+        normalized = Cpu;
+        return false;
+    }
 }
 
 public sealed class AutomationProfile : INotifyPropertyChanged

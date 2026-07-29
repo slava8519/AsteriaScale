@@ -90,7 +90,8 @@
                     Margin="0,8,0,0" Padding="0,7,0,0"
                     BorderBrush="#D8CEBA" BorderThickness="0,1,0,0">
                 <StackPanel>
-                    <TextBlock Text="Фраза · TG4B" Foreground="#5F7A54"
+                    <TextBlock x:Name="PhraseEngineText" Text="Фраза · TG4B"
+                               Foreground="#5F7A54"
                                FontSize="9.5" FontWeight="SemiBold" />
                     <TextBlock x:Name="PhraseTranslationText" Margin="0,3,0,0"
                                TextWrapping="Wrap" TextTrimming="CharacterEllipsis"

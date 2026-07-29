@@ -53,7 +53,8 @@ internal sealed class SmartHoverPipeline : IDisposable
     private readonly GlossBertDecisionCache _decisionCache;
     private readonly ISmartPhraseTranslator? _smartPhraseTranslator;
     private readonly SmartPhraseTranslationCache? _smartPhraseCache;
-    private readonly TranslationScaffoldBuilder _phraseScaffoldBuilder;
+    private readonly TranslationScaffoldBuilder _phraseSemanticScaffoldBuilder;
+    private readonly TranslationScaffoldBuilder _phraseDeterministicScaffoldBuilder;
     private readonly Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> _translateFallback;
     private readonly Action<string> _reportStatus;
     private readonly Action<string, NativeMethods.Point> _onDemandFallbackObserved;
@@ -71,7 +72,8 @@ internal sealed class SmartHoverPipeline : IDisposable
         Action<string> reportStatus,
         Action<string, NativeMethods.Point> onDemandFallbackObserved,
         ISmartPhraseTranslator? smartPhraseTranslator = null,
-        SmartPhraseTranslationCache? smartPhraseCache = null)
+        SmartPhraseTranslationCache? smartPhraseCache = null,
+        TranslationScaffoldNeuralRanker? phraseNeuralRanker = null)
     {
         _settings = settings;
         _dictionary = dictionary;
@@ -80,11 +82,12 @@ internal sealed class SmartHoverPipeline : IDisposable
         _decisionCache = decisionCache;
         _smartPhraseTranslator = smartPhraseTranslator;
         _smartPhraseCache = smartPhraseCache;
-        // The hovered target has already paid for any GlossBERT decision. The
-        // sentence scaffold therefore adds deterministic user/VN/MWE anchors
-        // only; re-ranking every other token would add up to twelve serial
-        // worker calls to an optional second line.
-        _phraseScaffoldBuilder = new TranslationScaffoldBuilder(dictionary);
+        _phraseSemanticScaffoldBuilder = new TranslationScaffoldBuilder(
+            dictionary,
+            phraseNeuralRanker);
+        // Idiom rewrites are synthetic English. Their mandatory anchors still
+        // belong to the model input, while WSD must see the original sentence.
+        _phraseDeterministicScaffoldBuilder = new TranslationScaffoldBuilder(dictionary);
         _translateFallback = translateFallback;
         _reportStatus = reportStatus;
         _onDemandFallbackObserved = onDemandFallbackObserved;
@@ -689,11 +692,16 @@ internal sealed class SmartHoverPipeline : IDisposable
             return null;
         }
 
+        // Settings can change while the optional generation is in flight.
+        // One request must keep one backend identity and label throughout;
+        // the facade cancels/restarts the runtime separately.
+        TranslateGemmaExecutionBackend phraseBackend = PhraseBackend;
+
         SmartPhraseContext? phrase = SmartPhraseContextBuilder.Build(
             recognized.Text,
             recognized.HoveredWord,
             recognized.CharacterIndex);
-        if (phrase is null || !phrase.Value.Text.Any(char.IsWhiteSpace))
+        if (phrase is null)
         {
             return null;
         }
@@ -702,32 +710,51 @@ internal sealed class SmartHoverPipeline : IDisposable
             phrase.Value.Text,
             recognized.HoveredWord,
             phrase.Value.CharacterIndex);
-        TranslationScaffold scaffold = await _phraseScaffoldBuilder.BuildAsync(
-            modelInput.ModelInputPhrase,
-            cancellationToken);
-        IReadOnlyList<ScaffoldSenseHint> senseHints = scaffold.SenseHints
-            .Concat(dictionaryResult.SelectedSenseHints)
-            .GroupBy(
-                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
-            .Select(group => group.Last())
+        IReadOnlyCollection<string> preResolvedNeuralSources = new[]
+            {
+                recognized.HoveredWord,
+                dictionaryResult.Source
+            }
+            .Concat(dictionaryResult.SelectedSenseHints.Select(hint => hint.Source))
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
+        TranslationScaffold semanticScaffold =
+            await _phraseSemanticScaffoldBuilder.BuildAsync(
+                modelInput.SourcePhrase,
+                neuralSession: null,
+                cancellationToken: cancellationToken,
+                preResolvedNeuralSources: preResolvedNeuralSources);
+        TranslationScaffold modelScaffold =
+            string.Equals(
+                modelInput.TransformIdentity,
+                SmartPhraseIdiomRewriter.NoTransformIdentity,
+                StringComparison.Ordinal)
+                ? semanticScaffold
+                : await _phraseDeterministicScaffoldBuilder.BuildAsync(
+                    modelInput.ModelInputPhrase,
+                    cancellationToken);
+        IReadOnlyList<ScaffoldSenseHint> senseHints = MergePhraseSenseHints(
+            semanticScaffold.SenseHints,
+            dictionaryResult.SelectedSenseHints);
         SmartPhraseTranslationRequest request = CreatePhraseTranslationRequest(
             modelInput,
             recognized.PreviousContext,
-            scaffold.Terms,
+            modelScaffold.Terms,
             senseHints,
-            scaffold.ProperNames);
+            modelScaffold.ProperNames,
+            phraseBackend);
         if (SmartPhraseTranslationGuard.ValidateRequest(request) !=
             SmartPhraseRejectionReason.None)
         {
-            return UnavailablePhraseLine(phrase.Value.Text);
+            return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
         }
         try
         {
             // A phrase-cache hit may skip generation, never artifact/provider
             // validation: otherwise replacing the GGUF could keep serving an
             // answer that claims the pinned model identity.
-            await _smartPhraseTranslator.PrepareAsync(cancellationToken);
+            await _smartPhraseTranslator.PrepareAsync(request, cancellationToken);
             SmartPhraseTranslationResult? translated =
                 await _smartPhraseCache.TryGetAsync(request, cancellationToken);
             if (translated is null)
@@ -744,7 +771,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             {
                 System.Diagnostics.Debug.WriteLine(
                     $"TranslateGemma phrase rejected: {guarded.Reason}");
-                return UnavailablePhraseLine(phrase.Value.Text);
+                return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
             }
 
             if (!translated.FromCache)
@@ -759,7 +786,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             return new SmartHoverPhraseLine(
                 phrase.Value.Text,
                 guarded.Translation,
-                TranslateGemmaTranslationService.EngineLabel,
+                TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
                 SmartPhraseLineStatus.Translated,
                 translated.FromCache);
         }
@@ -780,20 +807,49 @@ internal sealed class SmartHoverPipeline : IDisposable
                     "TranslateGemma недоступна — словарный результат сохранён без перевода фразы");
             }
 
-            return UnavailablePhraseLine(phrase.Value.Text);
+            return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
         }
+    }
+
+    private static IReadOnlyList<ScaffoldSenseHint> MergePhraseSenseHints(
+        IReadOnlyList<ScaffoldSenseHint> sentenceHints,
+        IReadOnlyList<ScaffoldSenseHint> hoveredHints)
+    {
+        ScaffoldSenseHint[] distinctHoveredHints = hoveredHints
+            .GroupBy(
+                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+            .Select(group => group.Last())
+            .Take(TranslationScaffoldBuilder.MaximumSenseHintCount)
+            .ToArray();
+        HashSet<(string Source, string Definition, string Translation)> hoveredKeys =
+            distinctHoveredHints
+                .Select(hint =>
+                    (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+                .ToHashSet();
+        int sentenceCapacity = TranslationScaffoldBuilder.MaximumSenseHintCount -
+                               distinctHoveredHints.Length;
+        return sentenceHints
+            .Where(hint => !hoveredKeys.Contains(
+                (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation)))
+            .GroupBy(
+                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+            .Select(group => group.Last())
+            .Take(sentenceCapacity)
+            .Concat(distinctHoveredHints)
+            .ToArray();
     }
 
     internal static bool HasReliablePhraseContext(HoverOcrResult recognized) =>
         recognized.TextSource == HoverTextSource.TextHook ||
         recognized.IsSentenceContextStable;
 
-    private static SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
+    private SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
         SmartPhraseModelInput modelInput,
         IReadOnlyList<string> previousContext,
         IReadOnlyList<ScaffoldTerm> semanticTerms,
         IReadOnlyList<ScaffoldSenseHint> senseHints,
-        IReadOnlyList<string> scaffoldProperNames) =>
+        IReadOnlyList<string> scaffoldProperNames,
+        TranslateGemmaExecutionBackend phraseBackend) =>
         new SmartPhraseTranslationRequest(
             modelInput.SourcePhrase,
             modelInput.ModelInputPhrase,
@@ -802,7 +858,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 .Concat(scaffoldProperNames)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray(),
-            TranslateGemmaTranslationService.ModelIdentity,
+            TranslateGemmaTranslationService.GetModelIdentity(phraseBackend),
             TranslateGemmaTranslationService.PromptIdentity)
         {
             PreviousContext = previousContext,
@@ -810,13 +866,19 @@ internal sealed class SmartHoverPipeline : IDisposable
             SenseHints = senseHints
         };
 
-    private static SmartHoverPhraseLine UnavailablePhraseLine(string source) =>
+    private static SmartHoverPhraseLine UnavailablePhraseLine(
+        string source,
+        TranslateGemmaExecutionBackend phraseBackend) =>
         new(
             source,
             string.Empty,
-            TranslateGemmaTranslationService.EngineLabel,
+            TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
             SmartPhraseLineStatus.Unavailable,
             FromCache: false);
+
+    private TranslateGemmaExecutionBackend PhraseBackend =>
+        TranslateGemmaTranslationService.ResolveBackend(
+            _settings.SmartPhraseTranslationBackend);
 
     internal static IReadOnlyList<string> ExtractStableProperNames(string phrase) =>
         phrase.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)

@@ -14,6 +14,7 @@ internal enum SmartPhraseRejectionReason
     PromptEcho,
     Explanation,
     NonRussian,
+    StructuralMismatch,
     ResidualEnglish,
     SemanticTermMissing,
     SenseConflict
@@ -106,6 +107,11 @@ internal static partial class SmartPhraseTranslationGuard
             return Reject(SmartPhraseRejectionReason.NonRussian);
         }
 
+        if (HasStructuralMismatch(sourcePhrase, translation))
+        {
+            return Reject(SmartPhraseRejectionReason.StructuralMismatch);
+        }
+
         HashSet<string> allowedProperNameTokens = request.ProperNames
             .SelectMany(name => AsciiWordRegex().Matches(name).Cast<Match>())
             .Select(match => match.Value)
@@ -154,8 +160,8 @@ internal static partial class SmartPhraseTranslationGuard
     {
         if (string.IsNullOrWhiteSpace(request.SourcePhrase) ||
             string.IsNullOrWhiteSpace(request.ModelInputPhrase) ||
-            sourceWordCount is < 2 or > SmartPhraseContextBuilder.MaximumWords ||
-            modelInputWordCount is < 2 or > SmartPhraseContextBuilder.MaximumWords ||
+            sourceWordCount is < 1 or > SmartPhraseContextBuilder.MaximumWords ||
+            modelInputWordCount is < 1 or > SmartPhraseContextBuilder.MaximumWords ||
             string.IsNullOrWhiteSpace(request.TransformIdentity) ||
             request.TransformIdentity.Length > 128 ||
             request.TransformIdentity.Any(character => char.IsControl(character)) ||
@@ -295,6 +301,119 @@ internal static partial class SmartPhraseTranslationGuard
         return false;
     }
 
+    private static bool HasStructuralMismatch(string source, string translation)
+    {
+        string normalizedSource = source.Trim();
+        string normalizedTranslation = translation.Trim();
+        if (!StartsWithEllipsis(normalizedSource) &&
+            StartsWithEllipsis(normalizedTranslation))
+        {
+            return true;
+        }
+
+        if (!LeadingSpeakerPrefixRegex().IsMatch(normalizedSource) &&
+            LeadingSpeakerPrefixRegex().IsMatch(normalizedTranslation))
+        {
+            return true;
+        }
+
+        if (!HasOuterQuoteWrapper(normalizedSource) &&
+            HasOuterQuoteWrapper(normalizedTranslation))
+        {
+            return true;
+        }
+
+        string[] outputAsciiTokens = AsciiWordRegex().Matches(normalizedTranslation)
+            .Cast<Match>()
+            .Select(match => match.Value)
+            .ToArray();
+        IEnumerable<Match> quotedSpans = SingleQuotedAsciiSpanRegex()
+            .Matches(normalizedSource)
+            .Cast<Match>()
+            .Concat(DoubleQuotedAsciiSpanRegex().Matches(normalizedSource).Cast<Match>());
+        foreach (Match quoted in quotedSpans)
+        {
+            if (quoted.Index == 0 && quoted.Length == normalizedSource.Length)
+            {
+                // Dialogue wrappers are punctuation, not atomic English
+                // wordplay. Nested quotes are enumerated independently.
+                continue;
+            }
+
+            string[] quotedTokens = AsciiWordRegex().Matches(quoted.Groups["content"].Value)
+                .Cast<Match>()
+                .Select(match => match.Value)
+                .ToArray();
+            if (quotedTokens.Length is < 1 or > 6 ||
+                !quotedTokens.Any(sourceToken => outputAsciiTokens.Contains(
+                    sourceToken,
+                    StringComparer.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            if (!ContainsOrderedTokenSequence(outputAsciiTokens, quotedTokens))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ContainsOrderedTokenSequence(
+        IReadOnlyList<string> haystack,
+        IReadOnlyList<string> needle)
+    {
+        if (needle.Count == 0 || haystack.Count < needle.Count)
+        {
+            return false;
+        }
+
+        for (int start = 0; start <= haystack.Count - needle.Count; start++)
+        {
+            bool matches = true;
+            for (int index = 0; index < needle.Count; index++)
+            {
+                if (string.Equals(
+                        haystack[start + index],
+                        needle[index],
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                matches = false;
+                break;
+            }
+
+            if (matches)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool StartsWithEllipsis(string value) =>
+        value.StartsWith("...", StringComparison.Ordinal) ||
+        value.StartsWith('\u2026');
+
+    private static bool HasOuterQuoteWrapper(string value)
+    {
+        if (value.Length < 2)
+        {
+            return false;
+        }
+
+        return (value[0], value[^1]) is
+            ('"', '"') or
+            ('\'', '\'') or
+            ('\u201c', '\u201d') or
+            ('\u00ab', '\u00bb');
+    }
+
     private static SmartPhraseGuardResult Reject(SmartPhraseRejectionReason reason) =>
         new(false, string.Empty, reason);
 
@@ -326,6 +445,21 @@ internal static partial class SmartPhraseTranslationGuard
         @"^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+",
         RegexOptions.CultureInvariant)]
     private static partial Regex LeadingListMarkerRegex();
+
+    [GeneratedRegex(
+        """^\s*["'\u00ab\u201c]?\s*(?:\[[^\]\r\n]{1,48}\]\s*|[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}(?:\s+[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}){0,2}\s*:\s*)""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex LeadingSpeakerPrefixRegex();
+
+    [GeneratedRegex(
+        """(?<![A-Za-z])'(?<content>[^'\r\n]{1,96})'(?![A-Za-z])""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex SingleQuotedAsciiSpanRegex();
+
+    [GeneratedRegex(
+        """"(?<content>[^"\r\n]{1,96})"""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex DoubleQuotedAsciiSpanRegex();
 
     [GeneratedRegex(
         @"^\s*(?:\u043f\u0435\u0440\u0435\u0432\u043e\u0434(?:\s+\u0444\u0440\u0430\u0437\u044b)?|translation|russian)\s*[:\-\u2014]\s*",

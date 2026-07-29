@@ -250,6 +250,7 @@ public partial class HoverTranslationOverlay : Window
         if (phraseLine is null)
         {
             PhrasePanel.Visibility = Visibility.Collapsed;
+            PhraseEngineText.Text = "Фраза · TG4B";
             PhraseTranslationText.Text = string.Empty;
             return string.Empty;
         }
@@ -260,6 +261,11 @@ public partial class HoverTranslationOverlay : Window
         string displayText = translated
             ? phraseLine.Translation.Trim()
             : "Перевод фразы недоступен";
+        PhraseEngineText.Text = phraseLine.Engine.Contains(
+            "VULKAN",
+            StringComparison.Ordinal)
+                ? "Фраза · TG4B · GPU"
+                : "Фраза · TG4B · CPU";
         PhraseTranslationText.Text = displayText;
         PhraseTranslationText.FontSize = translated ? 14.5 : 11.5;
         PhraseTranslationText.FontWeight = translated

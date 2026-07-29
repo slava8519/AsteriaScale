@@ -24,11 +24,17 @@ if (-not $AcceptGemmaTerms) {
     }
 }
 
-$runner = [ordered]@{
+$cpuRunner = [ordered]@{
     Name = 'llama-b9632-bin-win-cpu-x64.zip'
     Url = 'https://github.com/ggml-org/llama.cpp/releases/download/b9632/llama-b9632-bin-win-cpu-x64.zip'
     Size = 16899258L
     Sha256 = 'b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd'
+}
+$vulkanRunner = [ordered]@{
+    Name = 'llama-b9632-bin-win-vulkan-x64.zip'
+    Url = 'https://github.com/ggml-org/llama.cpp/releases/download/b9632/llama-b9632-bin-win-vulkan-x64.zip'
+    Size = 38545553L
+    Sha256 = '90b914ff48167370190477ff3f54fd2c4eb034a305b943913eaa310eda78793d'
 }
 $model = [ordered]@{
     Name = 'translategemma-4b-it.Q4_K_M.gguf'
@@ -220,7 +226,7 @@ try {
     $client = [Net.Http.HttpClient]::new($handler)
     $client.Timeout = [TimeSpan]::FromHours(6)
 
-    foreach ($artifact in @($license, $runner, $model)) {
+    foreach ($artifact in @($license, $cpuRunner, $vulkanRunner, $model)) {
         Receive-PinnedFile `
             -Client $client `
             -Artifact $artifact `
@@ -240,12 +246,15 @@ try {
     }
 
     $manifest = [ordered]@{
-        schemaVersion = 2
+        schemaVersion = 3
         acceptedUtc = [DateTimeOffset]::UtcNow.ToString('O')
         termsUrl = $termsUrl
         prohibitedUsePolicyUrl = $policyUrl
         model = $model
-        runner = $runner
+        runners = [ordered]@{
+            cpu = $cpuRunner
+            vulkan = $vulkanRunner
+        }
         license = $license
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content `
@@ -263,4 +272,6 @@ finally {
 
 Write-Host ''
 Write-Host 'TranslateGemma 4B установлена и проверена.' -ForegroundColor Green
-Write-Host 'В Asteria выберите: Умный словарь → Перевод фразы второй строкой → TranslateGemma 4B.'
+Write-Host 'Установлены оба закреплённых runtime: CPU и Vulkan GPU.'
+Write-Host 'В Asteria выберите: Умный словарь → Перевод фразы второй строкой → TranslateGemma 4B,'
+Write-Host 'затем явно выберите ускоритель CPU или Vulkan GPU.'

@@ -15,7 +15,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
     private readonly SmartDictionaryResultCache _smartResultCache = new();
     private readonly SmartPhraseTranslationCache _smartPhraseCache = new();
-    private readonly TranslateGemmaTranslationService _translateGemma = new();
+    private readonly TranslateGemmaTranslationService _translateGemma;
     // Shared by the hover pipeline and the full-text scaffold: both ask the
     // worker the same question, so neither may pay for the other's inference.
     private readonly GlossBertDecisionCache _decisionCache = new();
@@ -55,6 +55,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
     public HoverTranslationService(AppSettings settings, Func<bool>? isScaling = null)
     {
         _settings = settings;
+        _translateGemma = new TranslateGemmaTranslationService(
+            backendResolver: () => TranslateGemmaTranslationService.ResolveBackend(
+                _settings.SmartPhraseTranslationBackend));
         _ = isScaling; // Kept for source compatibility with existing callers.
         RankerCpuModelProfile initialRankerProfile =
             SemanticRankerProfileResolver.FromSettings(settings);
@@ -92,7 +95,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
             (text, cursor) => _lastSmartFallbackRequest =
                 new SmartFallbackRequest(text, cursor, DateTime.UtcNow),
             _translateGemma,
-            _smartPhraseCache);
+            _smartPhraseCache,
+            _scaffoldGlossBertRanker.RankAsync);
         _screenFlow = new ScreenTranslationFlow(
             _ocr,
             _translator,
@@ -560,12 +564,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
             return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}";
         }
 
+        string phraseBackend = TranslateGemmaTranslationService.ResolveBackend(
+                _settings.SmartPhraseTranslationBackend) ==
+            TranslateGemmaExecutionBackend.Vulkan
+                ? "Vulkan GPU"
+                : "CPU";
         string phrase = _settings.SmartDictionaryKeepWarm switch
         {
-            true when _translateGemmaReady == true => "TranslateGemma 4B прогрета",
+            true when _translateGemmaReady == true =>
+                $"TranslateGemma 4B прогрета на {phraseBackend}",
             true when _translateGemmaReady == false =>
-                "TranslateGemma 4B не установлена; словарный результат остаётся рабочим",
-            _ => "TranslateGemma 4B загрузится по требованию"
+                $"TranslateGemma 4B ({phraseBackend}) недоступна; словарный результат остаётся рабочим",
+            _ => $"TranslateGemma 4B загрузится по требованию на {phraseBackend}"
         };
         return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}; {phrase}";
     }

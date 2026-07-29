@@ -9,14 +9,21 @@ using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using AsteriaScale.Models;
 
 namespace AsteriaScale.Services;
 
+internal enum TranslateGemmaExecutionBackend
+{
+    Cpu,
+    Vulkan
+}
+
 /// <summary>
-/// Owns an isolated, CPU-only llama.cpp process for the pinned TranslateGemma
-/// experiment. Artifact acquisition is deliberately outside this service: a
-/// missing or changed binary is an explicit setup error, never a network side
-/// effect or a silent model substitution.
+/// Owns an isolated llama.cpp process for the pinned TranslateGemma experiment.
+/// Artifact acquisition is deliberately outside this service: a missing or
+/// changed binary is an explicit setup error, never a network side effect or a
+/// silent model/backend substitution.
 /// </summary>
 internal sealed class TranslateGemmaTranslationService :
     ISmartPhraseTranslator,
@@ -27,14 +34,23 @@ internal sealed class TranslateGemmaTranslationService :
         "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-cpu";
+    public const string VulkanModelIdentity =
+        "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
+        "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
+        ModelSha256 + "/llama.cpp-b9632-vulkan-full";
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
-    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v1";
-    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v2";
+    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v2";
+    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v3";
     public const string RunnerBuild = "b9632";
     public const string RunnerArchiveFileName = "llama-b9632-bin-win-cpu-x64.zip";
     public const string RunnerArchiveSha256 =
         "b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd";
     public const long RunnerArchiveSize = 16_899_258;
+    public const string VulkanRunnerArchiveFileName =
+        "llama-b9632-bin-win-vulkan-x64.zip";
+    public const string VulkanRunnerArchiveSha256 =
+        "90b914ff48167370190477ff3f54fd2c4eb034a305b943913eaa310eda78793d";
+    public const long VulkanRunnerArchiveSize = 38_545_553;
     public const string ModelSha256 =
         "81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330";
     public const long ModelSize = 2_489_909_760;
@@ -48,6 +64,7 @@ internal sealed class TranslateGemmaTranslationService :
     private static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(90);
     private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StartupEvidenceTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RuntimeDeleteInitialDelay = TimeSpan.FromMilliseconds(25);
     // App.xaml acquires the single-instance mutex before constructing this
     // service. Exact generated names can therefore be swept immediately; a
@@ -67,6 +84,7 @@ internal sealed class TranslateGemmaTranslationService :
     private readonly string _ollamaModelsRoot;
     private readonly TimeSpan _startupTimeout;
     private readonly TimeSpan _requestTimeout;
+    private readonly Func<TranslateGemmaExecutionBackend> _backendResolver;
     private readonly ProcessLogTail _processLog = new();
 
     private Process? _server;
@@ -75,14 +93,19 @@ internal sealed class TranslateGemmaTranslationService :
     private Uri? _endpoint;
     private string? _apiKey;
     private string? _runtimeDirectory;
+    private TranslateGemmaExecutionBackend? _activeBackend;
+    private string? _activeModelIdentity;
+    private VulkanStartupEvidenceTracker? _startupEvidence;
     private bool _disposed;
 
-    public TranslateGemmaTranslationService()
+    public TranslateGemmaTranslationService(
+        Func<TranslateGemmaExecutionBackend>? backendResolver = null)
         : this(
             ResolveDefaultModelRoot(),
             ResolveDefaultOllamaModelsRoot(),
             DefaultStartupTimeout,
-            DefaultRequestTimeout)
+            DefaultRequestTimeout,
+            backendResolver: backendResolver)
     {
     }
 
@@ -91,7 +114,8 @@ internal sealed class TranslateGemmaTranslationService :
         string ollamaModelsRoot,
         TimeSpan startupTimeout,
         TimeSpan requestTimeout,
-        HttpMessageHandler? handler = null)
+        HttpMessageHandler? handler = null,
+        Func<TranslateGemmaExecutionBackend>? backendResolver = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ollamaModelsRoot);
@@ -109,6 +133,7 @@ internal sealed class TranslateGemmaTranslationService :
         _ollamaModelsRoot = Path.GetFullPath(ollamaModelsRoot);
         _startupTimeout = startupTimeout;
         _requestTimeout = requestTimeout;
+        _backendResolver = backendResolver ?? (static () => TranslateGemmaExecutionBackend.Cpu);
         _httpClient = handler is null
             ? new HttpClient(new SocketsHttpHandler
             {
@@ -125,7 +150,10 @@ internal sealed class TranslateGemmaTranslationService :
         get
         {
             Process? server = _server;
-            if (_endpoint is null || server is null)
+            if (_endpoint is null ||
+                server is null ||
+                _activeBackend is null ||
+                _activeModelIdentity is null)
             {
                 return false;
             }
@@ -145,17 +173,128 @@ internal sealed class TranslateGemmaTranslationService :
         }
     }
 
-    Task ISmartPhraseTranslator.PrepareAsync(CancellationToken cancellationToken) =>
-        WarmUpAsync(cancellationToken);
+    internal TranslateGemmaExecutionBackend? ActiveBackend => _activeBackend;
+
+    internal string RequestedModelIdentity =>
+        GetModelIdentity(ResolveRequestedBackend());
+
+    internal static TranslateGemmaExecutionBackend ResolveBackend(string? settingsValue)
+    {
+        if (string.IsNullOrWhiteSpace(settingsValue) ||
+            string.Equals(
+                settingsValue,
+                SmartPhraseTranslationBackends.Cpu,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return TranslateGemmaExecutionBackend.Cpu;
+        }
+
+        if (string.Equals(
+                settingsValue,
+                SmartPhraseTranslationBackends.Vulkan,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return TranslateGemmaExecutionBackend.Vulkan;
+        }
+
+        throw new InvalidOperationException(
+            $"Неизвестный backend TranslateGemma: {settingsValue}.");
+    }
+
+    internal static TranslateGemmaExecutionBackend ResolveBackendIdentity(
+        string modelIdentity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
+        if (string.Equals(modelIdentity, ModelIdentity, StringComparison.Ordinal))
+        {
+            return TranslateGemmaExecutionBackend.Cpu;
+        }
+
+        if (string.Equals(modelIdentity, VulkanModelIdentity, StringComparison.Ordinal))
+        {
+            return TranslateGemmaExecutionBackend.Vulkan;
+        }
+
+        throw new InvalidOperationException(
+            $"TranslateGemma не поддерживает model identity {modelIdentity}.");
+    }
+
+    internal static string GetModelIdentity(TranslateGemmaExecutionBackend backend) => backend switch
+    {
+        TranslateGemmaExecutionBackend.Cpu => ModelIdentity,
+        TranslateGemmaExecutionBackend.Vulkan => VulkanModelIdentity,
+        _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+    };
+
+    internal static string GetEngineLabel(TranslateGemmaExecutionBackend backend) => backend switch
+    {
+        TranslateGemmaExecutionBackend.Cpu => EngineLabel + "  •  CPU",
+        TranslateGemmaExecutionBackend.Vulkan => EngineLabel + "  •  VULKAN",
+        _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+    };
+
+    private TranslateGemmaExecutionBackend ResolveRequestedBackend()
+    {
+        TranslateGemmaExecutionBackend backend = _backendResolver();
+        return Enum.IsDefined(backend)
+            ? backend
+            : throw new InvalidOperationException(
+                $"Неизвестный backend TranslateGemma: {(int)backend}.");
+    }
+
+    private bool IsWarmFor(TranslateGemmaExecutionBackend backend) =>
+        IsWarm &&
+        _activeBackend == backend &&
+        string.Equals(
+            _activeModelIdentity,
+            GetModelIdentity(backend),
+            StringComparison.Ordinal);
+
+    private void EnsureActiveBackend(
+        TranslateGemmaExecutionBackend backend,
+        string modelIdentity)
+    {
+        if (_activeBackend != backend ||
+            !string.Equals(_activeModelIdentity, modelIdentity, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"TranslateGemma runtime не подтверждает backend {backend} и identity {modelIdentity}.");
+        }
+    }
+
+    private void ResetActiveBackend()
+    {
+        _activeBackend = null;
+        _activeModelIdentity = null;
+        _startupEvidence = null;
+    }
+
+    Task ISmartPhraseTranslator.PrepareAsync(
+        SmartPhraseTranslationRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return WarmUpAsync(
+            ResolveBackendIdentity(request.ModelIdentity),
+            cancellationToken);
+    }
 
     /// <summary>
-    /// Validates both pinned artifacts, extracts the verified CPU runner to an
-    /// owned directory, starts the server and waits until model loading ends.
+    /// Validates both pinned artifacts, extracts the explicitly selected runner
+    /// to an owned directory, starts the server and verifies its backend.
     /// </summary>
     public async Task WarmUpAsync(CancellationToken cancellationToken = default)
     {
+        TranslateGemmaExecutionBackend backend = ResolveRequestedBackend();
+        await WarmUpAsync(backend, cancellationToken);
+    }
+
+    private async Task WarmUpAsync(
+        TranslateGemmaExecutionBackend backend,
+        CancellationToken cancellationToken)
+    {
         ThrowIfDisposed();
-        if (IsWarm)
+        if (IsWarmFor(backend))
         {
             return;
         }
@@ -163,54 +302,68 @@ internal sealed class TranslateGemmaTranslationService :
         await _lifecycleLock.WaitAsync(cancellationToken);
         try
         {
-            ThrowIfDisposed();
-            if (IsWarm)
-            {
-                return;
-            }
-
-            await StopAndCleanupOwnedRuntimeAsync();
-
-            using CancellationTokenSource startup =
-                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            startup.CancelAfter(_startupTimeout);
+            // Backend replacement owns both locks in the same order as
+            // UnloadAsync. A new warm-up must never kill the server beneath an
+            // in-flight completion from the previous backend.
+            await _requestLock.WaitAsync(cancellationToken);
             try
             {
-                RuntimeArtifacts artifacts = await PrepareArtifactsAsync(startup.Token);
-                _runtimeDirectory = artifacts.RuntimeDirectory;
-                StartServer(artifacts);
-                await WaitForHealthAsync(startup.Token);
-            }
-            catch (OperationCanceledException cancellationFailure)
-                when (cancellationToken.IsCancellationRequested)
-            {
-                IReadOnlyList<Exception> cleanupFailures =
-                    await CollectCleanupErrorsAsync(
-                        StopOwnedServerAsync,
-                        CleanupRuntimeDirectoriesAsync);
-                foreach (Exception cleanupFailure in cleanupFailures)
+                ThrowIfDisposed();
+                if (IsWarmFor(backend))
                 {
-                    _processLog.Append(
-                        "cleanup",
-                        cleanupFailure.GetType().Name + ": " + cleanupFailure.Message);
+                    return;
                 }
 
-                ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
-                throw;
+                await StopAndCleanupOwnedRuntimeAsync();
+
+                using CancellationTokenSource startup =
+                    CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                startup.CancelAfter(_startupTimeout);
+                try
+                {
+                    RuntimeArtifacts artifacts = await PrepareArtifactsAsync(backend, startup.Token);
+                    _runtimeDirectory = artifacts.RuntimeDirectory;
+                    StartServer(artifacts);
+                    await WaitForHealthAsync(startup.Token);
+                    await WaitForStartupEvidenceAsync(backend, startup.Token);
+                    _activeBackend = backend;
+                    _activeModelIdentity = GetModelIdentity(backend);
+                }
+                catch (OperationCanceledException cancellationFailure)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    IReadOnlyList<Exception> cleanupFailures =
+                        await CollectCleanupErrorsAsync(
+                            StopOwnedServerAsync,
+                            CleanupRuntimeDirectoriesAsync);
+                    foreach (Exception cleanupFailure in cleanupFailures)
+                    {
+                        _processLog.Append(
+                            "cleanup",
+                            cleanupFailure.GetType().Name + ": " + cleanupFailure.Message);
+                    }
+
+                    ExceptionDispatchInfo.Capture(cancellationFailure).Throw();
+                    throw;
+                }
+                catch (OperationCanceledException cancellationFailure)
+                {
+                    TimeoutException timeoutFailure = new(
+                        $"TranslateGemma не запустилась за {_startupTimeout.TotalSeconds:0} с. " +
+                        ProcessFailureSuffix(),
+                        cancellationFailure);
+                    await ThrowStartupFailureAfterCleanupAsync(timeoutFailure);
+                    throw;
+                }
+                catch (Exception startupFailure)
+                {
+                    await ThrowStartupFailureAfterCleanupAsync(startupFailure);
+                    throw;
+                }
             }
-            catch (OperationCanceledException cancellationFailure)
+            finally
             {
-                TimeoutException timeoutFailure = new(
-                    $"TranslateGemma не запустилась за {_startupTimeout.TotalSeconds:0} с. " +
-                    ProcessFailureSuffix(),
-                    cancellationFailure);
-                await ThrowStartupFailureAfterCleanupAsync(timeoutFailure);
-                throw;
-            }
-            catch (Exception startupFailure)
-            {
-                await ThrowStartupFailureAfterCleanupAsync(startupFailure);
-                throw;
+                _requestLock.Release();
             }
         }
         finally
@@ -229,12 +382,15 @@ internal sealed class TranslateGemmaTranslationService :
         CancellationToken cancellationToken = default)
     {
         string source = NormalizeSource(phrase);
-        await WarmUpAsync(cancellationToken);
+        TranslateGemmaExecutionBackend backend = ResolveRequestedBackend();
+        string modelIdentity = GetModelIdentity(backend);
+        await WarmUpAsync(backend, cancellationToken);
 
         await _requestLock.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
+            EnsureActiveBackend(backend, modelIdentity);
             Uri endpoint = _endpoint ??
                 throw new InvalidOperationException("TranslateGemma не прогрета.");
             string apiKey = _apiKey ??
@@ -290,11 +446,9 @@ internal sealed class TranslateGemmaTranslationService :
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (!string.Equals(request.ModelIdentity, ModelIdentity, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Запрошена модель {request.ModelIdentity}, но runtime закреплён за {ModelIdentity}.");
-        }
+        TranslateGemmaExecutionBackend backend =
+            ResolveBackendIdentity(request.ModelIdentity);
+        string modelIdentity = GetModelIdentity(backend);
 
         if (!string.Equals(request.PromptVersion, PromptIdentity, StringComparison.Ordinal))
         {
@@ -311,13 +465,14 @@ internal sealed class TranslateGemmaTranslationService :
         }
 
         string source = NormalizeSource(request.ModelInputPhrase);
-        await WarmUpAsync(cancellationToken);
+        await WarmUpAsync(backend, cancellationToken);
         long started = Stopwatch.GetTimestamp();
         string translation;
         await _requestLock.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
+            EnsureActiveBackend(backend, modelIdentity);
             Uri endpoint = _endpoint ??
                 throw new InvalidOperationException("TranslateGemma is not warmed up.");
             string apiKey = _apiKey ??
@@ -335,7 +490,7 @@ internal sealed class TranslateGemmaTranslationService :
                 request,
                 new SmartPhraseTranslationResult(
                     direct,
-                    ModelIdentity,
+                    modelIdentity,
                     ElapsedMilliseconds: 0));
             translation = directGuard.Accepted
                 ? directGuard.Translation
@@ -356,7 +511,7 @@ internal sealed class TranslateGemmaTranslationService :
                             request,
                             new SmartPhraseTranslationResult(
                                 corrected,
-                                ModelIdentity,
+                                modelIdentity,
                                 ElapsedMilliseconds: 0));
                     if (correctedGuard.Accepted)
                     {
@@ -399,7 +554,7 @@ internal sealed class TranslateGemmaTranslationService :
             MidpointRounding.AwayFromZero);
         return new SmartPhraseTranslationResult(
             translation,
-            ModelIdentity,
+            modelIdentity,
             elapsed);
     }
 
@@ -418,6 +573,7 @@ internal sealed class TranslateGemmaTranslationService :
             {
                 _endpoint = null;
                 _apiKey = null;
+                ResetActiveBackend();
                 await StopAndCleanupOwnedRuntimeAsync();
             }
             finally
@@ -494,26 +650,123 @@ internal sealed class TranslateGemmaTranslationService :
                 russian = hint.SelectedTranslation
             })
         };
-        string contextJson = JsonSerializer.Serialize(request.PreviousContext, PromptJsonOptions);
+        string contextJson = BuildPreviousContextPromptJson(request.PreviousContext);
         string currentJson = JsonSerializer.Serialize(current, PromptJsonOptions);
         string draftJson = JsonSerializer.Serialize(normalizedDraft, PromptJsonOptions);
         string evidenceJson = JsonSerializer.Serialize(evidence, PromptJsonOptions);
         const string instruction =
             "You are performing automatic translation post-editing from English to Russian. " +
-            "Translate the complete CURRENT text only. PREVIOUS dialogue is context only: never translate or quote it. " +
-            "Correct the Russian draft when needed. Preserve every clause, speaker and possessive role, " +
-            "negation, modality, cause, contrast, tone, and deliberate irony. " +
+            "Translate the complete CURRENT text only. PREVIOUS_CONTEXT is context only: never translate, quote, " +
+            "summarize, or continue it, and never emit its speakerMetadata. " +
+            "Correct the Russian draft when needed. Preserve every clause and semantic role, negation, modality, " +
+            "cause, contrast, tone, deliberate irony, and content on both sides of an internal ellipsis. " +
+            "An internal ellipsis marks hesitation, not omitted or censored text. " +
+            "Preserve a speaker label or outer quotation wrapper only when it occurs literally in CURRENT. " +
+            "Never add a name, speaker label, possessive, modifier, detail, or specificity not licensed by CURRENT. " +
+            "Translate quoted wordplay as a whole or copy its complete quoted wording; never truncate it. " +
             "SEMANTIC evidence identifies intended concepts or senses; render it naturally with suitable inflection " +
             "instead of copying wording mechanically. Return only the corrected Russian translation of CURRENT, " +
             "without labels, numbering, explanations, or alternatives.";
         string payload =
             instruction +
-            "\nPREVIOUS (DO NOT TRANSLATE, JSON array): " + contextJson +
+            "\nPREVIOUS_CONTEXT (DO NOT TRANSLATE, JSON entries): " + contextJson +
             "\nCURRENT (TRANSLATE ONLY THIS JSON string): " + currentJson +
             "\nRUSSIAN DRAFT (POST-EDIT THIS): " + draftJson +
             "\nSEMANTIC EVIDENCE (JSON): " + evidenceJson;
         return "<start_of_turn>user\n" + payload +
                "<end_of_turn>\n<start_of_turn>model\n";
+    }
+
+    internal static string BuildPreviousContextPromptJson(
+        IReadOnlyList<string> previousContext)
+    {
+        ArgumentNullException.ThrowIfNull(previousContext);
+        var entries = previousContext.Select((value, order) =>
+        {
+            (string text, string? speakerMetadata) = SplitPreviousContextEntry(value);
+            return new
+            {
+                order,
+                role = "context_only",
+                text,
+                speakerMetadata
+            };
+        });
+        return JsonSerializer.Serialize(entries, PromptJsonOptions);
+    }
+
+    private static (string Text, string? SpeakerMetadata) SplitPreviousContextEntry(
+        string? value)
+    {
+        string normalized = value?.Trim() ?? string.Empty;
+        if (normalized.Length == 0)
+        {
+            return (string.Empty, null);
+        }
+
+        if (normalized[0] == '[')
+        {
+            int closing = normalized.IndexOf(']');
+            if (closing is > 1 and <= 49)
+            {
+                string speaker = normalized[1..closing].Trim();
+                if (LooksLikeSpeakerMetadata(speaker))
+                {
+                    return (normalized[(closing + 1)..].Trim(), speaker);
+                }
+            }
+        }
+
+        int colon = normalized.IndexOf(':');
+        if (colon is > 0 and <= 48)
+        {
+            string speaker = normalized[..colon].Trim();
+            if (LooksLikeSpeakerMetadata(speaker))
+            {
+                return (normalized[(colon + 1)..].Trim(), speaker);
+            }
+        }
+
+        return LooksLikeSpeakerMetadata(normalized)
+            ? (string.Empty, normalized)
+            : (normalized, null);
+    }
+
+    private static bool LooksLikeSpeakerMetadata(string value)
+    {
+        if (value.Length is < 1 or > 48 || !char.IsUpper(value[0]))
+        {
+            return false;
+        }
+
+        int words = 0;
+        bool insideWord = false;
+        foreach (char character in value)
+        {
+            bool wordCharacter = char.IsLetter(character) ||
+                                 char.GetUnicodeCategory(character) ==
+                                 System.Globalization.UnicodeCategory.NonSpacingMark ||
+                                 character is '-' or '\'' or '\u2019';
+            if (wordCharacter)
+            {
+                if (!insideWord)
+                {
+                    words++;
+                    insideWord = true;
+                }
+
+                continue;
+            }
+
+            if (!char.IsWhiteSpace(character))
+            {
+                return false;
+            }
+
+            insideWord = false;
+        }
+
+        return words is >= 1 and <= 3;
     }
 
     internal static string BuildCompletionRequestJson(string phrase)
@@ -726,7 +979,8 @@ internal sealed class TranslateGemmaTranslationService :
         string workingDirectory,
         string modelPath,
         int port,
-        string apiKey)
+        string apiKey,
+        TranslateGemmaExecutionBackend backend = TranslateGemmaExecutionBackend.Cpu)
     {
         ProcessStartInfo startInfo = new(executable)
         {
@@ -747,8 +1001,29 @@ internal sealed class TranslateGemmaTranslationService :
         startInfo.ArgumentList.Add(port.ToString(System.Globalization.CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add("--ctx-size");
         startInfo.ArgumentList.Add(ContextSize.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        startInfo.ArgumentList.Add("--n-gpu-layers");
-        startInfo.ArgumentList.Add("0");
+        switch (backend)
+        {
+            case TranslateGemmaExecutionBackend.Cpu:
+                startInfo.ArgumentList.Add("--n-gpu-layers");
+                startInfo.ArgumentList.Add("0");
+                break;
+            case TranslateGemmaExecutionBackend.Vulkan:
+                // Selecting a named non-CPU device makes a missing Vulkan
+                // backend a parser error. Disabling auto-fit prevents llama.cpp
+                // from silently reducing the requested full offload.
+                startInfo.ArgumentList.Add("--device");
+                startInfo.ArgumentList.Add("Vulkan0");
+                startInfo.ArgumentList.Add("--n-gpu-layers");
+                startInfo.ArgumentList.Add("all");
+                startInfo.ArgumentList.Add("--fit");
+                startInfo.ArgumentList.Add("off");
+                startInfo.ArgumentList.Add("-lv");
+                startInfo.ArgumentList.Add("4");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(backend), backend, null);
+        }
+
         startInfo.ArgumentList.Add("--parallel");
         startInfo.ArgumentList.Add("1");
         startInfo.ArgumentList.Add("--api-key");
@@ -761,14 +1036,46 @@ internal sealed class TranslateGemmaTranslationService :
         return startInfo;
     }
 
-    private async Task<RuntimeArtifacts> PrepareArtifactsAsync(CancellationToken cancellationToken)
+    internal static string FindRunnerArchivePath(
+        string modelRoot,
+        TranslateGemmaExecutionBackend backend)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelRoot);
+        string fileName = backend switch
+        {
+            TranslateGemmaExecutionBackend.Cpu => RunnerArchiveFileName,
+            TranslateGemmaExecutionBackend.Vulkan => VulkanRunnerArchiveFileName,
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+        };
+        string path = Path.Combine(Path.GetFullPath(modelRoot), fileName);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                $"Не найден закреплённый runner TranslateGemma для {backend}.",
+                path);
+        }
+
+        return path;
+    }
+
+    private async Task<RuntimeArtifacts> PrepareArtifactsAsync(
+        TranslateGemmaExecutionBackend backend,
+        CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_modelRoot);
-        string archivePath = Path.Combine(_modelRoot, RunnerArchiveFileName);
+        string archivePath = FindRunnerArchivePath(_modelRoot, backend);
+        (long archiveSize, string archiveSha256) = backend switch
+        {
+            TranslateGemmaExecutionBackend.Cpu =>
+                (RunnerArchiveSize, RunnerArchiveSha256),
+            TranslateGemmaExecutionBackend.Vulkan =>
+                (VulkanRunnerArchiveSize, VulkanRunnerArchiveSha256),
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+        };
         await ValidatePinnedArtifactAsync(
             archivePath,
-            RunnerArchiveSize,
-            RunnerArchiveSha256,
+            archiveSize,
+            archiveSha256,
             cancellationToken);
 
         string modelPath = FindModelPath(_modelRoot, _ollamaModelsRoot);
@@ -794,14 +1101,15 @@ internal sealed class TranslateGemmaTranslationService :
             if (serverExecutables.Length != 1)
             {
                 throw new InvalidDataException(
-                    $"Архив {RunnerArchiveFileName} должен содержать ровно один llama-server.exe.");
+                    $"Архив {Path.GetFileName(archivePath)} должен содержать ровно один llama-server.exe.");
             }
 
             return new RuntimeArtifacts(
                 serverExecutables[0],
                 Path.GetDirectoryName(serverExecutables[0])!,
                 modelPath,
-                runtimeDirectory);
+                runtimeDirectory,
+                backend);
         }
         catch (Exception preparationFailure)
         {
@@ -836,11 +1144,17 @@ internal sealed class TranslateGemmaTranslationService :
                 artifacts.WorkingDirectory,
                 artifacts.ModelPath,
                 port,
-                apiKey),
+                apiKey,
+                artifacts.Backend),
             EnableRaisingEvents = true
         };
 
         _processLog.Clear();
+        VulkanStartupEvidenceTracker? startupEvidence =
+            artifacts.Backend == TranslateGemmaExecutionBackend.Vulkan
+                ? new VulkanStartupEvidenceTracker()
+                : null;
+        _startupEvidence = startupEvidence;
         if (!process.Start())
         {
             process.Dispose();
@@ -850,8 +1164,8 @@ internal sealed class TranslateGemmaTranslationService :
         _server = process;
         _apiKey = apiKey;
         _endpoint = new Uri($"http://127.0.0.1:{port}/", UriKind.Absolute);
-        _stdoutDrain = DrainAsync(process.StandardOutput, "stdout");
-        _stderrDrain = DrainAsync(process.StandardError, "stderr");
+        _stdoutDrain = DrainAsync(process.StandardOutput, "stdout", startupEvidence);
+        _stderrDrain = DrainAsync(process.StandardError, "stderr", startupEvidence);
     }
 
     private async Task WaitForHealthAsync(CancellationToken cancellationToken)
@@ -890,6 +1204,42 @@ internal sealed class TranslateGemmaTranslationService :
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
+        }
+    }
+
+    private async Task WaitForStartupEvidenceAsync(
+        TranslateGemmaExecutionBackend backend,
+        CancellationToken cancellationToken)
+    {
+        if (backend == TranslateGemmaExecutionBackend.Cpu)
+        {
+            return;
+        }
+
+        VulkanStartupEvidenceTracker evidence = _startupEvidence ??
+            throw new InvalidOperationException(
+                "Не создан трекер доказательств Vulkan TranslateGemma.");
+        long started = Stopwatch.GetTimestamp();
+        while (!evidence.IsComplete)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Process server = _server ??
+                throw new InvalidOperationException("Процесс TranslateGemma не запущен.");
+            if (server.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"llama-server завершился с кодом {server.ExitCode}. " + ProcessFailureSuffix());
+            }
+
+            if (Stopwatch.GetElapsedTime(started) >= StartupEvidenceTimeout)
+            {
+                throw new InvalidOperationException(
+                    "Vulkan TranslateGemma достигла health endpoint без обязательного " +
+                    $"доказательства backend: {evidence.DescribeMissing()}. " +
+                    ProcessFailureSuffix());
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
         }
     }
 
@@ -981,6 +1331,7 @@ internal sealed class TranslateGemmaTranslationService :
         Task? stderrDrain = _stderrDrain;
         _endpoint = null;
         _apiKey = null;
+        ResetActiveBackend();
 
         if (process is not null)
         {
@@ -1279,13 +1630,17 @@ internal sealed class TranslateGemmaTranslationService :
                Guid.TryParseExact(name[prefix.Length..], "N", out _);
     }
 
-    private async Task DrainAsync(StreamReader reader, string streamName)
+    private async Task DrainAsync(
+        StreamReader reader,
+        string streamName,
+        VulkanStartupEvidenceTracker? startupEvidence)
     {
         try
         {
             while (await reader.ReadLineAsync() is { } line)
             {
                 _processLog.Append(streamName, line);
+                startupEvidence?.Observe(line);
             }
         }
         catch (ObjectDisposedException)
@@ -1386,7 +1741,67 @@ internal sealed class TranslateGemmaTranslationService :
         string ServerExecutable,
         string WorkingDirectory,
         string ModelPath,
-        string RuntimeDirectory);
+        string RuntimeDirectory,
+        TranslateGemmaExecutionBackend Backend);
+
+    internal sealed class VulkanStartupEvidenceTracker
+    {
+        private const int DeviceMask = 1;
+        private const int SelectedDeviceMask = 2;
+        private const int FullOffloadMask = 4;
+        private const int CompleteMask = DeviceMask | SelectedDeviceMask | FullOffloadMask;
+        private int _observed;
+
+        public bool IsComplete =>
+            (Volatile.Read(ref _observed) & CompleteMask) == CompleteMask;
+
+        public void Observe(string line)
+        {
+            ArgumentNullException.ThrowIfNull(line);
+            int observed = 0;
+            if (line.Contains("Vulkan0", StringComparison.Ordinal))
+            {
+                observed |= DeviceMask;
+            }
+
+            if (line.Contains("using device Vulkan0", StringComparison.OrdinalIgnoreCase))
+            {
+                observed |= SelectedDeviceMask;
+            }
+
+            if (line.Contains("offloaded 35/35 layers to GPU", StringComparison.Ordinal))
+            {
+                observed |= FullOffloadMask;
+            }
+
+            if (observed != 0)
+            {
+                Interlocked.Or(ref _observed, observed);
+            }
+        }
+
+        public string DescribeMissing()
+        {
+            int observed = Volatile.Read(ref _observed);
+            List<string> missing = [];
+            if ((observed & DeviceMask) == 0)
+            {
+                missing.Add("device Vulkan0");
+            }
+
+            if ((observed & SelectedDeviceMask) == 0)
+            {
+                missing.Add("using device Vulkan0");
+            }
+
+            if ((observed & FullOffloadMask) == 0)
+            {
+                missing.Add("offloaded 35/35 layers to GPU");
+            }
+
+            return string.Join(", ", missing);
+        }
+    }
 
     private sealed class ProcessLogTail
     {

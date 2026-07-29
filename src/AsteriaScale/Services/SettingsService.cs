@@ -44,7 +44,8 @@ public sealed class SettingsService
             settings.DpiOverrides ??= [];
             settings.SelectedPresetId = PresetCatalog.Find(settings.SelectedPresetId).Id;
             settings.VisualNovelFrameRateLimit = VisualNovelFrameRates.Normalize(settings.VisualNovelFrameRateLimit);
-            settings.HoverTranslationMode = HoverTranslationModes.Normalize(settings.HoverTranslationMode);
+            settings.HoverTranslationMode =
+                HoverTranslationModes.NormalizeUserMode(settings.HoverTranslationMode);
             settings.SmartDictionaryBackend = SmartDictionaryBackends.Normalize(settings.SmartDictionaryBackend);
             settings.SmartDictionaryRankerModel =
                 SmartDictionaryRankerModels.Normalize(settings.SmartDictionaryRankerModel);
@@ -52,6 +53,17 @@ public sealed class SettingsService
                 SmartDictionarySourceLanguages.Normalize(settings.SmartDictionarySourceLanguage);
             settings.SmartDictionaryFallbackMode =
                 SmartDictionaryFallbackModes.Normalize(settings.SmartDictionaryFallbackMode);
+            settings.SmartPhraseTranslationMode =
+                SmartPhraseTranslationModes.Normalize(settings.SmartPhraseTranslationMode);
+            if (!SmartPhraseTranslationBackends.TryNormalize(
+                    settings.SmartPhraseTranslationBackend,
+                    out string phraseBackend))
+            {
+                throw new JsonException(
+                    $"Неизвестный backend TranslateGemma: {settings.SmartPhraseTranslationBackend}.");
+            }
+
+            settings.SmartPhraseTranslationBackend = phraseBackend;
             return settings;
         }
         catch (JsonException)

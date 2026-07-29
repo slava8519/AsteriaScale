@@ -2098,3 +2098,51 @@ OCR-контекст защищён bounded double-observation: два захв�
 отношении ordered-subsequence. Несовместимые наблюдения не объединяются и не
 передаются TG4B; локальный словарь продолжает работать. Ни один
 `ranker-holdout*.json` в ходе диагностики не открывался.
+
+## TranslateGemma 4B: CPU/Vulkan A/B на Radeon 860M — 29 июля 2026
+
+Для одного и того же закреплённого TranslateGemma 4B Q4_K_M, llama.cpp b9632 и
+direct probe сравнили два явно выбираемых runtime. Прогретый Vulkan-вызов занял
+`825 мс` при `29,669 token/s`, CPU — `1 444 мс` при `19,946 token/s`.
+
+Vulkan-профиль закреплён за `Vulkan0`, полным offload и отключённым auto-fit;
+запуск принимается только после доказательства `35/35` слоёв на GPU. Ошибка
+Vulkan не повторяет запрос на CPU. Совместимый backend по умолчанию и миграция
+старых настроек остаются на CPU.
+
+Текст ответа CPU и Vulkan может различаться даже при одинаковых модели и
+prompt, поэтому backend входит в model/cache identity: результат одного пути
+не обслуживает запрос другого. Это измерение latency конкретной Radeon 860M, а
+не отдельная оценка качества перевода. Ни один frozen holdout при A/B не
+открывался.
+
+## TranslateGemma: sentence-wide WSD и изоляция CURRENT — 29 июля 2026
+
+Анализ живых ошибок VN показал, что primary lane передавал post-edit только
+смысл слова под курсором, хотя full-text scaffold уже умел независимо разбирать
+остальные неоднозначные цели предложения. Теперь Smart phrase lane использует
+тот же provider-neutral `TranslationScaffoldBuilder` и выбранный профиль
+GlossBERT/SANDWiCH/ConSeC: последовательно обрабатывается до `12` уникальных
+неоднозначных source-форм полного исходного предложения. Hovered target не
+запускается повторно; при детерминированной EN→EN idiom-парафразе WSD читает
+исходный `SourcePhrase`, а обязательные термины строятся по `ModelInputPhrase`.
+Это independent-per-target planner, не новый joint-WSD claim.
+
+Вторая причина ошибок находилась после WSD: APE мог взять имя говорящего из
+Textractor-history, добавить внешние кавычки или принять внутреннее многоточие
+за пропущенный текст. Prompt identity поднят до
+`translategemma-direct-ape-en-ru-v3`. Предыдущие строки передаются как
+типизированные `context_only` entries с отдельной speaker metadata; prompt
+запрещает выводить её и добавлять отсутствующие в CURRENT роли или детали.
+Общий guard отклоняет добавленный speaker prefix, outer quotes, начальное
+многоточие и частично сохранённую английскую цитату. При валидном direct и
+отклонённом APE остаётся direct-результат. Ведущая OCR-строка имени говорящего
+отделяется от CURRENT; однословные OOV/VN-реплики теперь допустимы.
+
+Новый путь покрыт детерминированными regression-тестами на две дополнительные
+WSD-цели, локальные `GroupId`, original-source idiom WSD, `Cry Ant`/`Cry An`,
+утечку `Kotarou`, leading ellipsis, bracketed speaker и однословный
+`Boyquaintance`. Полный smoke: `55/55`, включая реальный lifecycle Magpie.
+Живой A/B качества нового prompt не выполнялся, поэтому это архитектурный и
+регрессионный результат, а не численная заявка на рост русского качества. Ни
+один `ranker-holdout*.json` или translation holdout не открывался.

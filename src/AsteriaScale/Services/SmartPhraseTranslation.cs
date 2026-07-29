@@ -40,7 +40,9 @@ internal sealed record SmartPhraseTranslationResult(
 /// </summary>
 internal interface ISmartPhraseTranslator
 {
-    Task PrepareAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    Task PrepareAsync(
+        SmartPhraseTranslationRequest request,
+        CancellationToken cancellationToken) => Task.CompletedTask;
 
     Task<SmartPhraseTranslationResult> TranslateAsync(
         SmartPhraseTranslationRequest request,

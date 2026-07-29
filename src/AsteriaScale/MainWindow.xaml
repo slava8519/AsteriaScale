@@ -414,32 +414,12 @@
                                           SelectionChanged="OnHoverDelayChanged" />
                             </Grid>
 
-                            <Border x:Name="ScreenTranslationHint" Visibility="Collapsed" Margin="0,10,0,0"
-                                    Background="{StaticResource PositiveTintBrush}" BorderBrush="{StaticResource PositiveBorderBrush}"
-                                    BorderThickness="1" CornerRadius="10" Padding="13,10">
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="12" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Border Background="#DCE7D6" BorderBrush="#B4C9AA" BorderThickness="1"
-                                            CornerRadius="8" Padding="9,5" VerticalAlignment="Center">
-                                        <TextBlock Text="Alt + Shift + T" Foreground="#566E50"
-                                                   FontSize="12" FontWeight="Bold" />
-                                    </Border>
-                                    <TextBlock Grid.Column="2" VerticalAlignment="Center" TextWrapping="Wrap"
-                                               Text="Распознать все реплики и заменить их переводом. Повторное нажатие обновляет подложки."
-                                               Foreground="#6F7A66" FontSize="12" />
-                                </Grid>
-                            </Border>
-
                             <Border x:Name="SmartDictionarySettingsPanel" Visibility="Collapsed" Margin="0,12,0,0"
                                     Background="{StaticResource SurfaceRaisedBrush}" BorderBrush="{StaticResource BorderBrush}"
                                     BorderThickness="1" CornerRadius="12" Padding="14">
                                 <StackPanel>
                                     <TextBlock Text="Настройки умного словаря" FontWeight="SemiBold" FontSize="13.5" />
-                                    <TextBlock Text="Выбранная модель значений отвечает за слово; TranslateGemma независимо добавляет перевод короткой фразы второй строкой."
+                                    <TextBlock Text="Выбранная модель значений отвечает за слово; TranslateGemma независимо добавляет перевод полного предложения второй строкой."
                                                TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}"
                                                FontSize="11" Margin="0,3,0,12" />
 
@@ -455,10 +435,12 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="10" />
                                             <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="10" />
+                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
 
                                         <StackPanel Grid.Row="0" Grid.Column="0">
-                                            <TextBlock Text="Ускоритель" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <TextBlock Text="Ускоритель выбора значения" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
                                             <ComboBox x:Name="SmartBackendComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
                                         </StackPanel>
@@ -485,6 +467,11 @@
                                         <StackPanel Grid.Row="4" Grid.Column="2">
                                             <TextBlock Text="Перевод фразы второй строкой" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
                                             <ComboBox x:Name="SmartPhraseTranslationComboBox" Height="34"
+                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="6" Grid.Column="2">
+                                            <TextBlock Text="Ускоритель TranslateGemma" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
+                                            <ComboBox x:Name="SmartPhraseBackendComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
                                         </StackPanel>
                                     </Grid>

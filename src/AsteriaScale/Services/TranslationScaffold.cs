@@ -198,7 +198,8 @@ internal sealed class TranslationScaffoldBuilder
     internal async Task<TranslationScaffold> BuildAsync(
         string sentence,
         TranslationScaffoldNeuralSession? neuralSession,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? preResolvedNeuralSources = null)
     {
         if (string.IsNullOrWhiteSpace(sentence))
         {
@@ -244,6 +245,19 @@ internal sealed class TranslationScaffoldBuilder
             List<TranslationScaffoldNeuralDiagnostic> neuralDecisions = [];
             List<ScaffoldSenseHint> senseHints = [];
             HashSet<string> neuralSources = new(StringComparer.Ordinal);
+            HashSet<string> preResolvedNeuralSourceKeys = new(StringComparer.Ordinal);
+            if (preResolvedNeuralSources is not null)
+            {
+                foreach (string source in preResolvedNeuralSources)
+                {
+                    string sourceKey = LocalDictionaryService.NormalizeEnglish(source);
+                    if (sourceKey.Length > 0)
+                    {
+                        preResolvedNeuralSourceKeys.Add(sourceKey);
+                    }
+                }
+            }
+
             HashSet<string> explicitScaffoldSources = new(StringComparer.Ordinal);
             // One token scan and one sentence key for the whole reply: this
             // loop probes the dictionary once per token, and rebuilding both
@@ -367,6 +381,17 @@ internal sealed class TranslationScaffoldBuilder
                             token.Index,
                             plan,
                             "invalid-source"));
+                    }
+                    else if (preResolvedNeuralSourceKeys.Contains(neuralSourceKey))
+                    {
+                        // The Smart-hover primary phase already owns this target.
+                        // Reusing its evidence avoids a second inference under a
+                        // sentence-extraction fingerprint that may legitimately differ.
+                        neuralDecisions.Add(CreateSkippedNeuralDiagnostic(
+                            lookup.Source,
+                            token.Index,
+                            plan,
+                            "pre-resolved-source"));
                     }
                     else if (!neuralSources.Add(neuralSourceKey))
                     {

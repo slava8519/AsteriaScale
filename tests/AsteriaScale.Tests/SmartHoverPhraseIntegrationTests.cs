@@ -2,6 +2,7 @@ using System.Drawing;
 using System.IO.Compression;
 using System.Text;
 using AsteriaScale.Models;
+using AsteriaScale.RankerProtocol;
 using AsteriaScale.Services;
 
 internal static class SmartHoverPhraseIntegrationTests
@@ -16,6 +17,10 @@ internal static class SmartHoverPhraseIntegrationTests
         Directory.CreateDirectory(root);
 
         await VerifyGenerationAndCacheHitAsync(Path.Combine(root, "cache-hit"));
+        await VerifyBackendCacheIsolationAsync(Path.Combine(root, "backend-cache"));
+        await VerifyBackendSnapshotAsync(Path.Combine(root, "backend-snapshot"));
+        await VerifySentenceWideSenseHintsAsync(Path.Combine(root, "sentence-wide-wsd"));
+        await VerifyIdiomRewriteRanksOriginalSourceAsync(Path.Combine(root, "idiom-wsd"));
         await VerifyWholeSentenceAndHiddenHistoryAsync(Path.Combine(root, "whole-sentence"));
         await VerifyContinuedEllipsisStaysWholeAsync(Path.Combine(root, "continued-ellipsis"));
         await VerifyDictionaryMissStillGetsPhraseAsync(Path.Combine(root, "miss"));
@@ -24,6 +29,168 @@ internal static class SmartHoverPhraseIntegrationTests
         await VerifyFailureStaysOnPrimaryAsync(Path.Combine(root, "fail-open"));
         await VerifyCancellationPropagatesAsync(Path.Combine(root, "cancellation"));
         await VerifyDisabledModeSkipsTranslatorAsync(Path.Combine(root, "disabled"));
+    }
+
+    private static async Task VerifyBackendSnapshotAsync(string root)
+    {
+        RecordingPhraseTranslator translator = new();
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        translator.OnPrepare = () =>
+            fixture.Settings.SmartPhraseTranslationBackend =
+                SmartPhraseTranslationBackends.Vulkan;
+
+        SmartHoverPhraseLine? line = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+
+        Check(line is { FromCache: false } &&
+              line.Engine.Contains("CPU", StringComparison.Ordinal) &&
+              translator.LastPreparedRequest?.ModelIdentity ==
+              TranslateGemmaTranslationService.ModelIdentity &&
+              translator.LastRequest?.ModelIdentity ==
+              TranslateGemmaTranslationService.ModelIdentity,
+            "A settings change altered the identity or label of one in-flight CPU request.");
+    }
+
+    private static async Task VerifyBackendCacheIsolationAsync(string root)
+    {
+        RecordingPhraseTranslator translator = new();
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+
+        SmartHoverPhraseLine? cpu = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(cpu is { FromCache: false } &&
+              cpu.Engine.Contains("CPU", StringComparison.Ordinal) &&
+              translator.LastRequest?.ModelIdentity ==
+              TranslateGemmaTranslationService.ModelIdentity,
+            "The CPU phrase result did not use the CPU-specific identity.");
+
+        fixture.Settings.SmartPhraseTranslationBackend =
+            SmartPhraseTranslationBackends.Vulkan;
+        SmartHoverPhraseLine? vulkan = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(vulkan is { FromCache: false } &&
+              vulkan.Engine.Contains("VULKAN", StringComparison.Ordinal) &&
+              translator.TranslateCalls == 2 &&
+              translator.LastRequest?.ModelIdentity ==
+              TranslateGemmaTranslationService.VulkanModelIdentity &&
+              await fixture.PhraseCache.CountAsync() == 2,
+            "Switching to Vulkan reused a CPU phrase-cache entry.");
+
+        fixture.Settings.SmartPhraseTranslationBackend =
+            SmartPhraseTranslationBackends.Cpu;
+        SmartHoverPhraseLine? cachedCpu = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(cachedCpu is { FromCache: true } && translator.TranslateCalls == 2,
+            "Switching back to CPU did not recover the isolated CPU cache entry.");
+    }
+
+    private static async Task VerifySentenceWideSenseHintsAsync(string root)
+    {
+        const string context = "I compared amber, birch, and cedar.";
+        const string target = "amber";
+        List<TranslationScaffoldNeuralRequest> neuralRequests = [];
+        RecordingPhraseTranslator translator = new()
+        {
+            Translation = "Я сравнил янтарь, берёзу и кедр."
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator,
+            CreateAcceptingPhraseRanker(neuralRequests));
+        SmartHoverResult primary = new(
+            target,
+            "янтарь",
+            GlossBertDictionarySelectorService.CpuEngineLabel,
+            DictionaryFound: true,
+            IsPhrase: false,
+            Language: "EN",
+            Confidence: 0.95,
+            UsedFullFallback: false)
+        {
+            SelectedSenseHints =
+            [
+                new ScaffoldSenseHint(
+                    target,
+                    "fossilized tree resin",
+                    "янтарь",
+                    ["сигнал"],
+                    0.95)
+            ]
+        };
+
+        SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(context, target),
+            primary,
+            CancellationToken.None);
+
+        Check(line is { Status: SmartPhraseLineStatus.Translated } &&
+              neuralRequests.Select(request => request.Target)
+                  .SequenceEqual(["birch", "cedar"], StringComparer.Ordinal) &&
+              neuralRequests.All(request =>
+                  string.Equals(request.Sentence, context, StringComparison.Ordinal)) &&
+              neuralRequests.All(request => request.Plan.Outcomes
+                  .Select(outcome => outcome.GroupId)
+                  .SequenceEqual(Enumerable.Range(0, request.Plan.Outcomes.Count))) &&
+              translator.LastRequest?.SenseHints.Select(hint => hint.Source)
+                  .SequenceEqual(["birch", "cedar", "amber"], StringComparer.Ordinal) == true,
+            "The phrase request did not preserve local GroupIds or combine sentence-wide senses with the hovered sense.");
+    }
+
+    private static async Task VerifyIdiomRewriteRanksOriginalSourceAsync(string root)
+    {
+        const string context = "You're trying to butter me up beside the birch.";
+        const string target = "butter";
+        List<TranslationScaffoldNeuralRequest> neuralRequests = [];
+        RecordingPhraseTranslator translator = new()
+        {
+            Translation = "Ты пытаешься мне польстить рядом с берёзой."
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator,
+            CreateAcceptingPhraseRanker(neuralRequests));
+        SmartHoverResult primary = new(
+            target,
+            "намаслить",
+            LocalDictionaryService.EngineLabel,
+            DictionaryFound: true,
+            IsPhrase: false,
+            Language: "EN",
+            Confidence: null,
+            UsedFullFallback: false);
+
+        SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(context, target),
+            primary,
+            CancellationToken.None);
+
+        Check(line is { Status: SmartPhraseLineStatus.Translated } &&
+              neuralRequests is [{ Sentence: context, Target: "birch" }] &&
+              translator.LastRequest is
+              {
+                  SourcePhrase: context,
+                  ModelInputPhrase:
+                      "You're flattering me to get what you want beside the birch."
+              } request &&
+              request.SenseHints.Select(hint => hint.Source)
+                  .SequenceEqual(["birch"], StringComparer.Ordinal),
+            "An idiom rewrite was ranked as synthetic English instead of preserving original-source WSD.");
     }
 
     private static async Task VerifyContinuedEllipsisStaysWholeAsync(string root)
@@ -440,6 +607,26 @@ internal static class SmartHoverPhraseIntegrationTests
             Confidence: 0.91,
             UsedFullFallback: false);
 
+    private static TranslationScaffoldNeuralRanker CreateAcceptingPhraseRanker(
+        List<TranslationScaffoldNeuralRequest> requests) =>
+        (request, cancellationToken) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            requests.Add(request);
+            return Task.FromResult(new TranslationScaffoldNeuralResult(
+                request.Plan.Outcomes[0].GroupId,
+                Abstained: false,
+                Margin: 0.5,
+                Score: 0.8,
+                Confidence: 0.8,
+                GlossBertRankerProvider.Cpu,
+                GlossBertDictionarySelectorService.CpuExecutionProvider,
+                "CPU",
+                "test-model",
+                "test-independent",
+                ElapsedMilliseconds: 1));
+        };
+
     private static void Check(bool condition, string message)
     {
         if (!condition)
@@ -454,15 +641,21 @@ internal static class SmartHoverPhraseIntegrationTests
         public Exception? PrepareFailure { get; set; }
         public Exception? TranslationFailure { get; set; }
         public bool CancelDuringPrepare { get; set; }
+        public Action? OnPrepare { get; set; }
         public int PrepareCalls { get; private set; }
         public int TranslateCalls { get; private set; }
         public List<string> Events { get; } = [];
         public SmartPhraseTranslationRequest? LastRequest { get; private set; }
+        public SmartPhraseTranslationRequest? LastPreparedRequest { get; private set; }
 
-        public Task PrepareAsync(CancellationToken cancellationToken)
+        public Task PrepareAsync(
+            SmartPhraseTranslationRequest request,
+            CancellationToken cancellationToken)
         {
             PrepareCalls++;
             Events.Add("prepare");
+            LastPreparedRequest = request;
+            OnPrepare?.Invoke();
             if (CancelDuringPrepare)
             {
                 return Task.FromCanceled(cancellationToken);
@@ -499,13 +692,37 @@ internal static class SmartHoverPhraseIntegrationTests
         public PipelineFixture(
             string root,
             string phraseMode,
-            ISmartPhraseTranslator translator)
+            ISmartPhraseTranslator translator,
+            TranslationScaffoldNeuralRanker? phraseNeuralRanker = null)
         {
             string bundled = Path.Combine(root, "bundled");
             string user = Path.Combine(root, "user");
             Directory.CreateDirectory(bundled);
             Directory.CreateDirectory(user);
-            CreateMinimalDictionary(Path.Combine(bundled, "eng-rus.tsv.gz"));
+            CreateGzipDictionary(
+                Path.Combine(bundled, "eng-rus.tsv.gz"),
+                phraseNeuralRanker is null
+                    ? ["placeholder\tзаполнитель"]
+                    :
+                    [
+                        "placeholder\tзаполнитель",
+                        "amber\tянтарь; сигнал",
+                        "birch\tберёза; розга",
+                        "cedar\tкедр; шкаф"
+                    ]);
+            if (phraseNeuralRanker is not null)
+            {
+                CreateGzipDictionary(
+                    Path.Combine(bundled, "eng-rus-senses.tsv.gz"),
+                    [
+                        "amber\tянтарь\tfossilized tree resin\tcommon\tnoun",
+                        "amber\tсигнал\ta yellow warning signal\tcommon\tnoun",
+                        "birch\tберёза\ta slender tree with pale bark\tcommon\tnoun",
+                        "birch\tрозга\ta switch used for punishment\tcommon\tnoun",
+                        "cedar\tкедр\tan evergreen coniferous tree\tcommon\tnoun",
+                        "cedar\tшкаф\ta storage cabinet made of cedar\tcommon\tnoun"
+                    ]);
+            }
             CreateMinimalDictionary(
                 Path.Combine(bundled, "jpn-rus.tsv.gz"),
                 "仮\tвременный");
@@ -520,14 +737,16 @@ internal static class SmartHoverPhraseIntegrationTests
                 Path.Combine(root, "decision-cache.json"));
             PhraseCache = new SmartPhraseTranslationCache(
                 Path.Combine(root, "phrase-cache.json"));
+            Settings = new AppSettings
+            {
+                SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
+                SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.English,
+                SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.Never,
+                SmartPhraseTranslationMode = phraseMode,
+                SmartPhraseTranslationBackend = SmartPhraseTranslationBackends.Cpu
+            };
             Pipeline = new SmartHoverPipeline(
-                new AppSettings
-                {
-                    SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
-                    SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.English,
-                    SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.Never,
-                    SmartPhraseTranslationMode = phraseMode
-                },
+                Settings,
                 dictionary,
                 _selector,
                 _resultCache,
@@ -543,10 +762,12 @@ internal static class SmartHoverPhraseIntegrationTests
                 static _ => { },
                 static (_, _) => { },
                 translator,
-                PhraseCache);
+                PhraseCache,
+                phraseNeuralRanker);
         }
 
         public SmartHoverPipeline Pipeline { get; }
+        public AppSettings Settings { get; }
         public SmartPhraseTranslationCache PhraseCache { get; }
         public int FullFallbackCalls { get; private set; }
 
@@ -561,12 +782,20 @@ internal static class SmartHoverPhraseIntegrationTests
 
         private static void CreateMinimalDictionary(
             string path,
-            string row = "placeholder\tзаполнитель")
+            string row = "placeholder\tзаполнитель") =>
+            CreateGzipDictionary(path, [row]);
+
+        private static void CreateGzipDictionary(
+            string path,
+            IEnumerable<string> rows)
         {
             using FileStream file = File.Create(path);
             using GZipStream gzip = new(file, CompressionLevel.SmallestSize);
             using StreamWriter writer = new(gzip, new UTF8Encoding(false));
-            writer.WriteLine(row);
+            foreach (string row in rows)
+            {
+                writer.WriteLine(row);
+            }
         }
     }
 }

@@ -38,9 +38,7 @@ public partial class MainWindow : Window
     private static readonly IReadOnlyList<TranslationModeOption> TranslationModes =
     [
         new("Умный словарь — выбор значения по контексту", HoverTranslationModes.Smart),
-        new("Нейросетевой — перевод реплики", HoverTranslationModes.Neural),
-        new("Словарный — быстро и экономно", HoverTranslationModes.Dictionary),
-        new("Экран по клавише — все реплики", HoverTranslationModes.Screen)
+        new("Словарный — быстро и экономно", HoverTranslationModes.Dictionary)
     ];
     private static readonly IReadOnlyList<TranslationSettingOption> SmartBackendOptions =
     [
@@ -74,7 +72,12 @@ public partial class MainWindow : Window
     private static readonly IReadOnlyList<TranslationSettingOption> SmartPhraseTranslationOptions =
     [
         new("Словарная форма — быстро и надёжно", SmartPhraseTranslationModes.Off),
-        new("TranslateGemma 4B — перевод фразы второй строкой", SmartPhraseTranslationModes.TranslateGemma)
+        new("TranslateGemma 4B — перевод предложения второй строкой", SmartPhraseTranslationModes.TranslateGemma)
+    ];
+    private static readonly IReadOnlyList<TranslationSettingOption> SmartPhraseBackendOptions =
+    [
+        new("Vulkan GPU — быстрее", SmartPhraseTranslationBackends.Vulkan),
+        new("CPU — совместимый режим", SmartPhraseTranslationBackends.Cpu)
     ];
     private static readonly IReadOnlyList<FrameRateOption> FrameRateOptions =
     [
@@ -121,7 +124,7 @@ public partial class MainWindow : Window
         HoverTranslationCheckBox.IsChecked = _settings.HoverTranslationEnabled;
         TranslationModeComboBox.ItemsSource = TranslationModes;
         TranslationModeComboBox.SelectedItem = TranslationModes.First(option =>
-            option.Id == HoverTranslationModes.Normalize(_settings.HoverTranslationMode));
+            option.Id == HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode));
         SmartBackendComboBox.ItemsSource = SmartBackendOptions;
         SmartBackendComboBox.SelectedItem = SmartBackendOptions.First(option =>
             option.Id == SmartDictionaryBackends.Normalize(_settings.SmartDictionaryBackend));
@@ -141,6 +144,11 @@ public partial class MainWindow : Window
         SmartPhraseTranslationComboBox.ItemsSource = SmartPhraseTranslationOptions;
         SmartPhraseTranslationComboBox.SelectedItem = SmartPhraseTranslationOptions.First(option =>
             option.Id == SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode));
+        SmartPhraseBackendComboBox.ItemsSource = SmartPhraseBackendOptions;
+        SmartPhraseBackendComboBox.SelectedItem = SmartPhraseBackendOptions.First(option =>
+            option.Id == SmartPhraseTranslationBackends.Normalize(
+                _settings.SmartPhraseTranslationBackend));
+        UpdateSmartPhraseBackendAvailability();
         HoverDelayComboBox.ItemsSource = HoverDelays;
         HoverDelayComboBox.SelectedItem = HoverDelays.FirstOrDefault(
             option => option.Milliseconds == _settings.HoverTranslationDelayMs) ?? HoverDelays[1];
@@ -210,7 +218,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        string normalized = HoverTranslationModes.Normalize(mode);
+        string normalized = HoverTranslationModes.NormalizeUserMode(mode);
         _initializing = true;
         TranslationModeComboBox.SelectedItem = TranslationModes.First(option => option.Id == normalized);
         _initializing = false;
@@ -643,9 +651,7 @@ public partial class MainWindow : Window
         if (await PersistSettingsAsync())
         {
             SetStatus(enabled
-                ? HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Screen
-                    ? "Экранный перевод включён — нажмите Alt+Shift+T над игрой"
-                    : "Перевод под курсором включён — локальная модель подготавливается"
+                ? "Перевод под курсором включён — локальная модель подготавливается"
                 : "Перевод текста выключен");
         }
     }
@@ -669,7 +675,8 @@ public partial class MainWindow : Window
             SmartSourceLanguageComboBox.SelectedItem is not TranslationSettingOption sourceLanguage ||
             SmartFallbackComboBox.SelectedItem is not TranslationSettingOption fallback ||
             SmartMemoryPolicyComboBox.SelectedItem is not MemoryPolicyOption memoryPolicy ||
-            SmartPhraseTranslationComboBox.SelectedItem is not TranslationSettingOption phraseTranslation)
+            SmartPhraseTranslationComboBox.SelectedItem is not TranslationSettingOption phraseTranslation ||
+            SmartPhraseBackendComboBox.SelectedItem is not TranslationSettingOption phraseBackend)
         {
             return;
         }
@@ -699,6 +706,9 @@ public partial class MainWindow : Window
         _settings.SmartDictionaryKeepWarm = memoryPolicy.KeepWarm;
         _settings.SmartPhraseTranslationMode =
             SmartPhraseTranslationModes.Normalize(phraseTranslation.Id);
+        _settings.SmartPhraseTranslationBackend =
+            SmartPhraseTranslationBackends.Normalize(phraseBackend.Id);
+        UpdateSmartPhraseBackendAvailability();
         _hoverTranslation.ApplySmartDictionarySettings();
         UpdateSmartDictionarySettingsHint();
 
@@ -724,8 +734,7 @@ public partial class MainWindow : Window
             {
                 HoverTranslationModes.Smart => "Умный словарь включён — ускоритель и язык можно настроить ниже",
                 HoverTranslationModes.Dictionary => "Быстрый словарный перевод включён — Qwen больше не используется",
-                HoverTranslationModes.Screen => "Экранный перевод включён — Alt+Shift+T переведёт все реплики",
-                _ => "Включён нейросетевой перевод полных реплик"
+                _ => "Умный словарь включён"
             });
         }
     }
@@ -733,22 +742,18 @@ public partial class MainWindow : Window
     private void UpdateTranslationModePresentation()
     {
         string mode = TranslationModeComboBox.SelectedItem is TranslationModeOption option
-            ? HoverTranslationModes.Normalize(option.Id)
-            : HoverTranslationModes.Normalize(_settings.HoverTranslationMode);
-        bool screen = mode == HoverTranslationModes.Screen;
+            ? HoverTranslationModes.NormalizeUserMode(option.Id)
+            : HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode);
         bool smart = mode == HoverTranslationModes.Smart;
-        HoverDelayPanel.Visibility = screen ? Visibility.Collapsed : Visibility.Visible;
-        ScreenTranslationHint.Visibility = screen ? Visibility.Visible : Visibility.Collapsed;
+        HoverDelayPanel.Visibility = Visibility.Visible;
         SmartDictionarySettingsPanel.Visibility = smart ? Visibility.Visible : Visibility.Collapsed;
         TranslationDescriptionText.Text = mode switch
         {
             HoverTranslationModes.Smart =>
-                "Наведите мышь на слово — словарь покажет значение, а TranslateGemma добавит перевод короткой фразы второй строкой",
-            HoverTranslationModes.Screen =>
-                "Нажмите горячую клавишу в игре — все найденные реплики будут переведены поверх оригинала",
+                "Наведите мышь на слово — словарь покажет значение, а TranslateGemma добавит перевод полного предложения второй строкой",
             HoverTranslationModes.Dictionary =>
                 "Задержите мышь над словом или выражением — быстрый перевод появится рядом",
-            _ => "Задержите мышь над репликой — нейросеть переведёт предложение целиком"
+            _ => "Наведите мышь на слово — словарь покажет перевод по контексту"
         };
         UpdateSmartDictionarySettingsHint();
     }
@@ -787,12 +792,25 @@ public partial class MainWindow : Window
             : "при простое модель освобождает память";
         string phrase = SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
                         SmartPhraseTranslationModes.TranslateGemma
-            ? "TranslateGemma независимо переводит короткий EN→RU контекст второй строкой"
+            ? $"TranslateGemma независимо переводит полное EN→RU предложение второй строкой на {SmartPhraseBackendDisplayName()}"
             : "показывается только словарный результат";
 
         SmartDictionarySettingsHint.Text =
             $"{backend}; {ranker}; {language}; {fallback}; {phrase}; {memory}.";
     }
+
+    private void UpdateSmartPhraseBackendAvailability()
+    {
+        SmartPhraseBackendComboBox.IsEnabled =
+            SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
+            SmartPhraseTranslationModes.TranslateGemma;
+    }
+
+    private string SmartPhraseBackendDisplayName() =>
+        SmartPhraseTranslationBackends.Normalize(_settings.SmartPhraseTranslationBackend) ==
+        SmartPhraseTranslationBackends.Vulkan
+            ? "Vulkan GPU"
+            : "CPU";
 
     private async void OnRunAtStartupChanged(object sender, RoutedEventArgs e)
     {

@@ -1,5 +1,8 @@
 [CmdletBinding()]
 param(
+    [Parameter(Mandatory = $true)]
+    [ValidateSet('Cpu', 'Vulkan')]
+    [string]$Backend,
     [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'AsteriaScale\Models\TranslateGemma')
 )
 
@@ -7,14 +10,58 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $resolvedRoot = [IO.Path]::GetFullPath($InstallRoot)
+$normalizedBackend = $Backend.ToLowerInvariant()
+$runner = if ($normalizedBackend -eq 'vulkan') {
+    [ordered]@{
+        Name = 'llama-b9632-bin-win-vulkan-x64.zip'
+        Size = 38545553L
+        Sha256 = '90b914ff48167370190477ff3f54fd2c4eb034a305b943913eaa310eda78793d'
+    }
+}
+else {
+    [ordered]@{
+        Name = 'llama-b9632-bin-win-cpu-x64.zip'
+        Size = 16899258L
+        Sha256 = 'b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd'
+    }
+}
+$model = [ordered]@{
+    Name = 'translategemma-4b-it.Q4_K_M.gguf'
+    Size = 2489909760L
+    Sha256 = '81200d03e843d2ec1ece6eeafe7d13cb6e5211e1fcd336ade55790b683a08330'
+}
 $runtimeRoot = Join-Path $resolvedRoot 'Runtime'
 $verificationRoot = Join-Path $runtimeRoot ('verification-' + [guid]::NewGuid().ToString('N'))
 $serverProcess = $null
 
+function Assert-PinnedFile {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][long]$Size,
+        [Parameter(Mandatory)][string]$Sha256
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Missing pinned TranslateGemma artifact: $Path"
+    }
+
+    $file = Get-Item -LiteralPath $Path
+    if ($file.Length -ne $Size) {
+        throw "Pinned artifact has size $($file.Length), expected ${Size}: $Path"
+    }
+
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    if (-not [string]::Equals($actual, $Sha256, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Pinned artifact failed SHA-256 validation: $Path"
+    }
+}
+
 try {
     New-Item -ItemType Directory -Path $verificationRoot -Force | Out-Null
-    $archivePath = Join-Path $resolvedRoot 'llama-b9632-bin-win-cpu-x64.zip'
-    $modelPath = Join-Path $resolvedRoot 'translategemma-4b-it.Q4_K_M.gguf'
+    $archivePath = Join-Path $resolvedRoot $runner.Name
+    $modelPath = Join-Path $resolvedRoot $model.Name
+    Assert-PinnedFile -Path $archivePath -Size $runner.Size -Sha256 $runner.Sha256
+    Assert-PinnedFile -Path $modelPath -Size $model.Size -Sha256 $model.Sha256
     Expand-Archive -LiteralPath $archivePath -DestinationPath $verificationRoot
 
     $serverExecutables = @(
@@ -36,8 +83,22 @@ try {
         '--model', ('"' + $modelPath + '"'),
         '--host', '127.0.0.1',
         '--port', $port,
-        '--ctx-size', '2048',
-        '--n-gpu-layers', '0',
+        '--ctx-size', '2048'
+    )
+    if ($normalizedBackend -eq 'vulkan') {
+        # A Vulkan request is strict: an unavailable or undersized device must
+        # fail instead of quietly moving layers back to the CPU.
+        $serverArguments += @(
+            '--device', 'Vulkan0',
+            '--n-gpu-layers', 'all',
+            '--fit', 'off',
+            '-lv', '4'
+        )
+    }
+    else {
+        $serverArguments += @('--n-gpu-layers', '0')
+    }
+    $serverArguments += @(
         '--parallel', '1',
         '--api-key', $apiKey,
         '--no-jinja',
@@ -82,6 +143,48 @@ try {
         throw 'llama-server did not become ready.'
     }
 
+    if ($normalizedBackend -eq 'vulkan') {
+        $evidenceDeadline = [DateTimeOffset]::UtcNow.AddSeconds(10)
+        $startupLog = ''
+        $hasVulkanDevice = $false
+        $hasSelectedVulkanDevice = $false
+        $hasFullOffload = $false
+        do {
+            $stdout = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) {
+                Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
+            } else { '' }
+            $stderr = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+                Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+            } else { '' }
+            $startupLog = $stdout + [Environment]::NewLine + $stderr
+            $hasVulkanDevice = $startupLog -match '(?i)Vulkan0'
+            $hasSelectedVulkanDevice =
+                $startupLog -match '(?i)using\s+device\s+Vulkan0'
+            $hasFullOffload = $startupLog -match '(?i)offloaded\s+35/35\s+layers\s+to\s+GPU'
+            if ($hasVulkanDevice -and $hasSelectedVulkanDevice -and
+                $hasFullOffload) {
+                break
+            }
+
+            Start-Sleep -Milliseconds 100
+        } while ([DateTimeOffset]::UtcNow -lt $evidenceDeadline)
+
+        if (-not ($hasVulkanDevice -and $hasSelectedVulkanDevice -and
+                  $hasFullOffload)) {
+            $tail = (($startupLog -split '\r?\n') | Select-Object -Last 40) -join [Environment]::NewLine
+            $evidence = "Vulkan0=$hasVulkanDevice; selected=$hasSelectedVulkanDevice; fullOffload=$hasFullOffload"
+            throw (
+                'Vulkan was requested, but llama.cpp did not prove Vulkan0 ' +
+                "with a full 35/35 GPU offload ($evidence). CPU fallback is forbidden.`n$tail")
+        }
+
+        Write-Host 'BACKEND=VULKAN' -ForegroundColor Green
+        Write-Host 'VULKAN_DEVICE=Vulkan0' -ForegroundColor Green
+        Write-Host 'GPU_OFFLOAD=35/35' -ForegroundColor Green
+    }
+    else {
+        Write-Host 'BACKEND=CPU' -ForegroundColor Green
+    }
     Write-Host 'MODEL_HEALTH=OK' -ForegroundColor Green
     $instruction =
         'You are a professional English (en) to Russian (ru) translator. ' +

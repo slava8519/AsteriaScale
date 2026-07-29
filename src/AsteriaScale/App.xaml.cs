@@ -496,7 +496,7 @@ public partial class App : System.Windows.Application
 
     private void SetHoverTranslationMode(string mode)
     {
-        string normalized = HoverTranslationModes.Normalize(mode);
+        string normalized = HoverTranslationModes.NormalizeUserMode(mode);
         HoverTranslation.SetMode(normalized);
         AsteriaWindow?.SetTranslationModeUi(normalized);
         Tray?.SetTranslationMode(normalized);

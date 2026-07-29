@@ -190,6 +190,22 @@ internal static class SmartPhraseTranslationFoundationTests
                 $"A continued ellipsis split the phrase around '{ellipsisTarget}'.");
         }
 
+        const string speakerLine = "Kotori\r\n\"Boyquaintance.\"";
+        SmartPhraseContext? speakerLineBuilt = SmartPhraseContextBuilder.Build(
+            speakerLine,
+            "Boyquaintance",
+            speakerLine.IndexOf("Boyquaintance", StringComparison.Ordinal));
+        Check(speakerLineBuilt is { Text: "\"Boyquaintance.\"", CharacterIndex: 1 },
+            "A standalone OCR speaker line leaked into the translated CURRENT sentence.");
+
+        const string bracketedSpeaker = "[Park staff] \"Wait here.\"";
+        SmartPhraseContext? bracketedSpeakerBuilt = SmartPhraseContextBuilder.Build(
+            bracketedSpeaker,
+            "Wait",
+            bracketedSpeaker.IndexOf("Wait", StringComparison.Ordinal));
+        Check(bracketedSpeakerBuilt is { Text: "\"Wait here.\"", CharacterIndex: 1 },
+            "A bracketed text-hook speaker label leaked into the translated CURRENT sentence.");
+
         const string unicodeEllipsis = "That's… not what I meant at all.";
         SmartPhraseContext? unicodeEllipsisBuilt = SmartPhraseContextBuilder.Build(
             unicodeEllipsis,
@@ -281,6 +297,71 @@ internal static class SmartPhraseTranslationFoundationTests
                   Result(properName, "river стоит на берегу.")).Reason ==
               SmartPhraseRejectionReason.ResidualEnglish,
             "An unrelated Latin token was accepted as a copied proper name.");
+
+        SmartPhraseTranslationRequest contextual = CreateRequest(
+            "Hey, why do you think ants cry?") with
+        {
+            PreviousContext = ["Kotarou", "Kotori said that ants never cry."]
+        };
+        Check(SmartPhraseTranslationGuard.Validate(
+                  contextual,
+                  Result(contextual, "Котару: «Эй, почему, по-твоему, муравьи плачут?»")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "A speaker label inferred from hidden context reached CURRENT.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  contextual,
+                  Result(contextual, "«Эй, почему, по-твоему, муравьи плачут?»")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "An outer quote wrapper absent from CURRENT was added by post-editing.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  contextual,
+                  Result(contextual, "Эй, почему, по-твоему, муравьи плачут?")).Accepted,
+            "A clean CURRENT-only translation was rejected because hidden context existed.");
+
+        SmartPhraseTranslationRequest literalSpeaker = CreateRequest(
+            "Kotarou: Hey, why do ants cry?",
+            properNames: ["Kotarou"]);
+        Check(SmartPhraseTranslationGuard.Validate(
+                  literalSpeaker,
+                  Result(literalSpeaker, "Котару: почему муравьи плачут?")).Accepted,
+            "A speaker label literally present in CURRENT was rejected.");
+
+        SmartPhraseTranslationRequest continued = CreateRequest(
+            "Sounds professional... and kind of like 'Cry Ant.'",
+            properNames: ["Cry", "Ant"]);
+        Check(SmartPhraseTranslationGuard.Validate(
+                  continued,
+                  Result(continued, "...профессионально и похоже на Cry Ant.")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "A model-generated leading ellipsis hid the first source clause.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  continued,
+                  Result(continued, "Звучит профессионально и похоже на Cry An.")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "A quoted English wordplay span was allowed to survive only partially.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  continued,
+                  Result(continued, "Звучит профессионально и похоже на Cry Ant.")).Accepted,
+            "A complete copied wordplay span was rejected.");
+
+        SmartPhraseTranslationRequest leadingEllipsis = CreateRequest(
+            "...and then she left.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  leadingEllipsis,
+                  Result(leadingEllipsis, "...а затем она ушла.")).Accepted,
+            "A leading ellipsis literally present in CURRENT was rejected.");
+
+        SmartPhraseTranslationRequest oneWord = CreateRequest("Boyquaintance.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  oneWord,
+                  Result(oneWord, "Парнезнакомый.")).Accepted,
+            "A one-word OOV VN utterance could not use the independent sentence translator.");
+        SmartPhraseTranslationRequest quotedOneWord = CreateRequest("\"Boyquaintance.\"");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  quotedOneWord,
+                  Result(quotedOneWord, "«Котори: мой знакомый»")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "A speaker inferred beside a quoted one-word utterance passed the structural guard.");
 
         SmartPhraseTranslationRequest uppercaseSource = CreateRequest(
             "LEMU BANK BY WATER",

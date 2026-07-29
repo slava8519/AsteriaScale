@@ -13,8 +13,10 @@ internal static class TranslateGemmaTranslationServiceTests
         VerifyPostEditPrompt();
         VerifyDeterministicCompletionRequest();
         VerifyCompletionResponseParsing();
-        VerifyCpuOnlyServerStartInfo();
+        VerifyBackendServerStartInfo();
+        VerifyVulkanStartupEvidence();
         await VerifyArtifactValidationAsync(tempRoot);
+        await VerifyRunnerArchiveResolutionAsync(tempRoot);
         await VerifyModelPathResolutionAsync(tempRoot);
         await VerifyCleanupFailurePreservationAsync();
         await VerifyRuntimeCleanupRetryAsync(tempRoot);
@@ -71,10 +73,48 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.DirectPromptIdentity ==
               "translategemma-direct-en-ru-v1" &&
               TranslateGemmaTranslationService.CorrectionPromptIdentity ==
-              "translategemma-ape-en-ru-v1" &&
+              "translategemma-ape-en-ru-v2" &&
               TranslateGemmaTranslationService.PromptIdentity ==
-              "translategemma-direct-ape-en-ru-v2",
+              "translategemma-direct-ape-en-ru-v3",
             "The experimental service silently changed the model/quantization.");
+        Check(TranslateGemmaTranslationService.GetModelIdentity(
+                  TranslateGemmaExecutionBackend.Cpu) ==
+              TranslateGemmaTranslationService.ModelIdentity &&
+              TranslateGemmaTranslationService.GetModelIdentity(
+                  TranslateGemmaExecutionBackend.Vulkan) ==
+              TranslateGemmaTranslationService.VulkanModelIdentity &&
+              TranslateGemmaTranslationService.VulkanModelIdentity.Contains(
+                  "llama.cpp-b9632-vulkan-full",
+                  StringComparison.Ordinal) &&
+              TranslateGemmaTranslationService.VulkanModelIdentity.Contains(
+                  TranslateGemmaTranslationService.ModelSha256,
+                  StringComparison.Ordinal) &&
+              TranslateGemmaTranslationService.ModelIdentity !=
+              TranslateGemmaTranslationService.VulkanModelIdentity,
+            "CPU and Vulkan execution identities are not distinct and pinned.");
+        Check(TranslateGemmaTranslationService.ResolveBackend("cpu") ==
+                  TranslateGemmaExecutionBackend.Cpu &&
+              TranslateGemmaTranslationService.ResolveBackend(null) ==
+                  TranslateGemmaExecutionBackend.Cpu &&
+              TranslateGemmaTranslationService.ResolveBackend("VULKAN") ==
+                  TranslateGemmaExecutionBackend.Vulkan &&
+              TranslateGemmaTranslationService.ResolveBackendIdentity(
+                  TranslateGemmaTranslationService.ModelIdentity) ==
+                  TranslateGemmaExecutionBackend.Cpu &&
+              TranslateGemmaTranslationService.ResolveBackendIdentity(
+                  TranslateGemmaTranslationService.VulkanModelIdentity) ==
+                  TranslateGemmaExecutionBackend.Vulkan &&
+              TranslateGemmaTranslationService.GetEngineLabel(
+                  TranslateGemmaExecutionBackend.Vulkan).Contains(
+                  "VULKAN",
+                  StringComparison.Ordinal),
+            "TranslateGemma backend settings or engine labels are not stable.");
+        CheckThrows<InvalidOperationException>(
+            () => TranslateGemmaTranslationService.ResolveBackend("unsupported"),
+            "An unknown explicit backend silently fell back to CPU.");
+        CheckThrows<InvalidOperationException>(
+            () => TranslateGemmaTranslationService.ResolveBackendIdentity("different-model"),
+            "An unknown model identity silently selected a runtime.");
         Check(TranslateGemmaTranslationService.ModelIdentity.Contains(
                   "mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42",
                   StringComparison.Ordinal) &&
@@ -87,6 +127,12 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.RunnerArchiveSha256 ==
               "b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd",
             "The llama.cpp CPU runner pin changed.");
+        Check(TranslateGemmaTranslationService.VulkanRunnerArchiveFileName ==
+                  "llama-b9632-bin-win-vulkan-x64.zip" &&
+              TranslateGemmaTranslationService.VulkanRunnerArchiveSize == 38_545_553 &&
+              TranslateGemmaTranslationService.VulkanRunnerArchiveSha256 ==
+                  "90b914ff48167370190477ff3f54fd2c4eb034a305b943913eaa310eda78793d",
+            "The llama.cpp Vulkan runner pin changed.");
         Check(TranslateGemmaTranslationService.ContextSize == 2_048,
             "The official TranslateGemma input budget changed without a measured experiment.");
     }
@@ -157,12 +203,14 @@ internal static class TranslateGemmaTranslationServiceTests
         string prompt = TranslateGemmaTranslationService.BuildPostEditRawPrompt(
             request,
             "Она открыла древние ворота.");
-        Check(prompt.Contains("PREVIOUS (DO NOT TRANSLATE", StringComparison.Ordinal) &&
+        Check(prompt.Contains("PREVIOUS_CONTEXT (DO NOT TRANSLATE", StringComparison.Ordinal) &&
               prompt.Contains("CURRENT (TRANSLATE ONLY THIS", StringComparison.Ordinal) &&
               prompt.Contains(previous, StringComparison.Ordinal) &&
               prompt.Contains(current, StringComparison.Ordinal) &&
               prompt.Contains("ancient gate", StringComparison.Ordinal) &&
-              prompt.Contains("древние ворота", StringComparison.Ordinal),
+              prompt.Contains("древние ворота", StringComparison.Ordinal) &&
+              prompt.Contains("never emit its speakerMetadata", StringComparison.Ordinal) &&
+              prompt.Contains("internal ellipsis marks hesitation", StringComparison.Ordinal),
             "The post-edit prompt lost its typed context or semantic evidence.");
         Check(prompt.Split(current, StringSplitOptions.None).Length == 2 &&
               prompt.Split(previous, StringSplitOptions.None).Length == 2,
@@ -183,6 +231,21 @@ internal static class TranslateGemmaTranslationServiceTests
                 injected,
                 "Она не открыла древние ворота."),
             "Hidden hook context was allowed to inject a Gemma turn marker.");
+
+        using JsonDocument typedContext = JsonDocument.Parse(
+            TranslateGemmaTranslationService.BuildPreviousContextPromptJson(
+                ["Kotori", "[Park staff] Wait here.", "Kotarou: Hurry.", previous]));
+        JsonElement[] entries = typedContext.RootElement.EnumerateArray().ToArray();
+        Check(entries.Length == 4 &&
+              entries[0].GetProperty("speakerMetadata").GetString() == "Kotori" &&
+              entries[0].GetProperty("text").GetString() == string.Empty &&
+              entries[1].GetProperty("speakerMetadata").GetString() == "Park staff" &&
+              entries[1].GetProperty("text").GetString() == "Wait here." &&
+              entries[2].GetProperty("speakerMetadata").GetString() == "Kotarou" &&
+              entries[2].GetProperty("text").GetString() == "Hurry." &&
+              entries[3].GetProperty("speakerMetadata").ValueKind == JsonValueKind.Null &&
+              entries[3].GetProperty("text").GetString() == previous,
+            "Textractor speaker metadata was not isolated from previous dialogue text.");
 
         SmartPhraseGuardResult clean = new(
             Accepted: true,
@@ -270,19 +333,20 @@ internal static class TranslateGemmaTranslationServiceTests
             "Malformed llama-server JSON was accepted.");
     }
 
-    private static void VerifyCpuOnlyServerStartInfo()
+    private static void VerifyBackendServerStartInfo()
     {
-        ProcessStartInfo startInfo = TranslateGemmaTranslationService.CreateServerStartInfo(
+        ProcessStartInfo cpu = TranslateGemmaTranslationService.CreateServerStartInfo(
             @"C:\runtime\llama-server.exe",
             @"C:\runtime",
             @"C:\models\translate gemma.gguf",
             43123,
-            "random-secret");
-        string[] arguments = startInfo.ArgumentList.ToArray();
+            "random-secret",
+            TranslateGemmaExecutionBackend.Cpu);
+        string[] arguments = cpu.ArgumentList.ToArray();
 
-        Check(!startInfo.UseShellExecute && startInfo.CreateNoWindow &&
-              startInfo.WindowStyle == ProcessWindowStyle.Hidden &&
-              startInfo.RedirectStandardOutput && startInfo.RedirectStandardError,
+        Check(!cpu.UseShellExecute && cpu.CreateNoWindow &&
+              cpu.WindowStyle == ProcessWindowStyle.Hidden &&
+              cpu.RedirectStandardOutput && cpu.RedirectStandardError,
             "The owned server could open a console or block on an undrained pipe.");
         Check(HasPair(arguments, "--host", "127.0.0.1") &&
               HasPair(arguments, "--port", "43123") &&
@@ -294,6 +358,47 @@ internal static class TranslateGemmaTranslationServiceTests
         Check(arguments.Contains("--no-jinja", StringComparer.Ordinal) &&
               arguments.Contains("--no-webui", StringComparer.Ordinal),
             "The raw-completion runtime enabled Jinja parsing or llama.cpp's web UI.");
+
+        ProcessStartInfo vulkan = TranslateGemmaTranslationService.CreateServerStartInfo(
+            @"C:\runtime\llama-server.exe",
+            @"C:\runtime",
+            @"C:\models\translate gemma.gguf",
+            43124,
+            "vulkan-secret",
+            TranslateGemmaExecutionBackend.Vulkan);
+        string[] vulkanArguments = vulkan.ArgumentList.ToArray();
+        Check(HasPair(vulkanArguments, "--device", "Vulkan0") &&
+              HasPair(vulkanArguments, "--n-gpu-layers", "all") &&
+              HasPair(vulkanArguments, "--fit", "off") &&
+              HasPair(vulkanArguments, "-lv", "4") &&
+              HasPair(vulkanArguments, "--api-key", "vulkan-secret") &&
+              !HasPair(vulkanArguments, "--n-gpu-layers", "0"),
+            "The Vulkan server is not pinned to full Vulkan0 offload without auto-fit.");
+    }
+
+    private static void VerifyVulkanStartupEvidence()
+    {
+        TranslateGemmaTranslationService.VulkanStartupEvidenceTracker accepted = new();
+        accepted.Observe("common_init: using device Vulkan0 (AMD Radeon 860M) - 4096 MiB free");
+        accepted.Observe("load_tensors: offloaded 35/35 layers to GPU");
+        Check(accepted.IsComplete && accepted.DescribeMissing().Length == 0,
+            "A complete Vulkan0/full-offload startup log was rejected.");
+
+        TranslateGemmaTranslationService.VulkanStartupEvidenceTracker partial = new();
+        partial.Observe("common_init: using device Vulkan0 (AMD Radeon 860M) - 4096 MiB free");
+        partial.Observe("load_tensors: offloaded 34/35 layers to GPU");
+        Check(!partial.IsComplete &&
+              partial.DescribeMissing().Contains(
+                  "offloaded 35/35 layers to GPU",
+                  StringComparison.Ordinal),
+            "A partial Vulkan offload was accepted as the full GPU backend.");
+
+        TranslateGemmaTranslationService.VulkanStartupEvidenceTracker wrongDevice = new();
+        wrongDevice.Observe("common_init: using device Vulkan1 (other GPU) - 8192 MiB free");
+        wrongDevice.Observe("load_tensors: offloaded 35/35 layers to GPU");
+        Check(!wrongDevice.IsComplete &&
+              wrongDevice.DescribeMissing().Contains("Vulkan0", StringComparison.Ordinal),
+            "A different Vulkan device satisfied the pinned Vulkan0 contract.");
     }
 
     private static async Task VerifyArtifactValidationAsync(string tempRoot)
@@ -327,6 +432,35 @@ internal static class TranslateGemmaTranslationServiceTests
                 expectedSize: null,
                 sha256),
             "A missing pinned artifact passed validation.");
+    }
+
+    private static async Task VerifyRunnerArchiveResolutionAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "translategemma-runner-resolution");
+        Directory.CreateDirectory(root);
+        string cpu = Path.Combine(
+            root,
+            TranslateGemmaTranslationService.RunnerArchiveFileName);
+        await File.WriteAllBytesAsync(cpu, []);
+
+        Check(TranslateGemmaTranslationService.FindRunnerArchivePath(
+                  root,
+                  TranslateGemmaExecutionBackend.Cpu) == cpu,
+            "The CPU profile did not resolve its exact pinned archive.");
+        CheckThrows<FileNotFoundException>(
+            () => TranslateGemmaTranslationService.FindRunnerArchivePath(
+                root,
+                TranslateGemmaExecutionBackend.Vulkan),
+            "A missing Vulkan archive silently fell back to the installed CPU runner.");
+
+        string vulkan = Path.Combine(
+            root,
+            TranslateGemmaTranslationService.VulkanRunnerArchiveFileName);
+        await File.WriteAllBytesAsync(vulkan, []);
+        Check(TranslateGemmaTranslationService.FindRunnerArchivePath(
+                  root,
+                  TranslateGemmaExecutionBackend.Vulkan) == vulkan,
+            "The Vulkan profile did not resolve its exact pinned archive.");
     }
 
     private static async Task VerifyModelPathResolutionAsync(string tempRoot)

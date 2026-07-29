@@ -8,8 +8,8 @@
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
-| Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | только для полного/экранного перевода |
-| TranslateGemma 4B Q4_K_M + llama.cpp | b9632 | опционально, независимый перевод фразы второй строкой |
+| Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | полный fallback Smart и внутренние full-text диагностики |
+| TranslateGemma 4B Q4_K_M + llama.cpp CPU/Vulkan | b9632 | опционально, независимый перевод фразы второй строкой |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
 | SANDWiCH dual encoder | NAACL 2025, upstream `daca3cad…` | опционально, экспериментальный CPU semantic ranker |
 | ConSeC/WNGT | upstream `9602b5fd…`, CC BY-NC-SA 4.0 | опционально, личный научный/некоммерческий CPU ranker |
@@ -237,14 +237,21 @@ TranslateGemma не входит в git, публикацию или обычн�
 - `llama-b9632-bin-win-cpu-x64.zip` — CPU runner llama.cpp b9632,
   `16 899 258` байт,
   SHA-256 `b835d5c5155dd2a5ed748a0351debf2ede0dc9f808757e0429f8700a11832dcd`;
+- `llama-b9632-bin-win-vulkan-x64.zip` — Vulkan runner llama.cpp b9632,
+  `38 545 553` байт,
+  SHA-256 `90b914ff48167370190477ff3f54fd2c4eb034a305b943913eaa310eda78793d`;
 - локальная копия `GEMMA_TERMS.txt`.
 
 Runtime также узнаёт точный blob с тем же SHA-256 в `OLLAMA_MODELS` (либо
 `%USERPROFILE%\.ollama\models`), но не принимает другой quant или похожий тег.
 `TranslateGemmaTranslationService` проверяет pins перед запуском, распаковывает
 runner в принадлежащий приложению временный каталог и поднимает скрытый
-`llama-server` только на `127.0.0.1` со случайным API-ключом, context `2048` и
-`--n-gpu-layers 0`: этот эксперимент сейчас **CPU-only**. Встроенный в GGUF
+`llama-server` только на `127.0.0.1` со случайным API-ключом и context `2048`.
+Backend выбирается явно: CPU запускается с `--n-gpu-layers 0`, Vulkan — через
+закреплённый Vulkan runner с `--device Vulkan0 --n-gpu-layers all --fit off`.
+Автоматического CPU fallback нет: отсутствие выбранного runner, Vulkan0
+device или подтверждения полного offload является ошибкой только независимой
+второй строки и не затрагивает словарный primary. Встроенный в GGUF
 мультимодальный Jinja-template llama.cpp b9632 не может проверить со своим
 тестовым string-content и завершает сервер до первого запроса. Поэтому runtime
 явно использует `--no-jinja` и детерминированный raw `/completion` с тем же
@@ -262,32 +269,52 @@ ownership повторно проверяется непосредственно
 После установки отдельную живую проверку модели можно выполнить без запуска UI:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-translategemma.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\verify-translategemma.ps1 -Backend Cpu
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\verify-translategemma.ps1 -Backend Vulkan
 ```
 
 Скрипт перепроверяет закреплённые артефакты, запускает скрытый loopback-server
 во временном каталоге, переводит четыре диагностические фразы и гарантированно
-останавливает принадлежащий ему процесс. Это live-проверка доступности и
-контракта runtime, а не количественная оценка качества.
+останавливает принадлежащий ему процесс. Backend обязателен: один runner никогда
+не подменяется другим. Vulkan-проверка до первого probe требует в verbose-журнале
+Vulkan0 и `offloaded 35/35 layers to GPU`; успешного `/health` без этих
+свидетельств недостаточно. Это live-проверка доступности и контракта runtime, а
+не количественная оценка качества.
+
+Контрольный прогон Vulkan на Radeon 860M с выделенными `4 ГБ` UMA сообщил
+`2 663 MiB` projected device memory: `2 368 MiB` model, `214 MiB` context и
+`81 MiB` compute; подтверждён полный offload `35/35`. После прогрева один direct
+probe занял `1,266 с` при `31,57 token/s`. Это измерение конкретной машины и
+закреплённого b9632/Q4_K_M, а не минимальная гарантия для другого GPU.
 
 После установки включите в UI: `Умный словарь` →
 `Перевод фразы второй строкой` →
-`TranslateGemma 4B — перевод фразы второй строкой`. Режим по умолчанию
-выключен. Основной словарный результат или решение выбранного ranker показывается сразу;
+`TranslateGemma 4B — перевод предложения второй строкой`, затем отдельно выберите
+`CPU` или `Vulkan GPU`. Режим по умолчанию выключен, а backend по умолчанию и
+при миграции старых настроек — CPU. Основной словарный результат или решение
+выбранного ranker показывается сразу;
 после этого TranslateGemma независимо обрабатывает любой английский smart-result,
 включая miss, abstention, trusted/heuristic-путь и попадание в кэш. Источник —
-полное текущее предложение длиной от 2 до 64 слов. Перед prompt узкий
+полное текущее предложение длиной от 1 до 64 слов. Перед prompt узкий
 `SmartPhraseIdiomRewriter` может детерминированно заменить доказанную идиому на
 однозначную английскую парафразу; русский primary и semantic evidence он не
-читает. Первый direct prompt получает только effective English. При длинном
+читает. Sentence-wide semantic scaffold передаёт выбранному ranker до 12
+остальных неоднозначных целей исходного предложения; hovered target повторно не
+ранжируется, а синтетическая idiom-парафраза не используется как WSD-контекст.
+Первый direct prompt получает только effective English. При длинном
 тексте, совпавшей истории Textractor, scaffold-терминах или принятом sense
 разрешён один отдельный APE post-edit: до трёх предыдущих строк передаются как
-`DO NOT TRANSLATE`, а provider-neutral evidence содержит английские определения
+типизированные `context_only` entries с отдельно помеченной speaker metadata, а
+provider-neutral evidence содержит английские определения
 и выбранные/отвергнутые поверхности как ограниченные, необязательные опоры.
 
 Generic guard проверяет размер и русскоязычность ответа, управляющие символы,
 prompt echo исходной и effective-фразы, объяснения и residual English с
-исключением устойчивых собственных имён. Он намеренно не требует повторить
+исключением устойчивых собственных имён. Он также отклоняет speaker prefix,
+внешние кавычки или начальное многоточие, которых нет в CURRENT, и частично
+скопированную английскую цитату. Он намеренно не требует повторить
 перевод слова из первой строки. При
 ошибке основной результат остаётся на месте, а вторая строка становится
 `Перевод фразы недоступен`; этот путь не обращается к full-Qwen. Проверенные
@@ -295,11 +322,14 @@ prompt echo исходной и effective-фразы, объяснения и re
 `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v4.json`; fingerprint v4
 включает исходную и effective-фразу, identity преобразования, упорядоченную
 скрытую историю, semantic plan, устойчивые собственные имена, model identity и
-prompt version. Cache hit по-прежнему
+prompt version. Model identity включает выбранный CPU/Vulkan backend и профиль
+offload, поэтому GPU и CPU никогда не делят один принятый результат. Cache hit по-прежнему
 сначала проверяет runtime и закреплённые артефакты.
 
-Default smoke проверяет direct/APE prompt, request, parser, artifact pins, полное
-предложение 2–64 слова, идиоматические и буквальные пары, generic guard, cache v4, miss/abstention
+Default smoke проверяет direct/APE prompt, request, parser, pins обоих runner,
+явную CPU/Vulkan маршрутизацию без fallback, полное
+предложение 1–64 слова, sentence-wide sense evidence, идиоматические и буквальные пары,
+структурный guard, cache v4, miss/abstention
 routing, независимость основной и второй строк и fail-open без запуска или
 загрузки живой модели.
 Систематический live A/B качества и задержки ещё не проведён.

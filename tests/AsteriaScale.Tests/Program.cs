@@ -149,6 +149,7 @@ try
             SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.OnDemand,
             SmartDictionaryKeepWarm = false,
             SmartPhraseTranslationMode = SmartPhraseTranslationModes.TranslateGemma,
+            SmartPhraseTranslationBackend = SmartPhraseTranslationBackends.Vulkan,
             DpiOverrides =
             [
                 new ManagedDpiOverride
@@ -183,12 +184,18 @@ try
                loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Japanese &&
                loaded.SmartDictionaryFallbackMode == SmartDictionaryFallbackModes.OnDemand &&
                !loaded.SmartDictionaryKeepWarm &&
-               loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.TranslateGemma,
+               loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.TranslateGemma &&
+               loaded.SmartPhraseTranslationBackend == SmartPhraseTranslationBackends.Vulkan,
             "Smart dictionary settings were not preserved.");
         Assert(HoverTranslationModes.Normalize("SCREEN") == HoverTranslationModes.Screen,
             "Screen translation mode was not recognized.");
         Assert(HoverTranslationModes.Normalize("SMART") == HoverTranslationModes.Smart,
             "Smart dictionary mode was not recognized.");
+        Assert(HoverTranslationModes.NormalizeUserMode("DICTIONARY") ==
+                   HoverTranslationModes.Dictionary &&
+               HoverTranslationModes.NormalizeUserMode("SMART") ==
+                   HoverTranslationModes.Smart,
+            "User-facing translation modes were not normalized.");
         Assert(SmartDictionaryBackends.Normalize("NPU") == SmartDictionaryBackends.Npu &&
                SmartDictionaryBackends.Normalize("CPU") == SmartDictionaryBackends.Cpu &&
                SmartDictionaryBackends.Normalize("GPU") == SmartDictionaryBackends.Cpu &&
@@ -221,12 +228,42 @@ try
                SmartPhraseTranslationModes.TranslateGemma &&
                SmartPhraseTranslationModes.Normalize("unsupported") == SmartPhraseTranslationModes.Off,
             "Smart phrase translation mode normalization failed.");
+        Assert(SmartPhraseTranslationBackends.Normalize("VULKAN") ==
+                   SmartPhraseTranslationBackends.Vulkan &&
+               SmartPhraseTranslationBackends.Normalize("unsupported") ==
+                   SmartPhraseTranslationBackends.Cpu,
+            "Smart phrase translation backend normalization failed.");
         Assert(loaded.Profiles.Count == 1 && loaded.Profiles[0].ProcessName == "novel", "Profile was not preserved.");
         Assert(loaded.DpiOverrides.Count == 1 &&
                loaded.DpiOverrides[0].OriginalCompatibilityLayers == "~ WIN7RTM",
             "Managed DPI override backup was not preserved.");
         string json = await File.ReadAllTextAsync(path);
         Assert(!json.Contains("\"Details\"", StringComparison.Ordinal), "Computed UI details must not be stored.");
+    });
+
+    await RunAsync("Legacy hidden translation modes migrate to smart", async () =>
+    {
+        (string Name, string Json)[] legacySettings =
+        [
+            ("neural", "{\"hoverTranslationMode\":\"neural\"}"),
+            ("screen", "{\"hoverTranslationMode\":\"screen\"}"),
+            ("unknown", "{\"hoverTranslationMode\":\"unsupported\"}"),
+            ("null", "{\"hoverTranslationMode\":null}")
+        ];
+
+        foreach ((string name, string json) in legacySettings)
+        {
+            string path = Path.Combine(
+                tempRoot,
+                $"legacy-hover-mode-{name}",
+                "settings.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, json);
+
+            AppSettings loaded = await new SettingsService(path).LoadAsync();
+            Assert(loaded.HoverTranslationMode == HoverTranslationModes.Smart,
+                $"Legacy user-facing mode '{name}' did not migrate to smart.");
+        }
     });
 
     await RunAsync("Legacy smart dictionary defaults", async () =>
@@ -248,6 +285,8 @@ try
             "Existing settings must keep the smart dictionary model warm by default.");
         Assert(loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.Off,
             "Existing settings must not silently enable the optional phrase model.");
+        Assert(loaded.SmartPhraseTranslationBackend == SmartPhraseTranslationBackends.Cpu,
+            "Existing settings must retain the compatible CPU phrase backend.");
 
         string gpuPath = Path.Combine(tempRoot, "legacy-gpu-settings", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(gpuPath)!);
@@ -255,6 +294,24 @@ try
         AppSettings migrated = await new SettingsService(gpuPath).LoadAsync();
         Assert(migrated.SmartDictionaryBackend == SmartDictionaryBackends.Cpu,
             "The legacy GPU smart-ranker backend must migrate to CPU.");
+
+        string invalidPhrasePath = Path.Combine(
+            tempRoot,
+            "invalid-phrase-settings",
+            "settings.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(invalidPhrasePath)!);
+        await File.WriteAllTextAsync(
+            invalidPhrasePath,
+            "{\"smartPhraseTranslationMode\":\"unsupported\",\"smartPhraseTranslationBackend\":\"unsupported\"}");
+        AppSettings invalidPhrase = await new SettingsService(invalidPhrasePath).LoadAsync();
+        Assert(invalidPhrase.SmartPhraseTranslationMode == SmartPhraseTranslationModes.Off &&
+               invalidPhrase.SmartPhraseTranslationBackend == SmartPhraseTranslationBackends.Cpu &&
+               Directory.EnumerateFiles(
+                       Path.GetDirectoryName(invalidPhrasePath)!,
+                       "settings.json.broken-*",
+                       SearchOption.TopDirectoryOnly)
+                   .Any(),
+            "Invalid phrase settings were silently coerced instead of backed up and reset.");
     });
 
     await RunAsync("Per-app DPI compatibility", () => DpiCompatibilityServiceTests.RunAsync(tempRoot));

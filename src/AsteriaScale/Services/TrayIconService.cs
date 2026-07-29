@@ -10,9 +10,7 @@ public sealed class TrayIconService : IDisposable
     private readonly Forms.ToolStripMenuItem _automationItem;
     private readonly Forms.ToolStripMenuItem _translationItem;
     private readonly Forms.ToolStripMenuItem _smartModeItem;
-    private readonly Forms.ToolStripMenuItem _neuralModeItem;
     private readonly Forms.ToolStripMenuItem _dictionaryModeItem;
-    private readonly Forms.ToolStripMenuItem _screenModeItem;
     private readonly Action _showWindow;
     private readonly Func<Task> _scaleLastWindow;
     private readonly Action<bool> _setAutomation;
@@ -64,17 +62,11 @@ public sealed class TrayIconService : IDisposable
 
         Forms.ToolStripMenuItem translationModeItem = new("Режим перевода");
         _smartModeItem = new Forms.ToolStripMenuItem("Умный словарь — выбор по контексту");
-        _neuralModeItem = new Forms.ToolStripMenuItem("Нейросетевой — вся реплика");
         _dictionaryModeItem = new Forms.ToolStripMenuItem("Словарный — слово или выражение");
-        _screenModeItem = new Forms.ToolStripMenuItem("Экран по клавише — Alt+Shift+T");
         _smartModeItem.Click += (_, _) => _setTranslationMode(HoverTranslationModes.Smart);
-        _neuralModeItem.Click += (_, _) => _setTranslationMode(HoverTranslationModes.Neural);
         _dictionaryModeItem.Click += (_, _) => _setTranslationMode(HoverTranslationModes.Dictionary);
-        _screenModeItem.Click += (_, _) => _setTranslationMode(HoverTranslationModes.Screen);
         translationModeItem.DropDownItems.Add(_smartModeItem);
-        translationModeItem.DropDownItems.Add(_neuralModeItem);
         translationModeItem.DropDownItems.Add(_dictionaryModeItem);
-        translationModeItem.DropDownItems.Add(_screenModeItem);
         SetTranslationMode(hoverTranslationMode);
 
         Forms.ToolStripMenuItem exitItem = new("Выход");
@@ -137,11 +129,9 @@ public sealed class TrayIconService : IDisposable
 
     public void SetTranslationMode(string mode)
     {
-        string normalized = HoverTranslationModes.Normalize(mode);
+        string normalized = HoverTranslationModes.NormalizeUserMode(mode);
         _smartModeItem.Checked = normalized == HoverTranslationModes.Smart;
-        _neuralModeItem.Checked = normalized == HoverTranslationModes.Neural;
         _dictionaryModeItem.Checked = normalized == HoverTranslationModes.Dictionary;
-        _screenModeItem.Checked = normalized == HoverTranslationModes.Screen;
     }
 
     private void OnAutomationCheckedChanged(object? sender, EventArgs e)
