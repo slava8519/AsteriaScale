@@ -225,6 +225,10 @@ try
         Assert(!json.Contains("\"Details\"", StringComparison.Ordinal), "Computed UI details must not be stored.");
     });
 
+    await RunAsync(
+        "Per-game speaker gender preferences",
+        () => SpeakerGenderPreferenceTests.RunAsync(tempRoot));
+
     await RunAsync("Legacy hidden translation modes migrate to smart", async () =>
     {
         (string Name, string Json)[] legacySettings =
@@ -2651,6 +2655,8 @@ try
         Assert(!context.Text.Contains("Sakuya", StringComparison.Ordinal) &&
                !context.Text.Contains("little significance", StringComparison.Ordinal),
             "The speaker label or preceding sentence leaked into neural translation context.");
+        Assert(context.CurrentSpeaker is { Name: "Sakuya", Gender: SpeakerGender.Unknown },
+            "The nearest OCR nameplate was not preserved as typed speaker metadata.");
         Assert(context.Text[context.CharacterIndex..].StartsWith("able", StringComparison.Ordinal),
             "The hovered character position was not preserved after line reconstruction.");
 
@@ -2671,6 +2677,8 @@ try
             "An unrelated UI line between dialogue rows interrupted spatial sentence assembly.");
         Assert(!interleaved.Text.Contains("Q.Save", StringComparison.Ordinal),
             "An unrelated side control leaked into the dialogue sentence.");
+        Assert(interleaved.CurrentSpeaker is null,
+            "An unrelated UI control was mistaken for an OCR speaker nameplate.");
         return Task.CompletedTask;
     });
 
@@ -2919,6 +2927,27 @@ try
                    IsSentenceContextStable: true
                } && !usedSecond,
             "Identical OCR observations should stabilize without replacing the first geometry.");
+
+        HoverOcrResult namedComplete = complete with
+        {
+            CurrentSpeaker = new CurrentSpeakerContext("Sakuya")
+        };
+        HoverOcrResult? stableNamed = WindowsAiOcrService.StabilizeSentenceContext(
+            namedComplete,
+            namedComplete,
+            out usedSecond);
+        Assert(stableNamed?.CurrentSpeaker is { Name: "Sakuya" },
+            "Two matching OCR nameplates did not preserve current speaker metadata.");
+        HoverOcrResult? conflictingNameplates =
+            WindowsAiOcrService.StabilizeSentenceContext(
+                namedComplete,
+                namedComplete with
+                {
+                    CurrentSpeaker = new CurrentSpeakerContext("Sakvya")
+                },
+                out usedSecond);
+        Assert(conflictingNameplates?.CurrentSpeaker is null,
+            "Conflicting OCR nameplates assigned an unstable speaker identity.");
 
         HoverOcrResult dangling = complete with
         {

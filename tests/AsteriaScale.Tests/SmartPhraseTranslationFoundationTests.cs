@@ -239,7 +239,12 @@ internal static class SmartPhraseTranslationFoundationTests
             speakerLine,
             "Boyquaintance",
             speakerLine.IndexOf("Boyquaintance", StringComparison.Ordinal));
-        Check(speakerLineBuilt is { Text: "\"Boyquaintance.\"", CharacterIndex: 1 },
+        Check(speakerLineBuilt is
+              {
+                  Text: "\"Boyquaintance.\"",
+                  CharacterIndex: 1,
+                  CurrentSpeaker.Name: "Kotori"
+              },
             "A standalone OCR speaker line leaked into the translated CURRENT sentence.");
 
         const string bracketedSpeaker = "[Park staff] \"Wait here.\"";
@@ -247,8 +252,43 @@ internal static class SmartPhraseTranslationFoundationTests
             bracketedSpeaker,
             "Wait",
             bracketedSpeaker.IndexOf("Wait", StringComparison.Ordinal));
-        Check(bracketedSpeakerBuilt is { Text: "\"Wait here.\"", CharacterIndex: 1 },
+        Check(bracketedSpeakerBuilt is
+              {
+                  Text: "\"Wait here.\"",
+                  CharacterIndex: 1,
+                  CurrentSpeaker.Name: "Park staff"
+              },
             "A bracketed text-hook speaker label leaked into the translated CURRENT sentence.");
+
+        const string colonSpeaker = "Shizuru: I was worried about you.";
+        SmartPhraseContext? colonSpeakerBuilt = SmartPhraseContextBuilder.Build(
+            colonSpeaker,
+            "worried",
+            colonSpeaker.IndexOf("worried", StringComparison.Ordinal));
+        Check(colonSpeakerBuilt is
+              {
+                  Text: "I was worried about you.",
+                  CurrentSpeaker.Name: "Shizuru"
+              } &&
+              colonSpeakerBuilt.Value.Text[colonSpeakerBuilt.Value.CharacterIndex..]
+                  .StartsWith("worried", StringComparison.Ordinal),
+            "A colon speaker label was not separated from translated CURRENT.");
+        Check(!SpeakerMetadataParser.TryFindLeadingSpeaker(
+                  "I said: the bank was closed.",
+                  "I said: the bank was closed.".IndexOf("bank", StringComparison.Ordinal),
+                  out _,
+                  out _) &&
+              !SpeakerMetadataParser.TryParseStandaloneName("Wait", out _),
+            "Ordinary colon prose or a one-word utterance was mistaken for a speaker.");
+
+        CurrentSpeakerContext upstreamSpeaker = new("Sakuya");
+        SmartPhraseContext? propagatedSpeaker = SmartPhraseContextBuilder.Build(
+            "I was late.",
+            "late",
+            6,
+            upstreamSpeaker);
+        Check(propagatedSpeaker?.CurrentSpeaker == upstreamSpeaker,
+            "Typed upstream speaker metadata was dropped by phrase extraction.");
 
         const string danglingSpeakerQuote =
             "[Park staff] \"Why do you think it is necessary to raise the air pressure?";
@@ -837,6 +877,28 @@ internal static class SmartPhraseTranslationFoundationTests
         CheckDifferent(request with { ProperNames = ["LeMU"] }, "proper-name whitelist");
         CheckDifferent(request with { PreviousContext = ["She looked away."] },
             "ordered hidden context");
+        CheckDifferent(request with
+        {
+            CurrentSpeaker = new CurrentSpeakerContext(
+                "Kotori",
+                SpeakerGender.Feminine,
+                "path:c:/games/rewrite.exe")
+        }, "current speaker metadata");
+        SmartPhraseTranslationRequest feminineSpeaker = request with
+        {
+            CurrentSpeaker = new CurrentSpeakerContext("Kotori", SpeakerGender.Feminine)
+        };
+        Check(
+            SmartPhraseTranslationCache.CreateFingerprint(feminineSpeaker) !=
+            SmartPhraseTranslationCache.CreateFingerprint(
+                feminineSpeaker with
+                {
+                    CurrentSpeaker = feminineSpeaker.CurrentSpeaker with
+                    {
+                        Gender = SpeakerGender.Masculine
+                    }
+                }),
+            "The phrase-cache key reused a translation across speaker genders.");
         CheckDifferent(request with
         {
             SemanticTerms = [new ScaffoldTerm("river", "река", 1)]

@@ -73,9 +73,9 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.DirectPromptIdentity ==
               "translategemma-direct-en-ru-v1" &&
               TranslateGemmaTranslationService.CorrectionPromptIdentity ==
-              "translategemma-ape-en-ru-v3" &&
+              "translategemma-ape-en-ru-v4" &&
               TranslateGemmaTranslationService.PromptIdentity ==
-              "translategemma-direct-ape-en-ru-v4",
+              "translategemma-direct-ape-en-ru-v5",
             "The experimental service silently changed the model/quantization.");
         Check(TranslateGemmaTranslationService.GetModelIdentity(
                   TranslateGemmaExecutionBackend.Cpu) ==
@@ -189,6 +189,10 @@ internal static class TranslateGemmaTranslationServiceTests
         {
             ProperNames = ["LeMU"],
             PreviousContext = [previous],
+            CurrentSpeaker = new CurrentSpeakerContext(
+                "Kotori",
+                SpeakerGender.Feminine,
+                "path:c:/games/rewrite.exe"),
             SemanticTerms = [new ScaffoldTerm("ancient gate", "древние ворота", 1)],
             SenseHints =
             [
@@ -214,6 +218,10 @@ internal static class TranslateGemmaTranslationServiceTests
               prompt.Contains("advisory identity anchors", StringComparison.Ordinal) &&
               prompt.Contains("transliterating naturally", StringComparison.Ordinal) &&
               prompt.Contains("never emit its speakerMetadata", StringComparison.Ordinal) &&
+              prompt.Contains("CURRENT_SPEAKER (DO NOT OUTPUT", StringComparison.Ordinal) &&
+              !prompt.Contains("Kotori", StringComparison.Ordinal) &&
+              prompt.Contains("\"grammaticalGender\":\"feminine\"", StringComparison.Ordinal) &&
+              prompt.Contains("Never apply that gender to an addressee", StringComparison.Ordinal) &&
               prompt.Contains("internal ellipsis marks hesitation", StringComparison.Ordinal),
             "The post-edit prompt lost its typed context or semantic evidence.");
         Check(prompt.Split(current, StringSplitOptions.None).Length == 2 &&
@@ -261,6 +269,7 @@ internal static class TranslateGemmaTranslationServiceTests
             SourcePhrase = shortCurrent,
             ModelInputPhrase = shortCurrent,
             PreviousContext = Array.Empty<string>(),
+            CurrentSpeaker = null,
             SemanticTerms = Array.Empty<ScaffoldTerm>(),
             SenseHints = Array.Empty<ScaffoldSenseHint>()
         };
@@ -290,6 +299,14 @@ internal static class TranslateGemmaTranslationServiceTests
                 clean) &&
               TranslateGemmaTranslationService.ShouldPostEdit(
                   shortRequest with { PreviousContext = [previous] },
+                  clean) &&
+              TranslateGemmaTranslationService.ShouldPostEdit(
+                  shortRequest with
+                  {
+                      CurrentSpeaker = new CurrentSpeakerContext(
+                          "Kotori",
+                          SpeakerGender.Feminine)
+                  },
                   clean) &&
               TranslateGemmaTranslationService.ShouldPostEdit(
                   shortRequest,

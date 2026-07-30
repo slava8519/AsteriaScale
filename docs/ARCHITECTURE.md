@@ -136,9 +136,12 @@ graph LR
     Переносы визуально обёрнутой OCR-строки не считаются границей. Превышение
     общего бюджета отклоняет всю вторую строку — частичное предложение никогда
     не отправляется модели. При совпавшем text-hook используется текущая строка
-    Textractor с тем же якорем. Ведущая отдельная строка имени говорящего или
-    bracketed speaker tag отделяется от CURRENT; поэтому однословные VN-неологизмы
-    также можно перевести независимо. Затем `SmartPhraseIdiomRewriter` может
+    Textractor с тем же якорем. Ведущая отдельная строка имени говорящего,
+    bracketed speaker tag или безопасный `Name:`-prefix отделяется от CURRENT и
+    сохраняется как типизированный `CurrentSpeakerContext`; поэтому однословные
+    VN-неологизмы также можно переводить независимо. OCR принимает отдельную
+    подпись только при двух совпавших наблюдениях, а text-hook — только из того
+    же PID/потока и ближайшей свежей строки. Затем `SmartPhraseIdiomRewriter` может
     заменить только узко доказанный английский оборот на однозначную английскую
     парафразу, если оборот пересекает hovered target. Сейчас это только закрытый
     шаблон `butter <object-pronoun> up`; буквальные, неполные и неизвестные
@@ -161,8 +164,11 @@ graph LR
     semantic sense evidence или отклонённого direct-ответа допускается **ровно один**
     отдельный APE/post-edit запрос. Он получает direct-черновик, до трёх
     предыдущих строк того же PID и точного hook-потока как типизированные
-    `context_only` JSON entries; speaker metadata отделена и явно запрещена к
-    выводу. Запрос также получает ограниченные смысловые опоры. История и опоры не входят
+    `context_only` JSON entries. Явно сохранённый для этой игры род текущего
+    говорящего передаётся отдельно как `masculine`/`feminine`; имя и ключ игры
+    модели не передаются. Род применяется только к формам, субъектом которых
+    является текущий говорящий, а не к адресату или третьему лицу. Неизвестный
+    род не угадывается. Запрос также получает ограниченные смысловые опоры. История и опоры не входят
     в current payload, не показываются и не сканируются как текст для перевода.
     Оба запроса используют один lock и общий 90-секундный бюджет.
 
@@ -177,8 +183,8 @@ graph LR
     цитату. Он требует high-confidence deterministic terms и отклоняет
     явную отвергнутую ranker-поверхность при отсутствии выбранной; естественные
     синонимы без отрицательного evidence остаются допустимы.
-    Persistent SHA-LRU v4 включает исходное/effective-предложение, упорядоченную
-    скрытую историю, semantic plan, identity преобразования, proper names,
+    Persistent SHA-LRU v5 включает исходное/effective-предложение, упорядоченную
+    скрытую историю, род текущего говорящего, semantic plan, identity преобразования, proper names,
     model identity и prompt version; model identity включает выбранный
     CPU/Vulkan backend и профиль offload, поэтому результаты разных runtime не
     пересекаются. Исходный английский текст на диск не записывается.
@@ -262,7 +268,7 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 | Журнал ошибок перевода | `%LOCALAPPDATA%\AsteriaScale\hover-translation.log` (ротация при 512 КБ) |
 | Кэш умного словаря | `%LOCALAPPDATA%\AsteriaScale\smart-dictionary-cache.v2.json` |
 | Общий кэш решений semantic ranker (историческое имя файла) | `%LOCALAPPDATA%\AsteriaScale\glossbert-decisions.v1.json` |
-| Кэш принятых предложений TranslateGemma | `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v4.json` |
+| Кэш принятых предложений TranslateGemma | `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v5.json` |
 | Опциональные TranslateGemma/llama.cpp artifacts | `%LOCALAPPDATA%\AsteriaScale\Models\TranslateGemma` |
 | Пользовательские словари | `%LOCALAPPDATA%\AsteriaScale\Dictionaries` |
 | Конфиг Magpie | `%LOCALAPPDATA%\Magpie\config\v4\config.json` (+ backup `.before-asteria.json`) |

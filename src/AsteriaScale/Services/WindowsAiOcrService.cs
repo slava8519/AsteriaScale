@@ -35,6 +35,8 @@ internal sealed record HoverOcrResult(
     // Context is populated only by a process- and hook-stream-scoped
     // Textractor match. It is never rendered as part of the current reply.
     public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
+
+    public CurrentSpeakerContext? CurrentSpeaker { get; init; }
 }
 
 internal sealed record HoverOcrDiagnostic(HoverOcrResult? Selection, string Details);
@@ -55,7 +57,10 @@ internal sealed record ScreenOcrResult(
     Drawing.Rectangle CaptureBounds,
     IReadOnlyList<ScreenOcrBlock> Blocks);
 
-internal sealed record SentenceContext(string Text, int CharacterIndex);
+internal sealed record SentenceContext(string Text, int CharacterIndex)
+{
+    public CurrentSpeakerContext? CurrentSpeaker { get; init; }
+}
 
 internal sealed record OcrWordGeometry(
     string Text,
@@ -304,8 +309,27 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         HoverOcrResult selected = useSecondObservation ? second : first;
         return selected with
         {
-            IsSentenceContextStable = LooksLikeCompleteOcrSentence(selected.Text)
+            IsSentenceContextStable = LooksLikeCompleteOcrSentence(selected.Text),
+            CurrentSpeaker = StableObservedSpeaker(first, second, selected)
         };
+    }
+
+    private static CurrentSpeakerContext? StableObservedSpeaker(
+        HoverOcrResult first,
+        HoverOcrResult second,
+        HoverOcrResult selected)
+    {
+        if (first.CurrentSpeaker is null ||
+            second.CurrentSpeaker is null ||
+            !string.Equals(
+                first.CurrentSpeaker.Name,
+                second.CurrentSpeaker.Name,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return selected.CurrentSpeaker ?? first.CurrentSpeaker;
     }
 
     private static string[] SentenceComparisonTokens(string value) =>
@@ -687,7 +711,10 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             context.Text,
             selected.HoveredWord,
             context.CharacterIndex,
-            captureBounds);
+            captureBounds)
+        {
+            CurrentSpeaker = context.CurrentSpeaker
+        };
     }
 
     internal static SentenceContext BuildSentenceContext(
@@ -723,6 +750,18 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             .OrderBy(line => line.Top)
             .ThenBy(line => line.Left)
             .ToList();
+        OcrLineGeometry? speakerLine = FindSpeakerLineAboveBlock(
+            lines,
+            included,
+            ordered);
+        CurrentSpeakerContext? geometrySpeaker = null;
+        if (speakerLine is not null &&
+            SpeakerMetadataParser.TryParseStandaloneName(
+                Normalize(speakerLine.Text),
+                out string speakerName))
+        {
+            geometrySpeaker = new CurrentSpeakerContext(speakerName);
+        }
 
         StringBuilder merged = new();
         int mergedAnchor = 0;
@@ -747,7 +786,68 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             }
         }
 
-        return ExtractSentence(merged.ToString(), mergedAnchor);
+        SentenceContext extracted = ExtractSentence(merged.ToString(), mergedAnchor);
+        return extracted.CurrentSpeaker is not null || geometrySpeaker is null
+            ? extracted
+            : extracted with { CurrentSpeaker = geometrySpeaker };
+    }
+
+    private static OcrLineGeometry? FindSpeakerLineAboveBlock(
+        IReadOnlyList<OcrLineGeometry> lines,
+        IReadOnlySet<OcrLineGeometry> included,
+        IReadOnlyList<OcrLineGeometry> orderedBlock)
+    {
+        if (orderedBlock.Count == 0)
+        {
+            return null;
+        }
+
+        OcrLineGeometry first = orderedBlock[0];
+        double dialogueHeight = Math.Max(1, first.Bottom - first.Top);
+        double blockLeft = orderedBlock.Min(line => line.Left);
+        double blockRight = orderedBlock.Max(line => line.Right);
+        double maximumVerticalGap = Math.Max(120, dialogueHeight * 2.5);
+        double maximumHorizontalGap = Math.Max(180, dialogueHeight * 4);
+
+        return lines
+            .Where(candidate =>
+                !included.Contains(candidate) &&
+                candidate.Bottom <= first.Top &&
+                first.Top - candidate.Bottom <= maximumVerticalGap &&
+                SpeakerMetadataParser.TryParseStandaloneName(
+                    Normalize(candidate.Text),
+                    out _) &&
+                IsPlausibleSpeakerGeometry(
+                    candidate,
+                    dialogueHeight,
+                    blockLeft,
+                    blockRight,
+                    maximumHorizontalGap))
+            .OrderBy(candidate => first.Top - candidate.Bottom)
+            .ThenBy(candidate => Math.Abs(candidate.Left - blockLeft))
+            .FirstOrDefault();
+    }
+
+    private static bool IsPlausibleSpeakerGeometry(
+        OcrLineGeometry candidate,
+        double dialogueHeight,
+        double blockLeft,
+        double blockRight,
+        double maximumHorizontalGap)
+    {
+        double candidateHeight = Math.Max(1, candidate.Bottom - candidate.Top);
+        double heightRatio = candidateHeight / dialogueHeight;
+        if (heightRatio is < 0.45 or > 1.8)
+        {
+            return false;
+        }
+
+        double horizontalGap = candidate.Right < blockLeft
+            ? blockLeft - candidate.Right
+            : candidate.Left > blockRight
+                ? candidate.Left - blockRight
+                : 0;
+        return horizontalGap <= maximumHorizontalGap;
     }
 
     private static OcrLineGeometry? FindAdjacentLine(
@@ -773,7 +873,31 @@ internal sealed partial class WindowsAiOcrService : IDisposable
 
     internal static SentenceContext ExtractSentence(string text, int characterIndex)
     {
+        CurrentSpeakerContext? currentSpeaker = null;
+        if (SpeakerMetadataParser.TryFindLeadingSpeaker(
+                text,
+                characterIndex,
+                out CurrentSpeakerContext? rawSpeaker,
+                out int rawDialogueStart))
+        {
+            text = text[rawDialogueStart..];
+            characterIndex -= rawDialogueStart;
+            currentSpeaker = rawSpeaker;
+        }
+
         string normalized = Normalize(text);
+        if (currentSpeaker is null &&
+            SpeakerMetadataParser.TryFindLeadingSpeaker(
+                normalized,
+                characterIndex,
+                out CurrentSpeakerContext? normalizedSpeaker,
+                out int normalizedDialogueStart))
+        {
+            normalized = normalized[normalizedDialogueStart..];
+            characterIndex -= normalizedDialogueStart;
+            currentSpeaker = normalizedSpeaker;
+        }
+
         text = StripUnmatchedDialogueQuote(normalized);
         if (normalized.Length > text.Length && normalized.EndsWith(text, StringComparison.Ordinal))
         {
@@ -809,7 +933,10 @@ internal sealed partial class WindowsAiOcrService : IDisposable
 
         return new SentenceContext(
             sentence,
-            sentence.Length == 0 ? 0 : Math.Clamp(anchor - start, 0, sentence.Length - 1));
+            sentence.Length == 0 ? 0 : Math.Clamp(anchor - start, 0, sentence.Length - 1))
+        {
+            CurrentSpeaker = currentSpeaker
+        };
     }
 
     private static bool LinesBelongToSameBlock(OcrLineGeometry upper, OcrLineGeometry lower)

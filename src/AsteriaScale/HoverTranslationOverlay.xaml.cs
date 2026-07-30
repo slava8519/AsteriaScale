@@ -41,7 +41,9 @@ public partial class HoverTranslationOverlay : Window
         NativeMethods.Point cursor,
         string engine,
         HoverTextSource textSource = HoverTextSource.Ocr,
-        TextHookStatusSnapshot? textHookStatus = null)
+        TextHookStatusSnapshot? textHookStatus = null,
+        CurrentSpeakerContext? currentSpeaker = null,
+        bool speakerEditorAvailable = true)
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
@@ -69,6 +71,7 @@ public partial class HoverTranslationOverlay : Window
         HintText.Visibility = Visibility.Collapsed;
         PhrasePanel.Visibility = Visibility.Collapsed;
         PhraseTranslationText.Text = string.Empty;
+        ConfigureSpeaker(currentSpeaker, speakerEditorAvailable);
         Width = PreferredWidth(
             normalizedSource,
             TranslationText.Text,
@@ -89,7 +92,9 @@ public partial class HoverTranslationOverlay : Window
         double? confidence = null,
         HoverTextSource textSource = HoverTextSource.Ocr,
         SmartHoverPhraseLine? phraseLine = null,
-        TextHookStatusSnapshot? textHookStatus = null)
+        TextHookStatusSnapshot? textHookStatus = null,
+        CurrentSpeakerContext? currentSpeaker = null,
+        bool speakerEditorAvailable = true)
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
@@ -130,6 +135,7 @@ public partial class HoverTranslationOverlay : Window
         SourceText.Text = normalizedSource;
         SourceText.FontSize = SourceFontSize(normalizedSource);
         string phraseDisplayText = ConfigurePhraseLine(phraseLine);
+        ConfigureSpeaker(currentSpeaker, speakerEditorAvailable);
         Width = PreferredWidth(
             normalizedSource,
             normalizedTranslation,
@@ -263,6 +269,31 @@ public partial class HoverTranslationOverlay : Window
             : MediaColor.FromRgb(0xA0, 0x96, 0x7F));
         PhrasePanel.Visibility = Visibility.Visible;
         return displayText;
+    }
+
+    private void ConfigureSpeaker(
+        CurrentSpeakerContext? speaker,
+        bool speakerEditorAvailable)
+    {
+        if (speaker is null || string.IsNullOrWhiteSpace(speaker.Name))
+        {
+            SpeakerPanel.Visibility = Visibility.Collapsed;
+            SpeakerText.Text = string.Empty;
+            return;
+        }
+
+        string gender = speaker.Gender switch
+        {
+            SpeakerGender.Masculine => "муж.",
+            SpeakerGender.Feminine => "жен.",
+            SpeakerGender.Ignore => "не учитывать",
+            _ => "род ?"
+        };
+        SpeakerText.Text = $"Говорящий: {speaker.Name.Trim()} · {gender}";
+        SpeakerShortcutText.Visibility = speakerEditorAvailable
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        SpeakerPanel.Visibility = Visibility.Visible;
     }
 
     private static double NonDictionaryContentWidth(

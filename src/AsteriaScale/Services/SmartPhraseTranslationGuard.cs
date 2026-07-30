@@ -206,6 +206,14 @@ internal static partial class SmartPhraseTranslationGuard
             request.ModelInputPhrase.Contains("<end_of_turn>", StringComparison.Ordinal) ||
             request.ProperNames is null ||
             request.PreviousContext is null ||
+            request.CurrentSpeaker is { } currentSpeaker &&
+            (string.IsNullOrWhiteSpace(currentSpeaker.Name) ||
+             currentSpeaker.Name.Length > 48 ||
+             currentSpeaker.Name.Any(char.IsControl) ||
+             currentSpeaker.Name.Contains("<start_of_turn>", StringComparison.Ordinal) ||
+             currentSpeaker.Name.Contains("<end_of_turn>", StringComparison.Ordinal) ||
+             currentSpeaker.GameKey.Length > 1_024 ||
+             currentSpeaker.GameKey.Any(char.IsControl)) ||
             request.SemanticTerms is null ||
             request.SenseHints is null ||
             request.SourcePhrase.Length > SmartPhraseContextBuilder.MaximumCharacters ||

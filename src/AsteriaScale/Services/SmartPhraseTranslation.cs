@@ -16,6 +16,13 @@ internal sealed record SmartPhraseTranslationRequest(
 {
     public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
 
+    /// <summary>
+    /// Metadata for the author of the current utterance. It is never part of
+    /// the text to translate; a known gender is used only by the post-editor
+    /// to inflect first-person and omitted-subject forms in Russian.
+    /// </summary>
+    public CurrentSpeakerContext? CurrentSpeaker { get; init; }
+
     public IReadOnlyList<ScaffoldTerm> SemanticTerms { get; init; } =
         Array.Empty<ScaffoldTerm>();
 
@@ -32,7 +39,8 @@ internal sealed record SmartPhraseTranslationResult(
     string Translation,
     string ModelIdentity,
     long ElapsedMilliseconds,
-    bool FromCache = false);
+    bool FromCache = false,
+    bool Cacheable = true);
 
 /// <summary>
 /// Narrow DI seam for an optional local phrase model. Failure or rejection is

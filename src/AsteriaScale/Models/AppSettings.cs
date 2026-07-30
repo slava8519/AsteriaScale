@@ -32,7 +32,16 @@ public sealed class AppSettings
 
     public string TextractorDirectory { get; set; } = string.Empty;
     public List<ManagedDpiOverride> DpiOverrides { get; set; } = [];
+    public List<SpeakerGenderPreference> SpeakerGenders { get; set; } = [];
     public List<AutomationProfile> Profiles { get; set; } = [];
+}
+
+public sealed record SpeakerGenderPreference
+{
+    public string GameKey { get; init; } = string.Empty;
+    public string SpeakerName { get; init; } = string.Empty;
+    public string DisplayName { get; init; } = string.Empty;
+    public string Gender { get; init; } = string.Empty;
 }
 
 public sealed class ManagedDpiOverride

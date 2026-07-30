@@ -73,12 +73,60 @@ internal static class TextHookSafetyTests
             "bank",
             "bank and another bank",
             ocrCharacterIndex: 18);
-        Assert(repeated is { CharacterIndex: 30 },
-            "A hook prefix shifted the repeated token to the wrong occurrence.");
+        Assert(repeated is
+               {
+                   Text: "bank and another bank",
+                   CharacterIndex: 17,
+                   CurrentSpeaker.Name: "LongSpeaker"
+               },
+            "An inline hook speaker was not separated without shifting the repeated token.");
+        hook.IngestLine(
+            "[BRACKET:2C64:0:0:0:GetGlyphOutlineW] [Park staff] Wait beside the bank.",
+            processId: 610);
+        TextHookMatch? bracketedInline = hook.TryGetSentenceContaining(610, "bank");
+        Assert(bracketedInline is
+               {
+                   Text: "Wait beside the bank.",
+                   CurrentSpeaker.Name: "Park staff"
+               },
+            "A bracketed inline hook speaker was not separated from CURRENT.");
         Assert(hook.TryGetSentenceContaining(
                 "bank",
                 DateTime.UtcNow.AddSeconds(5)) is null,
             "A hook sentence older than the five-second relevance window was reused.");
+
+        hook.IngestLine(
+            "[SPEAKER:2C64:0:0:0:TextOutA] Kotori",
+            processId: 606);
+        hook.IngestLine(
+            "[SPEAKER:2C64:0:0:0:TextOutA] I was worried about the bank.",
+            processId: 606);
+        TextHookMatch? separatelyNamed = hook.TryGetSentenceContaining(606, "bank");
+        Assert(separatelyNamed is
+               {
+                   Text: "I was worried about the bank.",
+                   CurrentSpeaker.Name: "Kotori"
+               } &&
+               separatelyNamed.PreviousContext.Count == 0,
+            "An immediately preceding same-stream hook name was not bound to CURRENT.");
+
+        hook.IngestLine(
+            "[NAME:2C64:0:0:0:TextOutA] Sakuya",
+            processId: 707);
+        hook.IngestLine(
+            "[DIALOGUE:2C64:0:0:0:TextOutA] I waited beside the bank.",
+            processId: 707);
+        Assert(hook.TryGetSentenceContaining(707, "bank")?.CurrentSpeaker is null,
+            "A name from another Textractor stream was bound to CURRENT.");
+
+        hook.IngestLine(
+            "[SHARED:2C64:0:0:0:TextOutA] Sakuya",
+            processId: 808);
+        hook.IngestLine(
+            "[SHARED:2C64:0:0:0:TextOutA] I waited beside the bank.",
+            processId: 809);
+        Assert(hook.TryGetSentenceContaining(809, "bank")?.CurrentSpeaker is null,
+            "A name from another process was bound to CURRENT.");
 
         hook.IngestLine(
             "[AAA:2C64:0:0:0:TextOutA] The gate was still closed.",
@@ -105,24 +153,34 @@ internal static class TextHookSafetyTests
             "bank and another bank",
             "bank",
             0,
-            Drawing.Rectangle.Empty);
+            Drawing.Rectangle.Empty)
+        {
+            CurrentSpeaker = new CurrentSpeakerContext("Sakuya")
+        };
         Assert(ReferenceEquals(
                 ocrResult,
                 HoverTranslationService.ApplyTextHookMatch(ocrResult, match: null)),
             "A missing hook match changed the pure OCR result.");
         HoverOcrResult hookedResult = HoverTranslationService.ApplyTextHookMatch(
             ocrResult,
-            new TextHookMatch("LongSpeaker: bank and another bank", 13)
+            new TextHookMatch("bank and another bank", 0)
             {
-                PreviousContext = ["The river was quiet."]
+                PreviousContext = ["The river was quiet."],
+                CurrentSpeaker = new CurrentSpeakerContext("LongSpeaker")
             });
         Assert(hookedResult is
         {
-            Text: "LongSpeaker: bank and another bank",
-            CharacterIndex: 13,
-            TextSource: HoverTextSource.TextHook
+            Text: "bank and another bank",
+            CharacterIndex: 0,
+            TextSource: HoverTextSource.TextHook,
+            CurrentSpeaker.Name: "LongSpeaker"
         } && hookedResult.PreviousContext.SequenceEqual(["The river was quiet."]),
             "A fresh hook match did not preserve explicit Textractor provenance.");
+        HoverOcrResult hookWithoutSpeaker = HoverTranslationService.ApplyTextHookMatch(
+            ocrResult,
+            new TextHookMatch("bank and another bank", 0));
+        Assert(hookWithoutSpeaker.CurrentSpeaker?.Name == "Sakuya",
+            "A hook match without speaker metadata discarded the confirmed OCR nameplate.");
         // Roadmap 14.3 requires the card to name the text source in both
         // directions. Labelling only HOOK left OCR to be inferred from the
         // engine prefix, which reads "NPU OCR" even on a hook match.

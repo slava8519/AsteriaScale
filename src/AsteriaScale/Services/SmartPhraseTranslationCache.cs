@@ -12,7 +12,7 @@ namespace AsteriaScale.Services;
 /// </summary>
 internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
 {
-    internal const int SchemaVersion = 4;
+    internal const int SchemaVersion = 5;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTranslationLength =
@@ -33,7 +33,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
             cachePath ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "AsteriaScale",
-                "smart-phrase-translations.v4.json"),
+                "smart-phrase-translations.v5.json"),
             SchemaVersion,
             capacity,
             maximumFileBytes,
@@ -121,12 +121,17 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
     {
         ValidateRequest(request);
         StringBuilder canonical = new();
-        Append(canonical, "asteria-smart-phrase-cache-v4");
+        Append(canonical, "asteria-smart-phrase-cache-v5");
         Append(canonical, request.SourcePhrase);
         Append(canonical, request.ModelInputPhrase);
         Append(canonical, request.TransformIdentity);
         AppendList(canonical, "proper-name", request.ProperNames);
         AppendList(canonical, "previous-context", request.PreviousContext);
+        Append(canonical, "current-speaker");
+        Append(
+            canonical,
+            ((int)(request.CurrentSpeaker?.Gender ?? SpeakerGender.Unknown))
+                .ToString(CultureInfo.InvariantCulture));
         Append(canonical, "semantic-terms");
         Append(canonical, request.SemanticTerms.Count.ToString(CultureInfo.InvariantCulture));
         foreach (ScaffoldTerm term in request.SemanticTerms)

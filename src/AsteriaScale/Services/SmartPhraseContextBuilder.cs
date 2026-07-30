@@ -10,7 +10,8 @@ namespace AsteriaScale.Services;
 internal readonly record struct SmartPhraseContext(
     string Text,
     int CharacterIndex,
-    bool Trimmed);
+    bool Trimmed,
+    CurrentSpeakerContext? CurrentSpeaker = null);
 
 /// <summary>
 /// Extracts the complete sentence containing the hovered target. Wrapped OCR
@@ -27,7 +28,8 @@ internal static partial class SmartPhraseContextBuilder
     public static SmartPhraseContext? Build(
         string context,
         string target,
-        int characterIndex)
+        int characterIndex,
+        CurrentSpeakerContext? currentSpeaker = null)
     {
         if (string.IsNullOrWhiteSpace(context) || string.IsNullOrWhiteSpace(target))
         {
@@ -87,8 +89,7 @@ internal static partial class SmartPhraseContextBuilder
         // Punctuation-only targets and oversized complete sentences are not
         // suitable for this phase. Returning null leaves the dictionary answer
         // intact; slicing here would contradict the full-sentence UI contract.
-        if (firstTargetWord < 0 ||
-            words.Length > MaximumWords)
+        if (firstTargetWord < 0)
         {
             return null;
         }
@@ -104,13 +105,22 @@ internal static partial class SmartPhraseContextBuilder
         }
 
         int localAnchor = anchor - start;
-        int dialogueStart = FindDialogueStartAfterSpeakerMetadata(
-            phrase,
-            localAnchor);
-        if (dialogueStart > 0)
+        if (SpeakerMetadataParser.TryFindLeadingSpeaker(
+                phrase,
+                localAnchor,
+                out CurrentSpeakerContext? parsedSpeaker,
+                out int dialogueStart))
         {
             phrase = phrase[dialogueStart..];
             localAnchor -= dialogueStart;
+            if (currentSpeaker is null ||
+                !string.Equals(
+                    currentSpeaker.Name,
+                    parsedSpeaker?.Name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                currentSpeaker = parsedSpeaker;
+            }
         }
 
         int dialogueTextStart = FindTextStartAfterUnmatchedOpeningQuote(phrase);
@@ -120,7 +130,8 @@ internal static partial class SmartPhraseContextBuilder
             localAnchor -= dialogueTextStart;
         }
 
-        if (localAnchor < 0 ||
+        if (WordRegex().Matches(phrase).Count > MaximumWords ||
+            localAnchor < 0 ||
             localAnchor + target.Length > phrase.Length ||
             !string.Equals(
                 phrase.Substring(localAnchor, target.Length),
@@ -133,42 +144,20 @@ internal static partial class SmartPhraseContextBuilder
         return new SmartPhraseContext(
             phrase,
             localAnchor,
-            Trimmed: start > 0 || end < context.Length);
+            Trimmed: start > 0 || end < context.Length,
+            CurrentSpeaker: currentSpeaker);
     }
 
     internal static int FindDialogueStartAfterSpeakerMetadata(
         string phrase,
-        int targetIndex)
-    {
-        int first = 0;
-        while (first < phrase.Length && char.IsWhiteSpace(phrase[first]))
-        {
-            first++;
-        }
-
-        if (first < phrase.Length && phrase[first] == '[')
-        {
-            int closing = phrase.IndexOf(']', first + 1);
-            if (closing > first + 1 &&
-                closing - first <= 49 &&
-                closing < targetIndex &&
-                LooksLikeSpeakerMetadata(phrase[(first + 1)..closing]))
-            {
-                return SkipLeadingWhitespace(phrase, closing + 1, phrase.Length);
-            }
-        }
-
-        int lineEnd = phrase.IndexOfAny(['\r', '\n']);
-        if (lineEnd > first &&
-            lineEnd < targetIndex &&
-            lineEnd - first <= 48 &&
-            LooksLikeSpeakerMetadata(phrase[first..lineEnd].Trim()))
-        {
-            return SkipLeadingWhitespace(phrase, lineEnd, phrase.Length);
-        }
-
-        return 0;
-    }
+        int targetIndex) =>
+        SpeakerMetadataParser.TryFindLeadingSpeaker(
+            phrase,
+            targetIndex,
+            out _,
+            out int dialogueStart)
+            ? dialogueStart
+            : 0;
 
     private static int FindTextStartAfterUnmatchedOpeningQuote(string phrase)
     {
@@ -193,43 +182,6 @@ internal static partial class SmartPhraseContextBuilder
         }
 
         return start;
-    }
-
-    private static bool LooksLikeSpeakerMetadata(string value)
-    {
-        if (value.Length is < 1 or > 48 || !char.IsUpper(value[0]))
-        {
-            return false;
-        }
-
-        int words = 0;
-        bool insideWord = false;
-        foreach (char character in value)
-        {
-            bool wordCharacter = char.IsLetter(character) ||
-                                 char.GetUnicodeCategory(character) ==
-                                 System.Globalization.UnicodeCategory.NonSpacingMark ||
-                                 character is '-' or '\'' or '\u2019';
-            if (wordCharacter)
-            {
-                if (!insideWord)
-                {
-                    words++;
-                    insideWord = true;
-                }
-
-                continue;
-            }
-
-            if (!char.IsWhiteSpace(character))
-            {
-                return false;
-            }
-
-            insideWord = false;
-        }
-
-        return words is >= 1 and <= 4;
     }
 
     private static bool IsClosingPunctuation(char value) =>

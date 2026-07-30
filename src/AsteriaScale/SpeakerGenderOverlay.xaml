@@ -1,0 +1,149 @@
+<Window x:Class="AsteriaScale.SpeakerGenderOverlay"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Род говорящего"
+        Width="474" SizeToContent="Height" MaxHeight="560"
+        WindowStyle="None" ResizeMode="NoResize"
+        AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ShowActivated="True" Topmost="True"
+        WindowStartupLocation="Manual"
+        PreviewKeyDown="OnPreviewKeyDown"
+        TextOptions.TextFormattingMode="Display"
+        AutomationProperties.Name="Выбор рода говорящего">
+    <Border Background="#FCFAF4" BorderBrush="#9DBE93" BorderThickness="1"
+            CornerRadius="16" Padding="20,18,20,17">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="28" ShadowDepth="7" Direction="270"
+                              Color="#3D3324" Opacity="0.32" />
+        </Border.Effect>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel>
+                    <TextBlock Text="Род говорящего" FontSize="19"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="Помогает TranslateGemma выбрать: «сделал» или «сделала»."
+                               Margin="0,4,0,0" FontSize="11.5"
+                               Foreground="{StaticResource SecondaryTextBrush}"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <Button Grid.Column="1" Width="34" Height="34" Margin="14,-4,-4,0"
+                        Padding="0" VerticalAlignment="Top" Content="×"
+                        FontSize="20" FontWeight="Normal"
+                        ToolTip="Закрыть без сохранения"
+                        AutomationProperties.Name="Закрыть без сохранения"
+                        Click="OnCancelClick" />
+            </Grid>
+
+            <StackPanel Grid.Row="1" Margin="0,18,0,0">
+                <Label x:Name="SpeakerNameLabel" Target="{Binding ElementName=SpeakerNameBox}"
+                       Padding="0" FontSize="11.5"
+                       Foreground="{StaticResource SecondaryTextBrush}">
+                    Имя в подписи
+                </Label>
+                <TextBox x:Name="SpeakerNameBox" Height="40" Margin="0,6,0,0"
+                         MaxLength="48" VerticalContentAlignment="Center"
+                         FontSize="14" TextChanged="OnSpeakerNameChanged"
+                         AutomationProperties.Name="Имя говорящего"
+                         AutomationProperties.HelpText="Имя можно исправить перед выбором рода" />
+                <TextBlock x:Name="NameValidationText"
+                           Text="Введите имя говорящего."
+                           Margin="2,5,0,0" FontSize="10.5" Foreground="#9D4B45"
+                           Visibility="Collapsed" />
+            </StackPanel>
+
+            <TextBlock Grid.Row="2" Text="Как согласовывать перевод?"
+                       Margin="0,18,0,8" FontSize="12"
+                       FontWeight="SemiBold" />
+
+            <UniformGrid Grid.Row="3" Columns="3" Rows="1">
+                <UniformGrid.Resources>
+                    <Style x:Key="GenderChoiceStyle" TargetType="Button"
+                           BasedOn="{StaticResource {x:Type Button}}">
+                        <Setter Property="Height" Value="82" />
+                        <Setter Property="Margin" Value="0,0,8,0" />
+                        <Setter Property="Padding" Value="8,10" />
+                        <Setter Property="BorderThickness" Value="1.5" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Style.Triggers>
+                            <Trigger Property="Tag" Value="Selected">
+                                <Setter Property="Background" Value="{StaticResource AccentSoftBrush}" />
+                                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </UniformGrid.Resources>
+
+                <Button x:Name="MasculineButton" Style="{StaticResource GenderChoiceStyle}"
+                        AutomationProperties.Name="Мужской род"
+                        AutomationProperties.HelpText="Например: я сделал"
+                        Click="OnMasculineClick">
+                    <StackPanel>
+                        <TextBlock Text="Мужской" FontSize="14"
+                                   FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock Text="я сделал" Margin="0,5,0,0" FontSize="11"
+                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                   TextAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="FeminineButton" Style="{StaticResource GenderChoiceStyle}"
+                        AutomationProperties.Name="Женский род"
+                        AutomationProperties.HelpText="Например: я сделала"
+                        Click="OnFeminineClick">
+                    <StackPanel>
+                        <TextBlock Text="Женский" FontSize="14"
+                                   FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock Text="я сделала" Margin="0,5,0,0" FontSize="11"
+                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                   TextAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Button x:Name="IgnoreButton" Style="{StaticResource GenderChoiceStyle}"
+                        Margin="0" AutomationProperties.Name="Не учитывать род"
+                        AutomationProperties.HelpText="Переводчик не получит подсказку о роде"
+                        Click="OnIgnoreClick">
+                    <StackPanel>
+                        <TextBlock Text="Не учитывать" FontSize="14"
+                                   FontWeight="SemiBold" TextAlignment="Center" />
+                        <TextBlock Text="без подсказки" Margin="0,5,0,0" FontSize="11"
+                                   Foreground="{StaticResource SecondaryTextBrush}"
+                                   TextAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </UniformGrid>
+
+            <Border Grid.Row="4" Margin="0,16,0,0" Padding="11,9"
+                    Background="{StaticResource PositiveTintBrush}"
+                    BorderBrush="{StaticResource PositiveBorderBrush}"
+                    BorderThickness="1" CornerRadius="9">
+                <TextBlock x:Name="GameNoteText" FontSize="10.5"
+                           Foreground="#66705F" TextWrapping="Wrap" />
+            </Border>
+
+            <Grid Grid.Row="5" Margin="2,13,2,0">
+                <TextBlock Text="Esc — отменить" FontSize="10.5"
+                           Foreground="{StaticResource SecondaryTextBrush}" />
+                <TextBlock Text="Выбор сохранится сразу" FontSize="10.5"
+                           HorizontalAlignment="Right"
+                           Foreground="{StaticResource SecondaryTextBrush}" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

@@ -39,8 +39,8 @@ internal sealed class TranslateGemmaTranslationService :
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-vulkan-full";
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
-    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v3";
-    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v4";
+    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v4";
+    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v5";
     public const string RunnerBuild = "b9632";
     public const string RunnerArchiveFileName = "llama-b9632-bin-win-cpu-x64.zip";
     public const string RunnerArchiveSha256 =
@@ -468,6 +468,9 @@ internal sealed class TranslateGemmaTranslationService :
         await WarmUpAsync(backend, cancellationToken);
         long started = Stopwatch.GetTimestamp();
         string translation;
+        bool cacheable = true;
+        bool requiresGenderPostEdit =
+            request.CurrentSpeaker?.Gender is SpeakerGender.Masculine or SpeakerGender.Feminine;
         await _requestLock.WaitAsync(cancellationToken);
         try
         {
@@ -538,7 +541,8 @@ internal sealed class TranslateGemmaTranslationService :
                     }
                     else if (correctedDisplayGuard.Accepted)
                     {
-                        translation = !directDisplayGuard.Accepted ||
+                        translation = requiresGenderPostEdit ||
+                                      !directDisplayGuard.Accepted ||
                                       IsDisplaySemanticImprovement(
                                           request,
                                           directDisplayGuard.Translation,
@@ -549,6 +553,7 @@ internal sealed class TranslateGemmaTranslationService :
                     else if (directDisplayGuard.Accepted)
                     {
                         translation = directDisplayGuard.Translation;
+                        cacheable = !requiresGenderPostEdit;
                     }
                     else if (!directGuard.Accepted)
                     {
@@ -568,6 +573,7 @@ internal sealed class TranslateGemmaTranslationService :
                     // direct translation remains useful if optional post-edit
                     // exhausts the shared budget or the server rejects it.
                     translation = postEditFailureFallback!;
+                    cacheable = !requiresGenderPostEdit;
                 }
             }
         }
@@ -588,7 +594,8 @@ internal sealed class TranslateGemmaTranslationService :
         return new SmartPhraseTranslationResult(
             translation,
             modelIdentity,
-            elapsed);
+            elapsed,
+            Cacheable: cacheable);
     }
 
     public async Task UnloadAsync()
@@ -685,6 +692,7 @@ internal sealed class TranslateGemmaTranslationService :
             })
         };
         string contextJson = BuildPreviousContextPromptJson(request.PreviousContext);
+        string currentSpeakerJson = BuildCurrentSpeakerPromptJson(request.CurrentSpeaker);
         string currentJson = JsonSerializer.Serialize(current, PromptJsonOptions);
         string draftJson = JsonSerializer.Serialize(normalizedDraft, PromptJsonOptions);
         string evidenceJson = JsonSerializer.Serialize(evidence, PromptJsonOptions);
@@ -692,6 +700,11 @@ internal sealed class TranslateGemmaTranslationService :
             "You are performing automatic translation post-editing from English to Russian. " +
             "Translate the complete CURRENT text only. PREVIOUS_CONTEXT is context only: never translate, quote, " +
             "summarize, or continue it, and never emit its speakerMetadata. " +
+            "CURRENT_SPEAKER is grammatical metadata only: never emit it or turn it into a speaker label. " +
+            "When its grammaticalGender is " +
+            "masculine or feminine, use it only to inflect words whose subject is the current speaker, including " +
+            "first-person or omitted-subject forms. Never apply that gender to an addressee or a third person. " +
+            "When grammaticalGender is unknown or ignore, do not infer or force a gender from this metadata. " +
             "Correct the Russian draft when needed. Preserve every clause and semantic role, negation, modality, " +
             "cause, contrast, tone, deliberate irony, and content on both sides of an internal ellipsis. " +
             "An internal ellipsis marks hesitation, not omitted or censored text. " +
@@ -706,6 +719,7 @@ internal sealed class TranslateGemmaTranslationService :
         string payload =
             instruction +
             "\nPREVIOUS_CONTEXT (DO NOT TRANSLATE, JSON entries): " + contextJson +
+            "\nCURRENT_SPEAKER (DO NOT OUTPUT, JSON metadata): " + currentSpeakerJson +
             "\nCURRENT (TRANSLATE ONLY THIS JSON string): " + currentJson +
             "\nRUSSIAN DRAFT (POST-EDIT THIS): " + draftJson +
             "\nSEMANTIC EVIDENCE (JSON): " + evidenceJson;
@@ -729,6 +743,29 @@ internal sealed class TranslateGemmaTranslationService :
             };
         });
         return JsonSerializer.Serialize(entries, PromptJsonOptions);
+    }
+
+    internal static string BuildCurrentSpeakerPromptJson(CurrentSpeakerContext? speaker)
+    {
+        if (speaker is null)
+        {
+            return "null";
+        }
+
+        string grammaticalGender = speaker.Gender switch
+        {
+            SpeakerGender.Masculine => "masculine",
+            SpeakerGender.Feminine => "feminine",
+            SpeakerGender.Ignore => "ignore",
+            _ => "unknown"
+        };
+        return JsonSerializer.Serialize(
+            new
+            {
+                role = "current_speaker",
+                grammaticalGender
+            },
+            PromptJsonOptions);
     }
 
     private static (string Text, string? SpeakerMetadata) SplitPreviousContextEntry(
@@ -837,6 +874,7 @@ internal sealed class TranslateGemmaTranslationService :
     {
         if (!directGuard.Accepted ||
             request.PreviousContext.Count > 0 ||
+            request.CurrentSpeaker?.Gender is SpeakerGender.Masculine or SpeakerGender.Feminine ||
             request.SemanticTerms.Count > 0 ||
             request.SenseHints.Count > 0)
         {

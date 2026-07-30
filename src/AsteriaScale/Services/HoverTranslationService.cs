@@ -7,6 +7,7 @@ namespace AsteriaScale.Services;
 public sealed class HoverTranslationService : IAsyncDisposable
 {
     private readonly AppSettings _settings;
+    private readonly Func<Task> _saveSettingsAsync;
     private readonly WindowsAiOcrService _ocr = new();
     private readonly LocalDictionaryService _dictionary;
     private readonly GlossBertDictionarySelectorService _glossBertSelector;
@@ -19,6 +20,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
     // worker the same question, so neither may pay for the other's inference.
     private readonly GlossBertDecisionCache _decisionCache = new();
     private readonly HoverTranslationOverlay _overlay;
+    private readonly SpeakerGenderOverlay _speakerEditor;
+    private readonly SpeakerGenderHotkeyService _speakerHotkey;
     private readonly Dispatcher _dispatcher;
     private readonly object _lifecycleLock = new();
     private readonly ModelActivityGate _modelActivity = new();
@@ -42,10 +45,17 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private int _textHookDiagnosticProcessId;
     private bool _textHookMatchReported;
     private bool? _translateGemmaReady;
+    private SpeakerEditTarget? _visibleSpeakerTarget;
+    private SpeakerEditTarget? _speakerEditorTarget;
+    private bool _speakerEditorOpen;
+    private bool _suppressSpeakerEditorResume;
 
-    public HoverTranslationService(AppSettings settings)
+    public HoverTranslationService(
+        AppSettings settings,
+        Func<Task>? saveSettingsAsync = null)
     {
         _settings = settings;
+        _saveSettingsAsync = saveSettingsAsync ?? (() => Task.CompletedTask);
         _translateGemma = new TranslateGemmaTranslationService(
             backendResolver: () => TranslateGemmaTranslationService.ResolveBackend(
                 _settings.SmartPhraseTranslationBackend));
@@ -63,6 +73,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
             () => _dictionary.VersionToken);
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _overlay = new HoverTranslationOverlay();
+        _speakerEditor = new SpeakerGenderOverlay();
+        _speakerEditor.Saved += OnSpeakerGenderSaved;
+        _speakerEditor.Hidden += OnSpeakerEditorHidden;
+        _speakerHotkey = new SpeakerGenderHotkeyService();
+        _speakerHotkey.HotkeyPressed += OnSpeakerGenderHotkeyPressed;
         _enabled = settings.HoverTranslationEnabled;
         _glossBertSelector.ConfigureKeepWarm(settings.SmartDictionaryKeepWarm);
         _smartPipeline = new SmartHoverPipeline(
@@ -76,7 +91,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _smartPhraseCache,
             _scaffoldGlossBertRanker.RankAsync);
         _tracking = new HoverTracking(
-            () => _enabled,
+            () => _enabled && !_speakerEditorOpen,
             EffectiveDelayMs,
             HideOverlay,
             TryBeginProcessing,
@@ -89,6 +104,17 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     public void Start()
     {
+        try
+        {
+            _speakerHotkey.Register();
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+            ReportStatus(
+                $"Быстрый выбор рода недоступен: {SpeakerGenderHotkeyService.DisplayGesture} занято");
+        }
+
         QueueUnload(HoverUnloadReason.Startup);
 
         if (_enabled)
@@ -498,6 +524,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             }
 
             recognized = UpgradeWithTextHook(recognized, cursor);
+            recognized = ApplySpeakerPreference(recognized, cursor);
             TextHookStatusSnapshot textHookStatus = _textHook.GetStatusSnapshot(
                 _textHook.AttachedProcessId,
                 recognized.TextSource == HoverTextSource.TextHook);
@@ -513,7 +540,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 cursor,
                 displayGeneration,
                 recognized.TextSource,
-                textHookStatus);
+                textHookStatus,
+                recognized.CurrentSpeaker,
+                SpeakerEditorAvailable);
             string source;
             string translation;
             string engine;
@@ -585,7 +614,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     displayGeneration,
                     requireCursorNear: true,
                     textSource: recognized.TextSource,
-                    textHookStatus: textHookStatus);
+                    textHookStatus: textHookStatus,
+                    currentSpeaker: recognized.CurrentSpeaker,
+                    speakerEditorAvailable: SpeakerEditorAvailable);
             }
 
             if (resultCacheRequest is not null && resultCacheSelection is not null)
@@ -615,7 +646,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     requireCursorNear: true,
                     textSource: recognized.TextSource,
                     phraseLine: phraseLine,
-                    textHookStatus: textHookStatus);
+                    textHookStatus: textHookStatus,
+                    currentSpeaker: recognized.CurrentSpeaker,
+                    speakerEditorAvailable: SpeakerEditorAvailable);
             }
             else if (!primaryDisplayable)
             {
@@ -721,6 +754,53 @@ public sealed class HoverTranslationService : IAsyncDisposable
         return recognized;
     }
 
+    private HoverOcrResult ApplySpeakerPreference(
+        HoverOcrResult recognized,
+        NativeMethods.Point cursor)
+    {
+        CurrentSpeakerContext? extracted = recognized.CurrentSpeaker;
+        if (extracted is null || string.IsNullOrWhiteSpace(extracted.Name))
+        {
+            _visibleSpeakerTarget = null;
+            return recognized;
+        }
+
+        SpeakerGameIdentity? game = ResolveSpeakerGameIdentity(cursor);
+        CurrentSpeakerContext resolved = SpeakerGenderPreferences.Resolve(
+            _settings,
+            game,
+            extracted.Name);
+        if (game is not null)
+        {
+            _visibleSpeakerTarget = new SpeakerEditTarget(
+                game,
+                resolved,
+                cursor);
+        }
+        else
+        {
+            _visibleSpeakerTarget = null;
+        }
+
+        return recognized with { CurrentSpeaker = resolved };
+    }
+
+    private static SpeakerGameIdentity? ResolveSpeakerGameIdentity(
+        NativeMethods.Point cursor)
+    {
+        nint window = VisibleCursorService.GetTextSourceWindow(cursor);
+        if (window == nint.Zero ||
+            NativeMethods.GetWindowThreadProcessId(window, out uint processIdValue) == 0)
+        {
+            return null;
+        }
+
+        int processId = unchecked((int)processIdValue);
+        return processId > 0 && processId != Environment.ProcessId
+            ? SpeakerGenderPreferences.ResolveGameIdentity(processId)
+            : null;
+    }
+
     internal static HoverOcrResult ApplyTextHookMatch(
         HoverOcrResult recognized,
         TextHookMatch? match) =>
@@ -731,7 +811,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 Text = match.Text,
                 CharacterIndex = match.CharacterIndex,
                 TextSource = HoverTextSource.TextHook,
-                PreviousContext = match.PreviousContext
+                PreviousContext = match.PreviousContext,
+                CurrentSpeaker = match.CurrentSpeaker ?? recognized.CurrentSpeaker
             };
 
     private static bool CursorIsNear(NativeMethods.Point expected) =>
@@ -778,7 +859,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private bool SmartRankerApplicable =>
         SmartDictionarySourceLanguages.Normalize(
             _settings.SmartDictionarySourceLanguage) !=
-        SmartDictionarySourceLanguages.Japanese;
+            SmartDictionarySourceLanguages.Japanese;
+
+    private bool SpeakerEditorAvailable =>
+        _speakerHotkey.IsRegistered && _visibleSpeakerTarget is not null;
 
     private void ResetTracking() => _tracking.Reset();
 
@@ -788,12 +872,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
         NativeMethods.Point cursor,
         long displayGeneration,
         HoverTextSource textSource = HoverTextSource.Ocr,
-        TextHookStatusSnapshot? textHookStatus = null) =>
+        TextHookStatusSnapshot? textHookStatus = null,
+        CurrentSpeakerContext? currentSpeaker = null,
+        bool speakerEditorAvailable = false) =>
         _dispatcher.BeginInvoke(
             () =>
             {
                 if (!_disposed &&
                     _enabled &&
+                    !_speakerEditorOpen &&
                     displayGeneration == Volatile.Read(ref _overlayGeneration))
                 {
                     _overlay.ShowLoading(
@@ -801,7 +888,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                         cursor,
                         engine,
                         textSource,
-                        textHookStatus);
+                        textHookStatus,
+                        currentSpeaker,
+                        speakerEditorAvailable);
                 }
             },
             DispatcherPriority.Normal);
@@ -820,13 +909,16 @@ public sealed class HoverTranslationService : IAsyncDisposable
         bool requireCursorNear,
         HoverTextSource textSource = HoverTextSource.Ocr,
         SmartHoverPhraseLine? phraseLine = null,
-        TextHookStatusSnapshot? textHookStatus = null)
+        TextHookStatusSnapshot? textHookStatus = null,
+        CurrentSpeakerContext? currentSpeaker = null,
+        bool speakerEditorAvailable = false)
     {
         _dispatcher.BeginInvoke(
             () =>
             {
                 if (_disposed ||
                     !_enabled ||
+                    _speakerEditorOpen ||
                     displayGeneration != Volatile.Read(ref _overlayGeneration) ||
                     requireCursorNear && !CursorIsNear(cursor))
                 {
@@ -844,7 +936,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     confidence,
                     textSource,
                     phraseLine,
-                    textHookStatus);
+                    textHookStatus,
+                    currentSpeaker,
+                    speakerEditorAvailable);
                 // The progressive phrase update redraws the same primary card.
                 // Record that answer only on its first render; otherwise every
                 // successful TranslateGemma call would duplicate history.
@@ -873,6 +967,126 @@ public sealed class HoverTranslationService : IAsyncDisposable
     /// <summary>History of shown translations, for the review panel and export.</summary>
     public TranslationHistoryService History => _history;
 
+    private void OnSpeakerGenderHotkeyPressed(object? sender, EventArgs e)
+    {
+        _dispatcher.BeginInvoke(
+            OpenSpeakerEditor,
+            DispatcherPriority.Send);
+    }
+
+    private void OpenSpeakerEditor()
+    {
+        if (_disposed || !_enabled)
+        {
+            ReportStatus("Включите перевод под курсором, чтобы выбрать род говорящего");
+            return;
+        }
+
+        if (_speakerEditorOpen)
+        {
+            _speakerEditor.Activate();
+            return;
+        }
+
+        SpeakerEditTarget? target = _visibleSpeakerTarget;
+        if (target is null ||
+            !_overlay.IsVisible ||
+            !CursorIsNear(target.Anchor))
+        {
+            ReportStatus(
+                "Говорящий не распознан — наведите курсор на реплику с подписью имени");
+            return;
+        }
+
+        _speakerEditorTarget = target;
+        _speakerEditorOpen = true;
+        StopTimer();
+        RestartModeCancellation();
+        HideOverlay();
+        _speakerEditor.ShowFor(
+            target.Speaker,
+            target.Game.DisplayName,
+            target.Anchor);
+    }
+
+    private void OnSpeakerGenderSaved(
+        object? sender,
+        SpeakerGenderSavedEventArgs e)
+    {
+        SpeakerEditTarget? target = _speakerEditorTarget;
+        if (target is null)
+        {
+            return;
+        }
+
+        bool changed = SpeakerGenderPreferences.Set(
+            _settings,
+            target.Game,
+            target.Speaker.Name,
+            e.Gender,
+            e.Name);
+        if (!string.Equals(
+                target.Speaker.Name,
+                e.Name,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            // Keep the observed OCR spelling as an alias while also accepting
+            // the user's correction if a later frame recognizes it cleanly.
+            changed |= SpeakerGenderPreferences.Set(
+                _settings,
+                target.Game,
+                e.Name,
+                e.Gender,
+                e.Name);
+        }
+
+        _speakerEditorTarget = target with
+        {
+            Speaker = SpeakerGenderPreferences.Resolve(
+                _settings,
+                target.Game,
+                target.Speaker.Name)
+        };
+        if (changed)
+        {
+            TrackTask(SaveSpeakerSettingsSafeAsync());
+        }
+
+        string gender = e.Gender switch
+        {
+            SpeakerGender.Masculine => "мужской",
+            SpeakerGender.Feminine => "женский",
+            _ => "не учитывать"
+        };
+        ReportStatus($"{e.Name}: сохранён {gender} род для {target.Game.DisplayName}");
+    }
+
+    private async Task SaveSpeakerSettingsSafeAsync()
+    {
+        try
+        {
+            await _saveSettingsAsync();
+        }
+        catch (Exception exception)
+        {
+            LogError(exception);
+            ReportStatus("Не удалось сохранить род говорящего: " + exception.Message);
+        }
+    }
+
+    private void OnSpeakerEditorHidden(object? sender, EventArgs e)
+    {
+        _speakerEditorOpen = false;
+        _speakerEditorTarget = null;
+        if (_suppressSpeakerEditorResume || _disposed || !_enabled)
+        {
+            return;
+        }
+
+        ResetTracking();
+        ConfigureActiveMode();
+    }
+
     /// <summary>
     /// Re-reads dictionaries after the user edited their own layer, then warms
     /// them in the background so the next hover is not slowed down.
@@ -887,11 +1101,31 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private void HideOverlay()
     {
+        _visibleSpeakerTarget = null;
         Interlocked.Increment(ref _overlayGeneration);
         _dispatcher.BeginInvoke(_overlay.HideOverlay, DispatcherPriority.Normal);
     }
 
-    private void HideAllOverlays() => HideOverlay();
+    private void HideAllOverlays()
+    {
+        HideOverlay();
+        if (!_speakerEditor.IsVisible)
+        {
+            return;
+        }
+
+        _suppressSpeakerEditorResume = true;
+        try
+        {
+            _speakerEditor.Cancel();
+        }
+        finally
+        {
+            _suppressSpeakerEditorResume = false;
+            _speakerEditorOpen = false;
+            _speakerEditorTarget = null;
+        }
+    }
 
     public void ApplyTextHookSettings()
     {
@@ -1072,6 +1306,17 @@ public sealed class HoverTranslationService : IAsyncDisposable
         await AwaitActiveTasksAsync();
         await _dispatcher.InvokeAsync(() =>
         {
+            _speakerHotkey.HotkeyPressed -= OnSpeakerGenderHotkeyPressed;
+            _speakerHotkey.Dispose();
+            _speakerEditor.Saved -= OnSpeakerGenderSaved;
+            _speakerEditor.Hidden -= OnSpeakerEditorHidden;
+            _suppressSpeakerEditorResume = true;
+            if (_speakerEditor.IsVisible)
+            {
+                _speakerEditor.Cancel();
+            }
+
+            _speakerEditor.Close();
             _overlay.HideOverlay();
             _overlay.Close();
         });
@@ -1098,4 +1343,9 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
         _lifetimeCancellation.Dispose();
     }
+
+    private sealed record SpeakerEditTarget(
+        SpeakerGameIdentity Game,
+        CurrentSpeakerContext Speaker,
+        NativeMethods.Point Anchor);
 }

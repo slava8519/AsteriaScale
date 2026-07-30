@@ -647,7 +647,8 @@ internal sealed class SmartHoverPipeline : IDisposable
         SmartPhraseContext? phrase = SmartPhraseContextBuilder.Build(
             recognized.Text,
             recognized.HoveredWord,
-            recognized.CharacterIndex);
+            recognized.CharacterIndex,
+            recognized.CurrentSpeaker);
         if (phrase is null)
         {
             return null;
@@ -687,6 +688,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         SmartPhraseTranslationRequest request = CreatePhraseTranslationRequest(
             modelInput,
             recognized.PreviousContext,
+            recognized.CurrentSpeaker ?? phrase.Value.CurrentSpeaker,
             modelScaffold.Terms,
             senseHints,
             modelScaffold.ProperNames,
@@ -730,7 +732,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
             }
 
-            if (!translated.FromCache)
+            if (!translated.FromCache && translated.Cacheable)
             {
                 await _smartPhraseCache.StoreAsync(
                     request,
@@ -838,6 +840,7 @@ internal sealed class SmartHoverPipeline : IDisposable
     private SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
         SmartPhraseModelInput modelInput,
         IReadOnlyList<string> previousContext,
+        CurrentSpeakerContext? currentSpeaker,
         IReadOnlyList<ScaffoldTerm> semanticTerms,
         IReadOnlyList<ScaffoldSenseHint> senseHints,
         IReadOnlyList<string> scaffoldProperNames,
@@ -854,6 +857,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             TranslateGemmaTranslationService.PromptIdentity)
         {
             PreviousContext = previousContext,
+            CurrentSpeaker = currentSpeaker,
             SemanticTerms = semanticTerms,
             SenseHints = senseHints
         };

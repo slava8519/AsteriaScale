@@ -14,6 +14,9 @@ internal static class NativeMethods
     internal const uint KeyeventfKeyup = 0x0002;
     internal const uint InputKeyboard = 1;
     internal const uint WmHotkey = 0x0312;
+    internal const uint ModControl = 0x0002;
+    internal const uint ModShift = 0x0004;
+    internal const uint ModNoRepeat = 0x4000;
     internal const int GwlExstyle = -20;
     internal const int WsExTransparent = 0x00000020;
     internal const int WsExToolwindow = 0x00000080;
@@ -23,6 +26,7 @@ internal static class NativeMethods
     internal const ushort VkMenu = 0x12;
     internal const ushort VkShift = 0x10;
     internal const ushort VkA = 0x41;
+    internal const ushort VkG = 0x47;
     internal const ushort VkQ = 0x51;
     internal static readonly nint HwndMessage = new(-3);
     internal static readonly nint HwndTopmost = new(-1);
@@ -65,9 +69,25 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     internal static extern nint GetForegroundWindow();
 
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool RegisterHotKey(
+        nint hWnd,
+        int id,
+        uint modifiers,
+        uint virtualKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnregisterHotKey(nint hWnd, int id);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool SetCursorPos(int x, int y);
 
     [DllImport("user32.dll")]
     internal static extern nint WindowFromPoint(Point point);

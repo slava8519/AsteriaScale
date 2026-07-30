@@ -399,12 +399,37 @@ public sealed partial class TextHookService : IAsyncDisposable
                         preferredOccurrenceOrdinal,
                         out int characterIndex))
                 {
-                    return new TextHookMatch(sentence.Text, characterIndex)
+                    string dialogue = sentence.Text;
+                    CurrentSpeakerContext? currentSpeaker = null;
+                    LinkedListNode<HookSentence>? boundSpeakerNode = null;
+                    if (SpeakerMetadataParser.TryFindLeadingSpeaker(
+                            dialogue,
+                            characterIndex,
+                            out CurrentSpeakerContext? inlineSpeaker,
+                            out int dialogueStart))
+                    {
+                        dialogue = dialogue[dialogueStart..];
+                        characterIndex -= dialogueStart;
+                        currentSpeaker = inlineSpeaker;
+                    }
+                    else if (TryBindImmediatelyPrecedingSpeaker(
+                                 node,
+                                 sentence,
+                                 nowUtc,
+                                 out CurrentSpeakerContext? precedingSpeaker,
+                                 out boundSpeakerNode))
+                    {
+                        currentSpeaker = precedingSpeaker;
+                    }
+
+                    return new TextHookMatch(dialogue, characterIndex)
                     {
                         PreviousContext = CollectPreviousContext(
                             node,
                             sentence,
-                            nowUtc)
+                            nowUtc,
+                            boundSpeakerNode),
+                        CurrentSpeaker = currentSpeaker
                     };
                 }
             }
@@ -1038,10 +1063,47 @@ public sealed partial class TextHookService : IAsyncDisposable
         return null;
     }
 
+    private static bool TryBindImmediatelyPrecedingSpeaker(
+        LinkedListNode<HookSentence> currentNode,
+        HookSentence current,
+        DateTime nowUtc,
+        out CurrentSpeakerContext? speaker,
+        out LinkedListNode<HookSentence>? speakerNode)
+    {
+        speaker = null;
+        speakerNode = currentNode.Next;
+        if (speakerNode is null)
+        {
+            return false;
+        }
+
+        HookSentence candidate = speakerNode.Value;
+        TimeSpan separation = current.ReceivedUtc - candidate.ReceivedUtc;
+        if (candidate.ProcessId != current.ProcessId ||
+            !string.Equals(
+                candidate.StreamIdentity,
+                current.StreamIdentity,
+                StringComparison.Ordinal) ||
+            separation < TimeSpan.Zero ||
+            separation > SentenceLifetime ||
+            nowUtc - candidate.ReceivedUtc > SentenceLifetime ||
+            !SpeakerMetadataParser.TryParseStandaloneName(
+                candidate.Text,
+                out string name))
+        {
+            speakerNode = null;
+            return false;
+        }
+
+        speaker = new CurrentSpeakerContext(name);
+        return true;
+    }
+
     private static IReadOnlyList<string> CollectPreviousContext(
         LinkedListNode<HookSentence> currentNode,
         HookSentence current,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        LinkedListNode<HookSentence>? excludedNode = null)
     {
         List<string> newestFirst = [];
         HashSet<string> seen = new(StringComparer.Ordinal)
@@ -1057,6 +1119,11 @@ public sealed partial class TextHookService : IAsyncDisposable
             if (nowUtc - candidate.ReceivedUtc > ContextLifetime)
             {
                 break;
+            }
+
+            if (ReferenceEquals(node, excludedNode))
+            {
+                continue;
             }
 
             if (candidate.ProcessId != current.ProcessId ||
@@ -1096,6 +1163,8 @@ public sealed partial class TextHookService : IAsyncDisposable
 internal sealed record TextHookMatch(string Text, int CharacterIndex)
 {
     public IReadOnlyList<string> PreviousContext { get; init; } = Array.Empty<string>();
+
+    public CurrentSpeakerContext? CurrentSpeaker { get; init; }
 }
 
 internal enum TextHookRuntimeState

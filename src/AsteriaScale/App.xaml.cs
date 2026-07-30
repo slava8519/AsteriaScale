@@ -109,7 +109,9 @@ public partial class App : System.Windows.Application
             Engine = new MagpieEngineService();
             StartupManager = new StartupService();
             AutoScale = new AutoScaleService(Settings, WindowCatalog, Engine);
-            HoverTranslation = new HoverTranslationService(Settings);
+            HoverTranslation = new HoverTranslationService(
+                Settings,
+                SaveSettingsTrackedAsync);
 
             AsteriaWindow = new MainWindow(
                 Settings,
@@ -240,41 +242,59 @@ public partial class App : System.Windows.Application
     {
         if (arguments.Length <= argumentIndex + 1)
         {
-            throw new ArgumentException("Usage: --overlay-diagnostic <output.png> [dictionary|smart|missing]");
+            throw new ArgumentException(
+                "Usage: --overlay-diagnostic <output.png> [dictionary|smart|missing|speaker]");
         }
 
         string outputPath = arguments[argumentIndex + 1];
         string mode = arguments.Length > argumentIndex + 2
             ? arguments[argumentIndex + 2]
             : "dictionary";
-        HoverTranslationOverlay overlay = new();
         NativeMethods.Point anchor = new() { X = 900, Y = 700 };
-        if (string.Equals(mode, "smart", StringComparison.OrdinalIgnoreCase))
+        Window diagnosticWindow;
+        if (string.Equals(mode, "speaker", StringComparison.OrdinalIgnoreCase))
         {
-            overlay.ShowTranslation(
-                "That is of little significance. More importantly, you should be able to enter this establishment.",
-                "Это не имеет большого значения. Гораздо важнее, что вы сможете войти в это заведение.",
-                anchor,
-                GlossBertDictionarySelectorService.CpuEngineLabel,
-                language: "EN");
+            SpeakerGenderOverlay speakerOverlay = new();
+            speakerOverlay.ShowFor(
+                new CurrentSpeakerContext("Котори", SpeakerGender.Feminine),
+                "Rewrite.exe",
+                anchor);
+            diagnosticWindow = speakerOverlay;
         }
         else
         {
-            bool found = !string.Equals(mode, "missing", StringComparison.OrdinalIgnoreCase);
-            overlay.ShowTranslation(
-                "You",
-                found ? "вы; ты; вам; вас; вами; выкать" : "Нет записи в локальном словаре",
-                anchor,
-                LocalDictionaryService.EngineLabel,
-                dictionaryFound: found,
-                language: "EN");
+            HoverTranslationOverlay overlay = new();
+            diagnosticWindow = overlay;
+            if (string.Equals(mode, "smart", StringComparison.OrdinalIgnoreCase))
+            {
+                overlay.ShowTranslation(
+                    "That is of little significance. More importantly, you should be able to enter this establishment.",
+                    "Это не имеет большого значения. Гораздо важнее, что вы сможете войти в это заведение.",
+                    anchor,
+                    GlossBertDictionarySelectorService.CpuEngineLabel,
+                    language: "EN",
+                    currentSpeaker: new CurrentSpeakerContext(
+                        "Kotori",
+                        SpeakerGender.Feminine));
+            }
+            else
+            {
+                bool found = !string.Equals(mode, "missing", StringComparison.OrdinalIgnoreCase);
+                overlay.ShowTranslation(
+                    "You",
+                    found ? "вы; ты; вам; вас; вами; выкать" : "Нет записи в локальном словаре",
+                    anchor,
+                    LocalDictionaryService.EngineLabel,
+                    dictionaryFound: found,
+                    language: "EN");
+            }
         }
 
         await Task.Delay(350);
-        nint handle = new System.Windows.Interop.WindowInteropHelper(overlay).Handle;
+        nint handle = new System.Windows.Interop.WindowInteropHelper(diagnosticWindow).Handle;
         if (!NativeMethods.GetWindowRect(handle, out NativeMethods.Rect bounds))
         {
-            overlay.Close();
+            diagnosticWindow.Close();
             throw new InvalidOperationException("Could not read overlay bounds.");
         }
 
@@ -288,7 +308,7 @@ public partial class App : System.Windows.Application
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
         bitmap.Save(outputPath, System.Drawing.Imaging.ImageFormat.Png);
-        overlay.Close();
+        diagnosticWindow.Close();
     }
 
     private static async Task RunOcrDiagnosticAsync(string[] arguments, int argumentIndex)

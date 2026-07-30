@@ -42,6 +42,8 @@ public sealed class SettingsService
 
             settings.Profiles ??= [];
             settings.DpiOverrides ??= [];
+            settings.SpeakerGenders ??= [];
+            SpeakerGenderPreferences.Normalize(settings);
             settings.SelectedPresetId = PresetCatalog.Find(settings.SelectedPresetId).Id;
             settings.VisualNovelFrameRateLimit = VisualNovelFrameRates.Normalize(settings.VisualNovelFrameRateLimit);
             settings.HoverTranslationMode =

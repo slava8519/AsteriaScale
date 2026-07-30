@@ -305,8 +305,12 @@ probe занял `1,266 с` при `31,57 token/s`. Это измерение к
 Первый direct prompt получает только effective English. При длинном
 тексте, совпавшей истории Textractor, scaffold-терминах или принятом sense
 разрешён один отдельный APE post-edit: до трёх предыдущих строк передаются как
-типизированные `context_only` entries с отдельно помеченной speaker metadata, а
-provider-neutral evidence содержит английские определения
+типизированные `context_only` entries с отдельно помеченной speaker metadata.
+Текущий speaker label извлекается из OCR/text-hook отдельно от CURRENT; явно
+выбранный для этой игры род передаётся APE только как grammatical metadata без
+имени. Известный мужской/женский род гарантирует попытку APE; если она не прошла,
+полезный direct-result можно показать, но нельзя записать в gender-specific
+кэш. Provider-neutral evidence содержит английские определения
 и выбранные/отвергнутые поверхности как ограниченные, необязательные опоры.
 
 Generic guard проверяет размер и русскоязычность ответа, управляющие символы,
@@ -318,17 +322,18 @@ prompt echo исходной и effective-фразы, объяснения и re
 ошибке основной результат остаётся на месте, а вторая строка становится
 `Перевод фразы недоступен`; скрытого генеративного fallback нет. Проверенные
 результаты хранятся в
-`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v4.json`; fingerprint v4
+`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v5.json`; fingerprint v5
 включает исходную и effective-фразу, identity преобразования, упорядоченную
-скрытую историю, semantic plan, устойчивые собственные имена, model identity и
+скрытую историю, род текущего говорящего, semantic plan, устойчивые собственные имена, model identity и
 prompt version. Model identity включает выбранный CPU/Vulkan backend и профиль
 offload, поэтому GPU и CPU никогда не делят один принятый результат. Cache hit по-прежнему
 сначала проверяет runtime и закреплённые артефакты.
 
 Default smoke проверяет direct/APE prompt, request, parser, pins обоих runner,
 явную CPU/Vulkan маршрутизацию без fallback, полное
-предложение 1–64 слова, sentence-wide sense evidence, идиоматические и буквальные пары,
-структурный guard, cache v4, miss/abstention
+предложение 1–64 слова, speaker extraction и per-game gender mapping,
+sentence-wide sense evidence, идиоматические и буквальные пары,
+структурный guard, cache v5, miss/abstention
 routing, независимость основной и второй строк и fail-open без запуска или
 загрузки живой модели.
 Систематический live A/B качества и задержки ещё не проведён.

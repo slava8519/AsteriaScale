@@ -19,6 +19,7 @@ internal static class SmartHoverPhraseIntegrationTests
         await VerifyGenerationAndCacheHitAsync(Path.Combine(root, "cache-hit"));
         await VerifyBackendCacheIsolationAsync(Path.Combine(root, "backend-cache"));
         await VerifyBackendSnapshotAsync(Path.Combine(root, "backend-snapshot"));
+        await VerifyNonCacheableResultIsRetriedAsync(Path.Combine(root, "non-cacheable"));
         await VerifySentenceWideSenseHintsAsync(Path.Combine(root, "sentence-wide-wsd"));
         await VerifyIdiomRewriteRanksOriginalSourceAsync(Path.Combine(root, "idiom-wsd"));
         await VerifyWholeSentenceAndHiddenHistoryAsync(Path.Combine(root, "whole-sentence"));
@@ -29,6 +30,33 @@ internal static class SmartHoverPhraseIntegrationTests
         await VerifyFailureStaysOnPrimaryAsync(Path.Combine(root, "fail-open"));
         await VerifyCancellationPropagatesAsync(Path.Combine(root, "cancellation"));
         await VerifyDisabledModeSkipsTranslatorAsync(Path.Combine(root, "disabled"));
+    }
+
+    private static async Task VerifyNonCacheableResultIsRetriedAsync(string root)
+    {
+        RecordingPhraseTranslator translator = new()
+        {
+            Cacheable = false
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+
+        SmartHoverPhraseLine? first = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        SmartHoverPhraseLine? second = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+
+        Check(first is { FromCache: false } &&
+              second is { FromCache: false } &&
+              translator.TranslateCalls == 2 &&
+              await fixture.PhraseCache.CountAsync() == 0,
+            "A gender-sensitive direct fallback was persisted as a completed post-edit result.");
     }
 
     private static async Task VerifyBackendSnapshotAsync(string root)
@@ -628,6 +656,7 @@ internal static class SmartHoverPhraseIntegrationTests
         public Exception? PrepareFailure { get; set; }
         public Exception? TranslationFailure { get; set; }
         public bool CancelDuringPrepare { get; set; }
+        public bool Cacheable { get; set; } = true;
         public Action? OnPrepare { get; set; }
         public int PrepareCalls { get; private set; }
         public int TranslateCalls { get; private set; }
@@ -665,7 +694,8 @@ internal static class SmartHoverPhraseIntegrationTests
                 ? Task.FromResult(new SmartPhraseTranslationResult(
                     Translation,
                     request.ModelIdentity,
-                    ElapsedMilliseconds: 11))
+                    ElapsedMilliseconds: 11,
+                    Cacheable: Cacheable))
                 : Task.FromException<SmartPhraseTranslationResult>(TranslationFailure);
         }
     }
