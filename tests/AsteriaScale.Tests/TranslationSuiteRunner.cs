@@ -121,7 +121,8 @@ internal static class TranslationSuiteRunner
                 options.OutputRankerCpuModelId,
                 result.Engine,
                 systemProvenance.TranslationModelIdentity,
-                systemProvenance.TranslationPromptIdentity));
+                systemProvenance.TranslationPromptIdentity,
+                result.Metadata));
         }
 
         ValidateDatasetOutputMatch(selected, outputs, selectionSha256);
@@ -1238,6 +1239,9 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
             recognized,
             dictionaryResult,
             cancellationToken);
+        TranslationSuiteSmartMetadata metadata = CreateSmartMetadata(
+            dictionaryResult,
+            phrase);
         if (phrase is null || phrase.Status != SmartPhraseLineStatus.Translated ||
             string.IsNullOrWhiteSpace(phrase.Translation))
         {
@@ -1248,7 +1252,8 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 focus,
                 phrase?.Engine,
                 ErrorCode: "phrase_translation_unavailable",
-                ErrorMessage: "The production Smart Dictionary pipeline did not accept a phrase translation.");
+                ErrorMessage: "The production Smart Dictionary pipeline did not accept a phrase translation.",
+                Metadata: metadata);
         }
 
         return new TranslationSuiteSystemResult(
@@ -1256,7 +1261,69 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
             phrase.Translation,
             phrase.FromCache,
             focus,
-            phrase.Engine);
+            phrase.Engine,
+            Metadata: metadata);
+    }
+
+    internal static TranslationSuiteSmartMetadata CreateSmartMetadata(
+        SmartHoverResult dictionaryResult,
+        SmartHoverPhraseLine? phrase)
+    {
+        IReadOnlyList<ScaffoldSenseHint> selectedHints =
+            phrase is { Status: SmartPhraseLineStatus.Translated }
+                ? phrase.SenseHints
+                : dictionaryResult.SelectedSenseHints;
+        TranslationSuiteSenseEvidence[] evidence = ProjectSenseEvidence(selectedHints);
+        TranslationSuiteSenseEvidence[] appliedEvidence =
+            phrase is { Status: SmartPhraseLineStatus.Translated }
+                ? ProjectSenseEvidence(phrase.SenseHints)
+                : Array.Empty<TranslationSuiteSenseEvidence>();
+        string evidenceFingerprint = FingerprintSenseEvidence(evidence);
+        string? appliedFingerprint =
+            phrase is { Status: SmartPhraseLineStatus.Translated }
+                ? FingerprintSenseEvidence(appliedEvidence)
+                : null;
+        return new TranslationSuiteSmartMetadata(
+            dictionaryResult.Engine,
+            dictionaryResult.DictionaryFound,
+            dictionaryResult.IsPhrase,
+            dictionaryResult.Translation,
+            evidence,
+            evidenceFingerprint,
+            appliedEvidence,
+            appliedFingerprint);
+    }
+
+    private static TranslationSuiteSenseEvidence[] ProjectSenseEvidence(
+        IReadOnlyList<ScaffoldSenseHint> senseHints) =>
+        senseHints.Select(hint => new TranslationSuiteSenseEvidence(
+                hint.Source,
+                hint.EnglishDefinition,
+                hint.SelectedTranslation))
+            .ToArray();
+
+    private static string FingerprintSenseEvidence(
+        IReadOnlyList<TranslationSuiteSenseEvidence> evidence)
+    {
+        var canonical = new StringBuilder("asteria-smart-sense-evidence-v1\n");
+        foreach (TranslationSuiteSenseEvidence item in evidence)
+        {
+            AppendEvidenceField(canonical, item.Source);
+            AppendEvidenceField(canonical, item.EnglishDefinition);
+            AppendEvidenceField(canonical, item.SelectedTranslation);
+        }
+        string fingerprint = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+            .ToLowerInvariant();
+        return fingerprint;
+    }
+
+    private static void AppendEvidenceField(StringBuilder builder, string value)
+    {
+        builder.Append(value.Length.ToString(CultureInfo.InvariantCulture));
+        builder.Append(':');
+        builder.Append(value);
+        builder.Append('\n');
     }
 
     public async Task<TranslationSuiteSystemProvenance> CaptureProvenanceAsync(

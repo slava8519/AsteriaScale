@@ -14,7 +14,13 @@ internal sealed record SmartHoverPhraseLine(
     string Translation,
     string Engine,
     SmartPhraseLineStatus Status,
-    bool FromCache);
+    bool FromCache)
+{
+    // Benchmark diagnostics retain the selected sense hints supplied to a
+    // successful phrase request. Other prompt sections are ranker-invariant.
+    public IReadOnlyList<ScaffoldSenseHint> SenseHints { get; init; } =
+        Array.Empty<ScaffoldSenseHint>();
+}
 
 internal sealed record SmartHoverResult(
         string Source,
@@ -746,7 +752,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                 guarded.Translation,
                 TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
                 SmartPhraseLineStatus.Translated,
-                translated.FromCache);
+                translated.FromCache)
+            {
+                SenseHints = senseHints
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

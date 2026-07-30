@@ -110,6 +110,7 @@ internal static class TranslationSuiteTests
             "The runner did not write both requested artifacts.");
         Check(!Directory.EnumerateFiles(root, "*.tmp-*", SearchOption.TopDirectoryOnly).Any(),
             "An atomic translation-suite write left a temporary artifact behind.");
+        VerifySmartMetadataEvidenceContract();
 
         string[] outputLines = (await File.ReadAllLinesAsync(output))
             .Where(line => !string.IsNullOrWhiteSpace(line))
@@ -155,6 +156,84 @@ internal static class TranslationSuiteTests
         Check(TranslationSuiteRunner.Percentile([1, 2, 3, 100], 0.50) == 2 &&
               TranslationSuiteRunner.Percentile([1, 2, 3, 100], 0.95) == 100,
             "Pinned nearest-rank latency percentiles changed.");
+    }
+
+    private static void VerifySmartMetadataEvidenceContract()
+    {
+        var selected = new ScaffoldSenseHint(
+            "bank",
+            "a financial institution",
+            "банк",
+            ["берег"],
+            0.91);
+        var dictionary = new SmartHoverResult(
+            "bank",
+            "банк",
+            "CPU",
+            DictionaryFound: true,
+            IsPhrase: false,
+            Language: "en",
+            Confidence: 0.91)
+        {
+            SelectedSenseHints = [selected]
+        };
+        var translated = new SmartHoverPhraseLine(
+            "The bank approved it.",
+            "Банк одобрил это.",
+            "TG4B",
+            SmartPhraseLineStatus.Translated,
+            FromCache: false)
+        {
+            SenseHints = [selected]
+        };
+
+        TranslationSuiteSmartMetadata accepted =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(dictionary, translated);
+        Check(accepted.SenseEvidence.Count == 1 &&
+              accepted.AppliedSenseEvidence.Count == 1 &&
+              accepted.AppliedSenseEvidenceSha256 == accepted.SenseEvidenceSha256 &&
+              IsLowerHexSha256(accepted.AppliedSenseEvidenceSha256!),
+            "Accepted phrase metadata lost the selected sense hints used by translation.");
+
+        var unavailable = translated with
+        {
+            Translation = string.Empty,
+            Status = SmartPhraseLineStatus.Unavailable,
+            SenseHints = Array.Empty<ScaffoldSenseHint>()
+        };
+        TranslationSuiteSmartMetadata rejected =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(dictionary, unavailable);
+        Check(rejected.SenseEvidence.Count == 1 &&
+              rejected.AppliedSenseEvidence.Count == 0 &&
+              rejected.AppliedSenseEvidenceSha256 is null,
+            "Unavailable phrase metadata claimed that sense evidence reached an accepted translation.");
+
+        var equivalent = selected with
+        {
+            RejectedTranslations = ["побережье", "берег"],
+            Confidence = 0.99
+        };
+        TranslationSuiteSmartMetadata ignoredFields =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(
+                dictionary,
+                translated with { SenseHints = [equivalent] });
+        Check(ignoredFields.AppliedSenseEvidenceSha256 ==
+              accepted.AppliedSenseEvidenceSha256,
+            "Confidence or rejected surfaces leaked into prompt-visible sense evidence identity.");
+
+        var emojiHint = new ScaffoldSenseHint(
+            "😀",
+            "smile 😀",
+            "translation",
+            Array.Empty<string>(),
+            1);
+        TranslationSuiteSmartMetadata emojiMetadata =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(
+                dictionary,
+                translated with { SenseHints = [emojiHint] });
+        Check(emojiMetadata.AppliedSenseEvidenceSha256 ==
+              "6f53d613312c5e45bedb95a2e9ac4e724561255a2b81a5bb38e039af6b646b0b",
+            "C# smart evidence hash no longer matches the UTF-16 cross-runtime contract.");
     }
 
     private static async Task VerifyDirectProvenanceAsync(
@@ -491,23 +570,46 @@ internal static class TranslationSuiteTests
                     "Подождите здесь, пожалуйста.",
                     FromCache: false,
                     TranslationSuiteRunner.ResolveFocus(benchmarkCase),
-                    Engine: "fake-cpu")),
+                    Engine: "fake-cpu",
+                    Metadata: CreateSmartMetadata(applied: true))),
                 "case-reference-free" => Task.FromResult(new TranslationSuiteSystemResult(
                     TranslationSuiteCaseStatus.Ok,
                     "Здравствуйте.",
                     FromCache: true,
                     TranslationSuiteRunner.ResolveFocus(benchmarkCase),
-                    Engine: "fake-cpu")),
+                    Engine: "fake-cpu",
+                    Metadata: CreateSmartMetadata(applied: true))),
                 "case-unavailable" => Task.FromResult(new TranslationSuiteSystemResult(
                     TranslationSuiteCaseStatus.Unavailable,
                     Hypothesis: string.Empty,
                     FromCache: false,
                     Focus: null,
                     ErrorCode: "fixture_unavailable",
-                    ErrorMessage: "Expected fixture outcome.")),
+                    ErrorMessage: "Expected fixture outcome.",
+                    Metadata: CreateSmartMetadata(applied: false))),
                 "case-error" => throw new InvalidOperationException("Expected fixture failure."),
                 _ => throw new InvalidOperationException("Unexpected fixture id.")
             };
+        }
+
+        private TranslationSuiteSmartMetadata? CreateSmartMetadata(bool applied)
+        {
+            if (_options.Profile != TranslationSuiteProfile.Smart)
+            {
+                return null;
+            }
+
+            const string emptyEvidenceSha256 =
+                "b47671aaa3a9798ac4cffcde3bb8eb8794acc37d6b09ed3f2ec8c87782f3903c";
+            return new TranslationSuiteSmartMetadata(
+                "fake-ranker",
+                DictionaryFound: false,
+                DictionaryIsPhrase: false,
+                DictionaryTranslation: string.Empty,
+                SenseEvidence: Array.Empty<TranslationSuiteSenseEvidence>(),
+                SenseEvidenceSha256: emptyEvidenceSha256,
+                AppliedSenseEvidence: Array.Empty<TranslationSuiteSenseEvidence>(),
+                AppliedSenseEvidenceSha256: applied ? emptyEvidenceSha256 : null);
         }
 
         public async Task<TranslationSuiteSystemProvenance> CaptureProvenanceAsync(

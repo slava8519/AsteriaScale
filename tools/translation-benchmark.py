@@ -14,10 +14,12 @@ import datetime as dt
 import hashlib
 import html
 import io
+import itertools
 import json
 import math
 import os
 import re
+import random
 import statistics
 import sys
 import tempfile
@@ -32,6 +34,14 @@ REPORT_KIND = "asteria.translation-benchmark-run"
 METRIC_INPUT_KIND = "asteria.translation-metric-input"
 METRIC_EVALUATION_KIND = "asteria.translation-metric-evaluation"
 LEADERBOARD_KIND = "asteria.translation-benchmark-leaderboard"
+PAIRED_COMPARISON_KIND = "asteria.translation-benchmark-paired-comparison"
+SCORING_CONTRACT = "asteria.translation-score-v2"
+OUTPUT_FINGERPRINT_DOMAIN = "asteria.translation-outputs-v2"
+SENSE_OUTCOME_METRIC_ID = "asteria.mucow-surface-outcome@2"
+SENSE_OUTCOME_METHOD = (
+    "full-positive-list-exact-token-yo-fold-no-lemmatization"
+)
+SENSE_EVIDENCE_DOMAIN = "asteria-smart-sense-evidence-v1\n"
 
 _DATASET_FIELDS = {
     "schemaVersion",
@@ -89,6 +99,16 @@ _OUTPUT_STATUSES = {
     "missing",
 }
 _HEX_64 = re.compile(r"^[0-9a-fA-F]{64}$")
+_SMART_METADATA_FIELDS = {
+    "dictionaryEngine",
+    "dictionaryFound",
+    "dictionaryIsPhrase",
+    "dictionaryTranslation",
+    "senseEvidence",
+    "senseEvidenceSha256",
+    "appliedSenseEvidence",
+    "appliedSenseEvidenceSha256",
+}
 
 
 class BenchmarkError(ValueError):
@@ -527,6 +547,8 @@ def validate_output_records(
         normalized["status"] = status
         if actual_focus is not None:
             normalized["focus"] = actual_focus
+        if normalized.get("profile") == "smart":
+            _validate_sense_evidence_metadata(normalized, label)
         outputs_by_id[case_id] = normalized
 
     aligned: list[dict[str, Any]] = []
@@ -646,6 +668,109 @@ def contains_term_anchor(hypothesis: str, anchor: dict[str, Any]) -> bool:
     return False
 
 
+def _sense_targets(case: dict[str, Any]) -> tuple[list[str], list[str]] | None:
+    metadata = case.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    if metadata.get("wsdSurfaceProxyCompatible") is False:
+        return None
+    correct = metadata.get("wsdCorrectTargets")
+    forbidden = metadata.get("wsdForbiddenTargets")
+    if (
+        not isinstance(correct, list)
+        or not correct
+        or any(not isinstance(item, str) or not item.strip() for item in correct)
+        or not isinstance(forbidden, list)
+        or any(not isinstance(item, str) or not item.strip() for item in forbidden)
+    ):
+        return None
+    return correct, forbidden
+
+
+def _sense_outcome(
+    text: str,
+    correct_targets: Sequence[str],
+    forbidden_targets: Sequence[str],
+) -> str:
+    correct = any(
+        contains_term_anchor(
+            text,
+            {"acceptable": [target], "match": "token"},
+        )
+        for target in correct_targets
+    )
+    forbidden = any(
+        contains_term_anchor(
+            text,
+            {"acceptable": [target], "match": "token"},
+        )
+        for target in forbidden_targets
+    )
+    if correct and forbidden:
+        return "mixed"
+    if correct:
+        return "correct"
+    if forbidden:
+        return "wrong"
+    return "unresolved"
+
+
+def _contains_standalone_ascii_focus(source: str, focus: str) -> bool:
+    if not source or not focus:
+        return False
+    pattern = rf"(?<![A-Za-z]){re.escape(focus)}(?![A-Za-z])"
+    return re.search(pattern, source, flags=re.IGNORECASE) is not None
+
+
+def _hover_sense_text(case: dict[str, Any], output: dict[str, Any]) -> str:
+    metadata = output.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    focus = case.get("focus")
+    focus_text = focus.get("text", "") if isinstance(focus, dict) else ""
+    evidence = metadata.get("senseEvidence")
+    selected: list[str] = []
+    if isinstance(evidence, list):
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            source = item.get("source")
+            translation = item.get("selectedTranslation")
+            if (
+                isinstance(source, str)
+                and isinstance(translation, str)
+                and _contains_standalone_ascii_focus(source, focus_text)
+                and translation.strip()
+            ):
+                selected.append(translation)
+    if selected:
+        return " ".join(selected)
+    dictionary_translation = metadata.get("dictionaryTranslation")
+    return dictionary_translation if isinstance(dictionary_translation, str) else ""
+
+
+def _sense_summary(counts: Counter[str]) -> dict[str, Any]:
+    evaluated = sum(counts.values())
+    resolved = counts["correct"] + counts["wrong"] + counts["mixed"]
+    return {
+        "metricId": SENSE_OUTCOME_METRIC_ID,
+        "method": SENSE_OUTCOME_METHOD,
+        "evaluated": evaluated,
+        "correct": counts["correct"],
+        "wrong": counts["wrong"],
+        "mixed": counts["mixed"],
+        "unresolved": counts["unresolved"],
+        "resolved": resolved,
+        "accuracyResolved": counts["correct"] / resolved if resolved else None,
+        "accuracyIntentionToTreat": counts["correct"] / evaluated if evaluated else None,
+        "forbiddenRate": (
+            (counts["wrong"] + counts["mixed"]) / evaluated
+            if evaluated
+            else None
+        ),
+    }
+
+
 def nearest_rank_percentile(values: Sequence[float], percentile: float) -> float | None:
     if not values:
         return None
@@ -665,14 +790,86 @@ def _median(values: Sequence[float]) -> float | None:
 
 
 def _output_fingerprint_records(outputs: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": item["id"],
-            "status": item["status"],
-            "hypothesis": item["hypothesis"],
-        }
-        for item in outputs
-    ]
+    # The report binds every quality- and provenance-relevant output field,
+    # including smart-ranker evidence. The former v1 projection covered only
+    # id/status/hypothesis and could not detect metadata or latency drift.
+    return list(outputs)
+
+
+def _utf16_code_units(value: str) -> int:
+    return len(value.encode("utf-16-le")) // 2
+
+
+def sense_evidence_sha256(evidence: Sequence[dict[str, Any]]) -> str:
+    canonical = [SENSE_EVIDENCE_DOMAIN]
+    for index, item in enumerate(evidence):
+        if not isinstance(item, dict):
+            raise BenchmarkError(f"sense evidence [{index}] должен быть объектом.")
+        if set(item) != {"source", "englishDefinition", "selectedTranslation"}:
+            raise BenchmarkError(
+                f"sense evidence [{index}] имеет неизвестные или отсутствующие поля."
+            )
+        for field in ("source", "englishDefinition", "selectedTranslation"):
+            value = item.get(field)
+            if not isinstance(value, str):
+                raise BenchmarkError(
+                    f"sense evidence [{index}].{field} должен быть строкой."
+                )
+            canonical.append(f"{_utf16_code_units(value)}:{value}\n")
+    return hashlib.sha256("".join(canonical).encode("utf-8")).hexdigest()
+
+
+def _validate_sense_evidence_metadata(output: dict[str, Any], label: str) -> None:
+    metadata = output.get("metadata")
+    status = output.get("status")
+    if not isinstance(metadata, dict):
+        if status == "ok":
+            raise BenchmarkError(f"{label}: успешный smart output не содержит metadata.")
+        return
+    if set(metadata) != _SMART_METADATA_FIELDS:
+        raise BenchmarkError(
+            f"{label}.metadata имеет неизвестные или отсутствующие smart-поля."
+        )
+    if not isinstance(metadata.get("dictionaryEngine"), str):
+        raise BenchmarkError(f"{label}.metadata.dictionaryEngine должен быть строкой.")
+    if not isinstance(metadata.get("dictionaryTranslation"), str):
+        raise BenchmarkError(
+            f"{label}.metadata.dictionaryTranslation должен быть строкой."
+        )
+    for field in ("dictionaryFound", "dictionaryIsPhrase"):
+        if not isinstance(metadata.get(field), bool):
+            raise BenchmarkError(f"{label}.metadata.{field} должен быть bool.")
+
+    selected = metadata.get("senseEvidence")
+    selected_sha256 = metadata.get("senseEvidenceSha256")
+    if not isinstance(selected, list):
+        raise BenchmarkError(f"{label}: senseEvidence должен быть массивом.")
+    if len(selected) > 256:
+        raise BenchmarkError(f"{label}: senseEvidence превышает безопасный предел.")
+    expected_selected = sense_evidence_sha256(selected)
+    if selected_sha256 != expected_selected:
+        raise BenchmarkError(f"{label}: senseEvidenceSha256 не совпадает с evidence.")
+
+    applied = metadata.get("appliedSenseEvidence")
+    applied_sha256 = metadata.get("appliedSenseEvidenceSha256")
+    if status == "ok":
+        if not isinstance(applied, list):
+            raise BenchmarkError(
+                f"{label}: успешный smart output не содержит appliedSenseEvidence."
+            )
+        if len(applied) > 256:
+            raise BenchmarkError(
+                f"{label}: appliedSenseEvidence превышает безопасный предел."
+            )
+        expected_applied = sense_evidence_sha256(applied)
+        if applied_sha256 != expected_applied:
+            raise BenchmarkError(
+                f"{label}: appliedSenseEvidenceSha256 не совпадает с evidence."
+            )
+    elif applied not in (None, []) or applied_sha256 is not None:
+        raise BenchmarkError(
+            f"{label}: неуспешный output не мог применить sense evidence к переводу."
+        )
 
 
 def score_cases(
@@ -687,6 +884,8 @@ def score_cases(
     contrast_correct = 0
     contrast_ties = 0
     contrast_scored = 0
+    translation_sense_outcomes: Counter[str] = Counter()
+    hover_sense_outcomes: Counter[str] = Counter()
     all_latencies: list[float] = []
     successful_latencies: list[float] = []
 
@@ -729,6 +928,29 @@ def score_cases(
             else:
                 contrast_outcome = "incorrect"
 
+        translation_sense_outcome: str | None = None
+        hover_sense_outcome: str | None = None
+        targets = _sense_targets(case)
+        if targets is not None:
+            if output.get("profile") == "smart":
+                _validate_sense_evidence_metadata(
+                    output,
+                    f"output[{case['id']}]",
+                )
+            correct_targets, forbidden_targets = targets
+            translation_sense_outcome = _sense_outcome(
+                hypothesis,
+                correct_targets,
+                forbidden_targets,
+            )
+            hover_sense_outcome = _sense_outcome(
+                _hover_sense_text(case, output),
+                correct_targets,
+                forbidden_targets,
+            )
+            translation_sense_outcomes[translation_sense_outcome] += 1
+            hover_sense_outcomes[hover_sense_outcome] += 1
+
         latency = output.get("latencyMilliseconds")
         if latency is not None:
             numeric_latency = float(latency)
@@ -748,6 +970,8 @@ def score_cases(
                     "residualLatinRate": residual,
                     "bestContrastChrF2": best_contrast,
                     "contrastiveOutcome": contrast_outcome,
+                    "translationSenseOutcome": translation_sense_outcome,
+                    "hoverSenseOutcome": hover_sense_outcome,
                 },
             }
         )
@@ -785,6 +1009,8 @@ def score_cases(
             "accuracy": contrast_correct / contrast_scored if contrast_scored else None,
             "method": "best-gold-chrf2-strictly-greater-than-best-known-wrong-chrf2",
         },
+        "translationSenseOutcome": _sense_summary(translation_sense_outcomes),
+        "hoverSenseOutcome": _sense_summary(hover_sense_outcomes),
         "latencyMilliseconds": {
             "samples": len(all_latencies),
             "p50": nearest_rank_percentile(all_latencies, 0.50),
@@ -847,6 +1073,7 @@ def build_score_report(
     dataset_artifact_sha256 = sha256_file(dataset_path)
     dataset = complete_dataset
     selection: dict[str, Any] | None = None
+    run_provenance: dict[str, Any] | None = None
     if selection_report_path is not None:
         selection_document = read_json(selection_report_path)
         selected_ids = selection_document.get("selectedCaseIds")
@@ -882,6 +1109,11 @@ def build_score_report(
             "shardIndex": selection_document.get("shardIndex"),
             "shardCount": selection_document.get("shardCount"),
         }
+        candidate_provenance = selection_document.get("provenance")
+        if candidate_provenance is not None:
+            if not isinstance(candidate_provenance, dict):
+                raise BenchmarkError("Selection report provenance должен быть объектом.")
+            run_provenance = candidate_provenance
 
     output_paths = (
         [outputs_path] if isinstance(outputs_path, Path) else list(outputs_path)
@@ -921,6 +1153,21 @@ def build_score_report(
                     f"Outputs '{path}' имеет selectionSha256 от другой выборки."
                 )
     raw_outputs = [record for _, batch in output_batches for record in batch]
+    if selection_report_path is not None and isinstance(
+        selection_document.get("cases"), list
+    ):
+        if canonical_json(selection_document["cases"]) != canonical_json(raw_outputs):
+            raise BenchmarkError(
+                "Selection report cases не совпадают с переданными outputs."
+            )
+        runner_dataset = selection_document.get("dataset")
+        if isinstance(runner_dataset, dict):
+            if runner_dataset.get("bytes") != dataset_path.stat().st_size or str(
+                runner_dataset.get("sha256", "")
+            ).lower() != dataset_artifact_sha256:
+                raise BenchmarkError(
+                    "Selection report закрепляет другой dataset artifact."
+                )
     outputs = validate_output_records(raw_outputs, dataset, system_id)
     output_selection_hashes = sorted(
         {
@@ -941,9 +1188,37 @@ def build_score_report(
     )
     output_core = _output_fingerprint_records(outputs)
     outputs_fingerprint = canonical_records_sha256(
-        "asteria.translation-outputs-v1", output_core
+        OUTPUT_FINGERPRINT_DOMAIN, output_core
     )
     cases, summary = score_cases(dataset, outputs)
+    system_profile = _consistent_output_value(outputs, "profile")
+    system_backend = _consistent_output_alias(outputs, "phraseBackend", "backend")
+    system_ranker = _consistent_output_alias(outputs, "rankerCpuModel", "ranker")
+    system_engine = _consistent_output_value(outputs, "engine")
+    system_model_identity = _consistent_output_value(outputs, "modelIdentity")
+    system_prompt_identity = _consistent_output_value(outputs, "promptIdentity")
+    if selection_report_path is not None:
+        expected_run_fields = {
+            "systemId": system_id,
+            "profile": system_profile,
+            "phraseBackend": system_backend,
+            "rankerCpuModel": system_ranker,
+        }
+        for field, expected in expected_run_fields.items():
+            actual = selection_document.get(field)
+            if actual is not None and actual != expected:
+                raise BenchmarkError(
+                    f"Selection report {field} не совпадает с outputs."
+                )
+    if run_provenance is not None:
+        if run_provenance.get("translationModelIdentity") != system_model_identity:
+            raise BenchmarkError(
+                "Selection report translationModelIdentity не совпадает с outputs."
+            )
+        if run_provenance.get("translationPromptIdentity") != system_prompt_identity:
+            raise BenchmarkError(
+                "Selection report translationPromptIdentity не совпадает с outputs."
+            )
     effective_dataset_id = dataset_id or dataset_path.stem
     effective_run_id = run_id or (
         f"{system_id}-{dataset_fingerprint[:12]}-{outputs_fingerprint[:12]}"
@@ -951,6 +1226,7 @@ def build_score_report(
     return {
         "schemaVersion": SCHEMA_VERSION,
         "kind": REPORT_KIND,
+        "metricContract": SCORING_CONTRACT,
         "runId": effective_run_id,
         "generatedUtc": utc_now(),
         "track": "text",
@@ -974,13 +1250,14 @@ def build_score_report(
         "system": {
             "id": system_id,
             "name": system_name or system_id,
-            "profile": _consistent_output_value(outputs, "profile"),
-            "backend": _consistent_output_alias(outputs, "phraseBackend", "backend"),
-            "ranker": _consistent_output_alias(outputs, "rankerCpuModel", "ranker"),
-            "engine": _consistent_output_value(outputs, "engine"),
-            "modelIdentity": _consistent_output_value(outputs, "modelIdentity"),
-            "promptIdentity": _consistent_output_value(outputs, "promptIdentity"),
+            "profile": system_profile,
+            "backend": system_backend,
+            "ranker": system_ranker,
+            "engine": system_engine,
+            "modelIdentity": system_model_identity,
+            "promptIdentity": system_prompt_identity,
         },
+        "runProvenance": run_provenance,
         "summary": summary,
         "selection": selection,
         "cases": cases,
@@ -1031,6 +1308,8 @@ def _metric_segments_bytes(segments: Sequence[dict[str, Any]]) -> bytes:
 def validate_report(report: dict[str, Any], label: str = "report") -> None:
     if report.get("schemaVersion") != SCHEMA_VERSION or report.get("kind") != REPORT_KIND:
         raise BenchmarkError(f"{label}: неподдерживаемый формат отчёта.")
+    if report.get("metricContract") != SCORING_CONTRACT:
+        raise BenchmarkError(f"{label}: неподдерживаемый контракт метрик.")
     cases = report.get("cases")
     if not isinstance(cases, list) or not cases:
         raise BenchmarkError(f"{label}: отсутствуют cases.")
@@ -1043,7 +1322,7 @@ def validate_report(report: dict[str, Any], label: str = "report") -> None:
         "asteria.translation-dataset-v1", dataset
     )
     expected_outputs = canonical_records_sha256(
-        "asteria.translation-outputs-v1", _output_fingerprint_records(outputs)
+        OUTPUT_FINGERPRINT_DOMAIN, _output_fingerprint_records(outputs)
     )
     if report.get("dataset", {}).get("evaluationSliceSha256") != expected_dataset:
         raise BenchmarkError(f"{label}: evaluation slice fingerprint не совпадает с cases.")
@@ -1091,6 +1370,44 @@ def validate_report(report: dict[str, Any], label: str = "report") -> None:
             raise BenchmarkError(f"{label}: selection.selectedCaseIds не совпадает с cases.")
         if reported_selection_hashes != [selection.get("selectionSha256")]:
             raise BenchmarkError(f"{label}: selectionSha256 не совпадает с outputs.")
+
+    expected_cases, expected_summary = score_cases(dataset, outputs)
+    reported_metrics = [item.get("metrics") for item in cases]
+    expected_metrics = [item["metrics"] for item in expected_cases]
+    if canonical_json(reported_metrics) != canonical_json(expected_metrics):
+        raise BenchmarkError(f"{label}: case metrics не совпадают с пересчётом.")
+    if canonical_json(report.get("summary")) != canonical_json(expected_summary):
+        raise BenchmarkError(f"{label}: summary не совпадает с пересчётом.")
+
+    system = report.get("system")
+    if not isinstance(system, dict):
+        raise BenchmarkError(f"{label}: system должен быть объектом.")
+    expected_system = {
+        "id": _consistent_output_value(outputs, "systemId") or system.get("id"),
+        "profile": _consistent_output_value(outputs, "profile"),
+        "backend": _consistent_output_alias(outputs, "phraseBackend", "backend"),
+        "ranker": _consistent_output_alias(outputs, "rankerCpuModel", "ranker"),
+        "engine": _consistent_output_value(outputs, "engine"),
+        "modelIdentity": _consistent_output_value(outputs, "modelIdentity"),
+        "promptIdentity": _consistent_output_value(outputs, "promptIdentity"),
+    }
+    for field, expected in expected_system.items():
+        if system.get(field) != expected:
+            raise BenchmarkError(
+                f"{label}: system.{field} не совпадает с case outputs."
+            )
+    provenance = report.get("runProvenance")
+    if provenance is not None:
+        if not isinstance(provenance, dict):
+            raise BenchmarkError(f"{label}: runProvenance должен быть объектом или null.")
+        if provenance.get("translationModelIdentity") != system.get("modelIdentity"):
+            raise BenchmarkError(
+                f"{label}: provenance translationModelIdentity не совпадает с system."
+            )
+        if provenance.get("translationPromptIdentity") != system.get("promptIdentity"):
+            raise BenchmarkError(
+                f"{label}: provenance translationPromptIdentity не совпадает с system."
+            )
 
 
 def export_metric_inputs(report_path: Path, output_directory: Path) -> tuple[Path, Path]:
@@ -1863,6 +2180,431 @@ def write_leaderboard_bundle(leaderboard: dict[str, Any], output_directory: Path
     atomic_write_text(output_directory / "leaderboard.html", html_content)
 
 
+def _mcnemar_exact(left: Sequence[bool], right: Sequence[bool]) -> dict[str, Any]:
+    left_only = sum(a and not b for a, b in zip(left, right, strict=True))
+    right_only = sum(b and not a for a, b in zip(left, right, strict=True))
+    discordant = left_only + right_only
+    if discordant == 0:
+        p_value = 1.0
+    else:
+        tail = sum(
+            math.comb(discordant, index)
+            for index in range(min(left_only, right_only) + 1)
+        ) / (2 ** discordant)
+        p_value = min(1.0, 2 * tail)
+    return {
+        "leftOnlyCorrect": left_only,
+        "rightOnlyCorrect": right_only,
+        "discordant": discordant,
+        "exactTwoSidedP": p_value,
+    }
+
+
+def _cluster_key(case: dict[str, Any]) -> str:
+    focus = case.get("focus")
+    if isinstance(focus, dict):
+        focus_text = focus.get("text")
+        if isinstance(focus_text, str) and focus_text.strip():
+            return focus_text.strip().casefold()
+    return case["id"]
+
+
+def _cluster_bootstrap_delta(
+    deltas: Sequence[float],
+    cluster_keys: Sequence[str],
+    *,
+    samples: int,
+    seed: int,
+) -> dict[str, Any]:
+    grouped: dict[str, list[float]] = {}
+    for value, key in zip(deltas, cluster_keys, strict=True):
+        grouped.setdefault(key, []).append(value)
+    keys = sorted(grouped)
+    observed = _mean(list(deltas))
+    if not keys or samples <= 0:
+        return {
+            "deltaRightMinusLeft": observed,
+            "confidence95": None,
+            "samples": samples,
+            "clusters": len(keys),
+        }
+    generator = random.Random(seed)
+    draws: list[float] = []
+    for _ in range(samples):
+        sampled = [grouped[generator.choice(keys)] for _ in keys]
+        flattened = [value for cluster in sampled for value in cluster]
+        draws.append(statistics.fmean(flattened))
+    draws.sort()
+    lower = draws[max(0, math.floor(0.025 * (len(draws) - 1)))]
+    upper = draws[min(len(draws) - 1, math.ceil(0.975 * (len(draws) - 1)))]
+    return {
+        "deltaRightMinusLeft": observed,
+        "confidence95": [lower, upper],
+        "samples": samples,
+        "clusters": len(keys),
+    }
+
+
+def _metadata_fingerprint(output: dict[str, Any]) -> str | None:
+    metadata = output.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("appliedSenseEvidenceSha256")
+    return value if isinstance(value, str) and _HEX_64.fullmatch(value) else None
+
+
+def _focus_evidence_signature(
+    case: dict[str, Any], output: dict[str, Any]
+) -> str | None:
+    if _metadata_fingerprint(output) is None:
+        return None
+    focus = case.get("focus")
+    metadata = output.get("metadata")
+    if not isinstance(focus, dict) or not isinstance(metadata, dict):
+        return None
+    focus_text = focus.get("text")
+    evidence = metadata.get("appliedSenseEvidence")
+    if not isinstance(focus_text, str) or not isinstance(evidence, list):
+        return None
+    selected = [
+        {
+            "source": item.get("source"),
+            "meaning": item.get("englishDefinition"),
+            "russian": item.get("selectedTranslation"),
+        }
+        for item in evidence
+        if isinstance(item, dict)
+        and isinstance(item.get("source"), str)
+        and _contains_standalone_ascii_focus(item["source"], focus_text)
+    ]
+    return canonical_json(selected)
+
+
+def _paired_provenance_invariants(
+    report: dict[str, Any], label: str
+) -> dict[str, Any]:
+    provenance = report.get("runProvenance")
+    if not isinstance(provenance, dict):
+        raise BenchmarkError(
+            f"{label}: paired comparison требует runProvenance нового формата."
+        )
+    ranker = provenance.get("ranker")
+    if not isinstance(ranker, dict):
+        raise BenchmarkError(f"{label}: отсутствует provenance ранжировщика.")
+    required_top = (
+        "translationModelIdentity",
+        "translationPromptIdentity",
+        "rankerProvider",
+        "abstentionTag",
+        "applicationArtifact",
+        "harnessArtifact",
+    )
+    required_ranker = (
+        "benchmarkSet",
+        "runtimeArtifacts",
+        "dictionaryArtifacts",
+    )
+    if any(provenance.get(field) is None for field in required_top):
+        raise BenchmarkError(f"{label}: provenance запуска неполон.")
+    if any(ranker.get(field) is None for field in required_ranker):
+        raise BenchmarkError(f"{label}: provenance ранжировщика неполон.")
+    return {
+        field: provenance[field]
+        for field in required_top
+    } | {
+        field: ranker[field]
+        for field in required_ranker
+    }
+
+
+def _apply_holm_family(pairs: Sequence[dict[str, Any]], metric: str) -> None:
+    p_values = [pair[metric]["mcnemar"]["exactTwoSidedP"] for pair in pairs]
+    order = sorted(range(len(p_values)), key=lambda index: p_values[index])
+    previous = 0.0
+    for rank, index in enumerate(order):
+        adjusted = min(1.0, p_values[index] * (len(p_values) - rank))
+        previous = max(previous, adjusted)
+        pairs[index][metric]["mcnemar"]["holmAdjustedP"] = previous
+
+
+def build_paired_comparison(
+    reports: Sequence[dict[str, Any]],
+    *,
+    bootstrap_samples: int = 10_000,
+    seed: int = 20_260_730,
+) -> dict[str, Any]:
+    if len(reports) < 2:
+        raise BenchmarkError("Для paired comparison нужны хотя бы два отчёта.")
+    for index, report in enumerate(reports):
+        validate_report(report, f"reports[{index}]")
+        if report.get("system", {}).get("profile") != "smart":
+            raise BenchmarkError("Paired ranker comparison допускает только profile=smart.")
+
+    first = reports[0]
+    provenance_invariants = [
+        _paired_provenance_invariants(report, f"reports[{index}]")
+        for index, report in enumerate(reports)
+    ]
+    expected_provenance = canonical_json(provenance_invariants[0])
+    if any(
+        canonical_json(item) != expected_provenance
+        for item in provenance_invariants[1:]
+    ):
+        raise BenchmarkError(
+            "Paired comparison requires the same build, prompt, provider, "
+            "runtime, dictionaries, and benchmark provenance."
+        )
+    invariant_paths = (
+        ("dataset", "evaluationSliceSha256"),
+        ("system", "profile"),
+        ("system", "backend"),
+        ("system", "engine"),
+        ("system", "modelIdentity"),
+        ("system", "promptIdentity"),
+    )
+    for path in invariant_paths:
+        expected = first[path[0]].get(path[1])
+        if any(report[path[0]].get(path[1]) != expected for report in reports[1:]):
+            raise BenchmarkError(
+                "Paired comparison requires the same " + ".".join(path) + "."
+            )
+    expected_ids = [item["input"]["id"] for item in first["cases"]]
+    if any(
+        [item["input"]["id"] for item in report["cases"]] != expected_ids
+        for report in reports[1:]
+    ):
+        raise BenchmarkError("Paired comparison requires identical ordered case ids.")
+    rankers = [report["system"].get("ranker") for report in reports]
+    if any(not isinstance(item, str) or not item for item in rankers):
+        raise BenchmarkError("Every paired report must identify its ranker.")
+    if len(set(rankers)) != len(rankers):
+        raise BenchmarkError("Paired reports must use distinct rankers.")
+
+    cluster_keys = [_cluster_key(item["input"]) for item in first["cases"]]
+    pairs: list[dict[str, Any]] = []
+    for left_report, right_report in itertools.combinations(reports, 2):
+        left_cases = left_report["cases"]
+        right_cases = right_report["cases"]
+        left_metrics = [item["metrics"] for item in left_cases]
+        right_metrics = [item["metrics"] for item in right_cases]
+        left_outputs = [item["output"] for item in left_cases]
+        right_outputs = [item["output"] for item in right_cases]
+
+        left_translation = [
+            item.get("translationSenseOutcome") == "correct" for item in left_metrics
+        ]
+        right_translation = [
+            item.get("translationSenseOutcome") == "correct" for item in right_metrics
+        ]
+        left_hover = [item.get("hoverSenseOutcome") == "correct" for item in left_metrics]
+        right_hover = [item.get("hoverSenseOutcome") == "correct" for item in right_metrics]
+        left_contrast = [item.get("contrastiveOutcome") == "correct" for item in left_metrics]
+        right_contrast = [item.get("contrastiveOutcome") == "correct" for item in right_metrics]
+        left_anchor = [
+            item.get("termAnchorsTotal", 0) > 0
+            and item.get("termAnchorsCorrect") == item.get("termAnchorsTotal")
+            for item in left_metrics
+        ]
+        right_anchor = [
+            item.get("termAnchorsTotal", 0) > 0
+            and item.get("termAnchorsCorrect") == item.get("termAnchorsTotal")
+            for item in right_metrics
+        ]
+        left_chrf = [float(item.get("chrF2") or 0) for item in left_metrics]
+        right_chrf = [float(item.get("chrF2") or 0) for item in right_metrics]
+
+        pair_seed = seed + int(hashlib.sha256(
+            (left_report["system"]["id"] + "\0" + right_report["system"]["id"]).encode("utf-8")
+        ).hexdigest()[:8], 16)
+        left_fingerprints = [_metadata_fingerprint(item) for item in left_outputs]
+        right_fingerprints = [_metadata_fingerprint(item) for item in right_outputs]
+        evidence_comparable = [
+            left is not None and right is not None
+            for left, right in zip(left_fingerprints, right_fingerprints, strict=True)
+        ]
+        evidence_changed = [
+            comparable and left != right
+            for comparable, left, right in zip(
+                evidence_comparable,
+                left_fingerprints,
+                right_fingerprints,
+                strict=True,
+            )
+        ]
+        evidence_availability_mismatch = [
+            (left is None) != (right is None)
+            for left, right in zip(left_fingerprints, right_fingerprints, strict=True)
+        ]
+        evidence_not_applied_both = [
+            left is None and right is None
+            for left, right in zip(left_fingerprints, right_fingerprints, strict=True)
+        ]
+        left_focus_signatures = [
+            _focus_evidence_signature(case["input"], output)
+            for case, output in zip(left_cases, left_outputs, strict=True)
+        ]
+        right_focus_signatures = [
+            _focus_evidence_signature(case["input"], output)
+            for case, output in zip(right_cases, right_outputs, strict=True)
+        ]
+        focus_comparable = [
+            left is not None and right is not None
+            for left, right in zip(
+                left_focus_signatures,
+                right_focus_signatures,
+                strict=True,
+            )
+        ]
+        focus_evidence_changed = [
+            comparable and left != right
+            for comparable, left, right in zip(
+                focus_comparable,
+                left_focus_signatures,
+                right_focus_signatures,
+                strict=True,
+            )
+        ]
+        output_changed = [
+            left.get("status") != right.get("status")
+            or left.get("hypothesis") != right.get("hypothesis")
+            for left, right in zip(left_outputs, right_outputs, strict=True)
+        ]
+        changed_evidence_count = sum(evidence_changed)
+        comparable_evidence_count = sum(evidence_comparable)
+        same_evidence_count = comparable_evidence_count - changed_evidence_count
+        changed_focus_count = sum(focus_evidence_changed)
+        comparable_focus_count = sum(focus_comparable)
+        pairs.append(
+            {
+                "left": left_report["system"]["id"],
+                "right": right_report["system"]["id"],
+                "leftRanker": left_report["system"]["ranker"],
+                "rightRanker": right_report["system"]["ranker"],
+                "translationSense": {
+                    "leftAccuracyIntentionToTreat": _mean([float(item) for item in left_translation]),
+                    "rightAccuracyIntentionToTreat": _mean([float(item) for item in right_translation]),
+                    "bootstrap": _cluster_bootstrap_delta(
+                        [float(b) - float(a) for a, b in zip(left_translation, right_translation, strict=True)],
+                        cluster_keys,
+                        samples=bootstrap_samples,
+                        seed=pair_seed,
+                    ),
+                    "mcnemar": _mcnemar_exact(left_translation, right_translation),
+                },
+                "hoverSense": {
+                    "leftAccuracyIntentionToTreat": _mean([float(item) for item in left_hover]),
+                    "rightAccuracyIntentionToTreat": _mean([float(item) for item in right_hover]),
+                    "bootstrap": _cluster_bootstrap_delta(
+                        [float(b) - float(a) for a, b in zip(left_hover, right_hover, strict=True)],
+                        cluster_keys,
+                        samples=bootstrap_samples,
+                        seed=pair_seed + 2,
+                    ),
+                    "mcnemar": _mcnemar_exact(left_hover, right_hover),
+                },
+                "contrastive": {
+                    "leftAccuracy": _mean([float(item) for item in left_contrast]),
+                    "rightAccuracy": _mean([float(item) for item in right_contrast]),
+                    "mcnemar": _mcnemar_exact(left_contrast, right_contrast),
+                },
+                "termAnchor": {
+                    "leftRecall": _mean([float(item) for item in left_anchor]),
+                    "rightRecall": _mean([float(item) for item in right_anchor]),
+                    "mcnemar": _mcnemar_exact(left_anchor, right_anchor),
+                },
+                "chrF2": {
+                    "leftMean": _mean(left_chrf),
+                    "rightMean": _mean(right_chrf),
+                    "winsRight": sum(b > a + 1e-12 for a, b in zip(left_chrf, right_chrf, strict=True)),
+                    "ties": sum(abs(b - a) <= 1e-12 for a, b in zip(left_chrf, right_chrf, strict=True)),
+                    "lossesRight": sum(b < a - 1e-12 for a, b in zip(left_chrf, right_chrf, strict=True)),
+                    "bootstrap": _cluster_bootstrap_delta(
+                        [b - a for a, b in zip(left_chrf, right_chrf, strict=True)],
+                        cluster_keys,
+                        samples=bootstrap_samples,
+                        seed=pair_seed + 1,
+                    ),
+                },
+                "causalDiagnostics": {
+                    "evidenceComparableCases": comparable_evidence_count,
+                    "evidenceNotAppliedBoth": sum(evidence_not_applied_both),
+                    "evidenceAvailabilityMismatch": sum(evidence_availability_mismatch),
+                    "evidenceChanged": changed_evidence_count,
+                    "evidenceChangedRate": (
+                        changed_evidence_count / comparable_evidence_count
+                        if comparable_evidence_count
+                        else None
+                    ),
+                    "outputChanged": sum(output_changed),
+                    "outputChangedRate": sum(output_changed) / len(output_changed),
+                    "outputChangedGivenEvidenceChanged": (
+                        sum(changed and output for changed, output in zip(evidence_changed, output_changed, strict=True))
+                        / changed_evidence_count
+                        if changed_evidence_count
+                        else None
+                    ),
+                    "outputChangedGivenEvidenceSame": (
+                        sum((not changed) and output for changed, output in zip(evidence_changed, output_changed, strict=True))
+                        / same_evidence_count
+                        if same_evidence_count
+                        else None
+                    ),
+                    "focusEvidenceChanged": changed_focus_count,
+                    "focusEvidenceComparableCases": comparable_focus_count,
+                    "focusEvidenceChangedRate": (
+                        changed_focus_count / comparable_focus_count
+                        if comparable_focus_count
+                        else None
+                    ),
+                    "outputChangedGivenFocusEvidenceChanged": (
+                        sum(changed and output for changed, output in zip(focus_evidence_changed, output_changed, strict=True))
+                        / changed_focus_count
+                        if changed_focus_count
+                        else None
+                    ),
+                },
+            }
+        )
+
+    _apply_holm_family(pairs, "translationSense")
+    _apply_holm_family(pairs, "hoverSense")
+
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": PAIRED_COMPARISON_KIND,
+        "generatedUtc": utc_now(),
+        "dataset": first["dataset"],
+        "invariants": {
+            "profile": first["system"]["profile"],
+            "backend": first["system"]["backend"],
+            "engine": first["system"]["engine"],
+            "modelIdentity": first["system"]["modelIdentity"],
+            "promptIdentity": first["system"]["promptIdentity"],
+            "rankerProvider": provenance_invariants[0]["rankerProvider"],
+            "abstentionTag": provenance_invariants[0]["abstentionTag"],
+            "applicationArtifact": provenance_invariants[0]["applicationArtifact"],
+            "harnessArtifact": provenance_invariants[0]["harnessArtifact"],
+            "benchmarkSet": provenance_invariants[0]["benchmarkSet"],
+            "runtimeArtifactsSha256": hashlib.sha256(
+                canonical_json(provenance_invariants[0]["runtimeArtifacts"]).encode("utf-8")
+            ).hexdigest(),
+            "dictionaryArtifactsSha256": hashlib.sha256(
+                canonical_json(provenance_invariants[0]["dictionaryArtifacts"]).encode("utf-8")
+            ).hexdigest(),
+            "orderedCaseIdsSha256": hashlib.sha256(
+                ("\n".join(expected_ids) + "\n").encode("utf-8")
+            ).hexdigest(),
+        },
+        "bootstrap": {
+            "samples": bootstrap_samples,
+            "seed": seed,
+            "unit": "focus-word-cluster",
+        },
+        "systems": [report["system"] for report in reports],
+        "pairs": pairs,
+    }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Автономный бенчмарк EN-RU-перевода Asteria."
@@ -1915,6 +2657,14 @@ def build_parser() -> argparse.ArgumentParser:
     leaderboard.add_argument("--title", default="Asteria Translation Benchmark")
     leaderboard.add_argument("--primary-metric", default="auto")
     leaderboard.add_argument("--output-dir", type=Path, required=True)
+
+    paired = subparsers.add_parser(
+        "paired", help="Compare smart rankers on the same cases."
+    )
+    paired.add_argument("--reports", type=Path, nargs="+", required=True)
+    paired.add_argument("--bootstrap-samples", type=int, default=10_000)
+    paired.add_argument("--seed", type=int, default=20_260_730)
+    paired.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -1967,6 +2717,17 @@ def main(arguments: Sequence[str] | None = None) -> int:
             )
             write_leaderboard_bundle(result, args.output_dir)
             print(f"Готово: {(args.output_dir / 'leaderboard.html').resolve()}")
+            return 0
+        if args.command == "paired":
+            if args.bootstrap_samples < 1:
+                raise BenchmarkError("bootstrap-samples must be positive.")
+            result = build_paired_comparison(
+                [read_json(path) for path in args.reports],
+                bootstrap_samples=args.bootstrap_samples,
+                seed=args.seed,
+            )
+            atomic_write_json(args.output, result)
+            print(f"Готово: {args.output.resolve()}")
             return 0
         raise BenchmarkError(f"Неизвестная команда '{args.command}'.")
     except (BenchmarkError, OSError) as error:

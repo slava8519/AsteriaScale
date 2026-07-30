@@ -220,6 +220,26 @@
         "url": "https://github.com/Helsinki-NLP/MuCoW/blob/8e7570b2bec5b6fcc3727e44da4705672fc026f8/LICENSE",
         "redistribution": "attribution-required"
       },
+      "derivedSelections": [
+        {
+          "id": "mucow-wsd-smart-hover-one-per-sense-v1",
+          "title": "MuCoW EN-RU Smart Dictionary one-example-per-sense slice",
+          "selector": "mucow-smart-hover-one-per-sense-v1",
+          "expectedRecords": 201
+        },
+          {
+            "id": "mucow-wsd-smart-hover-balanced-v1",
+            "title": "MuCoW EN-RU balanced Smart Dictionary downstream slice",
+            "selector": "mucow-smart-hover-balanced-v1",
+            "expectedRecords": 400
+          },
+          {
+            "id": "mucow-wsd-smart-hover-replication-v1",
+            "title": "MuCoW EN-RU disjoint-source Smart Dictionary replication slice",
+            "selector": "mucow-smart-hover-replication-v1",
+            "expectedRecords": 199
+          }
+      ],
       "files": [
         {
           "id": "dataset",

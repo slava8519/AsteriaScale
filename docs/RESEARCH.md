@@ -2295,3 +2295,87 @@ selection-v2/provenance-реруна `p50/p95=1393/4484` мс;
 увеличить честный sentence-level набор и устранить причины отказов до любых
 выводов о downstream-пользе ConSeC. Frozen-набор после зафиксированного выше
 случайного доступа не открывался и в эти числа не входит.
+
+## MuCoW A/B: влияет ли ранжировщик на TranslateGemma — 30 июля 2026
+
+Для ответа на downstream-вопрос создан публичный воспроизводимый development-
+срез `mucow-wsd-smart-hover-one-per-sense-v1`: `201` предложение, `99` focus
+words и `201` сочетание focus+sense. Source-disjoint contextual replication
+`mucow-wsd-smart-hover-replication-v1` содержит ещё `199` предложений для тех
+же `99` слов и `199` тех же sense strata; balanced400 является точным
+объединением dev201 и replication199, а не независимым подтверждением. Между
+dev201 и replication199 пересечений по case ID и source SHA нет. Replication
+проверяет новые контексты, но не unseen
+words/senses; её состав сильнее смещён к OpenSubtitles.
+
+Каждая выбранная строка содержит ровно одно самостоятельное target-вхождение,
+полный список допустимых и запрещённых русских поверхностей, проходит
+surface-discrimination check и совпадает с production hover phrase. ASCII
+граница усилена: `pen` больше не принимается за target внутри `pencil`, `pen2`
+или `pen_name`.
+
+Три прогона были последовательными и различались только
+`--ranker-cpu-model`: GlossBERT, SANDWiCH или ConSeC. Dataset/order,
+TranslateGemma 4B Q4_K_M, llama.cpp b9632, Vulkan full-offload, prompt v5 и
+остальные настройки совпадали. Все `201` cases вошли в intention-to-treat;
+каждый профиль дал `193` успешных и те же `8` unavailable. Ни один frozen
+ranker/translation holdout не открывался.
+
+После первого анализа контракт benchmark telemetry усилен. Новый output отдельно
+хранит выбранный ранжировщиком `senseEvidence` и `appliedSenseEvidence`, которое
+действительно дошло до принятого перевода; unavailable/error не могут заявить
+применённый prompt. C# и Python используют один SHA-256-контракт с длинами UTF-16.
+Reporter связывает полные outputs/metadata, пересчитывает case metrics/summary и
+для paired требует одинаковые build, model, backend, prompt, provider, runtime,
+dictionaries, dataset и order. Основной интервал — `10 000` bootstrap-выборок
+по `99` кластерам focus word; case-level exact McNemar служит sensitivity
+analysis. Holm применяется отдельно к семействам hover-sense и translation-sense;
+chrF2-интервалы descriptive и не корректируются на множественность.
+
+Первоначальный отчёт использовал только `original translation` как правильную
+поверхность и дал ошибочные `72/71/71` final и `83/79/107` hover correct. Эти
+числа **superseded**: поле MuCoW `sense` содержит дополнительные допустимые
+русские lexicalizations. Сохранённые hypotheses и selected evidence были
+read-only пересчитаны по полному positive list метрикой
+`asteria.mucow-surface-outcome@2` (`ё→е`, exact token, без лемматизации). Это не
+новый model run и не новый applied-evidence paired report. Официальный MuCoW
+evaluator также имеет lemma fallback, поэтому `@2` — Asteria surface proxy, а
+не официальный MuCoW score.
+
+| Метрика | GlossBERT | SANDWiCH | ConSeC |
+|---|---:|---:|---:|
+| Smart evidence: correct / wrong / mixed / unresolved | 92 / 43 / 36 / 30 | 88 / 39 / 32 / 42 | **118 / 34 / 5 / 44** |
+| Smart evidence ITT accuracy | 45,77 % | 43,78 % | **58,71 %** |
+| Smart evidence forbidden rate | 39,30 % | 35,32 % | **19,40 %** |
+| Итоговый translation sense: correct / wrong / mixed / unresolved | 75 / 13 / 0 / 113 | 75 / 13 / 0 / 113 | 75 / 13 / 0 / 113 |
+| Итоговый translation sense ITT | 37,31 % | 37,31 % | 37,31 % |
+| Generation-adapted contrastive accuracy | **62,69 %** | **62,69 %** | 62,19 % |
+| Macro chrF2 | 0,43367 | 0,43471 | **0,43578** |
+| Coverage | 96,02 % | 96,02 % | 96,02 % |
+| End-to-end p50 / p95 | 7,88 / 15,42 с | 7,24 / 15,22 с | **6,55 / 12,15 с** |
+
+Парно ConSeC против GlossBERT улучшил Smart-sense outcome в `29` случаях и
+ухудшил в `3`: delta `+12,94` п.п., focus-word 95% CI `[+7,43; +18,50]`, raw
+McNemar `p=2,556e-6`, Holm `p=5,112e-6`. Против SANDWiCH — `35` улучшений и `5`
+ухудшений: `+14,93` п.п., CI `[+9,31; +21,08]`, Holm `p=4,148e-6`. GlossBERT
+против SANDWiCH не различается: CI `[-7,77; +3,90]`, Holm `p=0,5966`. Это
+подтверждает, что ConSeC лучше разрешает неоднозначность в provider-neutral
+evidence-контракте.
+
+Однако TranslateGemma не превратила сигнал в точный target: у всех трёх
+ранжировщиков ровно `75/201`, все парные delta `0`, CI `[0; 0]`, McNemar `p=1`.
+Descriptive chrF2 ConSeC против GlossBERT вырос на `+0,002116`, focus-word CI
+`[+0,000274; +0,004568]`; против SANDWiCH — `+0,001075`, CI
+`[+0,000109; +0,002226]`. Эти малые интервалы не имеют multiplicity correction
+и не являются доказательством практического улучшения перевода. Старые outputs
+не содержали отдельного applied lifecycle, поэтому прежние causal counts
+`181/65/21` больше не используются как строгая причинная метрика.
+
+**Вывод.** ConSeC заметно улучшает семантический вход TranslateGemma и на этом
+железе одновременно снижает p50/p95, но практический рост точности конечного
+лексического смысла равен нулю. Bottleneck переместился из WSD в соблюдение
+advisory evidence внутри TranslateGemma/post-edit. ConSeC остаётся лучшим
+research/scientific профилем; GlossBERT сохраняется stable-default до
+sense-preservation gate. Настройка следующей политики выполняется только на
+dev201, подтверждение — один раз на source-disjoint replication199; frozen
+holdout для этой работы не открывался.

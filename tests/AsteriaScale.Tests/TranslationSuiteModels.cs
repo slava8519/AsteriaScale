@@ -295,6 +295,21 @@ internal enum TranslationSuiteCaseStatus
     Error
 }
 
+internal sealed record TranslationSuiteSenseEvidence(
+    string Source,
+    string EnglishDefinition,
+    string SelectedTranslation);
+
+internal sealed record TranslationSuiteSmartMetadata(
+    string DictionaryEngine,
+    bool DictionaryFound,
+    bool DictionaryIsPhrase,
+    string DictionaryTranslation,
+    IReadOnlyList<TranslationSuiteSenseEvidence> SenseEvidence,
+    string SenseEvidenceSha256,
+    IReadOnlyList<TranslationSuiteSenseEvidence> AppliedSenseEvidence,
+    string? AppliedSenseEvidenceSha256);
+
 internal sealed record TranslationSuiteSystemResult(
     TranslationSuiteCaseStatus Status,
     string Hypothesis,
@@ -302,7 +317,8 @@ internal sealed record TranslationSuiteSystemResult(
     TranslationSuiteFocus? Focus,
     string? Engine = null,
     string? ErrorCode = null,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+    TranslationSuiteSmartMetadata? Metadata = null);
 
 internal sealed record TranslationSuiteCaseOutput(
     int SchemaVersion,
@@ -322,7 +338,8 @@ internal sealed record TranslationSuiteCaseOutput(
     string? RankerCpuModel,
     string? Engine,
     string ModelIdentity,
-    string PromptIdentity);
+    string PromptIdentity,
+    TranslationSuiteSmartMetadata? Metadata = null);
 
 internal sealed record TranslationSuiteLatencySummary(
     int Samples,

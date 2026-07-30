@@ -27,23 +27,22 @@
 | 5 | Декомпозиция HoverTranslationService — **выполнено; после retirement старых Screen/Neural/Qwen-маршрутов ScreenTranslationFlow удалён, остались SmartHoverPipeline + HoverTracking и жизненный цикл текущих моделей** | 2 | M | — |
 | 6 | Память словарей — **этап 1 выполнен: senses −24% (63 МБ, UTF-8-блобы с ленивым декодом), интернирование значений −18.5 МБ, RunDetached устранил удержание hoisted-локалов; FrozenDictionary для больших словарей отвергнут замером (+57 МБ). Цель ≤120 МБ — за mmap-этапом 2** | 2 | M | — |
 | 7 | Bi-энкодер — **выполнено: MiniLM-префильтр (порог >16 групп, top-12, fail-open), протокол v3, офлайн-индекс 225 тыс. векторов; PCA отложена (диск дешевле RAM), k=8 отвергнут замером (терял верный смысл «set»), v3-holdout сознательно не открыт — решения побайтно тождественны cross-пути** | 2 | L | 0, 1 |
-| 8 | Готовые semantic ranker-ы: **SANDWiCH и independent ConSeC CPU интегрированы; ConSeC лучший на scientific sentence-dev; следующий этап — feedback/joint planner и TranslateGemma A/B, GlossBERT пока default** | 3 | XL | 0, 7, 14.2B–C |
+| 8 | Готовые semantic ranker-ы: **SANDWiCH и independent ConSeC CPU интегрированы; MuCoW downstream A/B выполнен — ConSeC улучшает WSD, но TranslateGemma слабо использует evidence; следующий этап — sense-preservation gate, затем feedback/joint planner; GlossBERT пока default** | 3 | XL | 0, 7, 14.2B–C |
 | 9 | Умный словарь для японского | 3 | L | 7 |
 | 10 | Пресет ArtCNN — **реализовано и отозвано: конвертер из Magpie PR #1415 генерирует MagpieFX под dev-ветку, Magpie 0.12.1 эффект не компилирует (проверено вживую). Ждём официальной поддержки в релизе Magpie; лицензионный анализ сохранён (официальные веса MIT — да, Ani4Kv2 CC BY-NC — нет), механизм авто-установки эффектов оставлен в MagpieEngineService. Возврат = один файл в assets/Effects + пресет** | 3 | S | Magpie upstream |
 | 11 | UX: редактор словарей, история, Anki — **выполнено: окно «Мой словарь» с поиском/добавлением/удалением и канонизацией ключей, история 200 переводов с персистом, перенос записи из истории в словарь, TSV-экспорт для Anki; попутно устранена давняя флака атомарной записи (AtomicFile)** | 3 | M | — |
 | 12 | HDR capture path | 3 | XL (внешняя) | Magpie upstream |
 
 **Рекомендуемый порядок оставшихся работ:**
-№8 (ConSeC feedback/joint + TranslateGemma A/B) → №15 → №18 → №16 → №19; №9 делать рядом с
+№8 (TranslateGemma sense-preservation, затем ConSeC feedback/joint) → №15 → №18 → №16 → №19; №9 делать рядом с
 японской частью №16, mmap-этап №6 — только по описанным триггерам.
 Обоснование: сначала нужно перестать терять реплики и гарантировать качество
-самого EN smart-слоя. Independent ConSeC уже выиграл открытый sentence-dev, но
-одна context-only пара и пять уверенных ошибок требуют проверить настоящий
-feedback/joint decoding до продвижения модели. После quality foundation №14.2
-и целостного источника №14.3 тот же provider-neutral evidence надо измерить в
-контуре «TranslateGemma + каркас + валидация», а не считать улучшение WSD
-автоматическим улучшением полного перевода. №11 кормит будущую память переводов
-№18.
+самого EN smart-слоя. Independent ConSeC выиграл открытый sentence-dev и
+MuCoW WSD-часть downstream A/B, но TranslateGemma изменила только `21/201`
+ответов и не улучшила точную передачу target. Поэтому сначала нужен
+sense-preservation gate для уже готового provider-neutral evidence, затем —
+feedback/joint decoding для оставшихся abstain. №11 кормит будущую память
+переводов №18.
 
 ---
 
@@ -335,9 +334,12 @@ same-build сравнения, а не более новым названием 
    independent CPU-профиль~~ — выполнено;
 3. ~~сравнить GlossBERT/SANDWiCH/ConSeC на sentence/scientific dev~~ —
    выполнено, ConSeC выиграл;
-4. реализовать feedback/joint planner для нескольких целей одной реплики и
-   проверить его provider-neutral evidence в TranslateGemma;
-5. сохранять GlossBERT production-default до прохождения общего promotion gate.
+4. ~~изолированно сравнить влияние трёх independent-профилей на TranslateGemma
+   на публичном MuCoW sentence-level срезе~~ — выполнено: ConSeC улучшил WSD,
+   но не конечную точность target;
+5. реализовать sense-preservation gate для TranslateGemma, затем feedback/joint
+   planner для нескольких целей одной реплики;
+6. сохранять GlossBERT production-default до прохождения общего promotion gate.
 
 Оба новых пути обязаны возвращать общий provider-neutral semantic evidence
 через `SemanticSenseEvidenceFactory`. Оно улучшает отдельную фразу умного
@@ -518,7 +520,41 @@ group из `138`, scientific `69/96/106` из `108`; все target-смыслы 
 GlossBERT. Поэтому ConSeC — лучший текущий scientific/research профиль, а
 GlossBERT остаётся stable-default. Frozen holdout не открывался.
 
-**Следующий эксперимент ConSeC — benchmark-only J1.** Прямое включение joint в
+**Independent-ranker A/B на открытом dev201 — выполнено 30 июля 2026.** На публичном открытом
+MuCoW-dev срезе из `201` случая три последовательных Smart-прогона использовали
+одну TranslateGemma 4B/Vulkan, prompt v5, dataset и порядок; менялся только
+CPU-ranker. Первоначальный single-positive расчёт признан ошибочным. Read-only
+re-score тех же hypotheses по полному positive list дал: ConSeC поднял hover
+sense ITT с `92/201` у GlossBERT до `118/201`, `29` улучшений против `3`
+ухудшений, delta `+12,94` п.п., focus-word CI `[+7,43; +18,50]`, Holm
+`p=5,11e-6`; wrong/mixed evidence сократился с `79` до `39`. Но итоговый target
+sense одинаков у всех трёх: `75/201`, delta `0`, CI `[0; 0]`, McNemar `p=1`.
+Descriptive chrF2 ConSeC выше GlossBERT лишь на `0,002116`; интервал
+`[+0,000274; +0,004568]` не корректировался на множественность. Значит, ConSeC
+улучшает семантический вход, но promotion блокирует соблюдение evidence
+генератором, а не independent WSD. Frozen holdout не открывался.
+
+**Следующий эксперимент P1 — sense-preservation gate.** Политика проектируется
+и настраивается только на открытом MuCoW-dev201. Gold evaluator остаётся только
+benchmark-инструментом: runtime не «знает правильный ответ», а консервативно
+проверяет наличие выбранных и явно отвергнутых surface hints. Если accepted
+high-confidence hint отсутствует, а отвергнутая поверхность появилась, разрешена
+ровно одна усиленная APE-попытка; затем действуют текущие safety/completeness
+guards. Neural hint не становится безусловным детерминированным термином. Cache
+identity обязана включать policy version.
+
+После заморозки политики выполняется один подтверждающий прогон на
+`mucow-wsd-smart-hover-replication-v1`: `199` source-disjoint предложений для
+тех же lexical-sense strata. Balanced400 включает dev и replication и поэтому
+не используется как «независимый» третий тест. Promotion gate P1 оценивается на
+replication199: ConSeC final target ITT выше GlossBERT минимум на `5` п.п.;
+focus-word bootstrap 95% CI не пересекает `0`; case-level McNemar `p<0,05`
+служит дополнительной проверкой; chrF2/contrastive/coverage/safety не хуже
+baseline; p95 растёт не более чем на `20 %`. После этого всё равно требуется
+один заранее объявленный frozen-holdout прогон. Только затем имеет смысл
+добавлять joint hints.
+
+**Последующий эксперимент ConSeC — benchmark-only J1.** Прямое включение joint в
 приложение пока отклонено: текущий набор содержит лишь два independent-abstain,
 поэтому rescue-only схема может добавить максимум `2/138` и не даёт
 статистически доказать пользу. Сначала замораживается отдельный открытый
@@ -544,7 +580,7 @@ Promotion gate J1: изменённых принятых independent-решен�
 sentence plan получает общий provider-neutral evidence для Smart Dictionary и
 TranslateGemma.
 
-Затем проводится отдельный full-text A/B с одинаковыми моделью, seed и
+Затем повторяется отдельный full-text A/B с одинаковыми моделью, seed и
 исходными репликами/абзацами: independent hints против joint hints. Измеряются
 chrF, сохранение выбранных/отвергнутых sense surfaces, residual English,
 mandatory anchors, latency и RAM. Scientific-срез является отдельным
@@ -569,11 +605,13 @@ gate, CPU runtime/installer и sentence-level отчёт; лицензии и г
 распространения зафиксированы.
 Победитель проходит правило выбора и новый one-shot holdout не хуже GlossBERT.
 Если никто не проходит — GlossBERT остаётся production ranker, а отрицательный
-результат фиксируется в RESEARCH.md. Для ConSeC дополнительно обязателен A/B на
-full-text dev: joint planner должен улучшать либо сохранять смысловую точность
-TranslateGemma, не ухудшая mandatory anchors, residual English и latency
-бюджета; до этого он не становится default, хотя independent runtime доступен
-как явный исследовательский профиль.
+результат фиксируется в RESEARCH.md. Independent downstream A/B уже выполнен и
+выявил слабое соблюдение evidence. Для ConSeC дополнительно обязательны P1 и
+повторный full-text A/B: сначала sense-preservation должен улучшить конечную
+смысловую точность TranslateGemma, затем joint planner — улучшить либо сохранить
+её, не ухудшая mandatory anchors, residual English и latency бюджета. До этого
+ConSeC не становится default, хотя independent runtime доступен как явный
+исследовательский профиль.
 
 ---
 

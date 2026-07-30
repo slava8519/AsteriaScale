@@ -37,6 +37,18 @@ PRODUCTION_MAXIMUM_CHARACTERS = 1_000
 PRODUCTION_MAXIMUM_WORDS = 64
 SMART_HOVER_SELECTOR = "smart-hover-whole-source-v1"
 PRODUCTION_GUARD_SELECTOR = "production-phrase-guard-v1"
+MUCOW_SMART_BALANCED_SELECTOR = "mucow-smart-hover-balanced-v1"
+MUCOW_SMART_ONE_PER_SENSE_SELECTOR = "mucow-smart-hover-one-per-sense-v1"
+MUCOW_SMART_REPLICATION_SELECTOR = "mucow-smart-hover-replication-v1"
+MUCOW_SMART_BALANCED_SEED = "mucow-wsd-smart-hover-balanced-v1"
+MUCOW_SMART_BALANCED_RECORDS = 400
+MUCOW_DOMAIN_PRIORITY = {
+    "books": 0,
+    "eubooks": 1,
+    "tatoeba": 2,
+    "ted": 3,
+    "opensubs": 4,
+}
 SENTENCE_TERMINATORS = frozenset(".!?…。！？")
 OPENING_QUOTES = frozenset('"‘“«「『')
 CLOSING_PUNCTUATION = frozenset('"\'’”)]}')
@@ -179,6 +191,9 @@ def _validate_manifest(raw: object, manifest_path: Path) -> dict[str, Any]:
             if selection.get("selector") not in {
                 PRODUCTION_GUARD_SELECTOR,
                 SMART_HOVER_SELECTOR,
+                MUCOW_SMART_BALANCED_SELECTOR,
+                MUCOW_SMART_ONE_PER_SENSE_SELECTOR,
+                MUCOW_SMART_REPLICATION_SELECTOR,
             }:
                 raise DatasetToolError(f"{selection_label}.selector: неизвестный selector.")
             _require_int(
@@ -402,6 +417,58 @@ def _unique_strings(values: Iterable[object], *, excluding: str | None = None) -
     return result
 
 
+def _unique_casefold_strings(values: Iterable[object]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _surface_tokens(value: str) -> list[str]:
+    return [
+        token.lower().replace("ё", "е")
+        for token in re.findall(r"[^\W\d_]+", value, flags=re.UNICODE)
+    ]
+
+
+def _contains_surface_target(value: str, target: str) -> bool:
+    actual = _surface_tokens(value)
+    expected = _surface_tokens(target)
+    return bool(expected) and any(
+        actual[index : index + len(expected)] == expected
+        for index in range(len(actual) - len(expected) + 1)
+    )
+
+
+def _mucow_surface_proxy_compatible(
+    reference: str,
+    contrasts: Sequence[str],
+    correct_targets: Sequence[str],
+    forbidden_targets: Sequence[str],
+) -> bool:
+    gold_correct = any(
+        _contains_surface_target(reference, target) for target in correct_targets
+    )
+    gold_forbidden = any(
+        _contains_surface_target(reference, target) for target in forbidden_targets
+    )
+    contrast_clean = all(
+        any(_contains_surface_target(contrast, target) for target in forbidden_targets)
+        and not any(
+            _contains_surface_target(contrast, target) for target in correct_targets
+        )
+        for contrast in contrasts
+    )
+    return gold_correct and not gold_forbidden and contrast_clean
+
+
 def _collect_references(value: object) -> list[str]:
     if isinstance(value, str):
         return [value] if value.strip() else []
@@ -433,6 +500,31 @@ def _focus(source: str, needle: str, label: str) -> dict[str, Any]:
         "characterIndex": utf16_length(source[: match.start()]),
         "annotated": True,
     }
+
+
+def _standalone_ascii_focus(
+    source: str,
+    needle: str,
+    label: str,
+) -> tuple[dict[str, Any], int]:
+    """Resolve a MuCoW target as a complete ASCII lexical token."""
+
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_]){re.escape(needle)}(?![A-Za-z0-9_])",
+        flags=re.IGNORECASE,
+    )
+    matches = list(pattern.finditer(source))
+    if not matches:
+        raise DatasetToolError(f"{label}: standalone focus '{needle}' was not found in source.")
+    match = matches[0]
+    return (
+        {
+            "text": source[match.start() : match.end()],
+            "characterIndex": utf16_length(source[: match.start()]),
+            "annotated": True,
+        },
+        len(matches),
+    )
 
 
 def _guard_metadata(source: str) -> dict[str, Any]:
@@ -939,11 +1031,35 @@ def _import_mucow_wsd(dataset: dict[str, Any], paths: dict[str, Path]) -> list[d
             (error.get("contrastive") for error in errors), excluding=reference
         )
         origin = _require_string(row.get("origin", "unknown"), f"{label}.origin")
+        original_translation = _row_text(row, "original translation", label)
+        sense = _row_text(row, "sense", label)
+        correct_targets = _unique_casefold_strings(
+            [original_translation, *sense.split("_")]
+        )
+        correct_target_set = {target.casefold() for target in correct_targets}
+        forbidden_targets = _unique_strings(
+            error.get("replacement")
+            for error in errors
+            if not isinstance(error.get("replacement"), str)
+            or error["replacement"].casefold() not in correct_target_set
+        )
+        focus, focus_occurrence_count = _standalone_ascii_focus(
+            source,
+            ambiguous,
+            label,
+        )
         case_id = f"mucow-wsd:{row_index:05d}"
         record = _base_record(case_id, source, [reference])
         record.update(
             {
-                "focus": _focus(source, ambiguous, label),
+                "focus": focus,
+                "termAnchors": [
+                    {
+                        "source": ambiguous,
+                        "acceptable": correct_targets,
+                        "match": "token",
+                    }
+                ],
                 "contrastReferences": contrasts,
                 "contrastSetId": case_id,
                 "domain": origin,
@@ -951,8 +1067,18 @@ def _import_mucow_wsd(dataset: dict[str, Any], paths: dict[str, Path]) -> list[d
                 "documentId": str(row.get("id", row_index)),
                 "metadata": {
                     "upstreamId": row.get("id"),
-                    "sense": row.get("sense"),
-                    "originalTranslation": row.get("original translation"),
+                    "sense": sense,
+                    "originalTranslation": original_translation,
+                    "focusOccurrenceCount": focus_occurrence_count,
+                    "wsdCorrectTargets": correct_targets,
+                    "wsdForbiddenTargets": forbidden_targets,
+                    "wsdSurfaceProxyCompatible": _mucow_surface_proxy_compatible(
+                        reference,
+                        contrasts,
+                        correct_targets,
+                        forbidden_targets,
+                    ),
+                    **_guard_metadata(source),
                     "errorAnnotations": [
                         {
                             "type": error.get("type"),
@@ -1249,6 +1375,93 @@ def _materialize_baselines(
     return artifacts
 
 
+def _mucow_stable_rank(record: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    digest.update(MUCOW_SMART_BALANCED_SEED.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(record["id"].encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(record["sourceSha256"].encode("ascii"))
+    return digest.hexdigest()
+
+
+def _select_mucow_smart_balanced(
+    records: Sequence[dict[str, Any]],
+    expected_records: int = MUCOW_SMART_BALANCED_RECORDS,
+) -> list[dict[str, Any]]:
+    """Select two domain-diverse examples per sense without observing outputs."""
+
+    eligible = [
+        record
+        for record in records
+        if record.get("metadata", {}).get("modelGuardCompatible") is True
+        and record.get("metadata", {}).get("smartHoverWholeSourceCompatible") is True
+        and record.get("metadata", {}).get("focusOccurrenceCount") == 1
+        and bool(record.get("contrastReferences"))
+        and bool(record.get("metadata", {}).get("originalTranslation"))
+        and record.get("metadata", {}).get("wsdSurfaceProxyCompatible") is True
+    ]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for record in eligible:
+        focus = record.get("focus", {}).get("text")
+        sense = record.get("metadata", {}).get("sense")
+        if not isinstance(focus, str) or not isinstance(sense, str):
+            continue
+        groups.setdefault((focus.casefold(), sense), []).append(record)
+
+    chosen: list[tuple[tuple[str, str], int, dict[str, Any]]] = []
+    for key in sorted(groups, key=lambda item: (item[0], item[1])):
+        candidates = sorted(
+            groups[key],
+            key=lambda record: (
+                MUCOW_DOMAIN_PRIORITY.get(record.get("domain"), 99),
+                _mucow_stable_rank(record),
+                record["id"],
+            ),
+        )
+        first = candidates[0]
+        chosen.append((key, 0, first))
+        different_domain = [
+            record for record in candidates[1:]
+            if record.get("domain") != first.get("domain")
+        ]
+        remaining = different_domain or candidates[1:]
+        if remaining and expected_records > 201:
+            chosen.append((key, 1, remaining[0]))
+
+    if len(groups) != 201 or len(chosen) < expected_records:
+        raise DatasetToolError(
+            "MuCoW balanced selector no longer has the pinned 201 sense groups "
+            f"and {expected_records} examples."
+        )
+    while len(chosen) > expected_records:
+        removable = [item for item in chosen if item[1] == 1]
+        if not removable:
+            raise DatasetToolError("MuCoW balanced selector cannot preserve every sense group.")
+        remove = max(removable, key=lambda item: _mucow_stable_rank(item[2]))
+        chosen.remove(remove)
+
+    chosen.sort(key=lambda item: (item[0][0], item[0][1], item[1], item[2]["id"]))
+    selected = [item[2] for item in chosen]
+    if len({record["sourceSha256"] for record in selected}) != len(selected):
+        raise DatasetToolError("MuCoW balanced selector produced duplicate source sentences.")
+    return selected
+
+
+def _select_mucow_smart_replication(
+    records: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only the second, source-disjoint example from the balanced slice."""
+
+    development = _select_mucow_smart_balanced(records, 201)
+    development_ids = {record["id"] for record in development}
+    balanced = _select_mucow_smart_balanced(records, MUCOW_SMART_BALANCED_RECORDS)
+    replication = [record for record in balanced if record["id"] not in development_ids]
+    if len(replication) != MUCOW_SMART_BALANCED_RECORDS - len(development):
+        raise DatasetToolError("MuCoW replication selector is no longer disjoint and pinned.")
+    return replication
+
+
 def import_dataset(
     output_root: Path,
     dataset: dict[str, Any],
@@ -1285,6 +1498,18 @@ def import_dataset(
                     "smartHoverWholeSourceCompatible"
                 ) is True
             ]
+        elif selector == MUCOW_SMART_BALANCED_SELECTOR:
+            selected = _select_mucow_smart_balanced(
+                records,
+                selection["expectedRecords"],
+            )
+        elif selector == MUCOW_SMART_ONE_PER_SENSE_SELECTOR:
+            selected = _select_mucow_smart_balanced(
+                records,
+                selection["expectedRecords"],
+            )
+        elif selector == MUCOW_SMART_REPLICATION_SELECTOR:
+            selected = _select_mucow_smart_replication(records)
         else:
             raise DatasetToolError(f"Неизвестный selector '{selector}'.")
         if len(selected) != selection["expectedRecords"]:
@@ -1384,6 +1609,41 @@ def import_dataset(
                 "sentenceBoundaryIdentity": "SentenceBoundaryRules-v1",
                 "speakerPrefixPolicy": "conservative-reject-v1",
                 "requiresWholeSourcePhrase": True,
+            }
+        elif selection["selector"] in {
+            MUCOW_SMART_BALANCED_SELECTOR,
+            MUCOW_SMART_ONE_PER_SENSE_SELECTOR,
+            MUCOW_SMART_REPLICATION_SELECTOR,
+        }:
+            provenance["normalized"]["comparisonScope"] = (
+                "MuCoW lexical-ambiguity Smart Dictionary downstream A/B"
+            )
+            provenance["normalized"]["selectionRule"] = {
+                "seed": MUCOW_SMART_BALANCED_SEED,
+                "requiresWholeSourcePhrase": True,
+                "requiresUniqueStandaloneFocus": True,
+                "requiresContrastReference": True,
+                "maximumPerFocusSense": (
+                    1
+                    if selection["selector"] in {
+                        MUCOW_SMART_ONE_PER_SENSE_SELECTOR,
+                        MUCOW_SMART_REPLICATION_SELECTOR,
+                    }
+                    else 2
+                ),
+                "preservesEveryEligibleFocusSense":
+                    selection["selector"] != MUCOW_SMART_REPLICATION_SELECTOR,
+                "focusSenseGroups": (
+                    199
+                    if selection["selector"] == MUCOW_SMART_REPLICATION_SELECTOR
+                    else 201
+                ),
+                "disjointFromSelection": (
+                    "mucow-wsd-smart-hover-one-per-sense-v1"
+                    if selection["selector"] == MUCOW_SMART_REPLICATION_SELECTOR
+                    else None
+                ),
+                "domainPriority": list(MUCOW_DOMAIN_PRIORITY),
             }
         _atomic_write_json(provenance_path, provenance)
         outputs.append(

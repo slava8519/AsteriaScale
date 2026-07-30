@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib.util
 import json
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 
 
@@ -36,7 +38,25 @@ def output_for(
     selection: str,
     status: str = "ok",
     latency: int = 10,
+    ranker: str = "consec",
+    metadata: dict | None = None,
 ) -> dict:
+    if metadata is None:
+        empty_evidence: list[dict] = []
+        metadata = {
+            "dictionaryEngine": ranker,
+            "dictionaryFound": False,
+            "dictionaryIsPhrase": False,
+            "dictionaryTranslation": "",
+            "senseEvidence": empty_evidence,
+            "senseEvidenceSha256": benchmark.sense_evidence_sha256(empty_evidence),
+            "appliedSenseEvidence": empty_evidence,
+            "appliedSenseEvidenceSha256": (
+                benchmark.sense_evidence_sha256(empty_evidence)
+                if status == "ok"
+                else None
+            ),
+        }
     return {
         "schemaVersion": 1,
         "id": case["id"],
@@ -50,8 +70,11 @@ def output_for(
         "systemId": system_id,
         "profile": "smart",
         "phraseBackend": "vulkan",
-        "rankerCpuModel": "consec",
+        "rankerCpuModel": ranker,
         "engine": "translategemma-4b",
+        "modelIdentity": "fixture-tg4b",
+        "promptIdentity": "fixture-prompt-v1",
+        "metadata": metadata,
     }
 
 
@@ -75,7 +98,12 @@ class TranslationBenchmarkTests(unittest.TestCase):
                 "termAnchors": [{"en": "term", "ru": "термин", "match": "stem"}],
                 "contrastReferences": ["Ошибочный вариант."],
                 "tags": ["vn"],
-                "metadata": {"fixture": True},
+                "metadata": {
+                    "fixture": True,
+                    "sense": "term-sense",
+                    "wsdCorrectTargets": ["термин"],
+                    "wsdForbiddenTargets": ["ошибочный"],
+                },
             },
             {
                 "schemaVersion": 1,
@@ -126,22 +154,79 @@ class TranslationBenchmarkTests(unittest.TestCase):
         *,
         system_name: str | None = None,
         selection: str | None = None,
+        ranker: str = "consec",
     ) -> dict:
         selected = selection or self.full_selection
         outputs = [
-            output_for(case, hypothesis, system_id=system_id, selection=selected)
+            output_for(
+                case,
+                hypothesis,
+                system_id=system_id,
+                selection=selected,
+                ranker=ranker,
+                metadata=(
+                    (lambda evidence: {
+                        "dictionaryEngine": ranker,
+                        "dictionaryFound": True,
+                        "dictionaryIsPhrase": False,
+                        "dictionaryTranslation": hypothesis,
+                        "senseEvidence": evidence,
+                        "senseEvidenceSha256": benchmark.sense_evidence_sha256(evidence),
+                        "appliedSenseEvidence": evidence,
+                        "appliedSenseEvidenceSha256": benchmark.sense_evidence_sha256(evidence),
+                    })([
+                        {
+                            "source": "term",
+                            "englishDefinition": "a lexical item",
+                            "selectedTranslation": hypothesis,
+                        }
+                    ])
+                    if case["id"] == "multi-ref"
+                    else None
+                ),
+            )
             for case, hypothesis in zip(self.dataset, hypotheses, strict=True)
         ]
         outputs[2]["status"] = "error"
         outputs[2]["hypothesis"] = ""
+        outputs[2]["metadata"]["appliedSenseEvidence"] = []
+        outputs[2]["metadata"]["appliedSenseEvidenceSha256"] = None
         output_path = self.root / f"{system_id}.jsonl"
         write_jsonl(output_path, outputs)
-        return benchmark.build_score_report(
+        report = benchmark.build_score_report(
             self.dataset_path,
             output_path,
             system_id,
             system_name,
             dataset_id="fixture",
+        )
+        report["runProvenance"] = {
+            "translationModelIdentity": "fixture-tg4b",
+            "translationPromptIdentity": "fixture-prompt-v1",
+            "rankerModelVersion": f"fixture-{ranker}",
+            "rankerProvider": "Cpu",
+            "abstentionTag": "abstain-margin=0.25",
+            "applicationArtifact": {"name": "app", "bytes": 1, "sha256": "a" * 64},
+            "harnessArtifact": {"name": "tests", "bytes": 1, "sha256": "b" * 64},
+            "ranker": {
+                "benchmarkSet": {"name": "set", "bytes": 1, "sha256": "c" * 64},
+                "runtimeArtifacts": [{"name": "runtime", "bytes": 1, "sha256": "d" * 64}],
+                "dictionaryArtifacts": [{"name": "dict", "bytes": 1, "sha256": "e" * 64}],
+                "modelArtifacts": [{"name": ranker, "bytes": 1, "sha256": "f" * 64}],
+            },
+        }
+        return report
+
+    @staticmethod
+    def refresh_report(report: dict) -> None:
+        outputs = [item["output"] for item in report["cases"]]
+        inputs = [item["input"] for item in report["cases"]]
+        cases, summary = benchmark.score_cases(inputs, outputs)
+        report["cases"] = cases
+        report["summary"] = summary
+        report["outputs"]["canonicalSha256"] = benchmark.canonical_records_sha256(
+            benchmark.OUTPUT_FINGERPRINT_DOMAIN,
+            benchmark._output_fingerprint_records(outputs),
         )
 
     def test_chrf2_multi_reference_and_residual_latin(self) -> None:
@@ -171,6 +256,10 @@ class TranslationBenchmarkTests(unittest.TestCase):
         self.assertEqual(report["summary"]["chrF2"]["referenceScoredCases"], 3)
         self.assertEqual(report["summary"]["termAnchors"], {"correct": 1, "total": 1, "recall": 1.0})
         self.assertEqual(report["summary"]["contrastive"]["accuracy"], 1.0)
+        self.assertEqual(
+            report["summary"]["translationSenseOutcome"]["correct"], 1
+        )
+        self.assertEqual(report["summary"]["hoverSenseOutcome"]["correct"], 1)
         self.assertGreater(report["summary"]["residualLatin"]["meanSuccessful"], 0)
         self.assertEqual(report["system"]["backend"], "vulkan")
         self.assertEqual(report["system"]["ranker"], "consec")
@@ -622,6 +711,165 @@ class TranslationBenchmarkTests(unittest.TestCase):
         report = benchmark.read_json(report_path)
         benchmark.validate_report(report)
         self.assertEqual(report["summary"]["successful"], 2)
+
+    def test_paired_ranker_comparison_tracks_downstream_sense_and_evidence(self) -> None:
+        shared_tail = ["Русский текст.", "", "Перевод без эталона."]
+        glossbert = self.make_report(
+            "smart-glossbert",
+            ["Ошибочный вариант.", *shared_tail],
+            ranker="glossbert",
+        )
+        sandwich = self.make_report(
+            "smart-sandwich",
+            ["Точный термин побеждает.", *shared_tail],
+            ranker="sandwich",
+        )
+        consec = self.make_report(
+            "smart-consec",
+            ["Точный термин побеждает.", *shared_tail],
+            ranker="consec",
+        )
+        comparison = benchmark.build_paired_comparison(
+            [glossbert, sandwich, consec],
+            bootstrap_samples=100,
+            seed=7,
+        )
+        self.assertEqual(benchmark.PAIRED_COMPARISON_KIND, comparison["kind"])
+        self.assertEqual("focus-word-cluster", comparison["bootstrap"]["unit"])
+        self.assertEqual(3, len(comparison["pairs"]))
+        for pair in comparison["pairs"]:
+            self.assertIn("bootstrap", pair["hoverSense"])
+            for metric in ("translationSense", "hoverSense"):
+                raw = pair[metric]["mcnemar"]["exactTwoSidedP"]
+                adjusted = pair[metric]["mcnemar"]["holmAdjustedP"]
+                self.assertLessEqual(raw, adjusted)
+                self.assertLessEqual(adjusted, 1.0)
+        gloss_sandwich = comparison["pairs"][0]
+        self.assertGreater(
+            gloss_sandwich["translationSense"]["rightAccuracyIntentionToTreat"],
+            gloss_sandwich["translationSense"]["leftAccuracyIntentionToTreat"],
+        )
+        self.assertEqual(
+            1,
+            gloss_sandwich["translationSense"]["mcnemar"]["rightOnlyCorrect"],
+        )
+        self.assertEqual(
+            1,
+            gloss_sandwich["causalDiagnostics"]["focusEvidenceChanged"],
+        )
+        sandwich_consec = comparison["pairs"][2]
+        self.assertEqual(0, sandwich_consec["causalDiagnostics"]["evidenceChanged"])
+        self.assertEqual(0, sandwich_consec["causalDiagnostics"]["outputChanged"])
+
+        unavailable_left = json.loads(json.dumps(glossbert))
+        unavailable_right = json.loads(json.dumps(sandwich))
+        for report in (unavailable_left, unavailable_right):
+            report["cases"][0]["output"]["status"] = "unavailable"
+            report["cases"][0]["output"]["hypothesis"] = ""
+            report["cases"][0]["output"]["metadata"][
+                "appliedSenseEvidence"
+            ] = []
+            report["cases"][0]["output"]["metadata"][
+                "appliedSenseEvidenceSha256"
+            ] = None
+            self.refresh_report(report)
+        unavailable_comparison = benchmark.build_paired_comparison(
+            [unavailable_left, unavailable_right],
+            bootstrap_samples=10,
+            seed=7,
+        )
+        self.assertEqual(
+            0,
+            unavailable_comparison["pairs"][0]["causalDiagnostics"][
+                "evidenceChanged"
+            ],
+        )
+        self.assertEqual(
+            2,
+            unavailable_comparison["pairs"][0]["causalDiagnostics"][
+                "evidenceComparableCases"
+            ],
+        )
+        self.assertEqual(
+            2,
+            unavailable_comparison["pairs"][0]["causalDiagnostics"][
+                "evidenceNotAppliedBoth"
+            ],
+        )
+
+        incompatible = json.loads(json.dumps(consec))
+        incompatible["system"]["backend"] = "cpu"
+        with self.assertRaises(benchmark.BenchmarkError):
+            benchmark.build_paired_comparison(
+                [glossbert, incompatible], bootstrap_samples=10
+            )
+
+        different_build = json.loads(json.dumps(consec))
+        different_build["runProvenance"]["applicationArtifact"]["sha256"] = "0" * 64
+        with self.assertRaises(benchmark.BenchmarkError):
+            benchmark.build_paired_comparison(
+                [glossbert, different_build], bootstrap_samples=10
+            )
+
+    def test_report_validation_detects_metadata_metrics_and_summary_tampering(self) -> None:
+        report = self.make_report(
+            "tamper",
+            ["Точный термин побеждает.", "Русский текст.", "", "Перевод."],
+        )
+        for mutate in (
+            lambda item: item["cases"][0]["output"]["metadata"].update(
+                {"dictionaryTranslation": "подмена"}
+            ),
+            lambda item: item["cases"][0]["metrics"].update({"chrF2": 0.0}),
+            lambda item: item["summary"].update({"successful": 999}),
+        ):
+            changed = json.loads(json.dumps(report))
+            mutate(changed)
+            with self.assertRaises(benchmark.BenchmarkError):
+                benchmark.validate_report(changed)
+
+        legacy = json.loads(json.dumps(report))
+        del legacy["metricContract"]
+        with self.assertRaises(benchmark.BenchmarkError):
+            benchmark.validate_report(legacy)
+
+    def test_focus_word_is_the_bootstrap_cluster(self) -> None:
+        first = {"id": "a", "focus": {"text": "Bank"}, "metadata": {"sense": "one"}}
+        second = {"id": "b", "focus": {"text": "bank"}, "metadata": {"sense": "two"}}
+        self.assertEqual(benchmark._cluster_key(first), benchmark._cluster_key(second))
+
+    def test_russian_anchor_folds_yo_to_e(self) -> None:
+        self.assertTrue(
+            benchmark.contains_term_anchor(
+                "Самолёт уже улетел.",
+                {"acceptable": ["самолет"], "match": "token"},
+            )
+        )
+
+    def test_mixed_sense_counts_as_resolved_but_not_correct(self) -> None:
+        summary = benchmark._sense_summary(
+            Counter(correct=3, wrong=1, mixed=2, unresolved=4)
+        )
+        self.assertEqual(6, summary["resolved"])
+        self.assertEqual(0.5, summary["accuracyResolved"])
+        self.assertEqual(0.3, summary["accuracyIntentionToTreat"])
+
+    def test_sense_evidence_hash_matches_dotnet_utf16_contract(self) -> None:
+        self.assertEqual(
+            "b47671aaa3a9798ac4cffcde3bb8eb8794acc37d6b09ed3f2ec8c87782f3903c",
+            benchmark.sense_evidence_sha256([]),
+        )
+        emoji = [
+            {
+                "source": "😀",
+                "englishDefinition": "smile 😀",
+                "selectedTranslation": "translation",
+            }
+        ]
+        self.assertEqual(
+            "6f53d613312c5e45bedb95a2e9ac4e724561255a2b81a5bb38e039af6b646b0b",
+            benchmark.sense_evidence_sha256(emoji),
+        )
 
 
 if __name__ == "__main__":

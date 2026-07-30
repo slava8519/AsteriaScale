@@ -94,6 +94,22 @@ class BenchmarkDatasetFetcherTests(unittest.TestCase):
         self.assertEqual(
             "CC-BY-NC-4.0", by_id["wmt25-terminology"]["license"]["spdx"]
         )
+        mucow_selections = {
+            selection["selector"]: selection
+            for selection in by_id["mucow-wsd"]["derivedSelections"]
+        }
+        self.assertEqual(
+            201,
+            mucow_selections["mucow-smart-hover-one-per-sense-v1"]["expectedRecords"],
+        )
+        self.assertEqual(
+            400,
+            mucow_selections["mucow-smart-hover-balanced-v1"]["expectedRecords"],
+        )
+        self.assertEqual(
+            199,
+            mucow_selections["mucow-smart-hover-replication-v1"]["expectedRecords"],
+        )
         for dataset in manifest["datasets"]:
             for file_info in dataset["files"]:
                 self.assertRegex(file_info["sha256"], r"^[0-9a-f]{64}$")
@@ -129,6 +145,98 @@ class BenchmarkDatasetFetcherTests(unittest.TestCase):
         focus = fetcher._focus(source, "NOTE", "emoji")
         self.assertEqual(3, focus["characterIndex"])
         self.assertEqual("NOTE", focus["text"])
+
+    def test_mucow_focus_requires_a_standalone_ascii_token(self) -> None:
+        focus, occurrences = fetcher._standalone_ascii_focus(
+            "The pencil fell beside the pen.", "pen", "fixture"
+        )
+        self.assertEqual("pen", focus["text"])
+        self.assertEqual(27, focus["characterIndex"])
+        self.assertEqual(1, occurrences)
+
+        repeated, repeated_count = fetcher._standalone_ascii_focus(
+            "A horse passed another horse.", "horse", "fixture"
+        )
+        self.assertEqual(2, repeated_count)
+        self.assertEqual(2, repeated["characterIndex"])
+        for source in ("pen2 is not pen", "pen_name is not pen"):
+            focus, count = fetcher._standalone_ascii_focus(source, "pen", "fixture")
+            self.assertEqual("pen", focus["text"])
+            self.assertEqual(source.rindex("pen"), focus["characterIndex"])
+            self.assertEqual(1, count)
+
+    def test_mucow_balanced_selector_is_complete_and_order_independent(self) -> None:
+        records = []
+        for group in range(201):
+            for variant, domain in enumerate(("books", "opensubs")):
+                source = f"word{group} sense {variant}."
+                focus, occurrences = fetcher._standalone_ascii_focus(
+                    source,
+                    f"word{group}",
+                    "fixture",
+                )
+                records.append(
+                    {
+                        "id": f"mucow:{group:03d}:{variant}",
+                        "source": source,
+                        "sourceSha256": fetcher.source_sha256(source),
+                        "focus": focus,
+                        "domain": domain,
+                        "contrastReferences": ["contrast"],
+                        "metadata": {
+                            "sense": f"sense-{group}",
+                            "originalTranslation": f"target-{group}",
+                            "wsdSurfaceProxyCompatible": True,
+                            "focusOccurrenceCount": occurrences,
+                            "modelGuardCompatible": True,
+                            "smartHoverWholeSourceCompatible": True,
+                        },
+                    }
+                )
+
+        selected = fetcher._select_mucow_smart_balanced(records)
+        reversed_selected = fetcher._select_mucow_smart_balanced(list(reversed(records)))
+        self.assertEqual(400, len(selected))
+        self.assertEqual(
+            [record["id"] for record in selected],
+            [record["id"] for record in reversed_selected],
+        )
+        self.assertEqual(201, len({
+            (record["focus"]["text"].casefold(), record["metadata"]["sense"])
+            for record in selected
+        }))
+        self.assertEqual(400, len({record["sourceSha256"] for record in selected}))
+        one_per_sense = fetcher._select_mucow_smart_balanced(records, 201)
+        self.assertEqual(201, len(one_per_sense))
+        self.assertEqual(
+            201,
+            len({
+                (record["focus"]["text"].casefold(), record["metadata"]["sense"])
+                for record in one_per_sense
+            }),
+        )
+        replication = fetcher._select_mucow_smart_replication(records)
+        self.assertEqual(199, len(replication))
+        self.assertFalse(
+            {record["id"] for record in one_per_sense}
+            & {record["id"] for record in replication}
+        )
+        self.assertFalse(
+            {record["sourceSha256"] for record in one_per_sense}
+            & {record["sourceSha256"] for record in replication}
+        )
+        self.assertEqual(
+            {record["id"] for record in selected},
+            {record["id"] for record in one_per_sense}
+            | {record["id"] for record in replication},
+        )
+        self.assertEqual(
+            199,
+            len({
+                (record["focus"]["text"].casefold(), record["metadata"]["sense"])
+                for record in replication
+            }),
+        )
 
     def test_smart_hover_selector_rejects_partial_wmt_segments(self) -> None:
         self.assertTrue(fetcher._smart_hover_whole_source_compatible("Wait here, please."))
@@ -346,10 +454,10 @@ class BenchmarkDatasetFetcherTests(unittest.TestCase):
                         "id": "duplicate",
                         "source": "The bank is closed.",
                         "reference": "Банк закрыт.",
-                        "original translation": "Банк закрыт.",
+                        "original translation": "Банк",
                         "ambig word": "bank",
                         "origin": "books",
-                        "sense": "financial",
+                        "sense": "банк_банковское учреждение",
                         "errors": [
                             {
                                 "contrastive": "Берег закрыт.",
@@ -362,10 +470,10 @@ class BenchmarkDatasetFetcherTests(unittest.TestCase):
                         "id": "duplicate",
                         "source": "The bank approved it.",
                         "reference": "Банк одобрил это.",
-                        "original translation": "Банк одобрил это.",
+                        "original translation": "Банк",
                         "ambig word": "bank",
                         "origin": "books",
-                        "sense": "financial",
+                        "sense": "банк_банковское учреждение",
                         "errors": [],
                     },
                 ],
@@ -378,6 +486,20 @@ class BenchmarkDatasetFetcherTests(unittest.TestCase):
         )
         self.assertNotEqual(mucow[0]["id"], mucow[1]["id"])
         self.assertEqual("bank", mucow[0]["focus"]["text"])
+        self.assertEqual(
+            [{
+                "source": "bank",
+                "acceptable": ["Банк", "банковское учреждение"],
+                "match": "token",
+            }],
+            mucow[0]["termAnchors"],
+        )
+        self.assertEqual(
+            ["Банк", "банковское учреждение"],
+            mucow[0]["metadata"]["wsdCorrectTargets"],
+        )
+        self.assertEqual(["берег"], mucow[0]["metadata"]["wsdForbiddenTargets"])
+        self.assertTrue(mucow[0]["metadata"]["wsdSurfaceProxyCompatible"])
 
         source_path = self.root / "bio-en.txt"
         reference_path = self.root / "bio-ru.txt"

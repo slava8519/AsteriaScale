@@ -217,6 +217,98 @@ gate, но слишком малый срез для вывода о качес�
 ранжировщика по-прежнему проверяется MuCoW и `--ranker-sentence-benchmark`, а
 влияние на русский текст — более крупным sentence-level A/B.
 
+## 6. MuCoW: изолированный A/B ранжировщиков
+
+Для downstream-проверки ранжировщика fetcher создаёт три воспроизводимых
+sentence-level среза MuCoW:
+
+- `mucow-wsd-smart-hover-one-per-sense-v1` — открытый development/diagnostic:
+  `201` случай, `99` focus words и `201` размеченный смысл;
+- `mucow-wsd-smart-hover-replication-v1` — `199` новых исходных предложений
+  для тех же `99` слов и `199` тех же lexical-sense strata;
+- `mucow-wsd-smart-hover-balanced-v1` — точное объединение этих двух срезов,
+  `400` случаев.
+
+Dev201 и replication199 не пересекаются по case ID и SHA исходного предложения,
+а balanced400 является их union. Replication
+не проверяет unseen words/senses и сильнее смещён к OpenSubtitles. Все выбранные
+строки требуют ровно одного отдельного target, сохраняют полный список
+допустимых русских реализаций и известные ошибочные поверхности, проходят
+surface-discrimination check и полностью совпадают с production hover phrase.
+Это также устраняет старую ошибку, где `pen` мог находиться внутри `pencil`,
+`pen2` или `pen_name`.
+
+```powershell
+python .\tools\fetch-benchmark-datasets.py fetch-import mucow-wsd
+```
+
+Для каждого ранжировщика выполняется одинаковый `smart`-прогон на
+`mucow-wsd-smart-hover-one-per-sense-v1`; меняется только
+`--ranker-cpu-model`. Затем обычный `score` дополнительно считает:
+
+- правильный, неправильный, смешанный или неразрешённый смысл в итоговом
+  переводе TranslateGemma;
+- тот же outcome в строке Smart Dictionary до генерации;
+- resolved accuracy, intention-to-treat accuracy и forbidden-sense rate.
+
+Runner отдельно сохраняет выбранные ранжировщиком hints и hints, действительно
+применённые в успешном prompt, с SHA-256 по общему C#/Python-контракту. Новый
+парный отчёт полностью связывает output/metadata/metrics, проверяет одинаковые
+build/model/backend/prompt/runtime/dictionaries/order, использует bootstrap по
+`99` кластерам focus word как основной интервал и case-level exact McNemar как
+дополнительный sensitivity analysis. Holm применяется отдельно к семействам
+translation-sense и hover-sense; chrF2-интервалы остаются descriptive и без
+поправки на множественные сравнения.
+
+После свежего model run с applied-evidence telemetry v2 команда выглядит так
+(исторические `mucow201.json` нового строгого контракта намеренно не проходят):
+
+```powershell
+python .\tools\translation-benchmark.py paired `
+  --reports `
+    .\artifacts\Benchmarks\reports\asteria-smart-glossbert-vulkan-mucow201-applied-v2.json `
+    .\artifacts\Benchmarks\reports\asteria-smart-sandwich-vulkan-mucow201-applied-v2.json `
+    .\artifacts\Benchmarks\reports\asteria-smart-consec-vulkan-mucow201-applied-v2.json `
+  --bootstrap-samples 10000 `
+  --seed 20260730 `
+  --output .\artifacts\Benchmarks\comparisons\mucow201-ranker-paired.json
+```
+
+Контрольный прогон 30 июля 2026 года использовал одну TranslateGemma 4B Q4_K_M,
+llama.cpp b9632, Vulkan full-offload и prompt v5. Во всех профилях успешны
+`193/201` случаев; восемь одинаково недоступны. После обнаружения неполного
+списка gold-поверхностей сохранённые hypotheses и selected evidence были без
+повторного model run пересчитаны метрикой
+`asteria.mucow-surface-outcome@2` (`ё→е`, exact token, без лемматизации):
+
+| Ранжировщик | Smart-смысл, ITT | Ошибочная/смешанная подсказка | Итоговый смысл, ITT | chrF2 | p50 / p95 |
+|---|---:|---:|---:|---:|---:|
+| GlossBERT | 45,77 % (`92/201`) | 79/201 | 37,31 % (`75/201`) | 0,43367 | 7,88 / 15,42 с |
+| SANDWiCH | 43,78 % (`88/201`) | 71/201 | 37,31 % (`75/201`) | 0,43471 | 7,24 / 15,22 с |
+| **ConSeC** | **58,71 % (`118/201`)** | **39/201** | 37,31 % (`75/201`) | **0,43578** | **6,55 / 12,15 с** |
+
+ConSeC против GlossBERT дал `29` парных улучшений Smart-смысла при `3`
+ухудшениях: delta `+12,94` п.п., focus-word 95% CI `[+7,43; +18,50]`, raw
+McNemar `p=2,56e-6`, Holm `p=5,11e-6`. Против SANDWiCH — `35/5`, delta
+`+14,93` п.п., CI `[+9,31; +21,08]`, Holm `p=4,15e-6`. Неправильные/смешанные
+подсказки ConSeC сократил почти вдвое.
+
+Однако итоговый смысл оказался буквально одинаков: `75/201` у всех трёх,
+каждая парная delta `0`, CI `[0; 0]`, McNemar `p=1`. Descriptive chrF2 ConSeC
+выше GlossBERT на `0,002116`, focus-word CI `[+0,000274; +0,004568]`, но это
+малый exploratory эффект без multiplicity correction. Старые outputs ещё не
+содержали отдельного applied-evidence lifecycle, поэтому строгий causal report
+нового формата потребует следующего model run; эти цифры являются честным
+read-only re-score старых hypotheses, а не новым прогоном.
+
+Следовательно, ConSeC достоверно улучшает WSD-вход и одновременно снижает
+latency, но TranslateGemma 4B не превращает преимущество в более точный
+лексический смысл конечной фразы. Следующий quality-step — повысить соблюдение
+advisory sense evidence, настраивать его на открытом dev201 и один раз проверить
+на source-disjoint replication199. Официальный MuCoW evaluator дополнительно
+использует lemma fallback; Asteria `@2` — намеренно более простой surface proxy,
+а не официальный MuCoW score.
+
 ## Минимальный протокол честного эксперимента
 
 1. Не менять dataset после первого baseline; новый slice получает новый ID.
@@ -237,6 +329,8 @@ gate, но слишком малый срез для вывода о качес�
 - [WMT26 General MT](https://github.com/wmt-conference/wmt26-general-mt)
 - [Good Translation, Wrong in Context](https://github.com/lena-voita/good-translation-wrong-in-context)
 - [MuCoW](https://github.com/Helsinki-NLP/MuCoW)
+- [Официальный MuCoW evaluator](https://github.com/Helsinki-NLP/MuCoW/blob/8e7570b2bec5b6fcc3727e44da4705672fc026f8/WMT2019/translation%20test%20suite/evaluate.py)
+- [Статья MuCoW, WMT 2019](https://aclanthology.org/W19-5354/)
 - [WinoMT](https://github.com/gabrielStanovsky/mt_gender)
 
 Лицензии и условия каждого upstream остаются его собственными. Fetcher
