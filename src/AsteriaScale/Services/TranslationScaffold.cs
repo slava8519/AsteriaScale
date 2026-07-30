@@ -33,7 +33,20 @@ internal sealed record ScaffoldSenseHint(
 internal enum ScaffoldTermProvenance
 {
     Deterministic,
-    GlossBert
+    GlossBert,
+    AdvisoryDictionary
+}
+
+internal static class ScaffoldTermPolicy
+{
+    internal static bool IsMandatory(ScaffoldTerm term) =>
+        term.Provenance == ScaffoldTermProvenance.Deterministic;
+
+    internal static ScaffoldTerm[] MandatoryTerms(IEnumerable<ScaffoldTerm> terms) =>
+        terms.Where(IsMandatory).ToArray();
+
+    internal static ScaffoldTerm[] AdvisoryTerms(IEnumerable<ScaffoldTerm> terms) =>
+        terms.Where(term => !IsMandatory(term)).ToArray();
 }
 
 internal enum TranslationScaffoldNeuralStatus
@@ -518,11 +531,11 @@ internal sealed class TranslationScaffoldBuilder
             ScaffoldTerm[] allTerms = eligibleCandidates
                 .Select(candidate => candidate.Term)
                 .ToArray();
-            ScaffoldTerm[] terms = allTerms
-                .Take(MaximumTermCount)
+            TermCandidate[] cappedCandidates = SelectCappedCandidates(eligibleCandidates);
+            ScaffoldTerm[] terms = cappedCandidates
+                .Select(candidate => candidate.Term)
                 .ToArray();
-            string[] properNames = eligibleCandidates
-                .Take(MaximumTermCount)
+            string[] properNames = cappedCandidates
                 .Where(candidate => candidate.IsProperName)
                 .Select(candidate => candidate.Term.Source)
                 .Distinct(StringComparer.Ordinal)
@@ -535,7 +548,7 @@ internal sealed class TranslationScaffoldBuilder
             if (exactSentenceTranslation is not null &&
                 SenseFidelityGuard.FindMissingTerms(
                     exactSentenceTranslation,
-                    allTerms).Count > 0)
+                    ScaffoldTermPolicy.MandatoryTerms(allTerms)).Count > 0)
             {
                 exactSentenceTranslation = null;
             }
@@ -599,7 +612,7 @@ internal sealed class TranslationScaffoldBuilder
         }
         else
         {
-            outcomes = NpuDictionarySelectorService.SplitMeanings(lookup.Translation);
+            outcomes = DictionaryMeaningParser.SplitMeanings(lookup.Translation);
         }
 
         outcomes = outcomes
@@ -622,7 +635,9 @@ internal sealed class TranslationScaffoldBuilder
                 new SelectedTranslation(
                     aligned.Translation,
                     aligned.Confidence,
-                    ScaffoldTermProvenance.Deterministic),
+                    authoritativeEntry
+                        ? ScaffoldTermProvenance.Deterministic
+                        : ScaffoldTermProvenance.AdvisoryDictionary),
                 plan);
         }
 
@@ -640,7 +655,9 @@ internal sealed class TranslationScaffoldBuilder
                 new SelectedTranslation(
                     heuristic.Translation,
                     heuristic.Confidence,
-                    ScaffoldTermProvenance.Deterministic),
+                    authoritativeEntry
+                        ? ScaffoldTermProvenance.Deterministic
+                        : ScaffoldTermProvenance.AdvisoryDictionary),
                 plan);
         }
 
@@ -649,13 +666,15 @@ internal sealed class TranslationScaffoldBuilder
         // a deterministic result below the mandatory-confidence floor unless
         // it came from the user layer. VN-hard controls visible dictionary and
         // residual repair, but mandatory terms are declared independently in
-        // the scaffold layer so a bulk curated import cannot constrain Qwen.
+        // the scaffold layer so a bulk curated import cannot constrain the phrase translator.
         return new SelectionAttempt(
             outcomes.Length == 1
                 ? new SelectedTranslation(
                     outcomes[0],
                     authoritativeEntry ? 1 : 0.85,
-                    ScaffoldTermProvenance.Deterministic)
+                    authoritativeEntry
+                        ? ScaffoldTermProvenance.Deterministic
+                        : ScaffoldTermProvenance.AdvisoryDictionary)
                 : null,
             plan);
     }
@@ -938,6 +957,32 @@ internal sealed class TranslationScaffoldBuilder
     private static bool SpansOverlap(TermCandidate left, SourceSpan right) =>
         left.CharacterIndex < right.CharacterIndex + right.CharacterLength &&
         right.CharacterIndex < left.CharacterIndex + left.CharacterLength;
+
+    private static TermCandidate[] SelectCappedCandidates(
+        IReadOnlyList<TermCandidate> eligibleCandidates)
+    {
+        if (eligibleCandidates.Count <= MaximumTermCount)
+        {
+            return eligibleCandidates.ToArray();
+        }
+
+        // The discovery order is part of the prompt/cache contract, but the
+        // cap must never let early broad-dictionary hints evict an authoritative
+        // user or curated term. Select the limited set by authority, then emit
+        // that set in its original stable order.
+        HashSet<TermCandidate> selected = eligibleCandidates
+            .Where(candidate => candidate.IsUserEntry)
+            .Concat(eligibleCandidates.Where(candidate =>
+                !candidate.IsUserEntry &&
+                ScaffoldTermPolicy.IsMandatory(candidate.Term)))
+            .Concat(eligibleCandidates.Where(candidate =>
+                !ScaffoldTermPolicy.IsMandatory(candidate.Term)))
+            .Take(MaximumTermCount)
+            .ToHashSet();
+        return eligibleCandidates
+            .Where(selected.Contains)
+            .ToArray();
+    }
 
     private static bool IsAsciiLetter(char character) =>
         character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';

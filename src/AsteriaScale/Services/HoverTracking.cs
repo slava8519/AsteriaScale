@@ -64,21 +64,6 @@ internal sealed class HoverTracking : IDisposable
         }
     }
 
-    /// <summary>
-    /// Screen mode shares the operation cancellation: cancel the previous
-    /// operation and hand out a fresh token.
-    /// </summary>
-    public CancellationToken RestartOperation()
-    {
-        lock (_stateLock)
-        {
-            _operationCancellation?.Cancel();
-            _operationCancellation?.Dispose();
-            _operationCancellation = new CancellationTokenSource();
-            return _operationCancellation.Token;
-        }
-    }
-
     internal static long DistanceSquared(NativeMethods.Point left, NativeMethods.Point right)
     {
         long dx = left.X - right.X;

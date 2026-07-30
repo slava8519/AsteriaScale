@@ -266,7 +266,7 @@ internal static class LocalDictionaryNormalizationTests
         // trailing "…" marker never becomes a rankable candidate.
         DictionaryLookupResult truncated = await dictionary.LookupAsync(
             "A verbose explanation.", "verbose", 2);
-        string[] chunks = NpuDictionarySelectorService.SplitMeanings(truncated.Translation);
+        string[] chunks = DictionaryMeaningParser.SplitMeanings(truncated.Translation);
         Check(truncated.Found &&
               truncated.Translation.EndsWith("; …", StringComparison.Ordinal) &&
               chunks.Length == 6 &&
@@ -430,6 +430,7 @@ internal static class LocalDictionaryNormalizationTests
             [
                 "Alice stood on the verge of collapse\tАлиса стояла на грани краха",
                 "Alice lost the lantern\tОна потеряла фонарь",
+                "I deposited money at the bank\tЯ отнёс сбережения в кредитную организацию",
                 "They waited by the gate\tОни танцевали у ворот",
                 "Abraham had eight children one of them was called Isaak\tУ Авраама было восемь детей; одного из них звали Исаак.",
                 "The event starts at 1 p.m.\tСобытие начинается в час дня.",
@@ -517,6 +518,28 @@ internal static class LocalDictionaryNormalizationTests
                 $"{key}\tальфа\tloud brass music played during {key} festivals\tcommon\tnoun",
                 $"{key}\tомега\tthe second synthetic sense of {key}\tcommon\tnoun"
             }));
+        await File.AppendAllLinesAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            [
+                "acorn\tжелудь; вымысел",
+                "basket\tкорзина; вымысел",
+                "candle\tсвеча; вымысел",
+                "dragon\tдракон; вымысел",
+                "engine\tдвигатель; вымысел",
+                "forest\tлес; вымысел",
+                "garden\tсад; вымысел",
+                "hammer\tмолоток; вымысел",
+                "island\tостров; вымысел",
+                "jacket\tкуртка; вымысел",
+                "kettle\tчайник; вымысел",
+                "meadow\tлуг; вымысел"
+            ]);
+        await File.AppendAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-dialogue.tsv"),
+            [
+                "Acorn basket candle dragon engine forest garden hammer island jacket kettle meadow wait\t" +
+                "желудь корзина свеча дракон двигатель лес сад молоток остров куртка чайник луг"
+            ]);
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "jpn-rus.tsv"),
             ["鳥\tптица"]);
@@ -538,10 +561,13 @@ internal static class LocalDictionaryNormalizationTests
         Check(exact.Terms.Any(term =>
                   term.Source == "on the verge of" &&
                   term.Translation == "на грани" &&
-                  term.Confidence >= TranslationScaffoldBuilder.MinimumConfidence),
+                  term.Confidence >= TranslationScaffoldBuilder.MinimumConfidence &&
+                  term.Provenance == ScaffoldTermProvenance.Deterministic),
             "The deterministic scaffold omitted a multi-word expression.");
         Check(exact.Terms.Any(term =>
-                  term.Source == "Alice" && term.Translation == "Алиса") &&
+                  term.Source == "Alice" &&
+                  term.Translation == "Алиса" &&
+                  term.Provenance == ScaffoldTermProvenance.Deterministic) &&
               exact.ProperNames.SequenceEqual(["Alice"], StringComparer.Ordinal),
             "A capitalized user-dictionary key was not preserved as a proper name term.");
 
@@ -560,7 +586,9 @@ internal static class LocalDictionaryNormalizationTests
             "They waited by the gate.");
         Check(inflectedUser.ExactSentenceTranslation is null &&
               inflectedUser.Terms.Any(term =>
-                  term.Source == "waited" && term.Translation == "ожидать"),
+                  term.Source == "waited" &&
+                  term.Translation == "ожидать" &&
+                  term.Provenance == ScaffoldTermProvenance.Deterministic),
             "An inflected user lemma lost its provenance or was overridden by dialogue data.");
 
         TranslationScaffold stopwordPhrase = await builder.BuildAsync("Please do it.");
@@ -582,6 +610,20 @@ internal static class LocalDictionaryNormalizationTests
         TranslationScaffold uniqueSense = await builder.BuildAsync("The lantern glowed.");
         Check(uniqueSense.Terms is [{ Source: "lantern", Translation: "фонарь" }],
             "A trusted single deterministic sense did not enter the scaffold.");
+
+        TranslationScaffold advisoryExact = await builder.BuildAsync(
+            "I deposited money at the bank.");
+        Check(advisoryExact.ExactSentenceTranslation ==
+              "Я отнёс сбережения в кредитную организацию" &&
+              advisoryExact.Terms is
+              [
+                  {
+                      Source: "bank",
+                      Translation: "банк",
+                      Provenance: ScaffoldTermProvenance.AdvisoryDictionary
+                  }
+              ],
+            "A broad heuristic synonym became mandatory or discarded a trusted exact sentence.");
 
         TranslationScaffold unresolved = await builder.BuildAsync("I saw the bank.");
         Check(unresolved.Terms.Count == 0,
@@ -930,6 +972,25 @@ internal static class LocalDictionaryNormalizationTests
             "Repeated lookups were not deduplicated stably before applying the cap.");
         Check(capped.ExactSentenceTranslation is null,
             "Exact dialogue bypass ignored an authoritative term beyond the twelve-term prompt cap.");
+
+        const string advisoryCappedSource =
+            "Acorn basket candle dragon engine forest garden hammer island jacket kettle meadow wait.";
+        TranslationScaffold advisoryCapped = await builder.BuildAsync(advisoryCappedSource);
+        Check(advisoryCapped.Terms.Count == TranslationScaffoldBuilder.MaximumTermCount &&
+              advisoryCapped.Terms[^1] is
+              {
+                  Source: "wait",
+                  Translation: "ожидать",
+                  Provenance: ScaffoldTermProvenance.Deterministic
+              } &&
+              advisoryCapped.Terms.Count(term =>
+                  term.Provenance == ScaffoldTermProvenance.AdvisoryDictionary) == 11 &&
+              advisoryCapped.Terms.All(term => term.Source != "meadow"),
+            "Early advisory terms evicted a later user term or changed stable scaffold order: " +
+            string.Join(" | ", advisoryCapped.Terms.Select(term =>
+                $"{term.Source}->{term.Translation} [{term.Provenance}]")));
+        Check(advisoryCapped.ExactSentenceTranslation is null,
+            "A dialogue shortcut bypassed a user term that was reserved inside the prompt cap.");
 
         string missingBundled = Path.Combine(scaffoldRoot, "missing-bundled");
         string missingUser = Path.Combine(scaffoldRoot, "missing-user");

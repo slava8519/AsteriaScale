@@ -17,7 +17,7 @@ public sealed record HardwareInfo(
         : string.Format("{0}  •  GPU-режим", GpuName);
 
     public string NpuExplanation => NpuDetected
-        ? "NPU выполняет локальное OCR для перевода под курсором и всего экрана. GPU масштабирует кадр и запускает локальную Qwen — так оба ускорителя используются там, где они эффективнее."
+        ? "NPU выполняет локальное OCR под курсором и может ускорять модель значений. GPU масштабирует кадр и, при выборе Vulkan, запускает TranslateGemma."
         : "Выделенный NPU не найден. Все пресеты работают на DirectX 11 GPU.";
 }
 

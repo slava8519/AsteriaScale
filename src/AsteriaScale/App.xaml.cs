@@ -38,23 +38,6 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
-        if (e.Args.Any(arg => string.Equals(arg, "--npu-selector-worker", StringComparison.OrdinalIgnoreCase)))
-        {
-            try
-            {
-                await NpuDictionarySelectorService.RunWorkerAsync(
-                    Console.OpenStandardInput(),
-                    Console.OpenStandardOutput());
-                Shutdown(0);
-            }
-            catch
-            {
-                Shutdown(1);
-            }
-
-            return;
-        }
-
         int rankerDiagnosticArgument = Array.FindIndex(e.Args, arg =>
             string.Equals(arg, "--ranker-diagnostic", StringComparison.OrdinalIgnoreCase));
         if (rankerDiagnosticArgument >= 0)
@@ -126,7 +109,7 @@ public partial class App : System.Windows.Application
             Engine = new MagpieEngineService();
             StartupManager = new StartupService();
             AutoScale = new AutoScaleService(Settings, WindowCatalog, Engine);
-            HoverTranslation = new HoverTranslationService(Settings, () => Engine.IsScaling);
+            HoverTranslation = new HoverTranslationService(Settings);
 
             AsteriaWindow = new MainWindow(
                 Settings,
@@ -257,7 +240,7 @@ public partial class App : System.Windows.Application
     {
         if (arguments.Length <= argumentIndex + 1)
         {
-            throw new ArgumentException("Usage: --overlay-diagnostic <output.png> [dictionary|neural|missing]");
+            throw new ArgumentException("Usage: --overlay-diagnostic <output.png> [dictionary|smart|missing]");
         }
 
         string outputPath = arguments[argumentIndex + 1];
@@ -266,13 +249,13 @@ public partial class App : System.Windows.Application
             : "dictionary";
         HoverTranslationOverlay overlay = new();
         NativeMethods.Point anchor = new() { X = 900, Y = 700 };
-        if (string.Equals(mode, "neural", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(mode, "smart", StringComparison.OrdinalIgnoreCase))
         {
             overlay.ShowTranslation(
                 "That is of little significance. More importantly, you should be able to enter this establishment.",
                 "Это не имеет большого значения. Гораздо важнее, что вы сможете войти в это заведение.",
                 anchor,
-                FoundryTranslationService.EngineLabel,
+                GlossBertDictionarySelectorService.CpuEngineLabel,
                 language: "EN");
         }
         else

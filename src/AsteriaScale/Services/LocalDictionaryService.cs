@@ -2160,7 +2160,7 @@ public sealed partial class LocalDictionaryService
                               matchedEnglishKey is not null &&
                               _preferredEnglishSurfaceForms.Contains(matchedEnglishKey),
             HasMultipleMeanings =
-                NpuDictionarySelectorService.SplitMeanings(translation).Length > 1,
+                DictionaryMeaningParser.SplitMeanings(translation).Length > 1,
             MatchedEnglishKey = matchedEnglishKey ?? string.Empty
         };
     }

@@ -39,8 +39,8 @@ internal sealed class TranslateGemmaTranslationService :
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-vulkan-full";
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
-    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v2";
-    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v3";
+    public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v3";
+    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v4";
     public const string RunnerBuild = "b9632";
     public const string RunnerArchiveFileName = "llama-b9632-bin-win-cpu-x64.zip";
     public const string RunnerArchiveSha256 =
@@ -492,9 +492,21 @@ internal sealed class TranslateGemmaTranslationService :
                     direct,
                     modelIdentity,
                     ElapsedMilliseconds: 0));
+            SmartPhraseGuardResult directDisplayGuard =
+                SmartPhraseTranslationGuard.ValidateForDisplay(
+                    request,
+                    new SmartPhraseTranslationResult(
+                        direct,
+                        modelIdentity,
+                        ElapsedMilliseconds: 0));
             translation = directGuard.Accepted
                 ? directGuard.Translation
-                : SmartPhraseTranslationGuard.NormalizeOutput(direct);
+                : directDisplayGuard.Accepted
+                    ? directDisplayGuard.Translation
+                    : SmartPhraseTranslationGuard.NormalizeOutput(direct);
+            string? postEditFailureFallback = SelectPostEditFailureFallback(
+                directGuard,
+                directDisplayGuard);
 
             if (ShouldPostEdit(request, directGuard))
             {
@@ -513,9 +525,30 @@ internal sealed class TranslateGemmaTranslationService :
                                 corrected,
                                 modelIdentity,
                                 ElapsedMilliseconds: 0));
+                    SmartPhraseGuardResult correctedDisplayGuard =
+                        SmartPhraseTranslationGuard.ValidateForDisplay(
+                            request,
+                            new SmartPhraseTranslationResult(
+                                corrected,
+                                modelIdentity,
+                                ElapsedMilliseconds: 0));
                     if (correctedGuard.Accepted)
                     {
                         translation = correctedGuard.Translation;
+                    }
+                    else if (correctedDisplayGuard.Accepted)
+                    {
+                        translation = !directDisplayGuard.Accepted ||
+                                      IsDisplaySemanticImprovement(
+                                          request,
+                                          directDisplayGuard.Translation,
+                                          correctedDisplayGuard.Translation)
+                            ? correctedDisplayGuard.Translation
+                            : directDisplayGuard.Translation;
+                    }
+                    else if (directDisplayGuard.Accepted)
+                    {
+                        translation = directDisplayGuard.Translation;
                     }
                     else if (!directGuard.Accepted)
                     {
@@ -529,12 +562,12 @@ internal sealed class TranslateGemmaTranslationService :
                 {
                     throw;
                 }
-                catch when (directGuard.Accepted)
+                catch when (postEditFailureFallback is not null)
                 {
                     // The primary dictionary line is already visible. A valid
                     // direct translation remains useful if optional post-edit
                     // exhausts the shared budget or the server rejects it.
-                    translation = directGuard.Translation;
+                    translation = postEditFailureFallback!;
                 }
             }
         }
@@ -638,6 +671,7 @@ internal sealed class TranslateGemmaTranslationService :
 
         var evidence = new
         {
+            properNames = request.ProperNames,
             requiredConcepts = request.SemanticTerms.Select(term => new
             {
                 source = term.Source,
@@ -662,6 +696,8 @@ internal sealed class TranslateGemmaTranslationService :
             "cause, contrast, tone, deliberate irony, and content on both sides of an internal ellipsis. " +
             "An internal ellipsis marks hesitation, not omitted or censored text. " +
             "Preserve a speaker label or outer quotation wrapper only when it occurs literally in CURRENT. " +
+            "PROPER_NAMES in SEMANTIC EVIDENCE are advisory identity anchors: preserve the person or entity, " +
+            "transliterating naturally into Russian when appropriate, and never introduce a listed name absent from CURRENT. " +
             "Never add a name, speaker label, possessive, modifier, detail, or specificity not licensed by CURRENT. " +
             "Translate quoted wordplay as a whole or copy its complete quoted wording; never truncate it. " +
             "SEMANTIC evidence identifies intended concepts or senses; render it naturally with suitable inflection " +
@@ -877,6 +913,16 @@ internal sealed class TranslateGemmaTranslationService :
         try
         {
             using JsonDocument document = JsonDocument.Parse(responseJson);
+            if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty(
+                    "stopped_limit",
+                    out JsonElement stoppedLimitElement) &&
+                stoppedLimitElement.ValueKind == JsonValueKind.True)
+            {
+                throw new InvalidDataException(
+                    "TranslateGemma остановила генерацию по лимиту токенов.");
+            }
+
             if (document.RootElement.ValueKind != JsonValueKind.Object ||
                 !document.RootElement.TryGetProperty("content", out JsonElement contentElement) ||
                 contentElement.ValueKind != JsonValueKind.String)
@@ -911,6 +957,34 @@ internal sealed class TranslateGemmaTranslationService :
             throw new InvalidDataException("TranslateGemma вернула повреждённый JSON.", exception);
         }
     }
+
+    internal static bool IsDisplaySemanticImprovement(
+        SmartPhraseTranslationRequest request,
+        string direct,
+        string corrected)
+    {
+        (int DirectTerms, int DirectSenses) = SemanticViolationCounts(request, direct);
+        (int CorrectedTerms, int CorrectedSenses) = SemanticViolationCounts(request, corrected);
+        return CorrectedTerms < DirectTerms ||
+               CorrectedTerms == DirectTerms && CorrectedSenses < DirectSenses;
+    }
+
+    internal static string? SelectPostEditFailureFallback(
+        SmartPhraseGuardResult directStrict,
+        SmartPhraseGuardResult directDisplay) =>
+        directDisplay.Accepted
+            ? directDisplay.Translation
+            : directStrict.Accepted
+                ? directStrict.Translation
+                : null;
+
+    private static (int Terms, int Senses) SemanticViolationCounts(
+        SmartPhraseTranslationRequest request,
+        string translation) =>
+        (
+            SenseFidelityGuard.FindMissingTerms(translation, request.SemanticTerms).Count,
+            NeuralSenseFidelityGuard.FindConflictingHints(translation, request.SenseHints).Count
+        );
 
     internal static async Task ValidatePinnedArtifactAsync(
         string path,

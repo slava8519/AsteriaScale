@@ -4,7 +4,7 @@ namespace AsteriaScale.Services;
 /// Detects only an explicit semantic substitution: the generated text contains
 /// a rejected Russian surface while omitting every selected surface for the
 /// same source. Merely omitting the selected dictionary wording is allowed, so
-/// Qwen remains free to render the selected sense naturally.
+/// The phrase translator remains free to render the selected sense naturally.
 /// </summary>
 internal static class NeuralSenseFidelityGuard
 {

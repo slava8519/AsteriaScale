@@ -39,6 +39,32 @@ internal static class TextHookSafetyTests
         Assert(hook.TryGetSentenceContaining(101, "in") is null,
             "A substring inside 'waiting' was accepted as a hovered token.");
 
+        const string titledHookLine =
+            "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe. " +
+            "I would appreciate it if you could forgive him.";
+        hook.IngestLine(
+            $"[TITLE:2C64:0:0:0:GetGlyphOutlineW] {titledHookLine}",
+            processId: 505);
+        TextHookMatch? titledHook = hook.TryGetSentenceContaining(505, "lot");
+        Assert(titledHook is not null,
+            "The title-abbreviation fixture was not available through Textractor.");
+        HoverOcrResult titledOcr = new(
+            "lot",
+            "lot",
+            0,
+            Drawing.Rectangle.Empty);
+        HoverOcrResult titledUpgrade = HoverTranslationService.ApplyTextHookMatch(
+            titledOcr,
+            titledHook);
+        SmartPhraseContext? titledPhrase = SmartPhraseContextBuilder.Build(
+            titledUpgrade.Text,
+            titledUpgrade.HoveredWord,
+            titledUpgrade.CharacterIndex);
+        Assert(titledPhrase is not null &&
+               titledPhrase.Value.Text ==
+               "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe.",
+            "Textractor context was truncated at an English title abbreviation.");
+
         hook.IngestLine(
             "[FA0:2C64:0:0:0:GetGlyphOutlineW] LongSpeaker: bank and another bank",
             processId: 101);

@@ -1,29 +1,5 @@
 namespace AsteriaScale.Services;
 
-internal enum TranslationSenseReviewOutcome
-{
-    NotIssued,
-    KeptOriginal,
-    AppliedCorrection,
-    RejectedResponse,
-    Failed
-}
-
-internal sealed record TranslationScaffoldDiagnostics(
-    string Source,
-    int TermCount,
-    int SatisfiedTermCount,
-    bool ExactSentenceUsed,
-    int InitialViolationCount,
-    bool RetryIssued,
-    int FinalViolationCount,
-    int InitialSenseConflictCount,
-    int FinalSenseConflictCount,
-    TranslationSenseReviewOutcome SenseReviewOutcome,
-    IReadOnlyList<ScaffoldTerm> Terms,
-    IReadOnlyList<TranslationScaffoldNeuralDiagnostic> NeuralDecisions,
-    IReadOnlyList<ScaffoldSenseHint> SenseHints);
-
 /// <summary>
 /// Checks only distinctive Russian stems from high-confidence glossary terms.
 /// Inflection must be tolerated, while substring matches inside unrelated words

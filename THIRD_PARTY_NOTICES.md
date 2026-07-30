@@ -30,13 +30,6 @@ Asteria Scale does not copy Magpie binaries or shader files into its own source 
 
 Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices and source headers are part of the separately installed Magpie distribution. Asteria only refers to their effect names in user configuration.
 
-## Microsoft Foundry Local
-
-- Project: https://github.com/microsoft/Foundry-Local
-- License: MIT
-- Components: Foundry Local CLI 0.10.2 and `Microsoft.AI.Foundry.Local.WinML` SDK 1.1.0
-- Role: local model catalog/service and full-text translation inference
-
 ## GlossBERT
 
 - Model: https://huggingface.co/kanishka/GlossBERT
@@ -104,8 +97,8 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - Evaluated upstream artifact: official WNGT checkpoint, `4,864,940,005` bytes,
   SHA-256 `92421ED245723964DB09CE396F19A0D1E55FE4D6E10D5ECB83278D9BC70CE8AF`
 - Role: optional CPU-only sentence-aware WSD ranker whose provider-neutral
-  semantic evidence can feed Smart Dictionary phrase output and later
-  TranslateGemma/full-text review; GlossBERT remains the stable default
+  semantic evidence can feed Smart Dictionary phrase output and TranslateGemma
+  APE; GlossBERT remains the stable default
 - Changes and verification: inference weights were extracted fail-closed with
   `torch.load(weights_only=True, mmap=True)`, exported to a FP32 ONNX external
   data bundle and integrated through the independent `consec-independent`
@@ -141,20 +134,6 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - License: MIT
 - Role: deterministic loading and execution of the packaged Hugging Face tokenizer
 
-## Qwen 2.5 Coder 1.5B
-
-- Model: `qwen2.5-coder-1.5b-instruct-vitis-npu:2`, downloaded separately by Foundry Local
-- License reported by the Foundry catalog: Apache-2.0
-- Role: research baseline for context selection in versions before 0.9; it is
-  not packaged and is not used by the 0.9 smart-dictionary ranker
-
-## Qwen 3.5
-
-- Model: `qwen3.5-2b-text-generic-cpu:1`, downloaded separately by Foundry Local
-  (`FoundryTranslationService.ModelId`)
-- License reported by the Foundry catalog: Apache-2.0
-- Role: local translation to Russian
-
 ## TranslateGemma 4B (optional, not bundled)
 
 - Model: [Google TranslateGemma 4B IT](https://huggingface.co/google/translategemma-4b-it)
@@ -169,17 +148,19 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
   current user's local application data only after explicit acceptance of the
   Gemma Terms, and records a local copy of the terms plus pinned size/SHA-256
   metadata.
-- Role: experimental CPU-only independent second-line translation of a short
-  EN→RU phrase in Smart Dictionary; it is not the full-text translation engine
+- Role: optional independent second-line EN→RU translation of the complete
+  current sentence in Smart Dictionary, on an explicitly selected CPU or
+  Vulkan GPU backend
 
 ## llama.cpp (optional TranslateGemma runtime)
 
 - Project: https://github.com/ggml-org/llama.cpp
-- Pinned release: `b9632`, Windows x64 CPU archive
+- Pinned release: `b9632`, separate Windows x64 CPU and Vulkan archives
 - License: MIT
 - Integration: not bundled; downloaded and hash-verified by the separate
   TranslateGemma installer, then launched as an owned loopback-only
-  `llama-server` process with GPU layers disabled
+  `llama-server` process. CPU uses `--n-gpu-layers 0`; Vulkan is accepted only
+  after selecting `Vulkan0` and verifying complete model offload
 - Role: local inference runtime for the optional TranslateGemma phrase phase
 
 ## all-MiniLM-L6-v2

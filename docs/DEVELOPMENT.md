@@ -8,7 +8,6 @@
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
-| Foundry Local + `qwen3.5-2b-text-generic-cpu:1` | 0.10.2 | полный fallback Smart и внутренние full-text диагностики |
 | TranslateGemma 4B Q4_K_M + llama.cpp CPU/Vulkan | b9632 | опционально, независимый перевод фразы второй строкой |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
 | SANDWiCH dual encoder | NAACL 2025, upstream `daca3cad…` | опционально, экспериментальный CPU semantic ranker |
@@ -317,7 +316,7 @@ prompt echo исходной и effective-фразы, объяснения и re
 скопированную английскую цитату. Он намеренно не требует повторить
 перевод слова из первой строки. При
 ошибке основной результат остаётся на месте, а вторая строка становится
-`Перевод фразы недоступен`; этот путь не обращается к full-Qwen. Проверенные
+`Перевод фразы недоступен`; скрытого генеративного fallback нет. Проверенные
 результаты хранятся в
 `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v4.json`; fingerprint v4
 включает исходную и effective-фразу, identity преобразования, упорядоченную
@@ -348,13 +347,10 @@ Smoke-набор — консольная программа без тестов
 | Аргумент | Что делает |
 |---|---|
 | `--live` | Живой апскейл Notepad через Magpie |
-| `--foundry-live` | Живой Qwen: перевод и выгрузка по простою |
 | `--smart-live` / `--smart-gpu-live` | Живой умный словарь end-to-end |
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
-| `--screen-ocr-image <png>` | Диагностика экранного OCR |
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
 | `--ranker-sentence-benchmark <set.json> <workerBaseDir> --ranker-cpu-model glossbert\|sandwich\|consec [--sentence-report <report.json>] [--benchmark-only]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается |
-| `--translation-benchmark <set.json> [engine] [--ranker-base <dir>] [--dump <file>] [--benchmark-only]` | Бенчмарк полного перевода: chrF, терминологические якоря, остаточный английский, латентность и scaffold/GlossBERT-диагностика. Требует живой Foundry Local; `--benchmark-only` не запускает default smoke/Magpie |
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (открытый dev, `134` случая, включая `20` научных) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
 Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
@@ -380,18 +376,14 @@ ConSeC: accepted precision `96,32 %`, coverage `98,55 %`, warm p50/p95
 context-only паре и имеет пять уверенных ошибок, поэтому joint planner остаётся
 следующим этапом. Frozen holdout при измерениях не открывался.
 
-Наборы полного перевода: `assets/Translation/translation-benchmark.json` (dev, 64 реплики) и `translation-holdout-v1.json` (замороженный, 30 реплик — правило то же). В dev-наборе 61 **term anchor**, а не 61 случай: chrF считается на всех 64 репликах, включая 15 реплик без терминологического якоря. Default smoke читает и проверяет только открытые dev-наборы `ranker-benchmark.json`, `ranker-sentence-benchmark.json` и `translation-benchmark.json`; frozen holdout он никогда не открывает. Holdout передаётся лишь явно в gated-команду для одноразового финального подтверждения, и каждое такое открытие фиксируется в `RESEARCH.md`.
-
-`--translation-benchmark` всегда падает на пустом наборе или пустом ответе. Dump записывается до quality gates и содержит SHA-256 набора, точные engine/model/runtime, общие и per-language агрегаты. Эталонный dev-прогон:
-
-```powershell
-foundry model download qwen3.5-2b-text-generic-cpu:1
-dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build -- --translation-benchmark assets/Translation/translation-benchmark.json qwen --dump artifacts/translation-qwen-cpu-baseline.json --benchmark-only
-dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build -- --translation-benchmark assets/Translation/translation-benchmark.json qwen-scaffold --dump artifacts/translation-qwen-scaffold.json --benchmark-only
-dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build -- --translation-benchmark assets/Translation/translation-benchmark.json qwen-scaffold-glossbert-cpu --ranker-base dist/AsteriaScale --dump artifacts/translation-qwen-scaffold-glossbert-cpu.json --benchmark-only
-```
-
-`qwen` сохраняет исходный prompt без каркаса; `qwen-scaffold` включает только детерминированный production-каркас, exact-sentence bypass и fidelity retry. `qwen-scaffold-glossbert-cpu` и `qwen-scaffold-glossbert-npu` запускают тот же полный production-конвейер с явно выбранным провайдером GlossBERT; для них `--ranker-base` обязан указывать на каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe`. Имя движка намеренно фиксирует провайдер: NPU-запрос никогда не повторяется на CPU. Принятый GlossBERT-смысл сохраняется как мягкая метаинформация, а не как обязательная русская лексема: `neuralHintsEmitted` считает созданные English sense hints, `neuralTermsEmitted` — защитный аудит и обязан оставаться нулём. В первый prompt hints не попадают; лишь явный surface-prefilter при отсутствии mandatory-ошибок запускает отдельный English `KEEP`/`FIX` review Qwen. Schema v3 сохраняет его outcomes (`SenseReviewKeeps`, `SenseReviewCorrections`, `SenseReviewRejected`, `SenseReviewFailures`; rejected включает невалидные ответы и prompt echo), каждый neural-исход (`selected`, `abstained`, `error`, `skipped`), причину пропуска (включая `session-disabled-after-error`), provider/device/model/pipeline и задержку. Именованный GlossBERT-прогон завершается ошибкой после записи dump, если не сделал ни одного ranker-запроса, получил хотя бы одну ошибку, создал mandatory neural-термин, не создал ни одного sense hint или не дошёл ни до одного Qwen sense review; калиброванное воздержание ошибкой не считается. Benchmark создаёт пустой временный user-словарь, поэтому личные термины разработчика не влияют на A/B. Quality gates включаются переменными окружения `ASTERIA_TRANSLATION_MIN_CHRF`, `ASTERIA_TRANSLATION_MIN_ANCHOR_RATE` и `ASTERIA_TRANSLATION_MAX_RESIDUAL_ENGLISH`; значения задаются от `0` до `1` с точкой. Для текущего CPU-baseline контрольные пороги — `0.50`, `0.85` и `0.01` соответственно. По умолчанию они остаются отключёнными, чтобы default smoke не требовал живую модель.
+Исторические наборы полного перевода
+`assets/Translation/translation-benchmark.json` и
+`translation-holdout-v1.json`, а также результаты Qwen/Foundry сохранены для
+исследовательской воспроизводимости в [RESEARCH.md](RESEARCH.md). Production
+Qwen-конвейер и его `--foundry-live`/`--translation-benchmark` команды удалены
+30 июля 2026 года; они не являются требованиями текущей сборки. Следующий
+полнотекстовый A/B должен использовать отдельный TranslateGemma-runner и новый
+gated-интерфейс, не возвращая Foundry Local в приложение.
 
 ## Публикация
 

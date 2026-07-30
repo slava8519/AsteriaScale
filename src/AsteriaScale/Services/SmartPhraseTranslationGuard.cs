@@ -16,6 +16,7 @@ internal enum SmartPhraseRejectionReason
     NonRussian,
     StructuralMismatch,
     ResidualEnglish,
+    IncompleteTranslation,
     SemanticTermMissing,
     SenseConflict
 }
@@ -34,10 +35,23 @@ internal static partial class SmartPhraseTranslationGuard
 {
     internal const int MaximumOutputCharacters = 1_600;
     internal const int MaximumOutputWords = 180;
+    private const int MinimumSourceWordsForCompletenessCheck = 10;
+    private const int MinimumRussianWordPercentage = 35;
 
     public static SmartPhraseGuardResult Validate(
         SmartPhraseTranslationRequest request,
-        SmartPhraseTranslationResult result)
+        SmartPhraseTranslationResult result) =>
+        ValidateCore(request, result, enforceSenseFidelity: true);
+
+    public static SmartPhraseGuardResult ValidateForDisplay(
+        SmartPhraseTranslationRequest request,
+        SmartPhraseTranslationResult result) =>
+        ValidateCore(request, result, enforceSenseFidelity: false);
+
+    private static SmartPhraseGuardResult ValidateCore(
+        SmartPhraseTranslationRequest request,
+        SmartPhraseTranslationResult result,
+        bool enforceSenseFidelity)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
@@ -76,6 +90,11 @@ internal static partial class SmartPhraseTranslationGuard
         }
 
         string translation = NormalizeOutput(result.Translation);
+        if (!enforceSenseFidelity)
+        {
+            translation = NormalizeDisplayStructure(sourcePhrase, translation);
+        }
+
         int maximumOutputWords = Math.Min(
             MaximumOutputWords,
             Math.Max(8, Math.Max(sourceWordCount, modelInputWordCount) * 3));
@@ -123,14 +142,28 @@ internal static partial class SmartPhraseTranslationGuard
             return Reject(SmartPhraseRejectionReason.ResidualEnglish);
         }
 
+        if (IsIncompleteTranslation(sourcePhrase, translation))
+        {
+            return Reject(SmartPhraseRejectionReason.IncompleteTranslation);
+        }
+
+        // The strict pass uses every lexical clue to request one APE correction.
+        // At the display boundary only user/scaffold requirements stay hard;
+        // ordinary dictionary selections are evidence, not mandatory wording.
+        IReadOnlyList<ScaffoldTerm> requiredTerms = enforceSenseFidelity
+            ? request.SemanticTerms
+            : request.SemanticTerms
+                .Where(ScaffoldTermPolicy.IsMandatory)
+                .ToArray();
         if (SenseFidelityGuard.FindMissingTerms(
                 translation,
-                request.SemanticTerms).Count > 0)
+                requiredTerms).Count > 0)
         {
             return Reject(SmartPhraseRejectionReason.SemanticTermMissing);
         }
 
-        if (NeuralSenseFidelityGuard.FindConflictingHints(
+        if (enforceSenseFidelity &&
+            NeuralSenseFidelityGuard.FindConflictingHints(
                 translation,
                 request.SenseHints).Count > 0)
         {
@@ -237,6 +270,24 @@ internal static partial class SmartPhraseTranslationGuard
         return CollapseWhitespace(normalized);
     }
 
+    private static string NormalizeDisplayStructure(
+        string source,
+        string translation)
+    {
+        string normalizedSource = source.Trim();
+        string normalizedTranslation = translation.Trim();
+        if (HasOuterQuoteWrapper(normalizedSource) ||
+            !HasOuterQuoteWrapper(normalizedTranslation))
+        {
+            return translation;
+        }
+
+        // A dangling OCR opening quote commonly becomes a balanced Russian
+        // dialogue wrapper. The wrapper is decorative; removing it preserves
+        // CURRENT while the stricter pass still asks the model to correct it.
+        return CollapseWhitespace(normalizedTranslation[1..^1]);
+    }
+
     private static bool IsSafeContext(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= SmartPhraseContextBuilder.MaximumCharacters &&
@@ -247,6 +298,22 @@ internal static partial class SmartPhraseTranslationGuard
     private static bool HasUnsafeSourceControl(string value) =>
         value.Any(character =>
             char.IsControl(character) && character is not '\r' and not '\n' and not '\t');
+
+    private static bool IsIncompleteTranslation(string source, string translation)
+    {
+        int sourceWordCount = WordRegex().Matches(source)
+            .Cast<Match>()
+            .Count(match => match.Value.Any(char.IsLetter));
+        if (sourceWordCount < MinimumSourceWordsForCompletenessCheck)
+        {
+            return false;
+        }
+
+        int russianWordCount = WordRegex().Matches(translation)
+            .Cast<Match>()
+            .Count(match => match.Value.Any(IsCyrillic));
+        return russianWordCount * 100 < sourceWordCount * MinimumRussianWordPercentage;
+    }
 
     private static bool ContainsPromptEcho(string source, string translation)
     {

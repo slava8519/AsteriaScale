@@ -55,8 +55,29 @@ internal static class SmartDictionaryPhraseRoutingTests
               !quietLookup.IsTrustedPhrase &&
               !quietLookup.HasMultipleMeanings &&
               quietResult.Translation == "тихая минута" &&
-              quietResult.Engine == LocalDictionaryService.EngineLabel,
+              quietResult.Engine == LocalDictionaryService.EngineLabel &&
+              quietResult.SelectedSenseHints.Count == 0,
             "A clean one-meaning broad phrase lost its fast dictionary bypass.");
+
+        const string afterlifeContext =
+            "You'll go to the afterlife after you grow old and die!";
+        SmartHoverResult afterlifeResult = await ResolveAsync(
+            broadDictionary,
+            afterlifeContext,
+            "afterlife",
+            Path.Combine(root, "afterlife-cache.json"));
+        Check(afterlifeResult is
+        {
+            Source: "afterlife",
+            Translation: "загробная жизнь",
+            Confidence: 1
+        } &&
+            afterlifeResult.SelectedSenseHints.Count > 0 &&
+            afterlifeResult.SelectedSenseHints.All(hint =>
+                hint.Source == "afterlife" &&
+                hint.SelectedTranslation == "загробная жизнь" &&
+                hint.RejectedTranslations.Count == 0),
+            "A trusted single aligned sense was not forwarded as advisory phrase evidence.");
 
         string vnBundled = Path.Combine(root, "vn-hard", "bundled");
         string vnUser = Path.Combine(root, "vn-hard", "user");
@@ -186,24 +207,19 @@ internal static class SmartDictionaryPhraseRoutingTests
             new AppSettings
             {
                 SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
-                SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.English,
-                SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.Never
+                SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.English
             },
             dictionary,
             selector,
             cache,
             decisionCache,
-            static (_, _) => Task.FromException<(string Source, string Translation, string Engine)>(
-                new InvalidOperationException("The phrase-routing regression used full fallback.")),
-            static _ => { },
-            static (_, _) => { });
+            static _ => { });
         return await pipeline.ResolveSmartHoverAsync(
             new HoverOcrResult(
                 context,
                 target,
                 context.IndexOf(target, StringComparison.Ordinal),
                 Rectangle.Empty),
-            default,
             SmartDictionaryBackends.Cpu,
             CancellationToken.None);
     }
@@ -217,6 +233,7 @@ internal static class SmartDictionaryPhraseRoutingTests
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus.tsv"),
             [
+                "afterlife\tзагробная жизнь",
                 "first time\tвпервые; первый половой акт",
                 "quiet moment\tтихая минута",
                 "you wish\tмечтать не вредно!"
@@ -224,6 +241,7 @@ internal static class SmartDictionaryPhraseRoutingTests
         await File.WriteAllLinesAsync(
             Path.Combine(bundled, "eng-rus-enwiktionary-senses.tsv"),
             [
+                "afterlife\tзагробная жизнь\tlife after death\tcommon\tnoun",
                 "first time\tвпервые\tthe initial occurrence of an event\tcommon\tphrase",
                 "first time\tпервый половой акт\tan individual's first instance of sexual intercourse\tsexual\tphrase"
             ]);

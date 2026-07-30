@@ -113,6 +113,13 @@ internal static partial class SmartPhraseContextBuilder
             localAnchor -= dialogueStart;
         }
 
+        int dialogueTextStart = FindTextStartAfterUnmatchedOpeningQuote(phrase);
+        if (dialogueTextStart > 0)
+        {
+            phrase = phrase[dialogueTextStart..];
+            localAnchor -= dialogueTextStart;
+        }
+
         if (localAnchor < 0 ||
             localAnchor + target.Length > phrase.Length ||
             !string.Equals(
@@ -129,7 +136,7 @@ internal static partial class SmartPhraseContextBuilder
             Trimmed: start > 0 || end < context.Length);
     }
 
-    private static int FindDialogueStartAfterSpeakerMetadata(
+    internal static int FindDialogueStartAfterSpeakerMetadata(
         string phrase,
         int targetIndex)
     {
@@ -161,6 +168,31 @@ internal static partial class SmartPhraseContextBuilder
         }
 
         return 0;
+    }
+
+    private static int FindTextStartAfterUnmatchedOpeningQuote(string phrase)
+    {
+        if (phrase.Length == 0)
+        {
+            return 0;
+        }
+
+        bool unmatchedAscii = phrase[0] == '"' &&
+                              (phrase.Count(character => character == '"') & 1) != 0;
+        bool unmatchedCurly = phrase[0] == '\u201c' &&
+                              !phrase.Contains('\u201d');
+        if (!unmatchedAscii && !unmatchedCurly)
+        {
+            return 0;
+        }
+
+        int start = 1;
+        while (start < phrase.Length && char.IsWhiteSpace(phrase[start]))
+        {
+            start++;
+        }
+
+        return start;
     }
 
     private static bool LooksLikeSpeakerMetadata(string value)

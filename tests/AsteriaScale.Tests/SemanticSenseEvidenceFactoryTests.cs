@@ -32,6 +32,17 @@ internal static class SemanticSenseEvidenceFactoryTests
         Check(plan.Outcomes.Select(outcome => outcome.GroupId).SequenceEqual([0, 1]),
             "Semantic evidence renumbered ranker outcomes.");
 
+        SmartDictionaryRankerPlan definitionlessPlan = new(
+            [new SmartDictionaryRankerOutcome(0, 0, "ждать")],
+            Array.Empty<string>(),
+            Array.Empty<int>());
+        Check(SemanticSenseEvidenceFactory.CreateOptional(
+                  "wait",
+                  definitionlessPlan,
+                  0,
+                  1).Count == 0,
+            "A definitionless deterministic selection did not fail open without neural evidence.");
+
         bool unknownRejected = false;
         try
         {

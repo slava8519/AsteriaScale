@@ -56,12 +56,4 @@ internal sealed class SemanticRankerProfileApplicator
             SemanticRankerProfileResolver.FromSettings(_settings),
             cancellationToken);
 
-    public async Task<TResult> RunAfterApplyAsync<TResult>(
-        Func<CancellationToken, Task<TResult>> operation,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(operation);
-        await ApplyAsync(cancellationToken);
-        return await operation(cancellationToken);
-    }
 }

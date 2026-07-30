@@ -16,12 +16,10 @@ public sealed class AppSettings
     public bool HoverTranslationEnabled { get; set; }
     public int HoverTranslationDelayMs { get; set; } = 700;
     public string HoverTranslationMode { get; set; } = HoverTranslationModes.Smart;
-    public string TranslationTargetLanguage { get; set; } = "ru";
     public string SmartDictionaryBackend { get; set; } = SmartDictionaryBackends.Auto;
     public string SmartDictionaryRankerModel { get; set; } =
         SmartDictionaryRankerModels.GlossBert;
     public string SmartDictionarySourceLanguage { get; set; } = SmartDictionarySourceLanguages.Auto;
-    public string SmartDictionaryFallbackMode { get; set; } = SmartDictionaryFallbackModes.Never;
     public bool SmartDictionaryKeepWarm { get; set; } = true;
     public string SmartPhraseTranslationMode { get; set; } = SmartPhraseTranslationModes.Off;
     public string SmartPhraseTranslationBackend { get; set; } = SmartPhraseTranslationBackends.Cpu;
@@ -58,26 +56,7 @@ public static class VisualNovelFrameRates
 public static class HoverTranslationModes
 {
     public const string Smart = "smart";
-    public const string Neural = "neural";
     public const string Dictionary = "dictionary";
-    public const string Screen = "screen";
-
-    public static string Normalize(string? value)
-    {
-        if (string.Equals(value, Smart, StringComparison.OrdinalIgnoreCase))
-        {
-            return Smart;
-        }
-
-        if (string.Equals(value, Dictionary, StringComparison.OrdinalIgnoreCase))
-        {
-            return Dictionary;
-        }
-
-        return string.Equals(value, Screen, StringComparison.OrdinalIgnoreCase)
-            ? Screen
-            : Neural;
-    }
 
     public static string NormalizeUserMode(string? value) =>
         string.Equals(value, Dictionary, StringComparison.OrdinalIgnoreCase)
@@ -126,25 +105,6 @@ public static class SmartDictionarySourceLanguages
         return string.Equals(value, Japanese, StringComparison.OrdinalIgnoreCase)
             ? Japanese
             : Auto;
-    }
-}
-
-public static class SmartDictionaryFallbackModes
-{
-    public const string Never = "never";
-    public const string OnDemand = "on-demand";
-    public const string Automatic = "automatic";
-
-    public static string Normalize(string? value)
-    {
-        if (string.Equals(value, OnDemand, StringComparison.OrdinalIgnoreCase))
-        {
-            return OnDemand;
-        }
-
-        return string.Equals(value, Automatic, StringComparison.OrdinalIgnoreCase)
-            ? Automatic
-            : Never;
     }
 }
 

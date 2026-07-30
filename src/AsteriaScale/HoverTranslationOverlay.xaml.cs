@@ -25,9 +25,6 @@ public partial class HoverTranslationOverlay : Window
     private static readonly SolidColorBrush DictionaryAccent = Brush(0x3E, 0x8C, 0x7E);
     private static readonly SolidColorBrush DictionaryBorder = Brush(0x7F, 0xB8, 0xAC);
     private static readonly SolidColorBrush DictionaryBadge = Brush(0xE2, 0xF0, 0xEC);
-    private static readonly SolidColorBrush NeuralAccent = Brush(0x7A, 0x5E, 0xA6);
-    private static readonly SolidColorBrush NeuralBorder = Brush(0xB7, 0xA6, 0xD6);
-    private static readonly SolidColorBrush NeuralBadge = Brush(0xEC, 0xE6, 0xF5);
     private static readonly SolidColorBrush SmartAccent = Brush(0x5F, 0x7A, 0x54);
     private static readonly SolidColorBrush SmartBorder = Brush(0x9D, 0xBE, 0x93);
     private static readonly SolidColorBrush SmartBadge = Brush(0xE7, 0xEF, 0xE1);
@@ -48,14 +45,10 @@ public partial class HoverTranslationOverlay : Window
     {
         bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
         string? smartAccelerator = SmartAccelerator(engine);
-        bool smartMode =
-            smartAccelerator is not null ||
-            engine == SmartDictionaryHeuristicRanker.EngineLabel ||
-            engine == SmartDictionaryResultCache.EngineLabel;
+        bool smartMode = !dictionaryMode;
         string normalizedSource = source.Trim();
         ConfigureMode(
             dictionaryMode,
-            smartMode,
             normalizedSource,
             isPhrase: false,
             loading: true,
@@ -69,7 +62,7 @@ public partial class HoverTranslationOverlay : Window
         TranslationPanel.Visibility = Visibility.Visible;
         TranslationText.Text = dictionaryMode
             ? "Ищу в локальных словарях…"
-            : smartMode ? "Сверяю значения с контекстом…" : "Перевожу локально…";
+            : "Сверяю значения с контекстом…";
         TranslationText.FontSize = 11.5;
         TranslationText.FontWeight = FontWeights.Normal;
         TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0x91, 0x87, 0x70));
@@ -112,15 +105,11 @@ public partial class HoverTranslationOverlay : Window
         bool smartUnavailable =
             smartAccelerator is not null &&
             IsSmartUnavailableEngine(engine);
-        bool smartMode =
-            smartAccelerator is not null ||
-            smartUsesFastPath ||
-            smartUsesCache;
+        bool smartMode = !dictionaryMode;
         string normalizedSource = source.Trim();
         string normalizedTranslation = translation.Trim();
         ConfigureMode(
             dictionaryMode,
-            smartMode,
             normalizedSource,
             isPhrase,
             loading: false,
@@ -176,14 +165,12 @@ public partial class HoverTranslationOverlay : Window
             MeaningsPanel.Visibility = Visibility.Collapsed;
             MoreMeaningsText.Visibility = Visibility.Collapsed;
             TranslationPanel.Visibility = Visibility.Visible;
-            TranslationText.FontSize = dictionaryMode ? 13.5 : smartMode ? 15 : 14.5;
+            TranslationText.FontSize = dictionaryMode ? 13.5 : 15;
             TranslationText.FontWeight = FontWeights.SemiBold;
             TranslationText.Foreground = new SolidColorBrush(MediaColor.FromRgb(0x2E, 0x2A, 0x22));
             TranslationText.Text = dictionaryMode ? "Перевод не найден" : normalizedTranslation;
-            HintText.Text = dictionaryMode
-                ? "Полный перевод можно разрешить в настройках умного словаря."
-                : string.Empty;
-            HintText.Visibility = dictionaryMode ? Visibility.Visible : Visibility.Collapsed;
+            HintText.Text = string.Empty;
+            HintText.Visibility = Visibility.Collapsed;
         }
 
         ShowNear(cursor);
@@ -331,7 +318,6 @@ public partial class HoverTranslationOverlay : Window
 
     private void ConfigureMode(
         bool dictionaryMode,
-        bool smartMode,
         string source,
         bool isPhrase,
         bool loading,
@@ -346,20 +332,18 @@ public partial class HoverTranslationOverlay : Window
         string sourceLanguage = string.IsNullOrWhiteSpace(language)
             ? (ContainsJapanese(source) ? "JA" : "EN")
             : language.ToUpperInvariant();
-        ModeText.Text = dictionaryMode ? "Словарь" : smartMode ? "Умный словарь" : "Локальный перевод";
+        ModeText.Text = dictionaryMode ? "Словарь" : "Умный словарь";
         string acceleratorLabel = smartAccelerator ?? "МОДЕЛЬ";
         string metaText = dictionaryMode
             ? $"{sourceLanguage} → RU  ·  {(loading ? "ПОИСК" : !dictionaryFound ? "НЕТ" : isPhrase ? "ВЫРАЖЕНИЕ" : "СЛОВО")}"
-            : smartMode
-                ? $"{sourceLanguage} → RU  ·  {smartStage ?? (loading || confidence is null ? acceleratorLabel + " АНАЛИЗ" : acceleratorLabel + " КОНТЕКСТ")}"
-                : $"{sourceLanguage} → RU  ·  QWEN";
+            : $"{sourceLanguage} → RU  ·  {smartStage ?? (loading || confidence is null ? acceleratorLabel + " АНАЛИЗ" : acceleratorLabel + " КОНТЕКСТ")}";
         MetaText.Text = AddTextSourceBadge(metaText, textSource, textHookStatus);
         MetaBadge.ToolTip = textHookStatus?.Details;
 
-        SolidColorBrush accent = dictionaryMode ? DictionaryAccent : smartMode ? SmartAccent : NeuralAccent;
-        Card.BorderBrush = dictionaryMode ? DictionaryBorder : smartMode ? SmartBorder : NeuralBorder;
-        MetaBadge.Background = dictionaryMode ? DictionaryBadge : smartMode ? SmartBadge : NeuralBadge;
-        MetaBadge.BorderBrush = dictionaryMode ? DictionaryBorder : smartMode ? SmartBorder : NeuralBorder;
+        SolidColorBrush accent = dictionaryMode ? DictionaryAccent : SmartAccent;
+        Card.BorderBrush = dictionaryMode ? DictionaryBorder : SmartBorder;
+        MetaBadge.Background = dictionaryMode ? DictionaryBadge : SmartBadge;
+        MetaBadge.BorderBrush = dictionaryMode ? DictionaryBorder : SmartBorder;
         MetaText.Foreground = accent;
         StatusDot.Fill = accent;
     }
@@ -398,13 +382,7 @@ public partial class HoverTranslationOverlay : Window
             return "NPU";
         }
 
-        // Compatibility with selections cached or still in flight from previous releases.
-        if (engine == FoundryTranslationService.SmartDictionaryEngineLabel)
-        {
-            return "GPU";
-        }
-
-        return engine == NpuDictionarySelectorService.EngineLabel ? "NPU" : null;
+        return null;
     }
 
     internal static bool IsSmartAbstentionEngine(string engine) =>

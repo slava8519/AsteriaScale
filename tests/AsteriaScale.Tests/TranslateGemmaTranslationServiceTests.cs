@@ -73,9 +73,9 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.DirectPromptIdentity ==
               "translategemma-direct-en-ru-v1" &&
               TranslateGemmaTranslationService.CorrectionPromptIdentity ==
-              "translategemma-ape-en-ru-v2" &&
+              "translategemma-ape-en-ru-v3" &&
               TranslateGemmaTranslationService.PromptIdentity ==
-              "translategemma-direct-ape-en-ru-v3",
+              "translategemma-direct-ape-en-ru-v4",
             "The experimental service silently changed the model/quantization.");
         Check(TranslateGemmaTranslationService.GetModelIdentity(
                   TranslateGemmaExecutionBackend.Cpu) ==
@@ -177,7 +177,7 @@ internal static class TranslateGemmaTranslationServiceTests
 
     private static void VerifyPostEditPrompt()
     {
-        const string current = "She did not open the ancient gate.";
+        const string current = "LeMU did not open the ancient gate.";
         const string previous = "The courtyard was completely silent.";
         SmartPhraseTranslationRequest request = new(
             current,
@@ -187,6 +187,7 @@ internal static class TranslateGemmaTranslationServiceTests
             TranslateGemmaTranslationService.ModelIdentity,
             TranslateGemmaTranslationService.PromptIdentity)
         {
+            ProperNames = ["LeMU"],
             PreviousContext = [previous],
             SemanticTerms = [new ScaffoldTerm("ancient gate", "древние ворота", 1)],
             SenseHints =
@@ -202,13 +203,16 @@ internal static class TranslateGemmaTranslationServiceTests
 
         string prompt = TranslateGemmaTranslationService.BuildPostEditRawPrompt(
             request,
-            "Она открыла древние ворота.");
+            "LeMU открыла древние ворота.");
         Check(prompt.Contains("PREVIOUS_CONTEXT (DO NOT TRANSLATE", StringComparison.Ordinal) &&
               prompt.Contains("CURRENT (TRANSLATE ONLY THIS", StringComparison.Ordinal) &&
               prompt.Contains(previous, StringComparison.Ordinal) &&
               prompt.Contains(current, StringComparison.Ordinal) &&
               prompt.Contains("ancient gate", StringComparison.Ordinal) &&
               prompt.Contains("древние ворота", StringComparison.Ordinal) &&
+              prompt.Contains("\"properNames\":[\"LeMU\"]", StringComparison.Ordinal) &&
+              prompt.Contains("advisory identity anchors", StringComparison.Ordinal) &&
+              prompt.Contains("transliterating naturally", StringComparison.Ordinal) &&
               prompt.Contains("never emit its speakerMetadata", StringComparison.Ordinal) &&
               prompt.Contains("internal ellipsis marks hesitation", StringComparison.Ordinal),
             "The post-edit prompt lost its typed context or semantic evidence.");
@@ -218,7 +222,7 @@ internal static class TranslateGemmaTranslationServiceTests
         using JsonDocument postEdit = JsonDocument.Parse(
             TranslateGemmaTranslationService.BuildPostEditRequestJson(
                 request,
-                "Она открыла древние ворота."));
+                "LeMU открыла древние ворота."));
         Check(postEdit.RootElement.GetProperty("prompt").GetString() == prompt,
             "The deterministic completion envelope changed the post-edit prompt.");
 
@@ -229,7 +233,7 @@ internal static class TranslateGemmaTranslationServiceTests
         CheckThrows<ArgumentException>(
             () => TranslateGemmaTranslationService.BuildPostEditRawPrompt(
                 injected,
-                "Она не открыла древние ворота."),
+                "LeMU не открыла древние ворота."),
             "Hidden hook context was allowed to inject a Gemma turn marker.");
 
         using JsonDocument typedContext = JsonDocument.Parse(
@@ -262,6 +266,19 @@ internal static class TranslateGemmaTranslationServiceTests
         };
         Check(!TranslateGemmaTranslationService.ShouldPostEdit(shortRequest, clean),
             "A clean short sentence paid for an unnecessary second generation.");
+        SmartPhraseGuardResult strictSemanticReject = clean with
+        {
+            Accepted = false,
+            Translation = string.Empty,
+            Reason = SmartPhraseRejectionReason.SenseConflict
+        };
+        Check(TranslateGemmaTranslationService.SelectPostEditFailureFallback(
+                  strictSemanticReject,
+                  clean) == clean.Translation &&
+              TranslateGemmaTranslationService.SelectPostEditFailureFallback(
+                  strictSemanticReject,
+                  strictSemanticReject) is null,
+            "A failed APE pass discarded a display-safe direct translation.");
         const string longCurrent =
             "We quietly rested beside the wide river after sunset.";
         Check(TranslateGemmaTranslationService.ShouldPostEdit(
@@ -324,6 +341,10 @@ internal static class TranslateGemmaTranslationServiceTests
         CheckThrows<InvalidDataException>(
             () => TranslateGemmaTranslationService.ParseCompletionResponse("{\"content\":\"   \"}"),
             "An empty translation was accepted.");
+        CheckThrows<InvalidDataException>(
+            () => TranslateGemmaTranslationService.ParseCompletionResponse(
+                "{\"content\":\"Неполный перевод\",\"stopped_limit\":true}"),
+            "A token-limit-truncated completion was accepted.");
         CheckThrows<InvalidDataException>(
             () => TranslateGemmaTranslationService.ParseCompletionResponse(
                 "{\"content\":\"<start_of_turn>user\"}"),

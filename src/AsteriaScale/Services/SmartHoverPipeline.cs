@@ -1,4 +1,3 @@
-using AsteriaScale.Interop;
 using AsteriaScale.Models;
 using AsteriaScale.RankerProtocol;
 
@@ -25,7 +24,6 @@ internal sealed record SmartHoverResult(
         bool IsPhrase,
         string? Language,
         double? Confidence,
-        bool UsedFullFallback,
         SmartDictionaryCacheRequest? CacheRequest = null,
         SmartDictionarySelection? CacheSelection = null)
 {
@@ -55,9 +53,7 @@ internal sealed class SmartHoverPipeline : IDisposable
     private readonly SmartPhraseTranslationCache? _smartPhraseCache;
     private readonly TranslationScaffoldBuilder _phraseSemanticScaffoldBuilder;
     private readonly TranslationScaffoldBuilder _phraseDeterministicScaffoldBuilder;
-    private readonly Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> _translateFallback;
     private readonly Action<string> _reportStatus;
-    private readonly Action<string, NativeMethods.Point> _onDemandFallbackObserved;
     private readonly SemaphoreSlim _smartBackendLock = new(1, 1);
     private string? _activeSmartBackend;
     private bool _phraseSetupFailureReported;
@@ -68,9 +64,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         GlossBertDictionarySelectorService glossBertSelector,
         SmartDictionaryResultCache smartResultCache,
         GlossBertDecisionCache decisionCache,
-        Func<string, CancellationToken, Task<(string Source, string Translation, string Engine)>> translateFallback,
         Action<string> reportStatus,
-        Action<string, NativeMethods.Point> onDemandFallbackObserved,
         ISmartPhraseTranslator? smartPhraseTranslator = null,
         SmartPhraseTranslationCache? smartPhraseCache = null,
         TranslationScaffoldNeuralRanker? phraseNeuralRanker = null)
@@ -88,9 +82,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         // Idiom rewrites are synthetic English. Their mandatory anchors still
         // belong to the model input, while WSD must see the original sentence.
         _phraseDeterministicScaffoldBuilder = new TranslationScaffoldBuilder(dictionary);
-        _translateFallback = translateFallback;
         _reportStatus = reportStatus;
-        _onDemandFallbackObserved = onDemandFallbackObserved;
     }
 
     public string? ActiveBackend => _activeSmartBackend;
@@ -111,19 +103,6 @@ internal sealed class SmartHoverPipeline : IDisposable
         }
     }
 
-    private bool IsAutomaticFallback =>
-        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
-        SmartDictionaryFallbackModes.Automatic;
-
-    private bool IsOnDemandFallback =>
-        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
-        SmartDictionaryFallbackModes.OnDemand;
-
-    private Task<(string Source, string Translation, string Engine)> TranslateSmartFallbackAsync(
-        string source,
-        CancellationToken cancellationToken) =>
-        _translateFallback(source, cancellationToken);
-
     private void ReportStatus(string status) => _reportStatus(status);
 
     private static void LogError(Exception exception) =>
@@ -133,7 +112,6 @@ internal sealed class SmartHoverPipeline : IDisposable
 
     public async Task<SmartHoverResult> ResolveSmartHoverAsync(
         HoverOcrResult recognized,
-        NativeMethods.Point cursor,
         string smartBackend,
         CancellationToken cancellationToken)
     {
@@ -142,41 +120,16 @@ internal sealed class SmartHoverPipeline : IDisposable
             recognized.HoveredWord,
             recognized.CharacterIndex,
             cancellationToken);
-        if (IsOnDemandFallback)
-        {
-            _onDemandFallbackObserved(recognized.Text, cursor);
-        }
-
         if (!lookup.Found)
         {
-            if (IsAutomaticFallback)
-            {
-                (string fallbackSource, string fallbackTranslation, string fallbackEngine) =
-                    await TranslateSmartFallbackAsync(recognized.Text, cancellationToken);
-                return new SmartHoverResult(
-                    fallbackSource,
-                    fallbackTranslation,
-                    fallbackEngine,
-                    DictionaryFound: true,
-                    IsPhrase: false,
-                    Language: lookup.Language,
-                    Confidence: null,
-                    UsedFullFallback: true);
-            }
-
             return new SmartHoverResult(
                 lookup.Source,
-                IsOnDemandFallback
-                    ? "Нет записи в локальном словаре. Alt+Shift+D — перевести реплику целиком."
-                    : lookup.Translation,
-                IsOnDemandFallback
-                    ? SmartEngineLabel(smartBackend)
-                    : LocalDictionaryService.EngineLabel,
+                lookup.Translation,
+                LocalDictionaryService.EngineLabel,
                 DictionaryFound: false,
                 lookup.IsPhrase,
                 lookup.Language,
-                Confidence: null,
-                UsedFullFallback: false);
+                Confidence: null);
         }
 
         SmartDictionaryTargetSpan targetSpan = lookup.IsPhrase
@@ -207,7 +160,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         if (rankableEnglishTarget && lookup.SenseCandidates.Count == 0)
         {
             string[] flatTranslations =
-                NpuDictionarySelectorService.SplitMeanings(lookup.Translation);
+                DictionaryMeaningParser.SplitMeanings(lookup.Translation);
             SmartDictionaryHeuristicSelection? tatoebaSelection =
                 SmartDictionaryHeuristicRanker.TrySelectFromContextTranslation(
                     lookup.ContextTranslation,
@@ -221,8 +174,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    tatoebaSelection.Confidence,
-                    UsedFullFallback: false);
+                    tatoebaSelection.Confidence);
             }
 
             SmartDictionaryHeuristicSelection? flatSelection =
@@ -241,8 +193,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    flatSelection.Confidence,
-                    UsedFullFallback: false);
+                    flatSelection.Confidence);
             }
         }
 
@@ -296,8 +247,14 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    tatoebaSelection.Confidence,
-                    UsedFullFallback: false);
+                    tatoebaSelection.Confidence)
+                {
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
+                        displaySource,
+                        plan,
+                        tatoebaSelection.Index,
+                        tatoebaSelection.Confidence)
+                };
             }
 
             if (visibleTranslations.Length == 1)
@@ -309,8 +266,17 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    Confidence: 1,
-                    UsedFullFallback: false);
+                    Confidence: 1)
+                {
+                    // A single aligned sense needs no neural decision, but its
+                    // definition is still useful advisory evidence for the
+                    // sentence translator (afterlife, elderly, and similar).
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
+                        displaySource,
+                        plan,
+                        plan.Outcomes[0].GroupId,
+                        confidence: 1)
+                };
             }
 
             SmartDictionaryHeuristicSelection? fastSelection =
@@ -329,8 +295,14 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    fastSelection.Confidence,
-                    UsedFullFallback: false);
+                    fastSelection.Confidence)
+                {
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
+                        displaySource,
+                        plan,
+                        fastSelection.Index,
+                        fastSelection.Confidence)
+                };
             }
 
             GlossBertRankerProvider provider = ResolveRankerProvider(smartBackend);
@@ -384,10 +356,9 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    cachedSelection.Confidence,
-                    UsedFullFallback: false)
+                    cachedSelection.Confidence)
                 {
-                    SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
                         displaySource,
                         plan,
                         cachedSelection.Index,
@@ -447,7 +418,6 @@ internal sealed class SmartHoverPipeline : IDisposable
                     displayIsPhrase,
                     lookup.Language,
                     promoted.Confidence,
-                    UsedFullFallback: false,
                     // Keyed on the model and pipeline that actually produced the
                     // verdict, exactly as the non-cached path below does.
                     CreateSmartCacheRequest(
@@ -461,7 +431,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                         sharedDecision.Pipeline),
                     promoted)
                 {
-                    SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                    SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
                         displaySource,
                         plan,
                         sharedOutcome.GroupId,
@@ -552,8 +522,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                         DictionaryFound: true,
                         IsPhrase: true,
                         lookup.Language,
-                        Confidence: null,
-                        UsedFullFallback: false);
+                        Confidence: null);
                 }
 
                 ReportStatus(
@@ -565,8 +534,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
-                    Confidence: null,
-                    UsedFullFallback: false);
+                    Confidence: null);
             }
 
             SmartDictionaryRankerOutcome selectedOutcome = plan.Outcomes
@@ -584,11 +552,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                 displayIsPhrase,
                 lookup.Language,
                 cacheSelection.Confidence,
-                UsedFullFallback: false,
                 cacheRequest,
                 cacheSelection)
             {
-                SelectedSenseHints = SemanticSenseEvidenceFactory.Create(
+                SelectedSenseHints = SemanticSenseEvidenceFactory.CreateOptional(
                     displaySource,
                     plan,
                     selectedOutcome.GroupId,
@@ -603,23 +570,6 @@ internal sealed class SmartHoverPipeline : IDisposable
         catch (Exception ex)
         {
             LogError(ex);
-            if (IsAutomaticFallback)
-            {
-                ReportStatus(
-                    "Умный словарь: ранжирование недоступно, запущен разрешённый полный перевод");
-                (string fallbackSource, string fallbackTranslation, string fallbackEngine) =
-                    await TranslateSmartFallbackAsync(recognized.Text, cancellationToken);
-                return new SmartHoverResult(
-                    fallbackSource,
-                    fallbackTranslation,
-                    fallbackEngine,
-                    DictionaryFound: true,
-                    IsPhrase: false,
-                    lookup.Language,
-                    Confidence: null,
-                    UsedFullFallback: true);
-            }
-
             if (!string.IsNullOrWhiteSpace(lookup.ContextTranslation))
             {
                 ReportStatus(
@@ -631,8 +581,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     DictionaryFound: true,
                     IsPhrase: true,
                     lookup.Language,
-                    Confidence: null,
-                    UsedFullFallback: false);
+                    Confidence: null);
             }
 
             ReportStatus(
@@ -656,8 +605,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             DictionaryFound: true,
             isPhrase ?? lookup.IsPhrase,
             lookup.Language,
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
     private static SmartHoverResult UnavailableSmartResult(
         DictionaryLookupResult lookup,
@@ -671,8 +619,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             DictionaryFound: true,
             isPhrase ?? lookup.IsPhrase,
             lookup.Language,
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
     private bool PhraseTranslationEnabled =>
         SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
@@ -744,9 +691,15 @@ internal sealed class SmartHoverPipeline : IDisposable
             senseHints,
             modelScaffold.ProperNames,
             phraseBackend);
-        if (SmartPhraseTranslationGuard.ValidateRequest(request) !=
-            SmartPhraseRejectionReason.None)
+        SmartPhraseRejectionReason requestRejection =
+            SmartPhraseTranslationGuard.ValidateRequest(request);
+        if (requestRejection != SmartPhraseRejectionReason.None)
         {
+            HoverTranslationService.LogDiagnostic(FormatPhraseRejectionDiagnostic(
+                "request",
+                requestRejection,
+                request,
+                result: null));
             return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
         }
         try
@@ -764,13 +717,16 @@ internal sealed class SmartHoverPipeline : IDisposable
                     cancellationToken);
             }
 
-            SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.Validate(
+            SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.ValidateForDisplay(
                 request,
                 translated);
             if (!guarded.Accepted)
             {
-                System.Diagnostics.Debug.WriteLine(
-                    $"TranslateGemma phrase rejected: {guarded.Reason}");
+                HoverTranslationService.LogDiagnostic(FormatPhraseRejectionDiagnostic(
+                    "display",
+                    guarded.Reason,
+                    request,
+                    translated));
                 return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
             }
 
@@ -798,7 +754,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         {
             // The primary dictionary result is already visible. Keeping this
             // failure inside the optional phase prevents the outer ranker catch
-            // from escalating it into an automatic full-Qwen call.
+            // from replacing a useful dictionary answer with an unavailable phrase line.
             LogError(exception);
             if (!_phraseSetupFailureReported)
             {
@@ -843,6 +799,42 @@ internal sealed class SmartHoverPipeline : IDisposable
         recognized.TextSource == HoverTextSource.TextHook ||
         recognized.IsSentenceContextStable;
 
+    internal static string FormatPhraseRejectionDiagnostic(
+        string stage,
+        SmartPhraseRejectionReason reason,
+        SmartPhraseTranslationRequest request,
+        SmartPhraseTranslationResult? result)
+    {
+        string sourcePhrase = request.SourcePhrase ?? string.Empty;
+        string fingerprint;
+        try
+        {
+            fingerprint = SmartPhraseTranslationCache.CreateFingerprint(request);
+        }
+        catch (Exception)
+        {
+            // Request rejection diagnostics run before the cache contract is
+            // valid. Their privacy-safe correlation key must never turn the
+            // optional phrase line into an exception that hides the dictionary.
+            fingerprint = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(sourcePhrase)));
+        }
+
+        int sourceWords = sourcePhrase.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries).Length;
+        int outputWords = result?.Translation?.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
+        int termCount = request.SemanticTerms?.Count ?? 0;
+        int hintCount = request.SenseHints?.Count ?? 0;
+        return "TranslateGemma phrase rejected " +
+               $"stage={stage} reason={reason} sourceWords={sourceWords} " +
+               $"outputWords={outputWords} terms={termCount} " +
+               $"hints={hintCount} fingerprint={fingerprint[..12]}";
+    }
+
     private SmartPhraseTranslationRequest CreatePhraseTranslationRequest(
         SmartPhraseModelInput modelInput,
         IReadOnlyList<string> previousContext,
@@ -880,16 +872,27 @@ internal sealed class SmartHoverPipeline : IDisposable
         TranslateGemmaTranslationService.ResolveBackend(
             _settings.SmartPhraseTranslationBackend);
 
-    internal static IReadOnlyList<string> ExtractStableProperNames(string phrase) =>
-        phrase.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+    internal static IReadOnlyList<string> ExtractStableProperNames(string phrase)
+    {
+        string[] tokens = phrase.Split(
+                (char[]?)null,
+                StringSplitOptions.RemoveEmptyEntries)
             .Select(segment => new string(segment
                 .Where(character =>
                     character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9')
                 .ToArray()))
             .Where(token => token.Length >= 2)
-            .Where(IsStableProperName)
+            .ToArray();
+        return tokens
+            .Where((token, index) =>
+                IsStableProperName(token) &&
+                // Sentence-initial title case alone is not name evidence:
+                // Sounds/Indeed/Maybe otherwise become legal residual English.
+                (index > 0 || token.Skip(1).Any(character =>
+                    character is >= 'A' and <= 'Z' or >= '0' and <= '9')))
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
 
     private static bool IsStableProperName(string token)
     {

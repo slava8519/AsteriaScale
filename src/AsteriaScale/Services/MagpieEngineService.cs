@@ -88,7 +88,7 @@ public sealed class MagpieEngineService : IAsyncDisposable
                 isWindow && NativeMethods.IsCloaked(sourceWindow));
         }
     }
-    internal bool IsScalingSourceForeground
+    internal bool IsScalingSessionForeground
     {
         get
         {
@@ -100,8 +100,11 @@ public sealed class MagpieEngineService : IAsyncDisposable
                 return false;
             }
 
-            return IsScalingSourceForegroundState(
-                NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND"),
+            nint sourceWindow = NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
+            return IsScalingSessionForegroundState(
+                sourceWindow,
+                sourceWindow != nint.Zero && NativeMethods.IsWindow(sourceWindow),
+                scalingWindow,
                 NativeMethods.GetForegroundWindow());
         }
     }
@@ -327,6 +330,37 @@ public sealed class MagpieEngineService : IAsyncDisposable
         {
             ThrowIfDisposed();
             await StopOwnedEngineCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    internal async Task<bool> StopOwnedEngineIfSourceStillUnavailableAsync(
+        ScalingSessionIdentity expectedSession,
+        CancellationToken cancellationToken = default)
+    {
+        await _operationLock.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            ScalingSessionSnapshot current = GetScalingSessionSnapshot();
+            bool expectedSourceStillAlive = IsExpectedSourceStillAlive(expectedSession);
+            if (!ShouldStopOwnedEngineForStaleSource(
+                    expectedSession,
+                    current,
+                    expectedSourceStillAlive))
+            {
+                return false;
+            }
+
+            // Rechecking under the same lock used by ScaleAsync prevents an
+            // old timer observation from killing a session that a manual or
+            // automated start has already recovered.
+            await StopOwnedEngineCoreAsync(cancellationToken);
+            Report("Magpie остановлен после завершения исходного окна");
+            return true;
         }
         finally
         {
@@ -610,6 +644,97 @@ public sealed class MagpieEngineService : IAsyncDisposable
             ? NativeMethods.FindTopLevelWindow(className, processId)
             : nint.Zero;
 
+    internal ScalingSessionSnapshot GetScalingSessionSnapshot()
+    {
+        if (!TryGetOwnedProcessId(out int engineProcessId))
+        {
+            return default;
+        }
+
+        nint scalingWindow = NativeMethods.FindTopLevelWindow(
+            ScalingWindowClass,
+            engineProcessId);
+        bool isActive = IsScalingWindowActiveState(
+            scalingWindow,
+            scalingWindow != nint.Zero && NativeMethods.IsWindowVisible(scalingWindow));
+        if (!isActive)
+        {
+            return default;
+        }
+
+        nint sourceWindow = NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
+        bool isSourceReady = sourceWindow != nint.Zero && NativeMethods.IsWindow(sourceWindow);
+        int sourceProcessId = 0;
+        if (isSourceReady &&
+            NativeMethods.GetWindowThreadProcessId(sourceWindow, out uint processId) != 0 &&
+            processId <= int.MaxValue)
+        {
+            sourceProcessId = (int)processId;
+        }
+
+        return new ScalingSessionSnapshot(
+            engineProcessId,
+            scalingWindow,
+            sourceWindow,
+            sourceProcessId,
+            IsActive: true,
+            IsSourceReady: isSourceReady && sourceProcessId > 0);
+    }
+
+    private static bool IsExpectedSourceStillAlive(ScalingSessionIdentity expectedSession)
+    {
+        if (expectedSession.SourceWindow == nint.Zero ||
+            expectedSession.SourceProcessId <= 0 ||
+            !NativeMethods.IsWindow(expectedSession.SourceWindow) ||
+            NativeMethods.GetWindowThreadProcessId(
+                expectedSession.SourceWindow,
+                out uint processId) == 0)
+        {
+            return false;
+        }
+
+        return processId == (uint)expectedSession.SourceProcessId;
+    }
+
+    internal static bool ShouldStopOwnedEngineForStaleSource(
+        ScalingSessionIdentity expectedSession,
+        ScalingSessionSnapshot current,
+        bool expectedSourceStillAlive) =>
+        expectedSession.IsValid &&
+        current.IsActive &&
+        current.EngineProcessId == expectedSession.EngineProcessId &&
+        current.ScalingWindow == expectedSession.ScalingWindow &&
+        !current.IsSourceReady &&
+        !expectedSourceStillAlive;
+
+    internal readonly record struct ScalingSessionIdentity(
+        int EngineProcessId,
+        nint ScalingWindow,
+        nint SourceWindow,
+        int SourceProcessId)
+    {
+        internal bool IsValid =>
+            EngineProcessId > 0 &&
+            ScalingWindow != nint.Zero &&
+            SourceWindow != nint.Zero &&
+            SourceProcessId > 0;
+    }
+
+    internal readonly record struct ScalingSessionSnapshot(
+        int EngineProcessId,
+        nint ScalingWindow,
+        nint SourceWindow,
+        int SourceProcessId,
+        bool IsActive,
+        bool IsSourceReady)
+    {
+        internal ScalingSessionIdentity Identity => new(
+            EngineProcessId,
+            ScalingWindow,
+            SourceWindow,
+            SourceProcessId);
+    }
+
     internal static bool IsScalingSourceLostState(
         nint sourceWindow,
         bool isWindow,
@@ -620,13 +745,27 @@ public sealed class MagpieEngineService : IAsyncDisposable
         // its scaling window remains active. Treating that transition as a
         // lost source stops and immediately restarts automatic scaling.
         _ = isIconic;
-        return sourceWindow == nint.Zero || !isWindow || isCloaked;
+        return IsScalingSourceDestroyedState(sourceWindow, isWindow) || isCloaked;
     }
+
+    internal static bool IsScalingSourceDestroyedState(
+        nint sourceWindow,
+        bool isWindow) =>
+        sourceWindow == nint.Zero || !isWindow;
 
     internal static bool IsScalingSourceForegroundState(
         nint sourceWindow,
         nint foregroundWindow) =>
         sourceWindow != nint.Zero && sourceWindow == foregroundWindow;
+
+    internal static bool IsScalingSessionForegroundState(
+        nint sourceWindow,
+        bool isSourceWindow,
+        nint scalingWindow,
+        nint foregroundWindow) =>
+        isSourceWindow &&
+        (IsScalingSourceForegroundState(sourceWindow, foregroundWindow) ||
+         scalingWindow != nint.Zero && scalingWindow == foregroundWindow);
 
     internal static bool IsScalingWindowActiveState(
         nint scalingWindow,

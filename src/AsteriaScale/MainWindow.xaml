@@ -435,8 +435,6 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="10" />
                                             <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="10" />
-                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
 
                                         <StackPanel Grid.Row="0" Grid.Column="0">
@@ -454,22 +452,17 @@
                                             <ComboBox x:Name="SmartRankerModelComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="4" Grid.Column="0">
-                                            <TextBlock Text="Если перевода нет" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
-                                            <ComboBox x:Name="SmartFallbackComboBox" Height="34"
-                                                      DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
-                                        </StackPanel>
                                         <StackPanel Grid.Row="2" Grid.Column="2">
                                             <TextBlock Text="Готовность модели" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
                                             <ComboBox x:Name="SmartMemoryPolicyComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="4" Grid.Column="2">
+                                        <StackPanel Grid.Row="4" Grid.Column="0">
                                             <TextBlock Text="Перевод фразы второй строкой" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
                                             <ComboBox x:Name="SmartPhraseTranslationComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />
                                         </StackPanel>
-                                        <StackPanel Grid.Row="6" Grid.Column="2">
+                                        <StackPanel Grid.Row="4" Grid.Column="2">
                                             <TextBlock Text="Ускоритель TranslateGemma" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,5" />
                                             <ComboBox x:Name="SmartPhraseBackendComboBox" Height="34"
                                                       DisplayMemberPath="Name" SelectionChanged="OnSmartDictionarySettingChanged" />

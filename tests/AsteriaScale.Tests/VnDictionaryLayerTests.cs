@@ -150,7 +150,7 @@ internal static class VnDictionaryLayerTests
             "Moonlit",
             0);
         string[] softMeanings =
-            NpuDictionarySelectorService.SplitMeanings(soft.Translation);
+            DictionaryMeaningParser.SplitMeanings(soft.Translation);
         Check(soft.Found &&
               softMeanings.SequenceEqual(
                   ["лунный", "озарённый луной"],
@@ -303,7 +303,7 @@ internal static class VnDictionaryLayerTests
             ambiguousUserSource.IndexOf("pulled", StringComparison.Ordinal));
         Check(ambiguousUser.Found &&
               ambiguousUser.MatchedEnglishKey == "got pulled away" &&
-              NpuDictionarySelectorService.SplitMeanings(ambiguousUser.Translation).Length == 2,
+              DictionaryMeaningParser.SplitMeanings(ambiguousUser.Translation).Length == 2,
             "The overlap regression did not exercise an unresolved user phrase.");
 
         TranslationScaffold ambiguousOverride =

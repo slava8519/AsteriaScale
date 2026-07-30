@@ -87,11 +87,29 @@ internal static class SmartPhraseTranslationFoundationTests
         SmartPhraseTranslationRequest namedRequest = CreateRequest(
             namedSource,
             properNames: names);
-        Check(names.SequenceEqual(["Alice", "Kotori", "Michael"]) &&
+        Check(names.SequenceEqual(["Kotori", "Michael"]) &&
               SmartPhraseTranslationGuard.Validate(
                   namedRequest,
-                  Result(namedRequest, "Alice познакомила Kotori с Michael.")).Accepted,
-            "Ordinary title-case character names were not preserved by the phrase guard.");
+                  Result(namedRequest, "Алиса познакомила Kotori с Michael.")).Accepted,
+            "High-confidence non-initial character names were not preserved by the phrase guard.");
+
+        const string commonInitial = "Sounds professional to me.";
+        IReadOnlyList<string> commonInitialNames =
+            SmartHoverPipeline.ExtractStableProperNames(commonInitial);
+        SmartPhraseTranslationRequest commonInitialRequest = CreateRequest(
+            commonInitial,
+            properNames: commonInitialNames);
+        Check(commonInitialNames.Count == 0 &&
+              SmartPhraseTranslationGuard.Validate(
+                  commonInitialRequest,
+                  Result(commonInitialRequest, "Sounds профессионально.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "A sentence-initial common word was whitelisted as a proper name.");
+
+        const string mixedCaseName = "LeMU welcomes everyone.";
+        Check(SmartHoverPipeline.ExtractStableProperNames(mixedCaseName)
+                .SequenceEqual(["LeMU"]),
+            "A sentence-initial mixed-case entity lost its high-confidence name signal.");
 
         const string uppercaseSource = "THE BANK IS CLOSED.";
         IReadOnlyList<string> uppercaseNames =
@@ -164,6 +182,32 @@ internal static class SmartPhraseTranslationFoundationTests
         Check(multiwordContext.Text.EndsWith(".", StringComparison.Ordinal),
             "A complete short sentence lost punctuation needed by the translator.");
 
+        const string titledAddressee =
+            "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe. " +
+            "I would appreciate it if you could forgive him.";
+        const string expectedTitledSentence =
+            "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe.";
+        foreach (string titledTarget in new[] { "a lot", "Giraffe" })
+        {
+            SmartPhraseContext? titled = SmartPhraseContextBuilder.Build(
+                titledAddressee,
+                titledTarget,
+                titledAddressee.IndexOf(titledTarget, StringComparison.Ordinal));
+            Check(titled is not null &&
+                  string.Equals(titled.Value.Text, expectedTitledSentence, StringComparison.Ordinal),
+                $"The title abbreviation truncated or merged the sentence around '{titledTarget}'.");
+        }
+
+        const string scientificAbbreviations =
+            "Dr. Rivera reviewed Fig. 2 carefully. The result was conclusive.";
+        SmartPhraseContext? scientific = SmartPhraseContextBuilder.Build(
+            scientificAbbreviations,
+            "reviewed",
+            scientificAbbreviations.IndexOf("reviewed", StringComparison.Ordinal));
+        Check(scientific is not null &&
+              scientific.Value.Text == "Dr. Rivera reviewed Fig. 2 carefully.",
+            "Scientific abbreviations split or merged a complete sentence.");
+
         const string question =
             "Are you talking about these magnificent 88-wide hips?";
         SmartPhraseContext? questionBuilt = SmartPhraseContextBuilder.Build(
@@ -205,6 +249,33 @@ internal static class SmartPhraseTranslationFoundationTests
             bracketedSpeaker.IndexOf("Wait", StringComparison.Ordinal));
         Check(bracketedSpeakerBuilt is { Text: "\"Wait here.\"", CharacterIndex: 1 },
             "A bracketed text-hook speaker label leaked into the translated CURRENT sentence.");
+
+        const string danglingSpeakerQuote =
+            "[Park staff] \"Why do you think it is necessary to raise the air pressure?";
+        SmartPhraseContext? danglingSpeakerQuoteBuilt = SmartPhraseContextBuilder.Build(
+            danglingSpeakerQuote,
+            "necessary",
+            danglingSpeakerQuote.IndexOf("necessary", StringComparison.Ordinal));
+        Check(danglingSpeakerQuoteBuilt is
+              {
+                  Text: "Why do you think it is necessary to raise the air pressure?"
+              } &&
+              danglingSpeakerQuoteBuilt.Value.Text[
+                      danglingSpeakerQuoteBuilt.Value.CharacterIndex..]
+                  .StartsWith("necessary", StringComparison.Ordinal),
+            "A dangling OCR dialogue quote survived speaker removal or displaced the target.");
+        SmartPhraseTranslationRequest danglingSpeakerRequest = CreateRequest(
+            danglingSpeakerQuoteBuilt?.Text ?? string.Empty);
+        Check(SmartPhraseTranslationGuard.ValidateForDisplay(
+                  danglingSpeakerRequest,
+                  Result(
+                      danglingSpeakerRequest,
+                      "«Почему вы считаете необходимым повышать давление воздуха?»")) is
+              {
+                  Accepted: true,
+                  Translation: "Почему вы считаете необходимым повышать давление воздуха?"
+              },
+            "The built dangling-quote context and display guard disagreed end to end.");
 
         const string unicodeEllipsis = "That's… not what I meant at all.";
         SmartPhraseContext? unicodeEllipsisBuilt = SmartPhraseContextBuilder.Build(
@@ -463,10 +534,103 @@ internal static class SmartPhraseTranslationFoundationTests
                   Result(termRequest, "Мы подошли к дому.")).Reason ==
               SmartPhraseRejectionReason.SemanticTermMissing,
             "A missing high-confidence sentence concept passed the semantic guard.");
+        Check(SmartPhraseTranslationGuard.ValidateForDisplay(
+                  termRequest,
+                  Result(termRequest, "Мы подошли к дому.")).Reason ==
+              SmartPhraseRejectionReason.SemanticTermMissing,
+            "A mandatory deterministic term was weakened by the display policy.");
         Check(SmartPhraseTranslationGuard.Validate(
                   termRequest,
                   Result(termRequest, "Мы остановились перед воротами.")).Accepted,
             "A natural Russian inflection failed the semantic guard.");
+
+        SmartPhraseTranslationRequest goodJoke = CreateRequest(
+            "\"My friend told me a good joke the other day!\"") with
+        {
+            SemanticTerms =
+            [
+                new ScaffoldTerm(
+                    "tell me",
+                    "сказать",
+                    0.96,
+                    ScaffoldTermProvenance.AdvisoryDictionary)
+            ]
+        };
+        SmartPhraseTranslationResult naturalGoodJoke = Result(
+            goodJoke,
+            "«Мой друг недавно рассказал мне отличную шутку!»");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  goodJoke,
+                  naturalGoodJoke).Reason == SmartPhraseRejectionReason.SemanticTermMissing &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  goodJoke,
+                  naturalGoodJoke).Accepted,
+            "A natural synonym was blocked by an advisory bundled-dictionary term.");
+
+        SmartPhraseTranslationRequest startingNow = CreateRequest(
+            "\"Starting from now, the air pressure in here is going to rise to six atmospheres.\"") with
+        {
+            SemanticTerms =
+            [
+                new ScaffoldTerm(
+                    "now",
+                    "сейчас",
+                    0.95,
+                    ScaffoldTermProvenance.AdvisoryDictionary)
+            ]
+        };
+        SmartPhraseTranslationResult naturalStartingNow = Result(
+            startingNow,
+            "«Отныне давление воздуха здесь повысится до шести атмосфер»");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  startingNow,
+                  naturalStartingNow).Reason == SmartPhraseRejectionReason.SemanticTermMissing &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  startingNow,
+                  naturalStartingNow).Accepted,
+            "An advisory time-expression surface blocked a complete natural translation.");
+
+        SmartPhraseTranslationRequest danglingQuote = CreateRequest(
+            "\"But it's really funny...");
+        SmartPhraseGuardResult strictDanglingQuote = SmartPhraseTranslationGuard.Validate(
+            danglingQuote,
+            Result(danglingQuote, "«Но это действительно смешно...»"));
+        SmartPhraseGuardResult displayDanglingQuote =
+            SmartPhraseTranslationGuard.ValidateForDisplay(
+                danglingQuote,
+                Result(danglingQuote, "«Но это действительно смешно...»"));
+        Check(strictDanglingQuote.Reason == SmartPhraseRejectionReason.StructuralMismatch &&
+              displayDanglingQuote is
+              {
+                  Accepted: true,
+                  Translation: "Но это действительно смешно..."
+              },
+            "A balanced Russian wrapper for a dangling OCR quote hid a safe phrase translation.");
+
+        SmartPhraseTranslationRequest danglingQuestion = CreateRequest(
+            "\"Why do you think it is necessary to raise the air pressure?");
+        SmartPhraseGuardResult displayDanglingQuestion =
+            SmartPhraseTranslationGuard.ValidateForDisplay(
+                danglingQuestion,
+                Result(
+                    danglingQuestion,
+                    "«Почему вы считаете необходимым повышать давление воздуха?»"));
+        Check(displayDanglingQuestion is
+              {
+                  Accepted: true,
+                  Translation: "Почему вы считаете необходимым повышать давление воздуха?"
+              },
+            "A dangling OCR quote still blocked a complete question translation.");
+
+        SmartPhraseTranslationRequest risingPressure = CreateRequest(
+            "\"As the air pressure rises, you may start to feel a strange sensation in your ears.\"");
+        Check(SmartPhraseTranslationGuard.ValidateForDisplay(
+                  risingPressure,
+                  Result(
+                      risingPressure,
+                      "«По мере повышения давления воздуха вы можете почувствовать странное ощущение в ушах»"))
+                .Accepted,
+            "A complete accepted air-pressure control sentence regressed.");
 
         SmartPhraseTranslationRequest senseRequest = request with
         {
@@ -485,6 +649,92 @@ internal static class SmartPhraseTranslationFoundationTests
                   Result(senseRequest, "Мы зашли в банк.")).Reason ==
               SmartPhraseRejectionReason.SenseConflict,
             "An explicit rejected GlossBERT sense passed the semantic guard.");
+        Check(SmartPhraseTranslationGuard.ValidateForDisplay(
+                  senseRequest,
+                  Result(senseRequest, "Мы зашли в банк.")).Accepted,
+            "An advisory sense conflict blocked an otherwise safe display translation.");
+        Check(TranslateGemmaTranslationService.IsDisplaySemanticImprovement(
+                  senseRequest,
+                  "Мы зашли в банк.",
+                  "Мы подошли к берегу.") &&
+              !TranslateGemmaTranslationService.IsDisplaySemanticImprovement(
+                  senseRequest,
+                  "Мы подошли к берегу.",
+                  "Мы зашли в банк."),
+            "Display-safe post-edit selection was not monotonic in semantic conflicts.");
+
+        const string privateSource = "UniquePrivateSentence must never enter logs.";
+        SmartPhraseTranslationRequest privateRequest = CreateRequest(privateSource);
+        string diagnostic = SmartHoverPipeline.FormatPhraseRejectionDiagnostic(
+            "display",
+            SmartPhraseRejectionReason.SenseConflict,
+            privateRequest,
+            Result(privateRequest, "Закрытый перевод."));
+        Check(diagnostic.Contains("reason=SenseConflict", StringComparison.Ordinal) &&
+              diagnostic.Contains("fingerprint=", StringComparison.Ordinal) &&
+              !diagnostic.Contains(privateSource, StringComparison.Ordinal) &&
+              !diagnostic.Contains("Закрытый перевод", StringComparison.Ordinal),
+            "Phrase rejection diagnostics leaked source or translated text.");
+
+        string invalidPrivateSource = string.Join(
+            ' ',
+            Enumerable.Repeat(
+                "PrivateInvalidWord",
+                SmartPhraseContextBuilder.MaximumWords + 1));
+        SmartPhraseTranslationRequest invalidPrivateRequest = CreateRequest(
+            invalidPrivateSource);
+        Check(SmartPhraseTranslationGuard.ValidateRequest(invalidPrivateRequest) ==
+              SmartPhraseRejectionReason.SourceOutOfScope,
+            "The diagnostic regression fixture unexpectedly became cache-valid.");
+        string invalidDiagnostic = SmartHoverPipeline.FormatPhraseRejectionDiagnostic(
+            "request",
+            SmartPhraseRejectionReason.SourceOutOfScope,
+            invalidPrivateRequest,
+            result: null);
+        Check(invalidDiagnostic.Contains("fingerprint=", StringComparison.Ordinal) &&
+              !invalidDiagnostic.Contains(invalidPrivateSource, StringComparison.Ordinal),
+            "An invalid request either escaped diagnostic formatting or leaked its source.");
+
+        SmartPhraseTranslationRequest completenessRequest = CreateRequest(
+            "One two three four five six seven eight nine ten");
+        SmartPhraseTranslationResult incomplete = Result(
+            completenessRequest,
+            "Слишком коротко.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  completenessRequest,
+                  incomplete).Reason == SmartPhraseRejectionReason.IncompleteTranslation &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  completenessRequest,
+                  incomplete).Reason == SmartPhraseRejectionReason.IncompleteTranslation,
+            "A truncated long-sentence translation passed the strict or display guard.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  completenessRequest,
+                  Result(completenessRequest, "Это достаточно полный перевод.")).Accepted &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  completenessRequest,
+                  Result(completenessRequest, "Это достаточно полный перевод.")).Accepted,
+            "The conservative completeness boundary rejected a four-word Russian result.");
+
+        SmartPhraseTranslationRequest shortCompletenessRequest = CreateRequest(
+            "One two three four five six seven eight nine");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  shortCompletenessRequest,
+                  Result(shortCompletenessRequest, "Кратко.")).Accepted &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  shortCompletenessRequest,
+                  Result(shortCompletenessRequest, "Кратко.")).Accepted,
+            "The completeness ratio was applied below its ten-word source threshold.");
+
+        SmartPhraseTranslationRequest exactBoundaryRequest = CreateRequest(
+            "One two three four five six seven eight nine ten eleven twelve thirteen " +
+            "fourteen fifteen sixteen seventeen eighteen nineteen twenty");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  exactBoundaryRequest,
+                  Result(exactBoundaryRequest, "Это ровно семь русских слов для перевода.")).Accepted &&
+              SmartPhraseTranslationGuard.ValidateForDisplay(
+                  exactBoundaryRequest,
+                  Result(exactBoundaryRequest, "Это ровно семь русских слов для перевода.")).Accepted,
+            "A Russian result at the exact 35-percent boundary was rejected.");
         Check(SmartPhraseTranslationGuard.Validate(
                   request with { ProperNames = null! },
                   Result(request, "Мы стояли на берегу.")).Reason ==
@@ -505,6 +755,18 @@ internal static class SmartPhraseTranslationFoundationTests
         Directory.CreateDirectory(root);
         string path = Path.Combine(root, "persistent.json");
         SmartPhraseTranslationRequest request = CreateRequest();
+        SmartPhraseTranslationRequest advisoryRequest = request with
+        {
+            SenseHints =
+            [
+                new ScaffoldSenseHint(
+                    "bank",
+                    "land beside water",
+                    "берег",
+                    ["банк"],
+                    0.91)
+            ]
+        };
 
         await using (SmartPhraseTranslationCache cache = new(path, capacity: 4))
         {
@@ -516,6 +778,10 @@ internal static class SmartPhraseTranslationFoundationTests
                     request,
                     Result(request, "Мы отдыхали у реки.")),
                 "A guarded phrase translation was not cached.");
+            Check(await cache.StoreAsync(
+                    advisoryRequest,
+                    Result(advisoryRequest, "Мы зашли в банк.")),
+                "A display-safe translation was rejected from cache by advisory evidence.");
         }
 
         string json = await File.ReadAllTextAsync(path);
@@ -535,6 +801,11 @@ internal static class SmartPhraseTranslationFoundationTests
             Check(hit is { FromCache: true } &&
                   hit.Translation == "Мы отдыхали у реки.",
                 "A guarded phrase translation did not survive restart.");
+            SmartPhraseTranslationResult? advisoryHit =
+                await reopened.TryGetAsync(advisoryRequest);
+            Check(advisoryHit is { FromCache: true } &&
+                  advisoryHit.Translation == "Мы зашли в банк.",
+                "A cached display translation was invalidated by advisory evidence on read.");
         }
 
         string fingerprint = SmartPhraseTranslationCache.CreateFingerprint(request);

@@ -60,7 +60,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
                 entry.ModelIdentity,
                 entry.ElapsedMilliseconds,
                 FromCache: true);
-            if (!SmartPhraseTranslationGuard.Validate(request, result).Accepted)
+            if (!SmartPhraseTranslationGuard.ValidateForDisplay(request, result).Accepted)
             {
                 access.Entries.Remove(fingerprint);
                 access.MarkDirty();
@@ -74,8 +74,8 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stores only output that passes the same guard used by the hover path.
-    /// Rejections and model failures remain retryable and never poison the cache.
+    /// Stores only output that passes the display guard. Neural WSD evidence is
+    /// advisory here; deterministic terms, safety and completeness stay strict.
     /// </summary>
     public Task<bool> StoreAsync(
         SmartPhraseTranslationRequest request,
@@ -83,7 +83,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         string fingerprint = CreateFingerprint(request);
-        SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.Validate(
+        SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.ValidateForDisplay(
             request,
             result);
         if (!guarded.Accepted || result.ElapsedMilliseconds < 0)

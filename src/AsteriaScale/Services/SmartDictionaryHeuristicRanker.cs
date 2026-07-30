@@ -166,6 +166,14 @@ internal static partial class SmartDictionaryHeuristicRanker
             ["чернов", "проект"],
             "document-draft context"),
         new(
+            "file",
+            [
+                "computer", "disk", "drive", "folder", "data", "storage", "download", "upload",
+                "attachment", "recycle", "bin", "delete", "deleted", "restore", "backup", "open", "save"
+            ],
+            ["файл"],
+            "digital-file context"),
+        new(
             "watch",
             ["wrist", "time", "hour", "minute", "wear", "wore"],
             ["час"],
@@ -1004,6 +1012,12 @@ internal static partial class SmartDictionaryHeuristicRanker
 
         if (normalized.EndsWith("es", StringComparison.Ordinal) && normalized.Length > 4)
         {
+            string singularWithSilentE = normalized[..^1];
+            if (SenseRules.Any(rule => rule.Lemma == singularWithSilentE))
+            {
+                return singularWithSilentE;
+            }
+
             return normalized[..^2];
         }
 

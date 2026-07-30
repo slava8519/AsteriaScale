@@ -813,7 +813,7 @@ internal static class RankerCalibrationBenchmark
         string expectedTranslation)
     {
         string expected = NormalizeRussian(expectedTranslation);
-        return NpuDictionarySelectorService.SplitMeanings(translation)
+        return DictionaryMeaningParser.SplitMeanings(translation)
             .Any(candidate => RussianLabelsMatch(candidate, expected));
     }
 

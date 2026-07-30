@@ -15,6 +15,26 @@ internal static class SemanticSenseEvidenceFactory
         int selectedGroupId,
         double confidence)
     {
+        IReadOnlyList<ScaffoldSenseHint> hints = CreateOptional(
+            source,
+            plan,
+            selectedGroupId,
+            confidence);
+        if (hints.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"Semantic ranker selected GroupId {selectedGroupId} without usable sense evidence.");
+        }
+
+        return hints;
+    }
+
+    public static IReadOnlyList<ScaffoldSenseHint> CreateOptional(
+        string source,
+        SmartDictionaryRankerPlan plan,
+        int selectedGroupId,
+        double confidence)
+    {
         ArgumentNullException.ThrowIfNull(plan);
         SmartDictionaryRankerOutcome? selectedOutcome = plan.Outcomes.FirstOrDefault(
             outcome => outcome.GroupId == selectedGroupId);
@@ -51,14 +71,13 @@ internal static class SemanticSenseEvidenceFactory
                 rejectedTranslations,
                 stableConfidence))
             .ToArray();
-        if (normalizedSource.Length == 0 ||
-            selectedTranslation.Length == 0 ||
-            hints.Length == 0)
+        if (normalizedSource.Length == 0 || selectedTranslation.Length == 0)
         {
-            throw new InvalidOperationException(
-                $"Semantic ranker selected GroupId {selectedGroupId} without usable sense evidence.");
+            return Array.Empty<ScaffoldSenseHint>();
         }
 
-        return Array.AsReadOnly(hints);
+        return hints.Length == 0
+            ? Array.Empty<ScaffoldSenseHint>()
+            : Array.AsReadOnly(hints);
     }
 }

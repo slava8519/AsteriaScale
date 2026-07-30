@@ -233,10 +233,34 @@ internal static class MagpieSafetyTests
                 isIconic: false,
                 isCloaked: false),
             "A valid visible scaling source was treated as lost.");
+        Check(MagpieEngineService.IsScalingSourceDestroyedState(
+                nint.Zero,
+                isWindow: false),
+            "A missing scaling source was not classified as destroyed.");
+        Check(MagpieEngineService.IsScalingSourceDestroyedState(
+                sourceWindow,
+                isWindow: false),
+            "A stale scaling source handle was not classified as destroyed.");
+        Check(!MagpieEngineService.IsScalingSourceDestroyedState(
+                sourceWindow,
+                isWindow: true),
+            "A live scaling source was classified as destroyed.");
         Check(MagpieEngineService.IsScalingSourceForegroundState(sourceWindow, sourceWindow),
             "The active scaling source was not recognized as foreground.");
         Check(!MagpieEngineService.IsScalingSourceForegroundState(sourceWindow, new nint(41)),
             "An unrelated foreground window was treated as the scaling source.");
+        Check(MagpieEngineService.IsScalingSessionForegroundState(
+                sourceWindow,
+                isSourceWindow: true,
+                scalingWindow,
+                scalingWindow),
+            "Magpie's active scaling surface was treated as an external application.");
+        Check(!MagpieEngineService.IsScalingSessionForegroundState(
+                sourceWindow,
+                isSourceWindow: false,
+                scalingWindow,
+                scalingWindow),
+            "A stale scaling surface retained cursor ownership after its source was destroyed.");
 
         Check(!MagpieEngineService.IsWindowedScalingModeState(nint.Zero),
             "A fullscreen Magpie session selected the windowed stop action.");
@@ -279,52 +303,175 @@ internal static class MagpieSafetyTests
               MagpieEngineService.ScalingCommand.RestartAfterStop,
             "Switching to another source window must stop the running session first.");
 
-        Check(AutoScaleService.IsDesktopWindowClass("Progman") &&
-              AutoScaleService.IsDesktopWindowClass("WorkerW") &&
-              AutoScaleService.IsDesktopWindowClass("Shell_TrayWnd"),
-            "A Windows desktop shell class bypassed the cursor lifecycle guard.");
-        Check(!AutoScaleService.IsDesktopWindowClass("Chrome_WidgetWin_1"),
-            "An ordinary foreground application was treated as the desktop.");
         Check(AutoScaleService.PlanDesktopCursorAction(
                   isScaling: true,
-                  isDesktopForeground: true,
-                  isSourceForeground: false,
-                  overrideActive: false) == AutoScaleService.DesktopCursorAction.Show,
+                  isScalingSessionForeground: false,
+                  overrideActive: false,
+                  magnificationInitialized: false,
+                  scalingWasObserved: false) == AutoScaleService.DesktopCursorAction.Show,
             "The desktop transition did not request a visible Windows cursor.");
         Check(AutoScaleService.PlanDesktopCursorAction(
                   isScaling: true,
-                  isDesktopForeground: true,
-                  isSourceForeground: false,
-                  overrideActive: true) == AutoScaleService.DesktopCursorAction.None,
+                  isScalingSessionForeground: false,
+                  overrideActive: true,
+                  magnificationInitialized: true,
+                  scalingWasObserved: true) == AutoScaleService.DesktopCursorAction.None,
             "The active desktop cursor override was repeatedly applied.");
         Check(AutoScaleService.PlanDesktopCursorAction(
                   isScaling: true,
-                  isDesktopForeground: false,
-                  isSourceForeground: true,
-                  overrideActive: true) == AutoScaleService.DesktopCursorAction.Hide,
+                  isScalingSessionForeground: true,
+                  overrideActive: true,
+                  magnificationInitialized: true,
+                  scalingWasObserved: true) == AutoScaleService.DesktopCursorAction.Hide,
             "Returning to the source did not return cursor ownership to Magpie.");
         Check(AutoScaleService.PlanDesktopCursorAction(
                   isScaling: true,
-                  isDesktopForeground: false,
-                  isSourceForeground: false,
-                  overrideActive: true) == AutoScaleService.DesktopCursorAction.None,
-            "An unrelated application was allowed to lose the visible system cursor.");
+                  isScalingSessionForeground: false,
+                  overrideActive: false,
+                  magnificationInitialized: false,
+                  scalingWasObserved: true) == AutoScaleService.DesktopCursorAction.Show,
+            "A direct Alt+Tab to an ordinary application did not expose the Windows cursor.");
         Check(AutoScaleService.PlanDesktopCursorAction(
                   isScaling: false,
-                  isDesktopForeground: false,
-                  isSourceForeground: false,
-                  overrideActive: true) == AutoScaleService.DesktopCursorAction.Release,
-            "Ending scaling did not preserve the visible system cursor.");
-        Check(!AutoScaleService.ShouldStopForUnavailableSource(
+                  isScalingSessionForeground: false,
+                  overrideActive: false,
+                  magnificationInitialized: true,
+                  scalingWasObserved: true) == AutoScaleService.DesktopCursorAction.Release,
+            "Ending scaling after a Hide call did not restore the system cursor.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: false,
+                  isScalingSessionForeground: false,
+                  overrideActive: false,
+                  magnificationInitialized: false,
+                  scalingWasObserved: true) == AutoScaleService.DesktopCursorAction.Release,
+            "Ending scaling without an earlier override did not restore Magpie's hidden cursor.");
+        Check(AutoScaleService.PlanDesktopCursorAction(
+                  isScaling: false,
+                  isScalingSessionForeground: false,
+                  overrideActive: false,
+                  magnificationInitialized: false,
+                  scalingWasObserved: false) == AutoScaleService.DesktopCursorAction.None,
+            "An idle app initialized the cursor override API without a scaling session.");
+        nint nextScalingWindow = new nint(73);
+        Check(AutoScaleService.PlanScalingSourceTracking(
                   isScaling: true,
-                  isDesktopForeground: true,
-                  isSourceLost: true),
-            "A desktop transition still stops the preserved Magpie session.");
-        Check(AutoScaleService.ShouldStopForUnavailableSource(
+                  currentEngineProcessId: 501,
+                  currentScalingWindow: nextScalingWindow,
+                  isSourceReady: false,
+                  sourceReadyWasObserved: true,
+                  trackedEngineProcessId: 500,
+                  trackedScalingWindow: scalingWindow,
+                  unavailableDuration: TimeSpan.FromSeconds(5)) ==
+              AutoScaleService.ScalingSourceTrackingAction.IgnoreUntilReady,
+            "A new pre-ready scaling session inherited stale state from the previous HWND.");
+        Check(AutoScaleService.PlanScalingSourceTracking(
                   isScaling: true,
-                  isDesktopForeground: false,
-                  isSourceLost: true),
-            "An unavailable source outside a desktop transition was ignored.");
+                  currentEngineProcessId: 500,
+                  currentScalingWindow: scalingWindow,
+                  isSourceReady: false,
+                  sourceReadyWasObserved: true,
+                  trackedEngineProcessId: 500,
+                  trackedScalingWindow: scalingWindow,
+                  unavailableDuration: TimeSpan.FromMilliseconds(700)) ==
+              AutoScaleService.ScalingSourceTrackingAction.WaitForGrace,
+            "One transient missing-source sample stopped the Magpie session.");
+        Check(AutoScaleService.PlanScalingSourceTracking(
+                  isScaling: true,
+                  currentEngineProcessId: 500,
+                  currentScalingWindow: scalingWindow,
+                  isSourceReady: false,
+                  sourceReadyWasObserved: true,
+                  trackedEngineProcessId: 500,
+                  trackedScalingWindow: scalingWindow,
+                  unavailableDuration: TimeSpan.FromMilliseconds(800)) ==
+              AutoScaleService.ScalingSourceTrackingAction.VerifyAndStop,
+            "A stale source in the same observed session skipped the guarded stop check.");
+        Check(AutoScaleService.PlanScalingSourceTracking(
+                  isScaling: true,
+                  currentEngineProcessId: 501,
+                  currentScalingWindow: nextScalingWindow,
+                  isSourceReady: true,
+                  sourceReadyWasObserved: false,
+                  trackedEngineProcessId: 0,
+                  trackedScalingWindow: nint.Zero,
+                  unavailableDuration: TimeSpan.Zero) ==
+              AutoScaleService.ScalingSourceTrackingAction.ObserveReady,
+            "A ready replacement session was not adopted as the new identity.");
+
+        MagpieEngineService.ScalingSessionIdentity expectedSession = new(
+            EngineProcessId: 500,
+            scalingWindow,
+            sourceWindow,
+            SourceProcessId: 77);
+        MagpieEngineService.ScalingSessionSnapshot staleSession = new(
+            EngineProcessId: 500,
+            scalingWindow,
+            SourceWindow: nint.Zero,
+            SourceProcessId: 0,
+            IsActive: true,
+            IsSourceReady: false);
+        Check(MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession,
+                expectedSourceStillAlive: false),
+            "A rechecked stale session whose game process exited was not stopped.");
+        Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession,
+                expectedSourceStillAlive: true),
+            "A live game window was killed only because Magpie temporarily cleared its source property.");
+        Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession with { EngineProcessId = 501 },
+                expectedSourceStillAlive: false),
+            "A delayed timer observation killed a replacement Magpie process.");
+        Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession with { ScalingWindow = nextScalingWindow },
+                expectedSourceStillAlive: false),
+            "A delayed timer observation killed a different replacement scaling session.");
+        Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession with
+                {
+                    SourceWindow = sourceWindow,
+                    SourceProcessId = 77,
+                    IsSourceReady = true
+                },
+                expectedSourceStillAlive: false),
+            "A source recovered while waiting for the operation lock but was still killed.");
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: true,
+                  isScaling: false,
+                  foregroundHandle: sourceWindow,
+                  foregroundProcessId: 77,
+                  lastTriggeredHandle: sourceWindow,
+                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Keep,
+            "A transient Magpie dropout re-armed the same game window.");
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: true,
+                  isScaling: false,
+                  foregroundHandle: nint.Zero,
+                  foregroundProcessId: 0,
+                  lastTriggeredHandle: sourceWindow,
+                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Keep,
+            "A temporarily invisible legacy game cleared the one-shot latch.");
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: true,
+                  isScaling: false,
+                  foregroundHandle: sourceWindow,
+                  foregroundProcessId: 78,
+                  lastTriggeredHandle: sourceWindow,
+                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Eligible,
+            "A new game process reusing an HWND was blocked by the old latch.");
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: false,
+                  isScaling: true,
+                  foregroundHandle: sourceWindow,
+                  foregroundProcessId: 77,
+                  lastTriggeredHandle: sourceWindow,
+                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Clear,
+            "Disabling automation did not explicitly re-arm its one-shot latch.");
         Check(AutoScaleService.PollingIntervalFor(isScaling: true) <=
               TimeSpan.FromMilliseconds(100),
             "Active scaling is not polled quickly enough to restore the cursor.");

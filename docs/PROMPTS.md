@@ -87,7 +87,7 @@
 ## 7. UI / оверлеи
 
 > Задача по UI: `<описание>`. Файлы: MainWindow.xaml(.cs),
-> HoverTranslationOverlay, ScreenTranslationOverlay, TrayIconService. Правила:
+> HoverTranslationOverlay, TrayIconService. Правила:
 > оверлеи не перехватывают клики (hit-test прозрачность), корректность при
 > Per-Monitor V2 DPI обязательна (эталон — 3200×2000 @ 200%), все
 > пользовательские строки по-русски. UI-поток не блокировать: тяжёлая работа —

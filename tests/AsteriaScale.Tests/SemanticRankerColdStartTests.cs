@@ -7,7 +7,7 @@ internal static class SemanticRankerColdStartTests
     {
         AppSettings settings = new()
         {
-            HoverTranslationMode = HoverTranslationModes.Screen,
+            HoverTranslationMode = HoverTranslationModes.Smart,
             SmartDictionaryRankerModel = SmartDictionaryRankerModels.Sandwich,
             // An incompatible persisted provider must remain explicit. The
             // profile applicator may not silently rewrite it to CPU.
@@ -25,18 +25,10 @@ internal static class SemanticRankerColdStartTests
                 return Task.CompletedTask;
             });
 
-        bool translated = await applicator.RunAfterApplyAsync(
-            cancellationToken =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                events.Add("screen");
-                Check(activeProfile == RankerCpuModelProfile.Sandwich,
-                    "Screen translation ran before the persisted SANDWiCH profile was applied.");
-                return Task.FromResult(true);
-            });
-
-        Check(translated && events.SequenceEqual(["configure:Sandwich", "screen"]),
-            "Cold Screen startup did not configure SANDWiCH before the full-text scaffold.");
+        await applicator.ApplyAsync();
+        Check(activeProfile == RankerCpuModelProfile.Sandwich &&
+              events.SequenceEqual(["configure:Sandwich"]),
+            "Cold Smart startup did not apply the persisted SANDWiCH profile.");
         Check(settings.SmartDictionaryBackend == SmartDictionaryBackends.Npu,
             "Applying the semantic-ranker profile silently changed the requested provider.");
 
@@ -46,20 +38,12 @@ internal static class SemanticRankerColdStartTests
                 RankerCpuModelProfile.Consec,
             "The persisted ConSeC profile did not resolve to the independent CPU runtime.");
 
-        bool operationStarted = false;
         SemanticRankerProfileApplicator failingApplicator = new(
             settings,
             (_, _) => Task.FromException(
                 new InvalidOperationException("profile configuration failed")));
         await CheckThrowsAsync<InvalidOperationException>(() =>
-            failingApplicator.RunAfterApplyAsync(
-                _ =>
-                {
-                    operationStarted = true;
-                    return Task.FromResult(true);
-                }));
-        Check(!operationStarted,
-            "Screen translation continued after semantic-ranker profile configuration failed.");
+            failingApplicator.ApplyAsync());
     }
 
     private static async Task CheckThrowsAsync<TException>(Func<Task> action)

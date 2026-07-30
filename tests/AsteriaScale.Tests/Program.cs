@@ -27,8 +27,8 @@ try
             (benchmarkOnlyRankerArgument >= 0 ? 1 : 0) +
             (benchmarkOnlyRegisterArgument >= 0 ? 1 : 0) +
             (benchmarkOnlySentenceArgument >= 0 ? 1 : 0);
-        Assert(benchmarkFamilyCount <= 1,
-            "--benchmark-only accepts one benchmark family per invocation.");
+        Assert(benchmarkFamilyCount == 1,
+            "--benchmark-only requires exactly one ranker benchmark family per invocation.");
 
         if (benchmarkOnlySentenceArgument >= 0)
         {
@@ -96,17 +96,6 @@ try
             return 0;
         }
 
-        (string translationSet, string translationEngine, string? translationDump,
-            string? translationRankerBase) =
-            ParseTranslationBenchmarkArguments(args);
-        await RunAsync($"Full translation benchmark ({translationEngine})", () =>
-            TranslationBenchmark.RunAsync(
-                translationSet,
-                translationEngine,
-                translationDump,
-                translationRankerBase));
-        Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
-        return 0;
     }
 
     await RunAsync("Preset catalog", () =>
@@ -146,7 +135,6 @@ try
             SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
             SmartDictionaryRankerModel = SmartDictionaryRankerModels.Sandwich,
             SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.Japanese,
-            SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.OnDemand,
             SmartDictionaryKeepWarm = false,
             SmartPhraseTranslationMode = SmartPhraseTranslationModes.TranslateGemma,
             SmartPhraseTranslationBackend = SmartPhraseTranslationBackends.Vulkan,
@@ -182,16 +170,15 @@ try
         Assert(loaded.SmartDictionaryBackend == SmartDictionaryBackends.Cpu &&
                loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.Sandwich &&
                loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Japanese &&
-               loaded.SmartDictionaryFallbackMode == SmartDictionaryFallbackModes.OnDemand &&
                !loaded.SmartDictionaryKeepWarm &&
                loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.TranslateGemma &&
                loaded.SmartPhraseTranslationBackend == SmartPhraseTranslationBackends.Vulkan,
             "Smart dictionary settings were not preserved.");
-        Assert(HoverTranslationModes.Normalize("SCREEN") == HoverTranslationModes.Screen,
-            "Screen translation mode was not recognized.");
-        Assert(HoverTranslationModes.Normalize("SMART") == HoverTranslationModes.Smart,
-            "Smart dictionary mode was not recognized.");
-        Assert(HoverTranslationModes.NormalizeUserMode("DICTIONARY") ==
+        Assert(HoverTranslationModes.NormalizeUserMode("SCREEN") ==
+                   HoverTranslationModes.Smart &&
+               HoverTranslationModes.NormalizeUserMode("NEURAL") ==
+                   HoverTranslationModes.Smart &&
+               HoverTranslationModes.NormalizeUserMode("DICTIONARY") ==
                    HoverTranslationModes.Dictionary &&
                HoverTranslationModes.NormalizeUserMode("SMART") ==
                    HoverTranslationModes.Smart,
@@ -221,9 +208,6 @@ try
         Assert(SmartDictionarySourceLanguages.Normalize("EN") == SmartDictionarySourceLanguages.English &&
                SmartDictionarySourceLanguages.Normalize("unsupported") == SmartDictionarySourceLanguages.Auto,
             "Smart dictionary source-language normalization failed.");
-        Assert(SmartDictionaryFallbackModes.Normalize("AUTOMATIC") == SmartDictionaryFallbackModes.Automatic &&
-               SmartDictionaryFallbackModes.Normalize("unsupported") == SmartDictionaryFallbackModes.Never,
-            "Smart dictionary fallback normalization failed.");
         Assert(SmartPhraseTranslationModes.Normalize("TRANSLATEGEMMA-4B") ==
                SmartPhraseTranslationModes.TranslateGemma &&
                SmartPhraseTranslationModes.Normalize("unsupported") == SmartPhraseTranslationModes.Off,
@@ -270,7 +254,9 @@ try
     {
         string path = Path.Combine(tempRoot, "legacy-settings", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, "{\"hoverTranslationMode\":\"smart\"}");
+        await File.WriteAllTextAsync(
+            path,
+            "{\"hoverTranslationMode\":\"smart\",\"smartDictionaryFallbackMode\":\"automatic\",\"translationTargetLanguage\":\"ja\"}");
 
         AppSettings loaded = await new SettingsService(path).LoadAsync();
         Assert(loaded.SmartDictionaryBackend == SmartDictionaryBackends.Auto,
@@ -279,14 +265,17 @@ try
             "Existing settings must retain GlossBERT as the stable default ranker.");
         Assert(loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Auto,
             "Existing settings must default to automatic source-language detection.");
-        Assert(loaded.SmartDictionaryFallbackMode == SmartDictionaryFallbackModes.Never,
-            "Existing settings must not enable full-translation fallback.");
         Assert(loaded.SmartDictionaryKeepWarm,
             "Existing settings must keep the smart dictionary model warm by default.");
         Assert(loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.Off,
             "Existing settings must not silently enable the optional phrase model.");
         Assert(loaded.SmartPhraseTranslationBackend == SmartPhraseTranslationBackends.Cpu,
             "Existing settings must retain the compatible CPU phrase backend.");
+        await new SettingsService(path).SaveAsync(loaded);
+        string migratedJson = await File.ReadAllTextAsync(path);
+        Assert(!migratedJson.Contains("SmartDictionaryFallbackMode", StringComparison.OrdinalIgnoreCase) &&
+               !migratedJson.Contains("TranslationTargetLanguage", StringComparison.OrdinalIgnoreCase),
+            "Obsolete translation fallback settings were written back after migration.");
 
         string gpuPath = Path.Combine(tempRoot, "legacy-gpu-settings", "settings.json");
         Directory.CreateDirectory(Path.GetDirectoryName(gpuPath)!);
@@ -327,7 +316,7 @@ try
         ApplicationLifecycleSafetyTests.RunAsync);
 
     await RunAsync(
-        "Screen semantic-ranker cold start",
+        "Smart semantic-ranker cold start",
         SemanticRankerColdStartTests.RunAsync);
 
     await RunAsync("Local dictionary lookup", async () =>
@@ -529,7 +518,7 @@ try
                sighed.Translation.StartsWith(
                    "вздыхать; вздохнуть",
                    StringComparison.Ordinal) &&
-               !NpuDictionarySelectorService.SplitMeanings(sighed.Translation)
+               !DictionaryMeaningParser.SplitMeanings(sighed.Translation)
                    .Any(value => value is "вздохнул" or "вздохнула"),
             $"The VN-soft layer must keep 'sighed' gender-neutral while preserving broad senses: {sighed.Translation}");
 
@@ -1493,182 +1482,8 @@ try
         return Task.CompletedTask;
     });
 
-    await RunAsync("Foundry idle shutdown guard", () =>
+    await RunAsync("Translation sense fidelity guard", () =>
     {
-        Assert(FoundryTranslationService.ModelId == "qwen3.5-2b-text-generic-cpu:1",
-            "The full translator must use the explicitly pinned CPU variant.");
-        Assert(FoundryTranslationService.SmartDictionaryEngineLabel.Contains(
-                "CPU-КОНТЕКСТ",
-                StringComparison.Ordinal),
-            "The smart fallback label must report the actual Qwen provider.");
-        Assert(FoundryTranslationService.IsServerRunning("{\"running\":true,\"state\":\"ready\"}"),
-            "A running Foundry server was not recognized.");
-        Assert(!FoundryTranslationService.IsServerRunning("{\"running\":false,\"state\":\"not_running\"}"),
-            "A stopped Foundry server was treated as running.");
-        Assert(FoundryTranslationService.IsServerReadyAndIdle(
-                "{\"service\":{\"ready\":true},\"models\":{\"loaded\":0}}"),
-            "An idle Foundry server was not recognized.");
-        Assert(!FoundryTranslationService.IsServerReadyAndIdle(
-                "{\"service\":{\"ready\":true},\"models\":{\"loaded\":1}}"),
-            "A server with another loaded model must never be stopped.");
-        Assert(!FoundryTranslationService.IsServerReadyAndIdle("not json"),
-            "Malformed status must fail closed.");
-        return Task.CompletedTask;
-    });
-
-    await RunAsync("Residual English translation guard", async () =>
-    {
-        string bundledDictionaries = Path.Combine(AppContext.BaseDirectory, "Dictionaries");
-        string isolatedUserDictionaries = Path.Combine(tempRoot, "residual-guard-user");
-        Directory.CreateDirectory(isolatedUserDictionaries);
-        LocalDictionaryService dictionary = new(
-            bundledDictionaries,
-            isolatedUserDictionaries);
-        ResidualEnglishTranslationGuard guard = new(dictionary);
-
-        string repaired = await guard.ProtectAsync(
-            "She gave him a sideways glance.",
-            "Она поглядела sideways на него.");
-        Assert(repaired == "Она поглядела sideways на него.",
-            $"An ambiguous VN-soft word was used for blind residual repair: {repaired}");
-
-        string repairedPhrase = await guard.ProtectAsync(
-            "She gave him a sideways glance.",
-            "Она бросила на него sideways glance.");
-        Assert(repairedPhrase == "Она бросила на него взгляд искоса.",
-            $"The longest trusted VN phrase was not preferred: {repairedPhrase}");
-
-        string protectedTerms = "Alice показала GPU, DirectX12, WinML и H264 для Bob.";
-        string unchangedTerms = await guard.ProtectAsync(
-            "Alice showed GPU, DirectX12, WinML and H264 to Bob.",
-            protectedTerms);
-        Assert(unchangedTerms == protectedTerms,
-            $"Names, ALLCAPS and mixed technical terms must remain untouched: {unchangedTerms}");
-
-        string alreadyRussian = "Она уже посмотрела на него искоса.";
-        Assert(await guard.ProtectAsync(alreadyRussian, alreadyRussian) == alreadyRussian,
-            "Already-Russian text must bypass residual-English correction.");
-
-        string untranslatedFailure = "She gave him a sideways glance.";
-        Assert(await guard.ProtectAsync(untranslatedFailure, untranslatedFailure) == untranslatedFailure,
-            "An all-English model failure must not be rewritten word by word.");
-
-        string hallucinated = await guard.ProtectAsync(
-            "She looked away.",
-            "Она посмотрела sideways.");
-        Assert(hallucinated == "Она посмотрела sideways.",
-            "A Latin fragment absent from the source must not be replaced.");
-
-        await dictionary.UnloadAsync();
-    });
-
-    await RunAsync("Foundry batch translation response", async () =>
-    {
-        IReadOnlyDictionary<int, string> translated = FoundryTranslationService.ParseBatchResponse(
-            "```json\n{\"translations\":[{\"id\":2,\"text\":\"Добрый вечер\"},{\"id\":5,\"text\":\"До встречи\"}]}\n```");
-        Assert(translated.Count == 2 && translated[2] == "Добрый вечер" && translated[5] == "До встречи",
-            "Structured screen translations were not parsed by id.");
-        AssertThrows<System.Text.Json.JsonException>(
-            () => FoundryTranslationService.ParseBatchResponse(
-                "{\"items\":[{\"id\":2,\"text\":\"Good evening\"}]}"),
-            "An echoed INPUT items array was accepted as translated output.");
-        AssertThrows<System.Text.Json.JsonException>(
-            () => FoundryTranslationService.ParseBatchResponse(
-                "{\"translations\":[{\"id\":2,\"text\":\"\"}]}"),
-            "An empty batch translation was accepted.");
-        int emptyRetryCalls = 0;
-        string recovered = await FoundryTranslationService.RetryEmptyTranslationOnceAsync(
-            string.Empty,
-            _ =>
-            {
-                emptyRetryCalls++;
-                return Task.FromResult("Повторный перевод");
-            });
-        Assert(recovered == "Повторный перевод" && emptyRetryCalls == 1,
-            "An empty cleaned model response was not retried exactly once.");
-        string unchanged = await FoundryTranslationService.RetryEmptyTranslationOnceAsync(
-            "Готовый перевод",
-            _ => throw new InvalidOperationException("A non-empty response must not retry."));
-        Assert(unchanged == "Готовый перевод",
-            "A non-empty model response unexpectedly entered the content retry.");
-        await AssertThrowsAsync<InvalidOperationException>(
-            () => FoundryTranslationService.RetryEmptyTranslationOnceAsync(
-                " ",
-                _ => Task.FromResult(string.Empty)),
-            "Two empty model responses were silently accepted.");
-        Assert(!FoundryTranslationService.ShouldSelectFidelityRetry(
-                   string.Empty,
-                   initialMissingCount: 1,
-                   retryMissingCount: 1) &&
-               !FoundryTranslationService.ShouldSelectFidelityRetry(
-                   "Исправленный перевод",
-                   initialMissingCount: 1,
-                   retryMissingCount: 1) &&
-               FoundryTranslationService.ShouldSelectFidelityRetry(
-                   "Исправленный перевод",
-                   initialMissingCount: 2,
-                   retryMissingCount: 1) &&
-               FoundryTranslationService.ShouldSelectFidelityRetry(
-                   "Исправленный перевод",
-                   initialMissingCount: 0,
-                   retryMissingCount: 0,
-                   initialSenseConflictCount: 1,
-                   retrySenseConflictCount: 0) &&
-               !FoundryTranslationService.ShouldSelectFidelityRetry(
-                   "Исправленный перевод",
-                   initialMissingCount: 0,
-                   retryMissingCount: 0,
-                   initialSenseConflictCount: 1,
-                   retrySenseConflictCount: 1) &&
-               FoundryTranslationService.IsMeaningfulFidelityFix(
-                   "Первый перевод.",
-                   "Исправленный перевод.") &&
-               !FoundryTranslationService.IsMeaningfulFidelityFix(
-                   " Первый перевод. ",
-                   "первый   перевод!") &&
-               FoundryTranslationService.ContainsFidelityPromptEcho(
-                   "GlossBERT предложил значение. Перевод: исправленный текст") &&
-               !FoundryTranslationService.ContainsFidelityPromptEcho(
-                   "Обычный естественный перевод."),
-            "A fidelity retry was not selected by strict lexicographic improvement.");
-        FoundryTranslationService.FidelityRetryResponse keep =
-            FoundryTranslationService.ParseFidelityRetryResponse(" KEEP ");
-        FoundryTranslationService.FidelityRetryResponse fix =
-            FoundryTranslationService.ParseFidelityRetryResponse(
-                "FIX|Исправленный перевод.");
-        FoundryTranslationService.FidelityRetryResponse invalid =
-            FoundryTranslationService.ParseFidelityRetryResponse(
-                "Вот исправленный перевод.");
-        FoundryTranslationService.FidelityRetryResponse embellishedKeep =
-            FoundryTranslationService.ParseFidelityRetryResponse(
-                "KEEP|лишний текст");
-        Assert(keep.Action == FoundryTranslationService.FidelityRetryAction.Keep &&
-               fix.Action == FoundryTranslationService.FidelityRetryAction.Fix &&
-               fix.Translation == "Исправленный перевод." &&
-               invalid.Action == FoundryTranslationService.FidelityRetryAction.Invalid &&
-               embellishedKeep.Action == FoundryTranslationService.FidelityRetryAction.Invalid,
-            "The semantic review protocol accepted an ambiguous model response.");
-    });
-
-    await RunAsync("Translation scaffold prompt and fidelity guard", () =>
-    {
-        string emptyPrompt = FoundryTranslationService.BuildTranslationPrompt(
-            "Please wait.",
-            TranslationScaffold.Empty);
-        // The register rule is mandatory in every full-text prompt (roadmap
-        // #14.2C): without it the model drifts toward the polite reading, and
-        // fidelity is symmetric — neither soften nor spice up the original.
-        const string registerRule =
-            "Сохрани уровень грубости, разговорности и откровенности оригинала: не смягчай, " +
-            "не цензурируй и не добавляй того, чего в оригинале нет.\n";
-        Assert(emptyPrompt ==
-               "Переведи реплику визуальной новеллы на русский. Только перевод, без пояснений.\n" +
-               registerRule +
-               "Реплика: Please wait.",
-            $"The empty scaffold prompt changed unexpectedly: {emptyPrompt}");
-        Assert(!emptyPrompt.Contains("Обязательная терминология", StringComparison.Ordinal),
-            "An empty scaffold must omit the terminology section entirely.");
-
         TranslationScaffold full = new(
             [
                 new ScaffoldTerm("on the verge of", "на гра\u0301ни", 0.995),
@@ -1687,69 +1502,6 @@ try
                     TranslationScaffoldBuilder.MinimumConfidence)
             ]
         };
-        string fullPrompt = FoundryTranslationService.BuildTranslationPrompt(
-            "Yuki was on the verge of tears.",
-            full);
-        Assert(fullPrompt.Contains(
-                   "Обязательная терминология:\n- on the verge of → на грани\n- Yuki → Юки\n",
-                   StringComparison.Ordinal) &&
-               fullPrompt.EndsWith(
-                    "Реплика: Yuki was on the verge of tears.",
-                    StringComparison.Ordinal) &&
-               !fullPrompt.Contains("GlossBERT", StringComparison.Ordinal),
-            $"The full scaffold prompt does not match the roadmap template: {fullPrompt}");
-
-        string retryPrompt = FoundryTranslationService.BuildTranslationPrompt(
-            "Yuki was on the verge of tears.",
-            full,
-            [full.Terms[1]],
-            "Она была на грани слёз.");
-        Assert(retryPrompt.Contains(
-                   "В прошлом переводе термин «Yuki» передан неверно. Обязательно используй «Юки».",
-                   StringComparison.Ordinal) &&
-               retryPrompt.Contains("Переведи заново.", StringComparison.Ordinal) &&
-               retryPrompt.Contains("- Yuki → Юки", StringComparison.Ordinal) &&
-               !retryPrompt.Contains("Она была на грани слёз", StringComparison.Ordinal),
-            "The single deterministic retry did not reinforce the violated term.");
-
-        string senseReviewPrompt = FoundryTranslationService.BuildTranslationPrompt(
-            "Yuki was on the verge of tears.",
-            full,
-            violatedTerms: null,
-            previousTranslation: "Она была на грани слёз.",
-            senseHints: full.SenseHints);
-        Assert(senseReviewPrompt.StartsWith(
-                   "Review a Russian translation of a visual-novel line.",
-                   StringComparison.Ordinal) &&
-               senseReviewPrompt.Contains(
-                   "English source: Yuki was on the verge of tears.",
-                   StringComparison.Ordinal) &&
-               senseReviewPrompt.Contains(
-                   "Previous Russian translation: Она была на грани слёз.",
-                   StringComparison.Ordinal) &&
-               senseReviewPrompt.Contains(
-                   "- tears: drops of clear salty liquid secreted from the eyes",
-                   StringComparison.Ordinal) &&
-               senseReviewPrompt.Contains("output exactly KEEP", StringComparison.Ordinal) &&
-               senseReviewPrompt.Contains("FIX|", StringComparison.Ordinal),
-            "The Qwen semantic review prompt did not preserve its strict protocol.");
-
-        FoundryTranslationService.BatchItem[] batch =
-        [
-            new(3, "Yuki waited.", full, "cache-3"),
-            new(7, "Please wait.", TranslationScaffold.Empty, "cache-7")
-        ];
-        string batchPrompt = FoundryTranslationService.BuildBatchTranslationPrompt(batch);
-        Assert(batchPrompt.Contains(
-                   "\"id\":3,\"text\":\"Yuki waited.\",\"terminology\":[",
-                   StringComparison.Ordinal) &&
-               batchPrompt.Contains("\"source\":\"Yuki\",\"translation\":\"Юки\"",
-                    StringComparison.Ordinal) &&
-               !batchPrompt.Contains("senseHints", StringComparison.Ordinal) &&
-               batchPrompt.Contains("\"id\":7,\"text\":\"Please wait.\"}",
-                   StringComparison.Ordinal),
-            $"Batch terminology was not associated with its own id: {batchPrompt}");
-
         Assert(NeuralSenseFidelityGuard.FindConflictingHints(
                     "Её глаза наполнились разрывами.",
                     full.SenseHints).Count == 1 &&
@@ -1823,42 +1575,14 @@ try
                 "Совсем другой перевод.",
                 [new ScaffoldTerm("uncertain", "термин", 0.89)]).Count == 0,
             "Terms below the frozen confidence floor must not trigger a retry.");
-        string cleanedEcho = FoundryTranslationService.CleanModelOutput(
-            "В прошлом переводе термин «ceremony» передан неверно. " +
-            "Обязательная терминология: - ceremony → церемония " +
-            "Реплика: Церемония начнётся ровно в полдень.");
-        Assert(cleanedEcho == "Церемония начнётся ровно в полдень.",
-            $"A retry prompt echo leaked into the visible translation: {cleanedEcho}");
-        string cleanedFullEcho = FoundryTranslationService.CleanModelOutput(
-            "В прошлом переводе термин «Yuki» передан неверно. " +
-            "Обязательная терминология: - Yuki → Юки " +
-            "Реплика: Yuki waited. Перевод: Юки ждала.",
-            "Yuki waited.");
-        Assert(cleanedFullEcho == "Юки ждала.",
-            $"An echoed source and output marker leaked into the visible translation: {cleanedFullEcho}");
-        Assert(FoundryTranslationService.CleanModelOutput(
-                   "Вот перевод:",
-                   "Here is the translation:") == "Вот перевод:",
-            "A legitimate translation containing an output-marker word was truncated.");
         return Task.CompletedTask;
     });
 
-    await RunAsync("Smart dictionary response", () =>
+    await RunAsync("Smart dictionary meaning parser", () =>
     {
-        NpuDictionarySelectorService.ParsedSelection parsed =
-            NpuDictionarySelectorService.ParseSelectionResponse("1", 2);
-        Assert(parsed.Index == 1 && parsed.Confidence == 0.9 &&
-               parsed.ContextTranslation.Length == 0,
-            "The short smart-dictionary class response was not parsed.");
-        NpuDictionarySelectorService.ParsedSelection legacyJson =
-            NpuDictionarySelectorService.ParseSelectionResponse(
-                "```json\n{\"translation\":\"ignored\",\"index\":0,\"confidence\":0.12}\n```",
-                2);
-        Assert(legacyJson.Index == 0 && legacyJson.ContextTranslation.Length == 0,
-            "Legacy JSON must remain readable without using generated translation or confidence.");
-        string[] meanings = NpuDictionarySelectorService.SplitMeanings("банк; берег; банк");
+        string[] meanings = DictionaryMeaningParser.SplitMeanings("банк; берег; банк");
         Assert(meanings.SequenceEqual(["банк", "берег"]),
-            "Dictionary meanings were not normalized for NPU selection.");
+            "Dictionary meanings were not normalized for semantic ranking.");
         return Task.CompletedTask;
     });
 
@@ -2013,6 +1737,17 @@ try
                 "English");
         Assert(distantRiver is null,
             $"A cue from another clause must not decide the hovered meaning: {distantRiver}");
+
+        const string damagedFileContext = "t those files still in the recycle bin, though?\"";
+        SmartDictionaryHeuristicSelection? digitalFile =
+            SmartDictionaryHeuristicRanker.TrySelect(
+                damagedFileContext,
+                "files",
+                damagedFileContext.IndexOf("files", StringComparison.Ordinal),
+                ["дело", "папка", "досье", "файл"],
+                "English");
+        Assert(digitalFile is { Translation: "файл", Confidence: >= 0.9 },
+            $"Digital-storage cues must select file despite damaged OCR context: {digitalFile}");
 
         SmartDictionaryHeuristicSelection? animalBat =
             SmartDictionaryHeuristicRanker.TrySelect(
@@ -2714,6 +2449,7 @@ try
                      Path.Combine(translationDirectory, "translation-benchmark.json")
                  })
         {
+            TranslationBenchmark.ValidateSetSchema(setPath);
             using System.Text.Json.JsonDocument set =
                 System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(setPath));
             int caseCount = 0;
@@ -2917,6 +2653,24 @@ try
             "The speaker label or preceding sentence leaked into neural translation context.");
         Assert(context.Text[context.CharacterIndex..].StartsWith("able", StringComparison.Ordinal),
             "The hovered character position was not preserved after line reconstruction.");
+
+        OcrLineGeometry[] interleavedLines =
+        [
+            new("You will lead the", 120, 180, 690, 230),
+            new("Q.Save", 1500, 245, 1680, 285),
+            new("rest of your life tortured by paranoia, constantly", 118, 260, 1740, 310),
+            new("questioning whether the person has read your writings!", 119, 340, 1810, 390)
+        ];
+        SentenceContext interleaved = WindowsAiOcrService.BuildSentenceContext(
+            interleavedLines,
+            0,
+            9);
+        Assert(interleaved.Text ==
+               "You will lead the rest of your life tortured by paranoia, constantly " +
+               "questioning whether the person has read your writings!",
+            "An unrelated UI line between dialogue rows interrupted spatial sentence assembly.");
+        Assert(!interleaved.Text.Contains("Q.Save", StringComparison.Ordinal),
+            "An unrelated side control leaked into the dialogue sentence.");
         return Task.CompletedTask;
     });
 
@@ -2927,6 +2681,44 @@ try
             28);
         Assert(english.Text == "This is the complete second sentence!",
             "English sentence boundaries were not respected.");
+
+        const string titledAddressee =
+            "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe. " +
+            "I would appreciate it if you could forgive him.";
+        const string expectedTitledSentence =
+            "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe.";
+        foreach (string titledTarget in new[] { "effort", "Giraffe" })
+        {
+            SentenceContext titled = WindowsAiOcrService.ExtractSentence(
+                titledAddressee,
+                titledAddressee.IndexOf(titledTarget, StringComparison.Ordinal));
+            Assert(titled.Text == expectedTitledSentence,
+                $"An English title truncated the OCR sentence around '{titledTarget}': '{titled.Text}'");
+        }
+
+        const string scientificAbbreviations =
+            "Dr. Rivera reviewed Fig. 2 carefully. The result was conclusive.";
+        SentenceContext scientific = WindowsAiOcrService.ExtractSentence(
+            scientificAbbreviations,
+            scientificAbbreviations.IndexOf("reviewed", StringComparison.Ordinal));
+        Assert(scientific.Text == "Dr. Rivera reviewed Fig. 2 carefully.",
+            $"Scientific abbreviations corrupted the OCR sentence: '{scientific.Text}'");
+
+        foreach ((string source, string target, string expected) in new[]
+                 {
+                     ("No. I refuse.", "I", "I refuse."),
+                     ("Wait 5 sec. Then go.", "Wait", "Wait 5 sec."),
+                     ("Option A. Next choice.", "Option", "Option A."),
+                     ("John Smith Jr. He left.", "John", "John Smith Jr."),
+                     ("He only said \"Dr.\" I left.", "Dr", "He only said \"Dr.\"")
+                 })
+        {
+            SentenceContext separate = WindowsAiOcrService.ExtractSentence(
+                source,
+                source.IndexOf(target, StringComparison.Ordinal));
+            Assert(separate.Text == expected,
+                $"An ambiguous abbreviation merged separate sentences: '{separate.Text}'");
+        }
 
         SentenceContext japanese = WindowsAiOcrService.ExtractSentence(
             "彼は来た。私はここで待っている！次は？",
@@ -2976,6 +2768,21 @@ try
             5);
         Assert(quoted.Text == "\"Wait...\"",
             $"A quoted ellipsis lost its closing quote: '{quoted.Text}'");
+
+        const string damagedFuture = "\"You'11 go to the afterlife after you grow old and die!";
+        SentenceContext repairedFuture = WindowsAiOcrService.ExtractSentence(
+            damagedFuture,
+            damagedFuture.IndexOf("afterlife", StringComparison.Ordinal));
+        Assert(repairedFuture.Text == "You'll go to the afterlife after you grow old and die!",
+            $"A proven OCR contraction or unmatched dialogue quote was not repaired: '{repairedFuture.Text}'");
+        Assert(repairedFuture.Text[repairedFuture.CharacterIndex..]
+                .StartsWith("afterlife", StringComparison.Ordinal),
+            "OCR edge repair displaced the hovered word index.");
+
+        string longSentence = string.Join(" ", Enumerable.Repeat("word", 100)) + ".";
+        SentenceContext preservedLong = WindowsAiOcrService.ExtractSentence(longSentence, 250);
+        Assert(preservedLong.Text == longSentence && preservedLong.Text.Length > 420,
+            "OCR silently sliced a long sentence instead of preserving or rejecting it as a whole.");
         return Task.CompletedTask;
     });
 
@@ -3112,6 +2919,45 @@ try
                    IsSentenceContextStable: true
                } && !usedSecond,
             "Identical OCR observations should stabilize without replacing the first geometry.");
+
+        HoverOcrResult dangling = complete with
+        {
+            Text = "You will lead the",
+            HoveredWord = "lead",
+            CharacterIndex = 9
+        };
+        HoverOcrResult? danglingStable = WindowsAiOcrService.StabilizeSentenceContext(
+            dangling,
+            dangling,
+            out usedSecond);
+        Assert(danglingStable is { IsSentenceContextStable: false },
+            "Two identical OCR fragments without a proven sentence ending were marked complete.");
+
+        HoverOcrResult missingStart = complete with
+        {
+            Text = "t those files still in the recycle bin, though?\"",
+            HoveredWord = "files",
+            CharacterIndex = 8
+        };
+        HoverOcrResult? missingStartStable = WindowsAiOcrService.StabilizeSentenceContext(
+            missingStart,
+            missingStart,
+            out usedSecond);
+        Assert(missingStartStable is { IsSentenceContextStable: false },
+            "An OCR fragment with a visibly missing sentence start reached TranslateGemma.");
+
+        HoverOcrResult speakerPrefixedMissingStart = missingStart with
+        {
+            Text = "[Park staff] t those files still in the recycle bin, though?\"",
+            CharacterIndex = 21
+        };
+        HoverOcrResult? speakerPrefixedMissingStartStable =
+            WindowsAiOcrService.StabilizeSentenceContext(
+                speakerPrefixedMissingStart,
+                speakerPrefixedMissingStart,
+                out usedSecond);
+        Assert(speakerPrefixedMissingStartStable is { IsSentenceContextStable: false },
+            "A speaker label disguised the missing start of an OCR dialogue fragment.");
 
         HoverOcrResult incompatible = complete with
         {
@@ -3320,227 +3166,6 @@ try
             "The Magpie process owned by the integration test did not stop cleanly.");
     });
 
-    if (args.Any(arg => string.Equals(arg, "--foundry-live", StringComparison.OrdinalIgnoreCase)))
-    {
-        await RunAsync("Foundry live idle shutdown", async () =>
-        {
-            FoundryTranslationService translator = new();
-            try
-            {
-                await translator.WarmUpAsync();
-                Assert(Process.GetProcessesByName("foundrylocald").Length > 0,
-                    "Foundry server did not start during neural warm-up.");
-                IReadOnlyList<string> screenTranslation = await translator.TranslateManyToRussianAsync(
-                    ["Good evening.", "We should go home now!"],
-                    CancellationToken.None);
-                Assert(screenTranslation.Count == 2 &&
-                       screenTranslation.All(text => text.Any(character => character is >= 'А' and <= 'я')),
-                    "The live model did not return two Russian screen translations.");
-            }
-            finally
-            {
-                await translator.DisposeAsync();
-            }
-
-            DateTime deadline = DateTime.UtcNow.AddSeconds(10);
-            while (DateTime.UtcNow < deadline && Process.GetProcessesByName("foundrylocald").Length > 0)
-            {
-                await Task.Delay(200);
-            }
-
-            Assert(Process.GetProcessesByName("foundrylocald").Length == 0,
-                "Idle Foundry server remained alive after the neural translator was disposed.");
-        });
-    }
-
-    if (args.Any(arg => string.Equals(arg, "--smart-live", StringComparison.OrdinalIgnoreCase)))
-    {
-        await RunAsync("Smart dictionary live NPU", async () =>
-        {
-            Process currentProcess = Process.GetCurrentProcess();
-            currentProcess.Refresh();
-            long privateBefore = currentProcess.PrivateMemorySize64;
-            await using NpuDictionarySelectorService selector = new();
-            Stopwatch npuWarmTimer = Stopwatch.StartNew();
-            await selector.WarmUpAsync();
-            npuWarmTimer.Stop();
-            Stopwatch npuRiverTimer = Stopwatch.StartNew();
-            SmartDictionarySelection river = await selector.SelectAsync(
-                "I sat on the bank of the river.",
-                "bank",
-                13,
-                ["банк", "берег"],
-                CancellationToken.None);
-            npuRiverTimer.Stop();
-            Console.WriteLine($"    river raw: {river.Translation} | {river.ContextTranslation} | {river.Confidence:P0}");
-            Assert(river.Translation == "берег",
-                $"River-bank context selected '{river.Translation}' from '{river.ContextTranslation}'.");
-
-            Stopwatch npuAnimalTimer = Stopwatch.StartNew();
-            SmartDictionarySelection animal = await selector.SelectAsync(
-                "A bat flew out of the cave.",
-                "bat",
-                2,
-                ["летучая мышь", "бита"],
-                CancellationToken.None);
-            npuAnimalTimer.Stop();
-            Console.WriteLine($"    animal raw: {animal.Translation} | {animal.ContextTranslation} | {animal.Confidence:P0}");
-            Assert(animal.Translation == "летучая мышь",
-                $"Animal-bat context selected '{animal.Translation}'.");
-
-            SmartDictionarySelection teetering = await selector.SelectAsync(
-                "He felt like he was teetering on the verge of utter confusion.",
-                "teetering",
-                20,
-                ["балансировать", "шататься", "быть на грани"],
-                "English",
-                CancellationToken.None);
-            Assert(teetering.Translation == "быть на грани",
-                $"Teetering context selected '{teetering.Translation}'.");
-
-            SmartDictionarySelection sighed = await selector.SelectAsync(
-                "He shook his head and sighed.",
-                "sighed",
-                23,
-                ["вздохнуть"],
-                "English",
-                CancellationToken.None);
-            Assert(sighed.Translation == "вздохнуть",
-                $"Sighed context selected '{sighed.Translation}'.");
-
-            SmartDictionarySelection beaming = await selector.SelectAsync(
-                "A beaming, innocent smile appeared on her shining face.",
-                "beaming",
-                3,
-                ["сияющий", "лучезарный", "сияющий от счастья"],
-                "English",
-                CancellationToken.None);
-            Assert(beaming.Translation is "сияющий" or "лучезарный" or "сияющий от счастья",
-                $"Beaming context selected '{beaming.Translation}'.");
-
-            int stableWorkerProcessId = selector.WorkerProcessId
-                                        ?? throw new InvalidOperationException("NPU worker disappeared before cancellation test.");
-            bool cancellationObserved = false;
-            Stopwatch cancellationTimer = Stopwatch.StartNew();
-            using (CancellationTokenSource movedCursor = new(TimeSpan.FromMilliseconds(50)))
-            {
-                try
-                {
-                    await selector.SelectAsync(
-                        "The crane spread its wings.",
-                        "crane",
-                        4,
-                        ["подъёмный кран", "журавль"],
-                        "English",
-                        movedCursor.Token);
-                }
-                catch (OperationCanceledException)
-                {
-                    cancellationObserved = true;
-                    // Expected: the UI no longer needs this result.
-                }
-            }
-            cancellationTimer.Stop();
-
-            Assert(cancellationObserved,
-                "The abandoned hover request did not observe cursor cancellation.");
-            Assert(cancellationTimer.Elapsed < TimeSpan.FromMilliseconds(750),
-                $"Cursor cancellation took {cancellationTimer.ElapsedMilliseconds:N0} ms.");
-            Assert(selector.WorkerProcessId == stableWorkerProcessId,
-                "Cursor cancellation killed the warm NPU worker.");
-            SmartDictionarySelection crane = await selector.SelectAsync(
-                "The crane spread its wings.",
-                "crane",
-                4,
-                ["подъёмный кран", "журавль"],
-                "English",
-                CancellationToken.None);
-            Assert(crane.Translation == "журавль",
-                $"The post-cancellation request selected '{crane.Translation}'.");
-            Console.WriteLine(
-                $"    NPU smart: bank={river.Translation} ({river.Confidence:P0}), " +
-                $"bat={animal.Translation}, teetering={teetering.Translation}, " +
-                $"sighed={sighed.Translation}, beaming={beaming.Translation}");
-            Console.WriteLine(
-                $"    timings: warm={npuWarmTimer.ElapsedMilliseconds:N0} ms, " +
-                $"bank={npuRiverTimer.ElapsedMilliseconds:N0} ms, " +
-                $"bat={npuAnimalTimer.ElapsedMilliseconds:N0} ms");
-
-            int workerProcessId = selector.WorkerProcessId
-                                  ?? throw new InvalidOperationException("NPU worker is not running after inference.");
-            using Process workerProcess = Process.GetProcessById(workerProcessId);
-            workerProcess.Refresh();
-            long workerPrivateLoaded = workerProcess.PrivateMemorySize64;
-            currentProcess.Refresh();
-            long privateLoaded = currentProcess.PrivateMemorySize64;
-            await selector.UnloadAsync();
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-            await Task.Delay(1200);
-            currentProcess.Refresh();
-            long privateUnloaded = currentProcess.PrivateMemorySize64;
-            Assert(!IsProcessRunning(workerProcessId),
-                "The isolated NPU worker remained alive after leaving smart mode.");
-            Console.WriteLine(
-                $"    private memory: host before={privateBefore / 1024d / 1024d:N0} MB, " +
-                $"host loaded={privateLoaded / 1024d / 1024d:N0} MB, " +
-                $"NPU worker={workerPrivateLoaded / 1024d / 1024d:N0} MB, " +
-                $"host after stop={privateUnloaded / 1024d / 1024d:N0} MB");
-
-            if (args.Any(arg => string.Equals(
-                    arg,
-                    "--smart-lifecycle",
-                    StringComparison.OrdinalIgnoreCase)))
-            {
-                await selector.WarmUpAsync();
-                int reloadedWorkerProcessId = selector.WorkerProcessId
-                                              ?? throw new InvalidOperationException("NPU worker did not restart.");
-                await selector.UnloadAsync();
-                Assert(!IsProcessRunning(reloadedWorkerProcessId),
-                    "The restarted NPU worker remained alive after its second stop.");
-                Console.WriteLine("    NPU model unload/reload lifecycle: ok");
-            }
-        });
-    }
-
-    if (args.Any(arg => string.Equals(arg, "--smart-gpu-live", StringComparison.OrdinalIgnoreCase)))
-    {
-        await RunAsync("Smart dictionary live GPU", async () =>
-        {
-            await using FoundryTranslationService selector = new();
-            Stopwatch warmTimer = Stopwatch.StartNew();
-            await selector.WarmUpAsync();
-            warmTimer.Stop();
-            Stopwatch riverTimer = Stopwatch.StartNew();
-            SmartDictionarySelection river = await selector.SelectDictionaryMeaningAsync(
-                "I sat on the bank of the river.",
-                "bank",
-                13,
-                ["банк", "берег"],
-                "English",
-                CancellationToken.None);
-            riverTimer.Stop();
-            Stopwatch animalTimer = Stopwatch.StartNew();
-            SmartDictionarySelection animal = await selector.SelectDictionaryMeaningAsync(
-                "A bat flew out of the cave.",
-                "bat",
-                2,
-                ["летучая мышь", "бита"],
-                "English",
-                CancellationToken.None);
-            animalTimer.Stop();
-            Assert(river.Translation == "берег",
-                $"GPU context selected '{river.Translation}' for river bank.");
-            Assert(animal.Translation == "летучая мышь",
-                $"GPU context selected '{animal.Translation}' for animal bat.");
-            Console.WriteLine(
-                $"    GPU timings: warm={warmTimer.ElapsedMilliseconds:N0} ms, " +
-                $"bank={riverTimer.ElapsedMilliseconds:N0} ms, " +
-                $"bat={animalTimer.ElapsedMilliseconds:N0} ms");
-        });
-    }
-
     int screenOcrImageArgument = Array.FindIndex(args, arg =>
         string.Equals(arg, "--screen-ocr-image", StringComparison.OrdinalIgnoreCase));
     if (screenOcrImageArgument >= 0)
@@ -3577,21 +3202,6 @@ try
                 ? "<none>"
                 : $"{diagnostic.Selection.HoveredWord} | {diagnostic.Selection.Text} | index={diagnostic.Selection.CharacterIndex}"));
         });
-    }
-
-    int translationBenchmarkArgument = Array.FindIndex(args, arg =>
-        string.Equals(arg, "--translation-benchmark", StringComparison.OrdinalIgnoreCase));
-    if (translationBenchmarkArgument >= 0)
-    {
-        (string translationSet, string translationEngine, string? translationDump,
-            string? translationRankerBase) =
-            ParseTranslationBenchmarkArguments(args);
-        await RunAsync($"Full translation benchmark ({translationEngine})", () =>
-            TranslationBenchmark.RunAsync(
-                translationSet,
-                translationEngine,
-                translationDump,
-                translationRankerBase));
     }
 
     int rankerBenchmarkArgument = Array.FindIndex(args, arg =>
@@ -3636,28 +3246,6 @@ try
         await RunAsync(
             $"Sentence semantic benchmark (CPU/{sentenceOptions.CpuModel})",
             () => RankerSentenceBenchmark.RunAsync(sentenceOptions));
-    }
-
-    // Live Qwen through Foundry Local: gated behind its own flag, like the other
-    // live modes, because AGENTS.md forbids invoking it unasked.
-    int translationRegisterArgument = Array.FindIndex(args, arg =>
-        string.Equals(arg, "--translation-register-benchmark", StringComparison.OrdinalIgnoreCase));
-    if (translationRegisterArgument >= 0)
-    {
-        Assert(args.Length > translationRegisterArgument + 1,
-            "Usage: --translation-register-benchmark <register-replies.json> [--translation-register-report <path>]");
-        int translationRegisterReport = Array.FindIndex(args, arg =>
-            string.Equals(arg, "--translation-register-report", StringComparison.OrdinalIgnoreCase));
-        Assert(translationRegisterReport < 0 ||
-               args.Length > translationRegisterReport + 1 &&
-               !args[translationRegisterReport + 1].StartsWith("--", StringComparison.Ordinal),
-            "--translation-register-report requires a file path.");
-        await RunAsync("Full-text register fidelity", () =>
-            TranslationRegisterBenchmark.RunAsync(
-                args[translationRegisterArgument + 1],
-                translationRegisterReport >= 0
-                    ? args[translationRegisterReport + 1]
-                    : null));
     }
 
     int registerBenchmarkArgument = Array.FindIndex(args, arg =>
@@ -3759,124 +3347,6 @@ async Task RunAsync(string name, Func<Task> test)
     await test();
     passed++;
     Console.WriteLine("ok  " + name);
-}
-
-static (string SetPath, string Engine, string? DumpPath, string? RankerBaseDirectory)
-    ParseTranslationBenchmarkArguments(
-    string[] arguments)
-{
-    const string usage =
-        "Usage: --translation-benchmark <set.json> [engine] [--ranker-base <directory>] " +
-        "[--dump <file>] [--benchmark-only]";
-    int benchmarkArgument = -1;
-    for (int index = 0; index < arguments.Length; index++)
-    {
-        if (!string.Equals(
-                arguments[index],
-                "--translation-benchmark",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            continue;
-        }
-
-        if (benchmarkArgument >= 0)
-        {
-            throw new InvalidOperationException(
-                "--translation-benchmark may be specified only once. " + usage);
-        }
-
-        benchmarkArgument = index;
-    }
-
-    if (benchmarkArgument < 0 ||
-        benchmarkArgument + 1 >= arguments.Length ||
-        string.IsNullOrWhiteSpace(arguments[benchmarkArgument + 1]) ||
-        arguments[benchmarkArgument + 1].StartsWith("--", StringComparison.Ordinal))
-    {
-        throw new InvalidOperationException(usage);
-    }
-
-    string setPath = arguments[benchmarkArgument + 1];
-    string engine =
-        benchmarkArgument + 2 < arguments.Length &&
-        !arguments[benchmarkArgument + 2].StartsWith("--", StringComparison.Ordinal)
-            ? arguments[benchmarkArgument + 2]
-            : "qwen";
-
-    int dumpArgument = -1;
-    for (int index = 0; index < arguments.Length; index++)
-    {
-        if (!string.Equals(arguments[index], "--dump", StringComparison.OrdinalIgnoreCase))
-        {
-            continue;
-        }
-
-        if (dumpArgument >= 0)
-        {
-            throw new InvalidOperationException("--dump may be specified only once. " + usage);
-        }
-
-        dumpArgument = index;
-    }
-
-    string? dumpPath = null;
-    if (dumpArgument >= 0)
-    {
-        if (dumpArgument + 1 >= arguments.Length ||
-            string.IsNullOrWhiteSpace(arguments[dumpArgument + 1]) ||
-            arguments[dumpArgument + 1].StartsWith("--", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("--dump requires a file path. " + usage);
-        }
-
-        dumpPath = arguments[dumpArgument + 1];
-    }
-
-    int rankerBaseArgument = -1;
-    for (int index = 0; index < arguments.Length; index++)
-    {
-        if (!string.Equals(arguments[index], "--ranker-base", StringComparison.OrdinalIgnoreCase))
-        {
-            continue;
-        }
-
-        if (rankerBaseArgument >= 0)
-        {
-            throw new InvalidOperationException(
-                "--ranker-base may be specified only once. " + usage);
-        }
-
-        rankerBaseArgument = index;
-    }
-
-    string? rankerBaseDirectory = null;
-    if (rankerBaseArgument >= 0)
-    {
-        if (rankerBaseArgument + 1 >= arguments.Length ||
-            string.IsNullOrWhiteSpace(arguments[rankerBaseArgument + 1]) ||
-            arguments[rankerBaseArgument + 1].StartsWith("--", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "--ranker-base requires a directory path. " + usage);
-        }
-
-        rankerBaseDirectory = arguments[rankerBaseArgument + 1];
-    }
-
-    bool neuralEngine = TranslationBenchmark.RequiresRankerBase(engine);
-    if (neuralEngine && rankerBaseDirectory is null)
-    {
-        throw new InvalidOperationException(
-            $"Engine '{engine}' requires --ranker-base. " + usage);
-    }
-
-    if (!neuralEngine && rankerBaseDirectory is not null)
-    {
-        throw new InvalidOperationException(
-            $"--ranker-base is valid only for a GlossBERT translation engine. {usage}");
-    }
-
-    return (setPath, engine, dumpPath, rankerBaseDirectory);
 }
 
 // Anything that was not exactly "npu" used to become CPU without a word, so a
@@ -4016,34 +3486,6 @@ static void AssertThrows<TException>(Action action, string message)
     }
 
     throw new InvalidOperationException(message);
-}
-
-static async Task AssertThrowsAsync<TException>(Func<Task> action, string message)
-    where TException : Exception
-{
-    try
-    {
-        await action();
-    }
-    catch (TException)
-    {
-        return;
-    }
-
-    throw new InvalidOperationException(message);
-}
-
-static bool IsProcessRunning(int processId)
-{
-    try
-    {
-        using Process process = Process.GetProcessById(processId);
-        return !process.HasExited;
-    }
-    catch (ArgumentException)
-    {
-        return false;
-    }
 }
 
 internal readonly record struct ParsedRankerBenchmarkOptions(

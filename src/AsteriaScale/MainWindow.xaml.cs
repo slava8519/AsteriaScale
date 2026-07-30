@@ -52,12 +52,6 @@ public partial class MainWindow : Window
         new("Английский → русский", SmartDictionarySourceLanguages.English),
         new("Японский → русский", SmartDictionarySourceLanguages.Japanese)
     ];
-    private static readonly IReadOnlyList<TranslationSettingOption> SmartFallbackOptions =
-    [
-        new("Не запускать — только словарь", SmartDictionaryFallbackModes.Never),
-        new("Только по моей команде", SmartDictionaryFallbackModes.OnDemand),
-        new("Автоматически", SmartDictionaryFallbackModes.Automatic)
-    ];
     private static readonly IReadOnlyList<MemoryPolicyOption> SmartMemoryPolicyOptions =
     [
         new("Всегда готова — быстрее", true),
@@ -135,9 +129,6 @@ public partial class MainWindow : Window
         SmartSourceLanguageComboBox.ItemsSource = SmartSourceLanguageOptions;
         SmartSourceLanguageComboBox.SelectedItem = SmartSourceLanguageOptions.First(option =>
             option.Id == SmartDictionarySourceLanguages.Normalize(_settings.SmartDictionarySourceLanguage));
-        SmartFallbackComboBox.ItemsSource = SmartFallbackOptions;
-        SmartFallbackComboBox.SelectedItem = SmartFallbackOptions.First(option =>
-            option.Id == SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode));
         SmartMemoryPolicyComboBox.ItemsSource = SmartMemoryPolicyOptions;
         SmartMemoryPolicyComboBox.SelectedItem = SmartMemoryPolicyOptions.First(option =>
             option.KeepWarm == _settings.SmartDictionaryKeepWarm);
@@ -673,7 +664,6 @@ public partial class MainWindow : Window
             SmartBackendComboBox.SelectedItem is not TranslationSettingOption backend ||
             SmartRankerModelComboBox.SelectedItem is not TranslationSettingOption rankerModel ||
             SmartSourceLanguageComboBox.SelectedItem is not TranslationSettingOption sourceLanguage ||
-            SmartFallbackComboBox.SelectedItem is not TranslationSettingOption fallback ||
             SmartMemoryPolicyComboBox.SelectedItem is not MemoryPolicyOption memoryPolicy ||
             SmartPhraseTranslationComboBox.SelectedItem is not TranslationSettingOption phraseTranslation ||
             SmartPhraseBackendComboBox.SelectedItem is not TranslationSettingOption phraseBackend)
@@ -701,8 +691,6 @@ public partial class MainWindow : Window
             SmartDictionaryRankerModels.Normalize(rankerModel.Id);
         _settings.SmartDictionarySourceLanguage =
             SmartDictionarySourceLanguages.Normalize(sourceLanguage.Id);
-        _settings.SmartDictionaryFallbackMode =
-            SmartDictionaryFallbackModes.Normalize(fallback.Id);
         _settings.SmartDictionaryKeepWarm = memoryPolicy.KeepWarm;
         _settings.SmartPhraseTranslationMode =
             SmartPhraseTranslationModes.Normalize(phraseTranslation.Id);
@@ -733,7 +721,7 @@ public partial class MainWindow : Window
             SetStatus(option.Id switch
             {
                 HoverTranslationModes.Smart => "Умный словарь включён — ускоритель и язык можно настроить ниже",
-                HoverTranslationModes.Dictionary => "Быстрый словарный перевод включён — Qwen больше не используется",
+                HoverTranslationModes.Dictionary => "Быстрый словарный перевод включён — без контекстной модели и перевода предложения",
                 _ => "Умный словарь включён"
             });
         }
@@ -781,12 +769,6 @@ public partial class MainWindow : Window
             SmartDictionarySourceLanguages.Japanese => "язык: японский",
             _ => "язык определяется автоматически"
         };
-        string fallback = SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) switch
-        {
-            SmartDictionaryFallbackModes.Automatic => "при отсутствии записи запустится полный перевод",
-            SmartDictionaryFallbackModes.OnDemand => "полный перевод — только по Alt+Shift+D",
-            _ => "если записи нет, полный перевод не запускается"
-        };
         string memory = _settings.SmartDictionaryKeepWarm
             ? "модель остаётся готовой, пока режим включён"
             : "при простое модель освобождает память";
@@ -796,7 +778,7 @@ public partial class MainWindow : Window
             : "показывается только словарный результат";
 
         SmartDictionarySettingsHint.Text =
-            $"{backend}; {ranker}; {language}; {fallback}; {phrase}; {memory}.";
+            $"{backend}; {ranker}; {language}; {phrase}; {memory}.";
     }
 
     private void UpdateSmartPhraseBackendAvailability()

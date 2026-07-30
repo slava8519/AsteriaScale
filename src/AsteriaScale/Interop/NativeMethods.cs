@@ -14,9 +14,6 @@ internal static class NativeMethods
     internal const uint KeyeventfKeyup = 0x0002;
     internal const uint InputKeyboard = 1;
     internal const uint WmHotkey = 0x0312;
-    internal const uint ModAlt = 0x0001;
-    internal const uint ModShift = 0x0004;
-    internal const uint ModNoRepeat = 0x4000;
     internal const int GwlExstyle = -20;
     internal const int WsExTransparent = 0x00000020;
     internal const int WsExToolwindow = 0x00000080;
@@ -26,9 +23,7 @@ internal static class NativeMethods
     internal const ushort VkMenu = 0x12;
     internal const ushort VkShift = 0x10;
     internal const ushort VkA = 0x41;
-    internal const ushort VkD = 0x44;
     internal const ushort VkQ = 0x51;
-    internal const ushort VkT = 0x54;
     internal static readonly nint HwndMessage = new(-3);
     internal static readonly nint HwndTopmost = new(-1);
 
@@ -113,9 +108,6 @@ internal static class NativeMethods
     internal static extern bool GetWindowRect(nint hWnd, out Rect rect);
 
     [DllImport("user32.dll")]
-    internal static extern nint MonitorFromWindow(nint hWnd, uint flags);
-
-    [DllImport("user32.dll")]
     internal static extern nint MonitorFromPoint(Point point, uint flags);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -175,14 +167,6 @@ internal static class NativeMethods
         int width,
         int height,
         uint flags);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool RegisterHotKey(nint hWnd, int id, uint modifiers, uint virtualKey);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool UnregisterHotKey(nint hWnd, int id);
 
     [DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(nint hWnd);

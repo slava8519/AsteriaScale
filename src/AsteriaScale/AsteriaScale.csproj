@@ -21,7 +21,6 @@
     <Description>Automatic real-time window upscaling for Windows, tuned for visual novels.</Description>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.AI.Foundry.Local.WinML" Version="1.1.0" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.8249" PrivateAssets="all" />
   </ItemGroup>

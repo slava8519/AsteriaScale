@@ -8,6 +8,7 @@ public sealed class AutoScaleService : IAsyncDisposable
 {
     private static readonly TimeSpan IdlePollingInterval = TimeSpan.FromMilliseconds(650);
     private static readonly TimeSpan ScalingPollingInterval = TimeSpan.FromMilliseconds(75);
+    private static readonly TimeSpan ScalingSourceGracePeriod = TimeSpan.FromMilliseconds(750);
 
     private readonly AppSettings _settings;
     private readonly WindowCatalogService _windowCatalog;
@@ -17,9 +18,15 @@ public sealed class AutoScaleService : IAsyncDisposable
     private nint _candidateHandle;
     private DateTime _candidateSince;
     private nint _lastTriggeredHandle;
+    private int _lastTriggeredProcessId;
     private Task? _activeTick;
     private bool _desktopCursorOverrideActive;
     private bool _magnificationInitialized;
+    private bool _scalingObserved;
+    private bool _cursorRestorePending;
+    private bool _scalingSourceReadyObserved;
+    private MagpieEngineService.ScalingSessionIdentity _scalingSessionIdentity;
+    private DateTime _scalingSourceUnavailableSince;
     private bool _disposed;
 
     internal enum DesktopCursorAction
@@ -28,6 +35,22 @@ public sealed class AutoScaleService : IAsyncDisposable
         Show,
         Hide,
         Release
+    }
+
+    internal enum AutomationLatchAction
+    {
+        Keep,
+        Clear,
+        Eligible
+    }
+
+    internal enum ScalingSourceTrackingAction
+    {
+        Reset,
+        ObserveReady,
+        IgnoreUntilReady,
+        WaitForGrace,
+        VerifyAndStop
     }
 
     public AutoScaleService(
@@ -98,30 +121,86 @@ public sealed class AutoScaleService : IAsyncDisposable
         cancellationToken.ThrowIfCancellationRequested();
 
         // Magpie keeps the system cursor hidden while it draws its scaled
-        // cursor. A desktop-only visibility override preserves the running
-        // session across Win+D without leaving Windows without a cursor.
+        // cursor. Expose the Windows cursor whenever focus leaves the source,
+        // while preserving the running session across Win+D and Alt+Tab.
         bool isScaling = _engine.IsScaling;
         _timer.Interval = PollingIntervalFor(isScaling);
-        bool isDesktopForeground = isScaling && IsDesktopForeground();
-        if (!UpdateDesktopCursorOverride(
-                PlanDesktopCursorAction(
-                    isScaling,
-                    isDesktopForeground,
-                    isScaling && _engine.IsScalingSourceForeground,
-                    _desktopCursorOverrideActive)))
+        if (isScaling)
         {
-            StatusChanged?.Invoke(this, "Не удалось вернуть курсор Windows — масштабирование остановлено");
-            await _engine.StopScalingAsync(cancellationToken);
-            return;
+            _scalingObserved = true;
+            _cursorRestorePending = true;
         }
 
-        if (ShouldStopForUnavailableSource(
-                isScaling,
-                isDesktopForeground,
-                isScaling && _engine.IsScalingSourceLost))
+        bool isScalingSessionForeground =
+            isScaling && _engine.IsScalingSessionForeground;
+        DesktopCursorAction cursorAction = PlanDesktopCursorAction(
+            isScaling,
+            isScalingSessionForeground,
+            _desktopCursorOverrideActive,
+            _magnificationInitialized,
+            _cursorRestorePending);
+        if (!UpdateDesktopCursorOverride(cursorAction))
         {
-            await _engine.StopScalingAsync(cancellationToken);
-            return;
+            // Cursor visibility is best-effort and retried on the next tick.
+            // Turning a transient Magnification API failure into a Magpie
+            // toggle creates the exact stop/restart loop this guard prevents.
+            StatusChanged?.Invoke(this, "Не удалось вернуть курсор Windows — повторная попытка");
+        }
+        else if (cursorAction == DesktopCursorAction.Release)
+        {
+            _cursorRestorePending = false;
+        }
+
+        if (!isScaling)
+        {
+            _scalingObserved = false;
+        }
+
+        MagpieEngineService.ScalingSessionSnapshot scalingSession = isScaling
+            ? _engine.GetScalingSessionSnapshot()
+            : default;
+        DateTime now = DateTime.UtcNow;
+        TimeSpan unavailableDuration = _scalingSourceUnavailableSince == default
+            ? TimeSpan.Zero
+            : now - _scalingSourceUnavailableSince;
+        ScalingSourceTrackingAction sourceAction = PlanScalingSourceTracking(
+            isScaling,
+            scalingSession.EngineProcessId,
+            scalingSession.ScalingWindow,
+            scalingSession.IsSourceReady,
+            _scalingSourceReadyObserved,
+            _scalingSessionIdentity.EngineProcessId,
+            _scalingSessionIdentity.ScalingWindow,
+            unavailableDuration);
+        switch (sourceAction)
+        {
+            case ScalingSourceTrackingAction.Reset:
+            case ScalingSourceTrackingAction.IgnoreUntilReady:
+                ResetScalingSourceTracking();
+                break;
+            case ScalingSourceTrackingAction.ObserveReady:
+                _scalingSourceReadyObserved = true;
+                _scalingSessionIdentity = scalingSession.Identity;
+                _scalingSourceUnavailableSince = default;
+                break;
+            case ScalingSourceTrackingAction.WaitForGrace:
+                if (_scalingSourceUnavailableSince == default)
+                {
+                    _scalingSourceUnavailableSince = now;
+                }
+
+                break;
+            case ScalingSourceTrackingAction.VerifyAndStop:
+                // The engine repeats all identity and liveness checks after
+                // acquiring its operation lock. A recovered/new session or a
+                // still-live game window is therefore never killed here.
+                await _engine.StopOwnedEngineIfSourceStillUnavailableAsync(
+                    _scalingSessionIdentity,
+                    cancellationToken);
+                _scalingSourceUnavailableSince = now;
+                return;
+            default:
+                throw new ArgumentOutOfRangeException();
         }
 
         WindowInfo? foreground = _windowCatalog.GetForegroundEligibleWindow();
@@ -130,27 +209,40 @@ public sealed class AutoScaleService : IAsyncDisposable
             LastEligibleWindow = foreground;
         }
 
-        if (!_settings.AutomationEnabled || _engine.IsScaling || foreground is null)
+        AutomationLatchAction latchAction = PlanAutomationLatch(
+            _settings.AutomationEnabled,
+            _engine.IsScaling,
+            foreground?.Handle ?? nint.Zero,
+            foreground?.ProcessId ?? 0,
+            _lastTriggeredHandle,
+            _lastTriggeredProcessId);
+        if (latchAction != AutomationLatchAction.Eligible)
         {
-            if (!_engine.IsScaling)
+            if (latchAction == AutomationLatchAction.Clear)
             {
                 _lastTriggeredHandle = nint.Zero;
+                _lastTriggeredProcessId = 0;
             }
 
             ResetCandidate();
             return;
         }
 
-        AutomationProfile? profile = _settings.Profiles.FirstOrDefault(p => p.Matches(foreground));
-        if (profile is null || foreground.Handle == _lastTriggeredHandle)
+        // Eligible guarantees a real foreground window distinct from the
+        // one-shot latch, while keeping the nullability proof local.
+        WindowInfo eligibleForeground = foreground ?? throw new InvalidOperationException(
+            "Automation latch admitted an empty foreground window.");
+        AutomationProfile? profile = _settings.Profiles.FirstOrDefault(
+            p => p.Matches(eligibleForeground));
+        if (profile is null)
         {
             ResetCandidate();
             return;
         }
 
-        if (_candidateHandle != foreground.Handle)
+        if (_candidateHandle != eligibleForeground.Handle)
         {
-            _candidateHandle = foreground.Handle;
+            _candidateHandle = eligibleForeground.Handle;
             _candidateSince = DateTime.UtcNow;
             return;
         }
@@ -164,12 +256,15 @@ public sealed class AutoScaleService : IAsyncDisposable
         {
             StatusChanged?.Invoke(this, string.Format("Автозапуск: {0}", profile.Name));
             await _engine.ScaleAsync(
-                foreground,
+                eligibleForeground,
                 PresetCatalog.Find(profile.PresetId),
                 profile.Windowed,
                 _settings.VisualNovelFrameRateLimit,
                 cancellationToken);
-            _lastTriggeredHandle = foreground.Handle;
+            _lastTriggeredHandle = eligibleForeground.Handle;
+            _lastTriggeredProcessId = eligibleForeground.ProcessId;
+            _scalingObserved = true;
+            _cursorRestorePending = true;
         }
         finally
         {
@@ -183,50 +278,96 @@ public sealed class AutoScaleService : IAsyncDisposable
         _candidateSince = default;
     }
 
-    private static bool IsDesktopForeground()
+    private void ResetScalingSourceTracking()
     {
-        nint foreground = NativeMethods.GetForegroundWindow();
-        if (foreground == nint.Zero)
-        {
-            return false;
-        }
-
-        string className = NativeMethods.ReadClassName(foreground);
-        return IsDesktopWindowClass(className);
+        _scalingSourceReadyObserved = false;
+        _scalingSessionIdentity = default;
+        _scalingSourceUnavailableSince = default;
     }
-
-    internal static bool IsDesktopWindowClass(string className) =>
-        className is "Progman" or "WorkerW" or "Shell_TrayWnd";
 
     internal static DesktopCursorAction PlanDesktopCursorAction(
         bool isScaling,
-        bool isDesktopForeground,
-        bool isSourceForeground,
-        bool overrideActive)
+        bool isScalingSessionForeground,
+        bool overrideActive,
+        bool magnificationInitialized,
+        bool scalingWasObserved)
     {
-        if (isScaling && isDesktopForeground)
-        {
-            return overrideActive ? DesktopCursorAction.None : DesktopCursorAction.Show;
-        }
-
-        if (!overrideActive)
-        {
-            return DesktopCursorAction.None;
-        }
-
         if (!isScaling)
         {
-            return DesktopCursorAction.Release;
+            return magnificationInitialized || scalingWasObserved
+                ? DesktopCursorAction.Release
+                : DesktopCursorAction.None;
         }
 
-        return isSourceForeground ? DesktopCursorAction.Hide : DesktopCursorAction.None;
+        if (!isScalingSessionForeground)
+        {
+            return overrideActive
+                ? DesktopCursorAction.None
+                : DesktopCursorAction.Show;
+        }
+
+        return overrideActive
+            ? DesktopCursorAction.Hide
+            : DesktopCursorAction.None;
     }
 
-    internal static bool ShouldStopForUnavailableSource(
+    internal static ScalingSourceTrackingAction PlanScalingSourceTracking(
         bool isScaling,
-        bool isDesktopForeground,
-        bool isSourceLost) =>
-        isScaling && isSourceLost && !isDesktopForeground;
+        int currentEngineProcessId,
+        nint currentScalingWindow,
+        bool isSourceReady,
+        bool sourceReadyWasObserved,
+        int trackedEngineProcessId,
+        nint trackedScalingWindow,
+        TimeSpan unavailableDuration)
+    {
+        if (!isScaling)
+        {
+            return ScalingSourceTrackingAction.Reset;
+        }
+
+        if (isSourceReady)
+        {
+            return ScalingSourceTrackingAction.ObserveReady;
+        }
+
+        if (!sourceReadyWasObserved ||
+            currentEngineProcessId <= 0 ||
+            currentScalingWindow == nint.Zero ||
+            currentEngineProcessId != trackedEngineProcessId ||
+            currentScalingWindow != trackedScalingWindow)
+        {
+            return ScalingSourceTrackingAction.IgnoreUntilReady;
+        }
+
+        return unavailableDuration >= ScalingSourceGracePeriod
+            ? ScalingSourceTrackingAction.VerifyAndStop
+            : ScalingSourceTrackingAction.WaitForGrace;
+    }
+
+    internal static AutomationLatchAction PlanAutomationLatch(
+        bool automationEnabled,
+        bool isScaling,
+        nint foregroundHandle,
+        int foregroundProcessId,
+        nint lastTriggeredHandle,
+        int lastTriggeredProcessId)
+    {
+        if (!automationEnabled)
+        {
+            return AutomationLatchAction.Clear;
+        }
+
+        if (isScaling || foregroundHandle == nint.Zero)
+        {
+            return AutomationLatchAction.Keep;
+        }
+
+        return foregroundHandle == lastTriggeredHandle &&
+               foregroundProcessId == lastTriggeredProcessId
+            ? AutomationLatchAction.Keep
+            : AutomationLatchAction.Eligible;
+    }
 
     private bool UpdateDesktopCursorOverride(DesktopCursorAction action)
     {
@@ -251,11 +392,19 @@ public sealed class AutoScaleService : IAsyncDisposable
                 // A visible cursor is safer than hiding it when ownership is uncertain.
                 return true;
             case DesktopCursorAction.Release:
-                if (TrySetSystemCursorVisible(visible: true))
+                if (!TrySetSystemCursorVisible(visible: true))
                 {
-                    _desktopCursorOverrideActive = false;
+                    return false;
                 }
 
+                _desktopCursorOverrideActive = false;
+
+                if (_magnificationInitialized && !NativeMethods.MagUninitialize())
+                {
+                    return false;
+                }
+
+                _magnificationInitialized = false;
                 return true;
             default:
                 throw new ArgumentOutOfRangeException(nameof(action));
@@ -307,16 +456,23 @@ public sealed class AutoScaleService : IAsyncDisposable
             }
         }
 
-        if (_desktopCursorOverrideActive && _magnificationInitialized)
+        if (_magnificationInitialized || _scalingObserved || _cursorRestorePending)
         {
-            NativeMethods.MagShowSystemCursor(true);
-            _desktopCursorOverrideActive = false;
-        }
+            // Hide is also our override. Always restore visibility before
+            // releasing the Magnification API, even if scaling ended mid-tick.
+            if (TrySetSystemCursorVisible(visible: true))
+            {
+                _desktopCursorOverrideActive = false;
+            }
 
-        if (_magnificationInitialized)
-        {
-            NativeMethods.MagUninitialize();
-            _magnificationInitialized = false;
+            if (_magnificationInitialized)
+            {
+                NativeMethods.MagUninitialize();
+                _magnificationInitialized = false;
+            }
+
+            _scalingObserved = false;
+            _cursorRestorePending = false;
         }
 
         _lifetimeCancellation.Dispose();

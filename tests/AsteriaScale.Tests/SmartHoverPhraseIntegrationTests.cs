@@ -119,8 +119,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: 0.95,
-            UsedFullFallback: false)
+            Confidence: 0.95)
         {
             SelectedSenseHints =
             [
@@ -172,8 +171,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
         SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
             Recognized(context, target),
@@ -219,8 +217,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
         SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
             recognized,
@@ -275,8 +272,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: true,
             Language: "EN",
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
         SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
             recognized,
@@ -365,8 +361,6 @@ internal static class SmartHoverPhraseIntegrationTests
               translator.PrepareCalls == 3 &&
               translator.TranslateCalls == 1,
             "A phrase-cache hit was served before current runtime validation completed.");
-        Check(fixture.FullFallbackCalls == 0,
-            "A phrase setup failure escalated into full-text fallback.");
     }
 
     private static async Task VerifyDictionaryMissStillGetsPhraseAsync(string root)
@@ -386,7 +380,6 @@ internal static class SmartHoverPhraseIntegrationTests
 
         SmartHoverResult miss = await fixture.Pipeline.ResolveSmartHoverAsync(
             recognized,
-            new AsteriaScale.Interop.NativeMethods.Point { X = 0, Y = 0 },
             SmartDictionaryBackends.Cpu,
             CancellationToken.None);
         SmartHoverPhraseLine? phrase = await fixture.Pipeline.TranslatePhraseLineAsync(
@@ -401,8 +394,8 @@ internal static class SmartHoverPhraseIntegrationTests
             Status: SmartPhraseLineStatus.Translated,
             Translation: "Вы говорите об этих великолепных бёдрах шириной 88 дюймов?"
         }, "A dictionary miss bypassed TranslateGemma instead of producing the second line.");
-        Check(translator.TranslateCalls == 1 && fixture.FullFallbackCalls == 0,
-            "A dictionary miss used the wrong neural fallback path.");
+        Check(translator.TranslateCalls == 1,
+            "A dictionary miss did not use TranslateGemma for its second line.");
     }
 
     private static async Task VerifyIdiomaticTranslationIsIndependentAsync(string root)
@@ -424,8 +417,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: 0.97,
-            UsedFullFallback: false);
+            Confidence: 0.97);
 
         SmartHoverPhraseLine? phrase = await fixture.Pipeline.TranslatePhraseLineAsync(
             Recognized(context, target),
@@ -467,8 +459,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: null,
-            UsedFullFallback: false);
+            Confidence: null);
 
         SmartHoverPhraseLine? phrase = await fixture.Pipeline.TranslatePhraseLineAsync(
             Recognized(context, target),
@@ -505,9 +496,8 @@ internal static class SmartHoverPhraseIntegrationTests
             Check(result is { Status: SmartPhraseLineStatus.Unavailable } &&
                   primary.Translation == "берег",
                 "A TranslateGemma exception discarded the primary dictionary result.");
-            Check(fixture.FullFallbackCalls == 0 &&
-                  await fixture.PhraseCache.CountAsync() == 0,
-                "A failed phrase generation launched fallback or poisoned its cache.");
+            Check(await fixture.PhraseCache.CountAsync() == 0,
+                "A failed phrase generation poisoned its cache.");
         }
 
         RecordingPhraseTranslator invalidTranslator = new()
@@ -557,8 +547,6 @@ internal static class SmartHoverPhraseIntegrationTests
 
         Check(translator.PrepareCalls == 0 && translator.TranslateCalls == 0,
             "Cancellation did not stop before scaffold or phrase generation.");
-        Check(fixture.FullFallbackCalls == 0,
-            "Phrase cancellation launched full-text fallback.");
     }
 
     private static async Task VerifyDisabledModeSkipsTranslatorAsync(string root)
@@ -604,8 +592,7 @@ internal static class SmartHoverPhraseIntegrationTests
             DictionaryFound: true,
             IsPhrase: false,
             Language: "EN",
-            Confidence: 0.91,
-            UsedFullFallback: false);
+            Confidence: 0.91);
 
     private static TranslationScaffoldNeuralRanker CreateAcceptingPhraseRanker(
         List<TranslationScaffoldNeuralRequest> requests) =>
@@ -741,7 +728,6 @@ internal static class SmartHoverPhraseIntegrationTests
             {
                 SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
                 SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.English,
-                SmartDictionaryFallbackMode = SmartDictionaryFallbackModes.Never,
                 SmartPhraseTranslationMode = phraseMode,
                 SmartPhraseTranslationBackend = SmartPhraseTranslationBackends.Cpu
             };
@@ -751,16 +737,7 @@ internal static class SmartHoverPhraseIntegrationTests
                 _selector,
                 _resultCache,
                 _decisionCache,
-                (_, _) =>
-                {
-                    FullFallbackCalls++;
-                    return Task.FromResult((
-                        Source: Context,
-                        Translation: "полнотекстовый fallback",
-                        Engine: "fixture fallback"));
-                },
                 static _ => { },
-                static (_, _) => { },
                 translator,
                 PhraseCache,
                 phraseNeuralRanker);
@@ -769,8 +746,6 @@ internal static class SmartHoverPhraseIntegrationTests
         public SmartHoverPipeline Pipeline { get; }
         public AppSettings Settings { get; }
         public SmartPhraseTranslationCache PhraseCache { get; }
-        public int FullFallbackCalls { get; private set; }
-
         public async ValueTask DisposeAsync()
         {
             Pipeline.Dispose();

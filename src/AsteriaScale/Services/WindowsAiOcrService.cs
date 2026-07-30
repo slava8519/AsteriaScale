@@ -302,7 +302,10 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         useSecondObservation = firstFitsSecond &&
                                (!secondFitsFirst || second.Text.Length > first.Text.Length);
         HoverOcrResult selected = useSecondObservation ? second : first;
-        return selected with { IsSentenceContextStable = true };
+        return selected with
+        {
+            IsSentenceContextStable = LooksLikeCompleteOcrSentence(selected.Text)
+        };
     }
 
     private static string[] SentenceComparisonTokens(string value) =>
@@ -338,23 +341,10 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         RegexOptions.CultureInvariant)]
     private static partial Regex SentenceComparisonTokenRegex();
 
-    internal async Task<ScreenOcrResult> RecognizeScreenAsync(
-        nint preferredWindow,
-        CancellationToken cancellationToken)
-    {
-        await EnsureReadyAsync();
-        cancellationToken.ThrowIfCancellationRequested();
-
-        Drawing.Rectangle bounds = MonitorBoundsForWindow(preferredWindow);
-        using Capture capture = CaptureBounds(bounds);
-        OcrRecognition? recognized = RecognizeBitmap(capture.Bitmap, cancellationToken);
-        if (recognized is null || recognized.Lines.Count == 0)
-        {
-            return new ScreenOcrResult(bounds, []);
-        }
-
-        return new ScreenOcrResult(bounds, BuildScreenBlocks(ExtractLineGeometries(recognized), bounds));
-    }
+    [GeneratedRegex(
+        @"\b(I|You|He|She|It|We|They)['\u2019][1Il]{2}\b",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex OcrFutureContractionRegex();
 
     internal async Task<ScreenOcrResult> RecognizeImageBlocksAsync(
         string path,
@@ -711,26 +701,32 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         }
 
         OcrLineGeometry selected = lines[selectedLineIndex];
-        List<OcrLineGeometry> ordered = lines
+        List<OcrLineGeometry> block = [selected];
+        HashSet<OcrLineGeometry> included = [selected];
+        OcrLineGeometry first = selected;
+        OcrLineGeometry last = selected;
+        while (FindAdjacentLine(lines, included, first, above: true) is { } previous)
+        {
+            block.Add(previous);
+            included.Add(previous);
+            first = previous;
+        }
+
+        while (FindAdjacentLine(lines, included, last, above: false) is { } next)
+        {
+            block.Add(next);
+            included.Add(next);
+            last = next;
+        }
+
+        List<OcrLineGeometry> ordered = block
             .OrderBy(line => line.Top)
             .ThenBy(line => line.Left)
             .ToList();
-        int anchor = ordered.IndexOf(selected);
-        int first = anchor;
-        int last = anchor;
-        while (first > 0 && LinesBelongToSameBlock(ordered[first - 1], ordered[first]))
-        {
-            first--;
-        }
-
-        while (last + 1 < ordered.Count && LinesBelongToSameBlock(ordered[last], ordered[last + 1]))
-        {
-            last++;
-        }
 
         StringBuilder merged = new();
         int mergedAnchor = 0;
-        for (int index = first; index <= last; index++)
+        for (int index = 0; index < ordered.Count; index++)
         {
             string text = Normalize(ordered[index].Text);
             if (text.Length == 0)
@@ -754,9 +750,36 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         return ExtractSentence(merged.ToString(), mergedAnchor);
     }
 
+    private static OcrLineGeometry? FindAdjacentLine(
+        IReadOnlyList<OcrLineGeometry> lines,
+        IReadOnlySet<OcrLineGeometry> included,
+        OcrLineGeometry edge,
+        bool above)
+    {
+        double edgeCenter = (edge.Top + edge.Bottom) / 2;
+        return lines
+            .Where(candidate =>
+                !included.Contains(candidate) &&
+                (above
+                    ? (candidate.Top + candidate.Bottom) / 2 < edgeCenter &&
+                      LinesBelongToSameBlock(candidate, edge)
+                    : (candidate.Top + candidate.Bottom) / 2 > edgeCenter &&
+                      LinesBelongToSameBlock(edge, candidate)))
+            .OrderBy(candidate => Math.Abs(
+                (candidate.Top + candidate.Bottom) / 2 - edgeCenter))
+            .ThenBy(candidate => Math.Abs(candidate.Left - edge.Left))
+            .FirstOrDefault();
+    }
+
     internal static SentenceContext ExtractSentence(string text, int characterIndex)
     {
-        text = Normalize(text);
+        string normalized = Normalize(text);
+        text = StripUnmatchedDialogueQuote(normalized);
+        if (normalized.Length > text.Length && normalized.EndsWith(text, StringComparison.Ordinal))
+        {
+            characterIndex -= normalized.Length - text.Length;
+        }
+
         if (text.Length == 0)
         {
             return new SentenceContext(string.Empty, 0);
@@ -783,13 +806,6 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         }
 
         string sentence = text[start..end];
-        if (sentence.Length > 420)
-        {
-            int relativeAnchor = Math.Clamp(anchor - start, 0, sentence.Length - 1);
-            int windowStart = Math.Clamp(relativeAnchor - 210, 0, sentence.Length - 420);
-            sentence = sentence.Substring(windowStart, 420).Trim();
-            start += windowStart;
-        }
 
         return new SentenceContext(
             sentence,
@@ -829,6 +845,48 @@ internal sealed partial class WindowsAiOcrService : IDisposable
 
     private static bool IsClosingQuote(char character) =>
         character is '"' or '\'' or '\u2019' or '\u201D' or '\u00BB' or '\u300D' or '\u300F' or '\u3011';
+
+    private static bool LooksLikeCompleteOcrSentence(string value)
+    {
+        string normalized = StripUnmatchedDialogueQuote(Normalize(value));
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        int end = normalized.Length - 1;
+        while (end >= 0 &&
+               (IsClosingQuote(normalized[end]) || normalized[end] is ')' or ']' or '}'))
+        {
+            end--;
+        }
+
+        if (end < 0 || normalized[end] is not ('.' or '!' or '?' or '\u2026' or '\u3002' or '\uFF01' or '\uFF1F'))
+        {
+            return false;
+        }
+
+        int start = SmartPhraseContextBuilder.FindDialogueStartAfterSpeakerMetadata(
+            normalized,
+            normalized.Length);
+        while (start <= end &&
+               (char.IsWhiteSpace(normalized[start]) ||
+                normalized[start] is '"' or '\'' or '\u2018' or '\u201C' or '\u00AB' or
+                    '(' or '[' or '{' or '-' or '\u2014' or '.' or '\u2026'))
+        {
+            start++;
+        }
+
+        if (start > end)
+        {
+            return false;
+        }
+
+        char firstCharacter = normalized[start];
+        return char.IsDigit(firstCharacter) ||
+               char.IsUpper(firstCharacter) ||
+               (char.IsLetter(firstCharacter) && firstCharacter is not (>= 'a' and <= 'z'));
+    }
 
     private static (double Left, double Top, double Right, double Bottom) BoundsOf(
         RecognizedTextBoundingBox box) =>
@@ -999,32 +1057,6 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         return System.Windows.Forms.SystemInformation.VirtualScreen;
     }
 
-    private static Drawing.Rectangle MonitorBoundsForWindow(nint window)
-    {
-        nint monitor = window != nint.Zero && NativeMethods.IsWindow(window)
-            ? NativeMethods.MonitorFromWindow(window, NativeMethods.MonitorDefaultToNearest)
-            : nint.Zero;
-        if (monitor == nint.Zero && NativeMethods.GetCursorPos(out NativeMethods.Point cursor))
-        {
-            monitor = NativeMethods.MonitorFromPoint(cursor, NativeMethods.MonitorDefaultToNearest);
-        }
-
-        NativeMethods.MonitorInfo info = new()
-        {
-            Size = System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MonitorInfo>()
-        };
-        if (monitor != nint.Zero && NativeMethods.GetMonitorInfo(monitor, ref info))
-        {
-            return Drawing.Rectangle.FromLTRB(
-                info.Monitor.Left,
-                info.Monitor.Top,
-                info.Monitor.Right,
-                info.Monitor.Bottom);
-        }
-
-        return System.Windows.Forms.SystemInformation.VirtualScreen;
-    }
-
     private static Capture CaptureBounds(Drawing.Rectangle bounds)
     {
         Drawing.Bitmap bitmap = new(bounds.Width, bounds.Height, DrawingImaging.PixelFormat.Format32bppArgb);
@@ -1156,7 +1188,39 @@ internal sealed partial class WindowsAiOcrService : IDisposable
 
         string normalized = RepairMixedScriptText(
             string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)));
-        return normalized.Length <= 420 ? normalized : normalized[..420];
+        normalized = OcrFutureContractionRegex().Replace(
+            normalized,
+            match => match.Groups[1].Value + "'ll");
+        return normalized;
+    }
+
+    private static string StripUnmatchedDialogueQuote(string value)
+    {
+        int asciiQuoteCount = value.Count(character => character == '"');
+        if ((asciiQuoteCount & 1) != 0)
+        {
+            if (value.StartsWith('"'))
+            {
+                return value[1..].TrimStart();
+            }
+
+            if (value.EndsWith('"'))
+            {
+                return value[..^1].TrimEnd();
+            }
+        }
+
+        if (value.StartsWith('\u201C') && !value.EndsWith('\u201D'))
+        {
+            return value[1..].TrimStart();
+        }
+
+        if (value.EndsWith('\u201D') && !value.StartsWith('\u201C'))
+        {
+            return value[..^1].TrimEnd();
+        }
+
+        return value;
     }
 
     private static string NormalizeLong(string? text, int maximumLength)

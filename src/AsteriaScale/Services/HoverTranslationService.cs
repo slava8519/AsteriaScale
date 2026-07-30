@@ -8,7 +8,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
 {
     private readonly AppSettings _settings;
     private readonly WindowsAiOcrService _ocr = new();
-    private readonly FoundryTranslationService _translator;
     private readonly LocalDictionaryService _dictionary;
     private readonly GlossBertDictionarySelectorService _glossBertSelector;
     private readonly SemanticRankerProfileApplicator _semanticRankerProfile;
@@ -20,8 +19,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     // worker the same question, so neither may pay for the other's inference.
     private readonly GlossBertDecisionCache _decisionCache = new();
     private readonly HoverTranslationOverlay _overlay;
-    private readonly ScreenTranslationOverlay _screenOverlay;
-    private readonly GlobalHotkeyService _hotkeys;
     private readonly Dispatcher _dispatcher;
     private readonly object _lifecycleLock = new();
     private readonly ModelActivityGate _modelActivity = new();
@@ -30,7 +27,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private readonly List<CancellationTokenSource> _retiredModeCancellations = [];
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SmartHoverPipeline _smartPipeline;
-    private readonly ScreenTranslationFlow _screenFlow;
     private readonly HoverTracking _tracking;
     private readonly TextHookService _textHook;
     private readonly TranslationHistoryService _history = new();
@@ -38,27 +34,21 @@ public sealed class HoverTranslationService : IAsyncDisposable
     private Task _pendingUnload = Task.CompletedTask;
     private long _unloadRevision;
     private bool _unloadWorkerRunning;
-    private CancellationTokenSource? _screenIdleUnloadCancellation;
-    private CancellationTokenSource? _screenTargetMonitorCancellation;
-    private CancellationTokenSource? _smartFallbackUnloadCancellation;
     private CancellationTokenSource? _modeCancellation;
     private bool _enabled;
-    private bool _hotkeysReady = true;
     private bool _disposed;
     private long _overlayGeneration;
     private string? _lastReportedStatus;
-    private SmartFallbackRequest? _lastSmartFallbackRequest;
     private int _textHookDiagnosticProcessId;
     private bool _textHookMatchReported;
     private bool? _translateGemmaReady;
 
-    public HoverTranslationService(AppSettings settings, Func<bool>? isScaling = null)
+    public HoverTranslationService(AppSettings settings)
     {
         _settings = settings;
         _translateGemma = new TranslateGemmaTranslationService(
             backendResolver: () => TranslateGemmaTranslationService.ResolveBackend(
                 _settings.SmartPhraseTranslationBackend));
-        _ = isScaling; // Kept for source compatibility with existing callers.
         RankerCpuModelProfile initialRankerProfile =
             SemanticRankerProfileResolver.FromSettings(settings);
         _glossBertSelector = new GlossBertDictionarySelectorService(initialRankerProfile);
@@ -71,17 +61,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _decisionCache,
             ResolveGlossBertProvider,
             () => _dictionary.VersionToken);
-        _translator = new FoundryTranslationService(
-            _dictionary,
-            TranslationScaffoldMode.GlossBert,
-            diagnosticSink: null,
-            neuralRanker: _scaffoldGlossBertRanker.RankAsync);
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _overlay = new HoverTranslationOverlay();
-        _screenOverlay = new ScreenTranslationOverlay();
-        _hotkeys = new GlobalHotkeyService();
-        _hotkeys.ScreenTranslationPressed += OnScreenTranslationPressed;
-        _hotkeys.SmartFallbackPressed += OnSmartFallbackPressed;
         _enabled = settings.HoverTranslationEnabled;
         _glossBertSelector.ConfigureKeepWarm(settings.SmartDictionaryKeepWarm);
         _smartPipeline = new SmartHoverPipeline(
@@ -90,22 +71,12 @@ public sealed class HoverTranslationService : IAsyncDisposable
             _glossBertSelector,
             _smartResultCache,
             _decisionCache,
-            TranslateSmartFallbackAsync,
             ReportStatus,
-            (text, cursor) => _lastSmartFallbackRequest =
-                new SmartFallbackRequest(text, cursor, DateTime.UtcNow),
             _translateGemma,
             _smartPhraseCache,
             _scaffoldGlossBertRanker.RankAsync);
-        _screenFlow = new ScreenTranslationFlow(
-            _ocr,
-            _translator,
-            _screenOverlay,
-            _dispatcher,
-            ReportStatus,
-            IsScreenTargetActive);
         _tracking = new HoverTracking(
-            () => _enabled && !IsScreenMode,
+            () => _enabled,
             EffectiveDelayMs,
             HideOverlay,
             TryBeginProcessing,
@@ -118,10 +89,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     public void Start()
     {
-        if (!_enabled || IsDictionaryMode || IsSmartMode || IsScreenMode)
-        {
-            QueueUnload(HoverUnloadReason.Startup);
-        }
+        QueueUnload(HoverUnloadReason.Startup);
 
         if (_enabled)
         {
@@ -134,11 +102,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         _enabled = enabled;
         _settings.HoverTranslationEnabled = enabled;
-        _lastSmartFallbackRequest = null;
         RestartModeCancellation();
         ResetTracking();
-        CancelScreenIdleUnload();
-        CancelSmartFallbackUnload();
         if (enabled)
         {
             ConfigureActiveMode();
@@ -147,8 +112,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         else
         {
             StopTimer();
-            _hotkeys.UnregisterScreenTranslation();
-            _hotkeys.UnregisterSmartFallback();
             HideAllOverlays();
             QueueUnload(HoverUnloadReason.ExplicitDisable);
             ReportStatus("Перевод текста выключен");
@@ -157,43 +120,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private void ConfigureActiveMode()
     {
-        _hotkeysReady = true;
         if (!_enabled)
         {
             StopTimer();
-            _hotkeys.UnregisterScreenTranslation();
-            _hotkeys.UnregisterSmartFallback();
             return;
         }
 
-        if (IsScreenMode)
-        {
-            StopTimer();
-            _hotkeys.UnregisterSmartFallback();
-            if (!_hotkeys.RegisterScreenTranslation())
-            {
-                _hotkeysReady = false;
-                ReportStatus("Не удалось назначить Alt+Shift+T — сочетание занято другой программой");
-            }
-        }
-        else
-        {
-            _hotkeys.UnregisterScreenTranslation();
-            if (IsSmartMode && IsOnDemandFallback)
-            {
-                if (!_hotkeys.RegisterSmartFallback())
-                {
-                    _hotkeysReady = false;
-                    ReportStatus("Не удалось назначить Alt+Shift+D — сочетание занято другой программой");
-                }
-            }
-            else
-            {
-                _hotkeys.UnregisterSmartFallback();
-            }
-
-            StartTimer();
-        }
+        StartTimer();
     }
 
     public void ApplySmartDictionarySettings()
@@ -201,7 +134,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         RestartModeCancellation();
         _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
         _translateGemmaReady = null;
-        _lastSmartFallbackRequest = null;
         ResetTracking();
         ConfigureActiveMode();
         if (_enabled && !IsDictionaryMode)
@@ -217,7 +149,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     public void SetMode(string mode)
     {
-        string normalized = HoverTranslationModes.Normalize(mode);
+        string normalized = HoverTranslationModes.NormalizeUserMode(mode);
         if (string.Equals(_settings.HoverTranslationMode, normalized, StringComparison.Ordinal))
         {
             ConfigureActiveMode();
@@ -229,11 +161,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         }
 
         _settings.HoverTranslationMode = normalized;
-        _lastSmartFallbackRequest = null;
         RestartModeCancellation();
         ResetTracking();
-        CancelScreenIdleUnload();
-        CancelSmartFallbackUnload();
         HideAllOverlays();
         ConfigureActiveMode();
         if (_enabled)
@@ -359,7 +288,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
             activeProvider != ResolveGlossBertProvider();
         bool unloadDictionary = !_enabled || (!IsDictionaryMode && !IsSmartMode);
         await UnloadModelOwnersAsync(
-            unloadTranslator: !_enabled || IsDictionaryMode || IsScreenMode || IsSmartMode,
             unloadDictionary: unloadDictionary,
             unloadRanker: !_enabled || !ActiveModeUsesGlossBert || backendChanged,
             unloadPhraseTranslator: !_enabled ||
@@ -374,7 +302,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     }
 
     private async Task UnloadModelOwnersAsync(
-        bool unloadTranslator,
         bool unloadDictionary,
         bool unloadRanker,
         bool unloadPhraseTranslator,
@@ -382,11 +309,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         bool releaseDictionaryMemory = false)
     {
         List<Exception> failures = [];
-        if (unloadTranslator)
-        {
-            await CaptureUnloadFailureAsync(_translator.UnloadAsync, failures);
-        }
-
         if (unloadDictionary)
         {
             Func<Task> unload = releaseDictionaryMemory
@@ -436,27 +358,22 @@ public sealed class HoverTranslationService : IAsyncDisposable
     {
         try
         {
-            string requestedMode = HoverTranslationModes.Normalize(_settings.HoverTranslationMode);
+            string requestedMode = HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode);
             ReportStatus(requestedMode switch
             {
                 HoverTranslationModes.Smart =>
                     $"Подготовка NPU OCR, словарей и контекстной модели на {ResolveSmartBackend().ToUpperInvariant()}…",
                 HoverTranslationModes.Dictionary => "Подготовка NPU OCR и локального словаря…",
-                HoverTranslationModes.Screen =>
-                    $"Подготовка экранного NPU OCR и модели значений {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))}…",
-                _ =>
-                    $"Подготовка NPU OCR, модели значений {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))} и локального переводчика…"
+                _ => "Подготовка NPU OCR и локального словаря…"
             });
             await _ocr.EnsureReadyAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            if (!_enabled || requestedMode != HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
+            if (!_enabled || requestedMode != HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode))
             {
                 return;
             }
 
-            if (requestedMode is HoverTranslationModes.Smart or
-                HoverTranslationModes.Neural or
-                HoverTranslationModes.Screen)
+            if (requestedMode == HoverTranslationModes.Smart)
             {
                 await _semanticRankerProfile.ApplyAsync(cancellationToken);
             }
@@ -491,36 +408,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 await _dictionary.LoadAsync(cancellationToken);
             }
-            else if (requestedMode == HoverTranslationModes.Neural)
-            {
-                Task translatorWarmUp = _translator.WarmUpAsync(cancellationToken);
-                if (_settings.SmartDictionaryKeepWarm)
-                {
-                    await Task.WhenAll(
-                        translatorWarmUp,
-                        _glossBertSelector.WarmUpAsync(
-                            ResolveGlossBertProvider(),
-                            cancellationToken));
-                }
-                else
-                {
-                    await translatorWarmUp;
-                }
-            }
-
             if (_enabled &&
-                _hotkeysReady &&
-                requestedMode == HoverTranslationModes.Normalize(_settings.HoverTranslationMode))
+                requestedMode == HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode))
             {
                 ReportStatus(requestedMode switch
                 {
                     HoverTranslationModes.Smart => BuildSmartReadyStatus(),
                     HoverTranslationModes.Dictionary =>
                         $"Быстрый перевод готов: {_dictionary.EntryCount:N0} записей из {_dictionary.SourceCount} словарей",
-                    HoverTranslationModes.Screen =>
-                        $"Экранный перевод готов: Alt+Shift+T — перевести все реплики; модель значений: {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))}",
-                    _ =>
-                        $"Перевод под курсором готов: NPU OCR + {SemanticRankerProfileResolver.DisplayName(SemanticRankerProfileResolver.FromSettings(_settings))} + локальная Qwen"
+                    _ => BuildSmartReadyStatus()
                 });
             }
         }
@@ -580,170 +476,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}; {phrase}";
     }
 
-    private void OnScreenTranslationPressed(object? sender, EventArgs e) => TranslateScreen();
-
-    private void OnSmartFallbackPressed(object? sender, EventArgs e)
-    {
-        if (!_enabled || !IsSmartMode || !IsOnDemandFallback)
-        {
-            ReportStatus("Полный перевод по команде доступен в умном словаре с fallback «по команде»");
-            return;
-        }
-
-        SmartFallbackRequest? request = _lastSmartFallbackRequest;
-        if (request is null || DateTime.UtcNow - request.CreatedUtc > TimeSpan.FromSeconds(45))
-        {
-            ReportStatus("Сначала наведите курсор на слово или реплику, затем нажмите Alt+Shift+D");
-            return;
-        }
-
-        if (!TryBeginProcessing())
-        {
-            ReportStatus("Перевод ещё выполняется — повторите Alt+Shift+D через секунду");
-            return;
-        }
-
-        TrackTask(ProcessSmartFallbackOnDemandAsync(request));
-    }
-
-    private async Task ProcessSmartFallbackOnDemandAsync(SmartFallbackRequest request)
-    {
-        try
-        {
-            using CancellationTokenSource operationCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    _lifetimeCancellation.Token,
-                    CurrentModeToken);
-            CancellationToken cancellationToken = operationCancellation.Token;
-            long displayGeneration = BeginOverlayOperation();
-            NativeMethods.Point cursor = VisibleCursorService.TryGetPosition(out NativeMethods.Point current)
-                ? current
-                : request.Cursor;
-            ShowLoading(
-                request.Source,
-                FoundryTranslationService.EngineLabel,
-                cursor,
-                displayGeneration,
-                request.TextSource);
-            (string source, string translation, string engine) = await TranslateSmartFallbackAsync(
-                request.Source,
-                cancellationToken);
-            if (!_enabled || !IsSmartMode || !IsOnDemandFallback ||
-                string.IsNullOrWhiteSpace(translation))
-            {
-                HideOverlay();
-                return;
-            }
-
-            ShowTranslation(
-                source,
-                translation,
-                engine,
-                cursor,
-                dictionaryFound: true,
-                isPhrase: false,
-                language: null,
-                confidence: null,
-                context: request.Source,
-                displayGeneration: displayGeneration,
-                requireCursorNear: false,
-                textSource: request.TextSource);
-            ReportStatus("Полная реплика переведена по Alt+Shift+D");
-            ScheduleSmartFallbackUnload();
-        }
-        catch (OperationCanceledException)
-        {
-            HideOverlay();
-        }
-        catch (Exception ex)
-        {
-            HideOverlay();
-            LogError(ex);
-            ReportStatus("Полный перевод по команде: " + ex.Message);
-        }
-        finally
-        {
-            EndProcessing();
-        }
-    }
-
-    public void TranslateScreen()
-    {
-        if (!_enabled || !IsScreenMode)
-        {
-            ReportStatus("Сначала включите режим «Экран по клавише»");
-            return;
-        }
-
-        CancelScreenIdleUnload();
-        CancelScreenTargetMonitor();
-        CancellationToken token = _tracking.RestartOperation();
-
-        if (!TryBeginProcessing())
-        {
-            ReportStatus("Экранный перевод: предыдущая операция отменена, нажмите ещё раз");
-            return;
-        }
-
-        nint foregroundWindow = NativeMethods.GetForegroundWindow();
-        NativeMethods.GetWindowThreadProcessId(foregroundWindow, out uint processId);
-        if (foregroundWindow == nint.Zero || processId == 0)
-        {
-            EndProcessing();
-            ReportStatus("Экранный перевод: активное окно недоступно");
-            return;
-        }
-
-        TrackTask(RunScreenFlowAsync(foregroundWindow, unchecked((int)processId), token));
-    }
-
-    private async Task RunScreenFlowAsync(
-        nint foregroundWindow,
-        int foregroundProcessId,
-        CancellationToken cancellationToken)
-    {
-        bool translated = false;
-        try
-        {
-            CancellationToken targetMonitorToken = StartScreenTargetMonitor(
-                foregroundWindow,
-                foregroundProcessId);
-            using CancellationTokenSource linkedCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken,
-                    _lifetimeCancellation.Token,
-                    CurrentModeToken,
-                    targetMonitorToken);
-            translated = await _semanticRankerProfile.RunAfterApplyAsync(
-                token => _screenFlow.ProcessAsync(
-                    foregroundWindow,
-                    foregroundProcessId,
-                    token),
-                linkedCancellation.Token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception exception)
-        {
-            LogError(exception);
-            ReportStatus("Экранный перевод: " + exception.Message);
-        }
-        finally
-        {
-            EndProcessing();
-            if (translated && _enabled && IsScreenMode)
-            {
-                ScheduleScreenIdleUnload();
-            }
-            else
-            {
-                CancelScreenTargetMonitor();
-                HideScreenOverlay();
-            }
-        }
-    }
-
     private async Task ProcessCursorAsync(NativeMethods.Point cursor, CancellationToken cancellationToken)
     {
         try
@@ -774,7 +506,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
             string smartBackend = ResolveSmartBackend();
             string currentEngine = IsSmartMode
                 ? SmartHoverPipeline.SmartEngineLabel(smartBackend)
-                : IsDictionaryMode ? LocalDictionaryService.EngineLabel : FoundryTranslationService.EngineLabel;
+                : LocalDictionaryService.EngineLabel;
             ShowLoading(
                 IsSmartMode ? recognized.HoveredWord : recognized.Text,
                 currentEngine,
@@ -789,7 +521,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
             bool isPhrase = false;
             string? language = null;
             double? confidence = null;
-            bool usedFullFallback = false;
             SmartDictionaryCacheRequest? resultCacheRequest = null;
             SmartDictionarySelection? resultCacheSelection = null;
             SmartHoverResult? resolvedSmartResult = null;
@@ -797,18 +528,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
             {
                 resolvedSmartResult = await _smartPipeline.ResolveSmartHoverAsync(
                     recognized,
-                    cursor,
                     smartBackend,
                     cancellationToken);
-                if (_lastSmartFallbackRequest is { } fallbackRequest &&
-                    string.Equals(fallbackRequest.Source, recognized.Text, StringComparison.Ordinal))
-                {
-                    _lastSmartFallbackRequest = fallbackRequest with
-                    {
-                        TextSource = recognized.TextSource
-                    };
-                }
-
                 source = resolvedSmartResult.Source;
                 translation = resolvedSmartResult.Translation;
                 engine = resolvedSmartResult.Engine;
@@ -816,11 +537,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 isPhrase = resolvedSmartResult.IsPhrase;
                 language = resolvedSmartResult.Language;
                 confidence = resolvedSmartResult.Confidence;
-                usedFullFallback = resolvedSmartResult.UsedFullFallback;
                 resultCacheRequest = resolvedSmartResult.CacheRequest;
                 resultCacheSelection = resolvedSmartResult.CacheSelection;
             }
-            else if (IsDictionaryMode)
+            else
             {
                 DictionaryLookupResult lookup = await _dictionary.LookupAsync(
                     recognized.Text,
@@ -833,12 +553,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 dictionaryFound = lookup.Found;
                 isPhrase = lookup.IsPhrase;
                 language = lookup.Language;
-            }
-            else
-            {
-                source = recognized.Text;
-                translation = await _translator.TranslateToRussianAsync(recognized.Text, cancellationToken);
-                engine = FoundryTranslationService.EngineLabel;
             }
 
             if (!_enabled || !CursorIsNear(cursor))
@@ -877,11 +591,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
             if (resultCacheRequest is not null && resultCacheSelection is not null)
             {
                 await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
-            }
-
-            if (usedFullFallback)
-            {
-                ScheduleSmartFallbackUnload();
             }
 
             SmartHoverPhraseLine? phraseLine = resolvedSmartResult is null
@@ -1054,33 +763,17 @@ public sealed class HoverTranslationService : IAsyncDisposable
             : GlossBertRankerProvider.Cpu;
 
     private bool IsDictionaryMode =>
-        HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Dictionary;
-
-    private bool IsNeuralMode =>
-        HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Neural;
+        HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Dictionary;
 
     private bool IsSmartMode =>
-        HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
+        HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
 
     private bool SmartPhraseTranslationEnabled =>
         SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
         SmartPhraseTranslationModes.TranslateGemma;
 
-    private bool IsScreenMode =>
-        HoverTranslationModes.Normalize(_settings.HoverTranslationMode) == HoverTranslationModes.Screen;
-
     private bool ActiveModeUsesGlossBert =>
-        IsNeuralMode ||
-        IsScreenMode ||
         IsSmartMode && SmartRankerApplicable;
-
-    private bool IsAutomaticFallback =>
-        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
-        SmartDictionaryFallbackModes.Automatic;
-
-    private bool IsOnDemandFallback =>
-        SmartDictionaryFallbackModes.Normalize(_settings.SmartDictionaryFallbackMode) ==
-        SmartDictionaryFallbackModes.OnDemand;
 
     private bool SmartRankerApplicable =>
         SmartDictionarySourceLanguages.Normalize(
@@ -1192,192 +885,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
         await _dictionary.LoadAsync(_lifetimeCancellation.Token);
     }
 
-    private async Task<(string Source, string Translation, string Engine)> TranslateSmartFallbackAsync(
-        string source,
-        CancellationToken cancellationToken)
-    {
-        CancelSmartFallbackUnload();
-        string translation = await _translator.TranslateToRussianAsync(
-            source,
-            cancellationToken);
-        return (source, translation, FoundryTranslationService.EngineLabel);
-    }
-
     private void HideOverlay()
     {
         Interlocked.Increment(ref _overlayGeneration);
         _dispatcher.BeginInvoke(_overlay.HideOverlay, DispatcherPriority.Normal);
     }
 
-    private void HideScreenOverlay() =>
-        _dispatcher.BeginInvoke(_screenOverlay.HideOverlay, DispatcherPriority.Normal);
-
-    private void HideAllOverlays()
-    {
-        CancelScreenTargetMonitor();
-        HideOverlay();
-        HideScreenOverlay();
-    }
-
-    private CancellationToken StartScreenTargetMonitor(nint window, int processId)
-    {
-        CancelScreenTargetMonitor();
-        CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            _lifetimeCancellation.Token,
-            CurrentModeToken);
-        CancellationToken cancellationToken = cancellation.Token;
-        _screenTargetMonitorCancellation = cancellation;
-        TrackTask(MonitorScreenTargetAsync(
-            window,
-            processId,
-            cancellation,
-            cancellationToken));
-        return cancellationToken;
-    }
-
-    private async Task MonitorScreenTargetAsync(
-        nint window,
-        int processId,
-        CancellationTokenSource cancellation,
-        CancellationToken cancellationToken)
-    {
-        bool targetLost = false;
-        try
-        {
-            while (IsScreenTargetActive(window, processId))
-            {
-                await Task.Delay(75, cancellationToken);
-            }
-
-            targetLost = !cancellationToken.IsCancellationRequested;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            bool ownsSlot = ReferenceEquals(
-                Interlocked.CompareExchange(
-                    ref _screenTargetMonitorCancellation,
-                    null,
-                    cancellation),
-                cancellation);
-            if (ownsSlot)
-            {
-                if (targetLost)
-                {
-                    // Losing focus invalidates the whole capture, not just its
-                    // loading overlay. This prevents a result from reappearing if
-                    // the user returns to the same window before translation ends.
-                    cancellation.Cancel();
-                    HideScreenOverlay();
-                }
-
-                cancellation.Dispose();
-            }
-        }
-    }
-
-    private void CancelScreenTargetMonitor()
-    {
-        CancellationTokenSource? cancellation = Interlocked.Exchange(
-            ref _screenTargetMonitorCancellation,
-            null);
-        if (cancellation is not null)
-        {
-            cancellation.Cancel();
-            cancellation.Dispose();
-        }
-    }
-
-    private void ScheduleScreenIdleUnload()
-    {
-        CancelScreenIdleUnload();
-        CancellationTokenSource cancellation = new();
-        _screenIdleUnloadCancellation = cancellation;
-        TrackTask(Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromMinutes(2), cancellation.Token);
-                using IDisposable maintenance =
-                    await _modelActivity.BeginMaintenanceWhenIdleAsync(cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
-                if (_enabled && IsScreenMode)
-                {
-                    await UnloadModelOwnersAsync(
-                        unloadTranslator: true,
-                        unloadDictionary: false,
-                        unloadRanker: true,
-                        unloadPhraseTranslator: true,
-                        forgetSmartBackend: false);
-
-                    ReportStatus("Экранный перевод готов: модели выгружены после простоя, Alt+Shift+T загрузит их снова");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // A new screen request keeps the local model warm.
-            }
-            catch (Exception ex)
-            {
-                LogError(ex);
-            }
-        }, cancellation.Token));
-    }
-
-    private void CancelScreenIdleUnload()
-    {
-        CancellationTokenSource? cancellation = Interlocked.Exchange(
-            ref _screenIdleUnloadCancellation,
-            null);
-        cancellation?.Cancel();
-        cancellation?.Dispose();
-    }
-
-    private void ScheduleSmartFallbackUnload()
-    {
-        CancelSmartFallbackUnload();
-        CancellationTokenSource cancellation = new();
-        _smartFallbackUnloadCancellation = cancellation;
-        TrackTask(Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(45), cancellation.Token);
-                using IDisposable maintenance =
-                    await _modelActivity.BeginMaintenanceWhenIdleAsync(cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
-                if (_enabled && IsSmartMode)
-                {
-                    await UnloadModelOwnersAsync(
-                        unloadTranslator: true,
-                        unloadDictionary: false,
-                        unloadRanker: false,
-                        unloadPhraseTranslator: false,
-                        forgetSmartBackend: false);
-                    ReportStatus("Умный словарь готов: резервная полная модель выгружена после простоя");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Another fallback request keeps the translator warm briefly.
-            }
-            catch (Exception ex)
-            {
-                LogError(ex);
-            }
-        }, cancellation.Token));
-    }
-
-    private void CancelSmartFallbackUnload()
-    {
-        CancellationTokenSource? cancellation = Interlocked.Exchange(
-            ref _smartFallbackUnloadCancellation,
-            null);
-        cancellation?.Cancel();
-        cancellation?.Dispose();
-    }
+    private void HideAllOverlays() => HideOverlay();
 
     public void ApplyTextHookSettings()
     {
@@ -1387,20 +901,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
     }
 
     private long BeginOverlayOperation() => Interlocked.Increment(ref _overlayGeneration);
-
-    private bool IsScreenTargetActive(nint window, int processId)
-    {
-        if (_disposed || !_enabled || !IsScreenMode ||
-            window == nint.Zero ||
-            NativeMethods.GetForegroundWindow() != window ||
-            !NativeMethods.IsWindow(window))
-        {
-            return false;
-        }
-
-        NativeMethods.GetWindowThreadProcessId(window, out uint currentProcessId);
-        return currentProcessId == unchecked((uint)processId);
-    }
 
     private bool TryBeginProcessing()
     {
@@ -1516,6 +1016,16 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     internal static void LogError(Exception exception)
     {
+        AppendDiagnostic(exception.ToString());
+    }
+
+    internal static void LogDiagnostic(string message)
+    {
+        AppendDiagnostic((message ?? string.Empty).Replace('\r', ' ').Replace('\n', ' '));
+    }
+
+    private static void AppendDiagnostic(string message)
+    {
         try
         {
             string directory = Path.Combine(
@@ -1529,7 +1039,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 File.Move(path, path + ".1", overwrite: true);
             }
 
-            File.AppendAllText(path, $"[{DateTimeOffset.Now:O}] {exception}\n\n");
+            File.AppendAllText(path, $"[{DateTimeOffset.Now:O}] {message}\n\n");
         }
         catch
         {
@@ -1557,10 +1067,6 @@ public sealed class HoverTranslationService : IAsyncDisposable
         modeCancellation?.Cancel();
         StopTimer();
         ResetTracking();
-        CancelScreenIdleUnload();
-        CancelSmartFallbackUnload();
-        _hotkeys.UnregisterScreenTranslation();
-        _hotkeys.UnregisterSmartFallback();
         HideAllOverlays();
         await WaitForProcessingIdleAsync();
         await AwaitActiveTasksAsync();
@@ -1568,17 +1074,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
         {
             _overlay.HideOverlay();
             _overlay.Close();
-            _screenOverlay.HideOverlay();
-            _screenOverlay.Close();
-            _hotkeys.ScreenTranslationPressed -= OnScreenTranslationPressed;
-            _hotkeys.SmartFallbackPressed -= OnSmartFallbackPressed;
-            _hotkeys.Dispose();
         });
         _tracking.Dispose();
         _ocr.Dispose();
         _history.Dispose();
         await _textHook.DisposeAsync();
-        await _translator.DisposeAsync();
         await _translateGemma.DisposeAsync();
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();
@@ -1598,10 +1098,4 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
         _lifetimeCancellation.Dispose();
     }
-
-    private sealed record SmartFallbackRequest(
-        string Source,
-        NativeMethods.Point Cursor,
-        DateTime CreatedUtc,
-        HoverTextSource TextSource = HoverTextSource.Ocr);
 }

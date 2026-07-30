@@ -51,8 +51,6 @@ public sealed class SettingsService
                 SmartDictionaryRankerModels.Normalize(settings.SmartDictionaryRankerModel);
             settings.SmartDictionarySourceLanguage =
                 SmartDictionarySourceLanguages.Normalize(settings.SmartDictionarySourceLanguage);
-            settings.SmartDictionaryFallbackMode =
-                SmartDictionaryFallbackModes.Normalize(settings.SmartDictionaryFallbackMode);
             settings.SmartPhraseTranslationMode =
                 SmartPhraseTranslationModes.Normalize(settings.SmartPhraseTranslationMode);
             if (!SmartPhraseTranslationBackends.TryNormalize(
