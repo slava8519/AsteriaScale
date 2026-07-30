@@ -1,0 +1,317 @@
+{
+  "schemaVersion": 1,
+  "kind": "asteria.translation-benchmark-source-manifest",
+  "datasets": [
+    {
+      "id": "wmt25-general",
+      "title": "WMT 2025 General MT — English to Russian",
+      "homepage": "https://github.com/wmt-conference/wmt25-general-mt",
+      "revision": "56c0a513f64ba63500e222b25bf87ac2201cb1eb",
+      "languagePair": "en-ru",
+      "importer": "wmt25-general",
+      "expectedRecords": 87,
+      "license": {
+        "spdx": "NOASSERTION",
+        "redistribution": "download-only",
+        "note": "The upstream repository does not declare a dataset license. Keep downloaded data and derived normalized rows in ignored artifacts only."
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "data/wmt25-genmt.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/wmt25-genmt.jsonl",
+          "size": 14553955,
+          "sha256": "33b14dc670e28225ce742290718c513c1545c2c500d33667a4d01d776ca58dbc"
+        },
+        {
+          "id": "baseline-nllb",
+          "role": "baseline",
+          "systemId": "NLLB",
+          "path": "data/systems/NLLB.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/systems/NLLB.jsonl",
+          "size": 9612424,
+          "sha256": "600d5bdddb155b73dc45fdc2f29da938564a31c6b6e22d5c474063243ab51a5c"
+        },
+        {
+          "id": "baseline-gemma-3-12b",
+          "role": "baseline",
+          "systemId": "Gemma-3-12B",
+          "path": "data/systems/Gemma-3-12B.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/systems/Gemma-3-12B.jsonl",
+          "size": 10962531,
+          "sha256": "59a9a1359f3083c1dbcadf1144192292cb1631b3a328ec3c62407658232acc69"
+        },
+        {
+          "id": "baseline-yandex",
+          "role": "baseline",
+          "systemId": "Yandex",
+          "path": "data/systems/Yandex.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/systems/Yandex.jsonl",
+          "size": 603161,
+          "sha256": "89523bbdf1acccdd5c513062827d7296a83d1e8f6291a9752bf951118bd44b2d"
+        },
+        {
+          "id": "baseline-gemini-2.5-pro",
+          "role": "baseline",
+          "systemId": "Gemini-2.5-Pro",
+          "path": "data/systems/Gemini-2.5-Pro.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/systems/Gemini-2.5-Pro.jsonl",
+          "size": 11109071,
+          "sha256": "ab61826bf08e7575e305dd8d6670e1df268ed4ad69a578c80e4543333f95fa91"
+        }
+      ]
+    },
+    {
+      "id": "wmt25-humeval",
+      "title": "WMT 2025 General MT human-evaluation segments — English to Russian",
+      "homepage": "https://github.com/wmt-conference/wmt25-general-mt",
+      "revision": "56c0a513f64ba63500e222b25bf87ac2201cb1eb",
+      "languagePair": "en-ru",
+      "importer": "wmt25-humeval",
+      "expectedRecords": 200,
+      "derivedSelections": [
+        {
+          "id": "wmt25-humeval-translategemma-compatible",
+          "title": "WMT 2025 General MT human-evaluation segments — TranslateGemma production-guard slice",
+          "selector": "production-phrase-guard-v1",
+          "expectedRecords": 40
+        },
+        {
+          "id": "wmt25-humeval-smart-hover-compatible",
+          "title": "WMT 2025 General MT human-evaluation segments — Smart Dictionary whole-hover-phrase slice",
+          "selector": "smart-hover-whole-source-v1",
+          "expectedRecords": 10
+        }
+      ],
+      "license": {
+        "spdx": "NOASSERTION",
+        "redistribution": "download-only",
+        "note": "The upstream repository does not declare a dataset license. The 200-row EN-RU subset and its derived runtime-compatible selections stay in ignored artifacts only."
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "data/wmt25-genmt-humeval.jsonl",
+          "url": "https://media.githubusercontent.com/media/wmt-conference/wmt25-general-mt/56c0a513f64ba63500e222b25bf87ac2201cb1eb/data/wmt25-genmt-humeval.jsonl",
+          "size": 128674273,
+          "sha256": "a36ebce10c9ea26f71449933721de3a87e27f6a5b09d96b5daa026eaf1d197ab"
+        }
+      ]
+    },
+    {
+      "id": "wmt26-general",
+      "title": "WMT 2026 General MT — English to Russian (source-only snapshot)",
+      "homepage": "https://github.com/wmt-conference/wmt26-general-mt",
+      "revision": "d8c84e5d557d454ced710dd78f178382e9b5e72a",
+      "languagePair": "en-ru",
+      "importer": "wmt26-general",
+      "expectedRecords": 198,
+      "referenceFree": true,
+      "license": {
+        "spdx": "NOASSERTION",
+        "redistribution": "download-only",
+        "note": "The pinned upstream snapshot has no declared dataset license and its EN-RU rows contain no references."
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "data/wmt26-genmt.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt26-general-mt/d8c84e5d557d454ced710dd78f178382e9b5e72a/data/wmt26-genmt.jsonl",
+          "size": 21616765,
+          "sha256": "de286ce336f10367bedfe0611764b2569b538a9c57db20467fc8c1fa84838291"
+        }
+      ]
+    },
+    {
+      "id": "voita-context",
+      "title": "Good Translation, Wrong in Context — EN-RU contrastive discourse tests",
+      "homepage": "https://github.com/lena-voita/good-translation-wrong-in-context",
+      "revision": "bb59382f6bc6c01e0cb8e58e370a8dff8198107b",
+      "languagePair": "en-ru",
+      "importer": "voita-context",
+      "expectedRecords": 6000,
+      "license": {
+        "spdx": "NOASSERTION",
+        "redistribution": "download-only",
+        "note": "The paper is available from ACL Anthology, but the upstream dataset repository does not declare a data license. The official protocol scores target likelihood; Asteria's generated-text contrast score is an adaptation."
+      },
+      "files": [
+        {
+          "id": "deixis-dev",
+          "role": "dataset-part",
+          "phenomenon": "deixis",
+          "split": "dev",
+          "expectedRecords": 500,
+          "path": "consistency_testsets/deixis_dev.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/deixis_dev.json",
+          "size": 851788,
+          "sha256": "b5914c1635dfd3c33716bb9b53a9afafee0a69f50917c20d64925b8c1b8881e6"
+        },
+        {
+          "id": "deixis-test",
+          "role": "dataset-part",
+          "phenomenon": "deixis",
+          "split": "test",
+          "expectedRecords": 2500,
+          "path": "consistency_testsets/deixis_test.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/deixis_test.json",
+          "size": 4084666,
+          "sha256": "006dff885951759513f8d67f45a14df5519450a8dbb81ac4f2a0c91220f0518a"
+        },
+        {
+          "id": "ellipsis-inflection",
+          "role": "dataset-part",
+          "phenomenon": "ellipsis-inflection",
+          "split": "test",
+          "expectedRecords": 500,
+          "path": "consistency_testsets/ellipsis_infl.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/ellipsis_infl.json",
+          "size": 1569243,
+          "sha256": "373301d702775d80478127a88f759aad05311d82f808d340110915ce214d94d2"
+        },
+        {
+          "id": "ellipsis-vp",
+          "role": "dataset-part",
+          "phenomenon": "ellipsis-vp",
+          "split": "test",
+          "expectedRecords": 500,
+          "path": "consistency_testsets/ellipsis_vp.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/ellipsis_vp.json",
+          "size": 3440277,
+          "sha256": "6e740a80f7ab42fc4942a35ff534989f28c71d80068d7231aac03bfe81ad9c2c"
+        },
+        {
+          "id": "lexical-cohesion-dev",
+          "role": "dataset-part",
+          "phenomenon": "lexical-cohesion",
+          "split": "dev",
+          "expectedRecords": 500,
+          "path": "consistency_testsets/lex_cohesion_dev.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/lex_cohesion_dev.json",
+          "size": 986355,
+          "sha256": "7331a30bf20f289ba67097f92f3ee24c76b3773509b9742ddabe7d85f325b695"
+        },
+        {
+          "id": "lexical-cohesion-test",
+          "role": "dataset-part",
+          "phenomenon": "lexical-cohesion",
+          "split": "test",
+          "expectedRecords": 1500,
+          "path": "consistency_testsets/lex_cohesion_test.json",
+          "url": "https://raw.githubusercontent.com/lena-voita/good-translation-wrong-in-context/bb59382f6bc6c01e0cb8e58e370a8dff8198107b/consistency_testsets/lex_cohesion_test.json",
+          "size": 3024950,
+          "sha256": "0db3420c92b04e25bb72712ba0324261b61147ea3debaadc126dfcc7f486382d"
+        }
+      ]
+    },
+    {
+      "id": "mucow-wsd",
+      "title": "MuCoW WMT 2019 EN-RU lexical ambiguity test suite",
+      "homepage": "https://github.com/Helsinki-NLP/MuCoW",
+      "revision": "8e7570b2bec5b6fcc3727e44da4705672fc026f8",
+      "languagePair": "en-ru",
+      "importer": "mucow-wsd",
+      "expectedRecords": 3902,
+      "license": {
+        "spdx": "CC-BY-4.0",
+        "url": "https://github.com/Helsinki-NLP/MuCoW/blob/8e7570b2bec5b6fcc3727e44da4705672fc026f8/LICENSE",
+        "redistribution": "attribution-required"
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "WMT2019/translation test suite/json/en-ru.mucow.tts.json",
+          "url": "https://raw.githubusercontent.com/Helsinki-NLP/MuCoW/8e7570b2bec5b6fcc3727e44da4705672fc026f8/WMT2019/translation%20test%20suite/json/en-ru.mucow.tts.json",
+          "size": 3421834,
+          "sha256": "a1aa7c24769457c34ca09494d5b3034bc210b979dc1049d5d0e12304aafa87fd"
+        }
+      ]
+    },
+    {
+      "id": "winomt-gender",
+      "title": "WinoMT English source suite for gender accuracy",
+      "homepage": "https://github.com/gabrielStanovsky/mt_gender",
+      "revision": "586292861cf2efdda2dec03c69c3408995a8b293",
+      "languagePair": "en-ru",
+      "importer": "winomt-gender",
+      "expectedRecords": 3888,
+      "referenceFree": true,
+      "license": {
+        "spdx": "MIT",
+        "url": "https://github.com/gabrielStanovsky/mt_gender/blob/586292861cf2efdda2dec03c69c3408995a8b293/LICENSE",
+        "redistribution": "permitted-with-notice",
+        "note": "The source suite has no Russian references. Use a dedicated target-gender scorer; do not compare it as a reference-based translation set."
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "data/aggregates/en.txt",
+          "url": "https://raw.githubusercontent.com/gabrielStanovsky/mt_gender/586292861cf2efdda2dec03c69c3408995a8b293/data/aggregates/en.txt",
+          "size": 363069,
+          "sha256": "11797c54a74876c4ae63d029e88ec35ded8ee335251c51ff861f8790a7e258af"
+        }
+      ]
+    },
+    {
+      "id": "wmt24-biomedical",
+      "title": "WMT 2024 Biomedical Translation Task — English to Russian",
+      "homepage": "https://www2.statmt.org/wmt24/biomedical-translation-task.html",
+      "revision": "wmt24-final-public-drive-snapshot",
+      "languagePair": "en-ru",
+      "importer": "wmt24-biomedical",
+      "expectedRecords": 50,
+      "license": {
+        "spdx": "NOASSERTION",
+        "redistribution": "download-only",
+        "note": "The official task page links the files but does not state a reusable data license."
+      },
+      "files": [
+        {
+          "id": "source",
+          "role": "source",
+          "path": "biomedical/en.txt",
+          "url": "https://drive.google.com/uc?export=download&id=1bPb5FogwYRCsx4PqUkxIyFsS0xa0260y",
+          "size": 65369,
+          "sha256": "42d520241708429fa894805ca7b1999909e8320358275c0153f8aa2ec1676bb6"
+        },
+        {
+          "id": "reference",
+          "role": "reference",
+          "path": "biomedical/ru.txt",
+          "url": "https://drive.google.com/uc?export=download&id=1QGrMboeKjWrS7rJ1JMl23cGbhGh7RxE-",
+          "size": 119663,
+          "sha256": "e8f2e492bc857a40691befa821a855fa314b3b40f84e54cfcee8aacb455e371d"
+        }
+      ]
+    },
+    {
+      "id": "wmt25-terminology",
+      "title": "WMT 2025 Terminology Shared Task — English to Russian",
+      "homepage": "https://github.com/wmt-conference/wmt25-terminology",
+      "revision": "b8aedb75b0cb37e4533ead83607367b9fb44588c",
+      "languagePair": "en-ru",
+      "importer": "wmt25-terminology",
+      "expectedRecords": 500,
+      "license": {
+        "spdx": "CC-BY-NC-4.0",
+        "url": "https://github.com/wmt-conference/wmt25-terminology/blob/b8aedb75b0cb37e4533ead83607367b9fb44588c/LICENSE.txt",
+        "redistribution": "non-commercial-attribution-required"
+      },
+      "files": [
+        {
+          "id": "dataset",
+          "role": "dataset",
+          "path": "ranking/references/track1/full_data.enru.jsonl",
+          "url": "https://raw.githubusercontent.com/wmt-conference/wmt25-terminology/b8aedb75b0cb37e4533ead83607367b9fb44588c/ranking/references/track1/full_data.enru.jsonl",
+          "size": 149067,
+          "sha256": "d9e795b1d27bfa4a89102852aa77d602dc501841fefbce3cddd5821efe36a471"
+        }
+      ]
+    }
+  ]
+}

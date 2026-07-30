@@ -2254,3 +2254,44 @@ Regression покрывает OCR/text-hook extraction, конфликтующи
 gender-specific fingerprint и повтор non-cacheable результата. Полный smoke
 после интеграции проходит без live-модели; frozen ranker/translation holdout не
 открывался. Численный A/B качества согласования остаётся отдельной live-проверкой.
+
+## Журнал доступа к frozen-наборам — 30 июля 2026
+
+Во время инвентаризации старой benchmark-инфраструктуры вспомогательный агент
+по ошибке вывел начало `assets/Translation/translation-holdout-v1.json`. Содержимое
+не использовалось для проектирования, настройки, выбора метрик или проверки
+нового публичного runner; дальнейшая работа ограничена dev-наборами и внешними
+публичными корпусами. Повторного открытия файла не было.
+
+## Публичный EN→RU benchmark harness — 30 июля 2026
+
+Добавлен отдельный production-runner для настоящих `direct` и `smart` путей
+TranslateGemma, pinned downloader/importer публичных наборов и единый
+JSONL/JSON/CSV/HTML reporter. Каталог включает WMT25/26, Voita context,
+MuCoW, WinoMT, WMT24 Biomedical и WMT25 Terminology; сторонние байты остаются
+только в ignored `artifacts/Benchmarks`. Каждый прогон закрепляет dataset,
+source, selection, model, prompt, backend и ranker identities. Ошибка отдельной
+строки учитывается как coverage/error, а не превращается в пустой успешный
+перевод. Встроенная reference-метрика называется `chrF2`, поскольку она не
+добавляет word n-grams и не выдаётся за chrF++/официальный WMT evaluator.
+
+Первый контрольный WMT25 Human Evaluation прогон использовал 40 EN→RU
+сегментов, проходящих текущий TranslateGemma guard. Macro chrF2: опубликованный
+Gemini-2.5-Pro `0,508771`, Yandex `0,485274`, Asteria TranslateGemma 4B direct
+Vulkan `0,425777`, NLLB `0,416548`, Gemma-3-12B `0,388489`. Asteria покрыла
+`40/40`; после финального selection-v2/provenance-реруна latency `p50=3307` мс,
+`p95=6401` мс. Это небольшой публичный срез и
+локальная chrF2, а не заявка на место в официальном WMT-лидерборде.
+
+Пробный `smart`-прогон выявил ошибку методики: многие WMT-сегменты содержат
+несколько предложений, тогда как production-карточка по контракту переводит
+только предложение под курсором. Результат такого смешения отвергнут. Fetcher
+теперь зеркалит `SentenceBoundaryRules` и отдельно закрепляет 10 строк, где
+полная source-строка совпадает с whole-hover phrase. На этом диагностическом
+срезе `direct` дал chrF2 `0,371100`, coverage `10/10`; после финального
+selection-v2/provenance-реруна `p50/p95=1393/4484` мс;
+`smart + ConSeC` — `0,241892`, coverage `7/10`, `p50/p95=7675/15310` мс. Три
+случая завершились `phrase_translation_unavailable`, поэтому следующий шаг —
+увеличить честный sentence-level набор и устранить причины отказов до любых
+выводов о downstream-пользе ConSeC. Frozen-набор после зафиксированного выше
+случайного доступа не открывался и в эти числа не входит.

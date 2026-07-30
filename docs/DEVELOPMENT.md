@@ -356,6 +356,7 @@ Smoke-набор — консольная программа без тестов
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
 | `--ranker-sentence-benchmark <set.json> <workerBaseDir> --ranker-cpu-model glossbert\|sandwich\|consec [--sentence-report <report.json>] [--benchmark-only]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается |
+| `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|sandwich\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--benchmark-only]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output |
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (открытый dev, `134` случая, включая `20` научных) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
 Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
@@ -381,14 +382,24 @@ ConSeC: accepted precision `96,32 %`, coverage `98,55 %`, warm p50/p95
 context-only паре и имеет пять уверенных ошибок, поэтому joint planner остаётся
 следующим этапом. Frozen holdout при измерениях не открывался.
 
+Публичный полнотекстовый стенд, pinned downloader, схема отчётов и команды
+построения локального HTML/CSV-ладера описаны в
+[BENCHMARKING.md](BENCHMARKING.md). Он не возвращает удалённые Qwen/Foundry
+маршруты: `direct` вызывает TranslateGemma напрямую, `smart` — текущий
+production-конвейер умного словаря. Большие наборы делятся детерминированными
+`--shard`/`--max-cases`; точный selection hash записывается в output и report.
+Для сравнения `direct`/`smart` используется только whole-hover-срез из
+[BENCHMARKING.md](BENCHMARKING.md); многопредложный WMT segment не выдаётся за
+одну карточку умного словаря.
+
 Исторические наборы полного перевода
 `assets/Translation/translation-benchmark.json` и
 `translation-holdout-v1.json`, а также результаты Qwen/Foundry сохранены для
 исследовательской воспроизводимости в [RESEARCH.md](RESEARCH.md). Production
 Qwen-конвейер и его `--foundry-live`/`--translation-benchmark` команды удалены
-30 июля 2026 года; они не являются требованиями текущей сборки. Следующий
-полнотекстовый A/B должен использовать отдельный TranslateGemma-runner и новый
-gated-интерфейс, не возвращая Foundry Local в приложение.
+30 июля 2026 года; они не являются требованиями текущей сборки. Их сменил
+отдельный TranslateGemma-runner, который не возвращает Foundry Local в
+приложение.
 
 ## Публикация
 

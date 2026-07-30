@@ -23,12 +23,30 @@ try
                 arg,
                 "--ranker-sentence-benchmark",
                 StringComparison.OrdinalIgnoreCase));
+        int benchmarkOnlyTranslationArgument = Array.FindIndex(args, arg =>
+            string.Equals(
+                arg,
+                "--translation-suite",
+                StringComparison.OrdinalIgnoreCase));
         int benchmarkFamilyCount =
             (benchmarkOnlyRankerArgument >= 0 ? 1 : 0) +
             (benchmarkOnlyRegisterArgument >= 0 ? 1 : 0) +
-            (benchmarkOnlySentenceArgument >= 0 ? 1 : 0);
+            (benchmarkOnlySentenceArgument >= 0 ? 1 : 0) +
+            (benchmarkOnlyTranslationArgument >= 0 ? 1 : 0);
         Assert(benchmarkFamilyCount == 1,
-            "--benchmark-only requires exactly one ranker benchmark family per invocation.");
+            "--benchmark-only requires exactly one benchmark family per invocation.");
+
+        if (benchmarkOnlyTranslationArgument >= 0)
+        {
+            TranslationSuiteOptions options = TranslationSuiteOptions.Parse(
+                args,
+                benchmarkOnlyTranslationArgument);
+            await RunAsync(
+                $"Translation suite ({options.SystemId}/{options.ProfileId})",
+                () => TranslationSuiteRunner.RunAsync(options));
+            Console.WriteLine(string.Format("PASS: {0} benchmark", passed));
+            return 0;
+        }
 
         if (benchmarkOnlySentenceArgument >= 0)
         {
@@ -97,6 +115,12 @@ try
         }
 
     }
+
+    Assert(!args.Any(arg => string.Equals(
+            arg,
+            "--translation-suite",
+            StringComparison.OrdinalIgnoreCase)),
+        "--translation-suite requires --benchmark-only.");
 
     await RunAsync("Preset catalog", () =>
     {
@@ -2486,6 +2510,10 @@ try
 
         Assert(translationSets == 1, "Expected exactly the translation development set.");
     });
+
+    await RunAsync(
+        "Translation suite runner and reporting contract",
+        () => TranslationSuiteTests.RunAsync(tempRoot));
 
     await RunAsync(
         "Sentence semantic benchmark schema",

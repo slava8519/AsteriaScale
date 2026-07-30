@@ -184,6 +184,7 @@ Smoke-тесты проверяют каталог пресетов, round-trip 
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — устройство: процессы, конвейер перевода, структура словарей и инварианты;
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — сборка, тесты, публикация, артефакты модели, регенерация словарей;
+- [docs/BENCHMARKING.md](docs/BENCHMARKING.md) — публичные EN→RU-наборы, production A/B TranslateGemma и локальный HTML/CSV-ладер;
 - [docs/RESEARCH.md](docs/RESEARCH.md) — выбор моделей, калибровка воздержания, бенчмарки;
 - [docs/ROADMAP.md](docs/ROADMAP.md) — роадмап доработок с архитектурой каждой задачи;
 - [docs/PROMPTS.md](docs/PROMPTS.md) — готовые промты для ИИ-агентов;

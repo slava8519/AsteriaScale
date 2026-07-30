@@ -22,7 +22,8 @@ internal static class RankerBenchmarkProvenance
         string workerBaseDirectory,
         GlossBertRankerProvider provider,
         RankerCpuModelProfile cpuModelProfile,
-        string modelVersion)
+        string modelVersion,
+        CancellationToken cancellationToken = default)
     {
         string modelDirectory = Path.Combine(
             workerBaseDirectory,
@@ -30,14 +31,16 @@ internal static class RankerBenchmarkProvenance
             "Models");
         IReadOnlyList<BenchmarkArtifactRecord> runtimeArtifacts =
             await DescribeArtifactsAsync(
-                EnumerateRuntimeArtifactPaths(workerBaseDirectory));
+                EnumerateRuntimeArtifactPaths(workerBaseDirectory),
+                cancellationToken);
         IReadOnlyList<BenchmarkArtifactRecord> dictionaryArtifacts =
             await DescribeArtifactsAsync(
                 EnumerateDictionaryArtifactPaths(AppContext.BaseDirectory)
                     .Select(path => new NamedArtifactPath(
                         Path.GetRelativePath(AppContext.BaseDirectory, path)
                             .Replace('\\', '/'),
-                        path)));
+                        path)),
+                cancellationToken);
         List<BenchmarkArtifactRecord> modelArtifacts =
             (await DescribeArtifactsAsync(
                 EnumerateActiveModelArtifactPaths(
@@ -48,12 +51,14 @@ internal static class RankerBenchmarkProvenance
                     .Select(path => new NamedArtifactPath(
                         Path.GetRelativePath(modelDirectory, path)
                             .Replace('\\', '/'),
-                        path))))
+                        path)),
+                cancellationToken))
             .ToList();
         if (cpuModelProfile == RankerCpuModelProfile.Consec)
         {
             modelArtifacts.Add(await DescribePinnedConsecReferenceGoldenAsync(
-                ResolveConsecReferenceGoldenPath(AppContext.BaseDirectory)));
+                ResolveConsecReferenceGoldenPath(AppContext.BaseDirectory),
+                cancellationToken));
             modelArtifacts.Sort((left, right) =>
                 StringComparer.Ordinal.Compare(left.Name, right.Name));
             ValidatePinnedConsecArtifacts(modelArtifacts);
@@ -62,7 +67,8 @@ internal static class RankerBenchmarkProvenance
         return new RankerBenchmarkProvenanceData(
             await DescribeArtifactAsync(
                 benchmarkPath,
-                Path.GetFileName(benchmarkPath)),
+                Path.GetFileName(benchmarkPath),
+                cancellationToken),
             runtimeArtifacts,
             dictionaryArtifacts,
             modelArtifacts);
@@ -70,7 +76,8 @@ internal static class RankerBenchmarkProvenance
 
     internal static async Task<BenchmarkArtifactRecord> DescribeArtifactAsync(
         string path,
-        string? name = null)
+        string? name = null,
+        CancellationToken cancellationToken = default)
     {
         await using FileStream stream = new(
             path,
@@ -80,7 +87,8 @@ internal static class RankerBenchmarkProvenance
             64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         long length = stream.Length;
-        string hash = Convert.ToHexString(await SHA256.HashDataAsync(stream));
+        string hash = Convert.ToHexString(
+            await SHA256.HashDataAsync(stream, cancellationToken));
         return new BenchmarkArtifactRecord(
             name ?? Path.GetFileName(path),
             length,
@@ -88,12 +96,14 @@ internal static class RankerBenchmarkProvenance
     }
 
     internal static async Task<BenchmarkArtifactRecord>
-        DescribePinnedConsecReferenceGoldenAsync(string path)
+        DescribePinnedConsecReferenceGoldenAsync(
+            string path,
+            CancellationToken cancellationToken = default)
     {
         BenchmarkArtifactRecord artifact = await DescribeArtifactAsync(
             path,
-            "Consec/Reference/" +
-            ConsecArtifactBundle.OfficialReferenceGoldenFileName);
+            "Consec/Reference/" + ConsecArtifactBundle.OfficialReferenceGoldenFileName,
+            cancellationToken);
         if (artifact.Bytes !=
                 ConsecArtifactBundle.OfficialReferenceGoldenLength ||
             !string.Equals(
@@ -276,7 +286,9 @@ internal static class RankerBenchmarkProvenance
     }
 
     private static async Task<IReadOnlyList<BenchmarkArtifactRecord>>
-        DescribeArtifactsAsync(IEnumerable<NamedArtifactPath> paths)
+        DescribeArtifactsAsync(
+            IEnumerable<NamedArtifactPath> paths,
+            CancellationToken cancellationToken)
     {
         var artifacts = new List<BenchmarkArtifactRecord>();
         foreach (NamedArtifactPath artifact in paths.OrderBy(
@@ -285,7 +297,8 @@ internal static class RankerBenchmarkProvenance
         {
             artifacts.Add(await DescribeArtifactAsync(
                 artifact.Path,
-                artifact.Name));
+                artifact.Name,
+                cancellationToken));
         }
 
         return artifacts;
