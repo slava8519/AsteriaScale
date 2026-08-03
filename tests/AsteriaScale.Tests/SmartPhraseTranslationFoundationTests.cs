@@ -807,6 +807,28 @@ internal static class SmartPhraseTranslationFoundationTests
                     0.91)
             ]
         };
+        ScaffoldSenseHint subsetBank = new(
+            "bank",
+            "land beside water",
+            "берег",
+            ["банк"],
+            0.91);
+        ScaffoldSenseHint subsetSeal = new(
+            "seal",
+            "a marine mammal",
+            "тюлень",
+            ["печать"],
+            0.92);
+        SmartPhraseTranslationRequest subsetRequest = CreateRequest(
+            "We rested on the bank and watched the seal.") with
+        {
+            SenseHints = [subsetBank, subsetSeal]
+        };
+        SmartPhraseTranslationRequest structuralRequest = advisoryRequest with
+        {
+            SourcePhrase = "We did not rest on the bank for six days.",
+            ModelInputPhrase = "We did not rest on the bank for six days."
+        };
 
         await using (SmartPhraseTranslationCache cache = new(path, capacity: 4))
         {
@@ -818,15 +840,48 @@ internal static class SmartPhraseTranslationFoundationTests
                     request,
                     Result(request, "Мы отдыхали у реки.")),
                 "A guarded phrase translation was not cached.");
+            Check(!await cache.StoreAsync(
+                    advisoryRequest,
+                    Result(advisoryRequest, "Мы зашли в банк.") with
+                    {
+                        GenerationRoute = SmartPhraseGenerationRoute.SenseConditioned,
+                        AppliedSenseHints = advisoryRequest.SenseHints
+                    }),
+                "An explicit final sense conflict entered the persistent cache.");
             Check(await cache.StoreAsync(
                     advisoryRequest,
-                    Result(advisoryRequest, "Мы зашли в банк.")),
+                    Result(advisoryRequest, "Мы подошли к берегу.") with
+                    {
+                        GenerationRoute = SmartPhraseGenerationRoute.SenseConditioned,
+                        AppliedSenseHints = advisoryRequest.SenseHints
+                    }),
                 "A display-safe translation was rejected from cache by advisory evidence.");
+            Check(await cache.StoreAsync(
+                    subsetRequest,
+                    Result(
+                        subsetRequest,
+                        "Мы отдыхали на берегу; рядом был тюлень.") with
+                    {
+                        GenerationRoute = SmartPhraseGenerationRoute.SenseConditioned,
+                        AppliedSenseHints = [subsetBank]
+                    }),
+                "A valid partial applied-evidence subset was not cached.");
+            Check(!await cache.StoreAsync(
+                    structuralRequest,
+                    Result(
+                        structuralRequest,
+                        "Мы отдыхали у берега на протяжении нескольких долгих дней.") with
+                    {
+                        GenerationRoute = SmartPhraseGenerationRoute.SenseConditioned,
+                        AppliedSenseHints = structuralRequest.SenseHints
+                    }),
+                "A translation that lost negation and a number entered the persistent cache.");
         }
 
         string json = await File.ReadAllTextAsync(path);
         Check(!json.Contains(request.SourcePhrase, StringComparison.Ordinal) &&
-              !json.Contains(request.ModelInputPhrase, StringComparison.Ordinal),
+              !json.Contains(request.ModelInputPhrase, StringComparison.Ordinal) &&
+              !json.Contains("\"bank\"", StringComparison.Ordinal),
             "The persistent phrase cache leaked source dialogue instead of a SHA key.");
         using (JsonDocument document = JsonDocument.Parse(json))
         {
@@ -844,8 +899,18 @@ internal static class SmartPhraseTranslationFoundationTests
             SmartPhraseTranslationResult? advisoryHit =
                 await reopened.TryGetAsync(advisoryRequest);
             Check(advisoryHit is { FromCache: true } &&
-                  advisoryHit.Translation == "Мы зашли в банк.",
-                "A cached display translation was invalidated by advisory evidence on read.");
+                  advisoryHit.Translation == "Мы подошли к берегу." &&
+                  advisoryHit.GenerationRoute ==
+                      SmartPhraseGenerationRoute.SenseConditioned &&
+                  advisoryHit.AppliedSenseHints.Count == 1 &&
+                  advisoryHit.AppliedSenseHints[0].Source == "bank",
+                "A gated sense-preserving translation did not survive cache restart.");
+            SmartPhraseTranslationResult? subsetHit =
+                await reopened.TryGetAsync(subsetRequest);
+            Check(subsetHit is { FromCache: true } &&
+                  subsetHit.AppliedSenseHints.Count == 1 &&
+                  subsetHit.AppliedSenseHints[0].Source == "bank",
+                "The exact applied-evidence subset was not restored from cache.");
         }
 
         string fingerprint = SmartPhraseTranslationCache.CreateFingerprint(request);
@@ -910,6 +975,31 @@ internal static class SmartPhraseTranslationFoundationTests
                 new ScaffoldSenseHint("bank", "land beside water", "берег", ["банк"], 0.9)
             ]
         }, "sense hints");
+        Check(
+            SmartPhraseTranslationCache.CreateFingerprint(advisoryRequest) !=
+            SmartPhraseTranslationCache.CreateFingerprint(
+                advisoryRequest with
+                {
+                    SenseHints =
+                    [
+                        advisoryRequest.SenseHints[0] with
+                        {
+                            RejectedTranslations = ["банк", "фонд"]
+                        }
+                    ]
+                }),
+            "The phrase-cache key omitted rejected sense surfaces used by the gate.");
+        Check(
+            SmartPhraseTranslationCache.CreateFingerprint(advisoryRequest) !=
+            SmartPhraseTranslationCache.CreateFingerprint(
+                advisoryRequest with
+                {
+                    SenseHints =
+                    [
+                        advisoryRequest.SenseHints[0] with { IsPrimary = true }
+                    ]
+                }),
+            "The phrase-cache key omitted primary hover-evidence priority.");
         CheckDifferent(request with { ModelIdentity = "translategemma:4b-q8" },
             "model identity");
         CheckDifferent(request with { PromptVersion = "direct-en-ru-v2" },
@@ -1017,11 +1107,11 @@ internal static class SmartPhraseTranslationFoundationTests
         await using (SmartPhraseTranslationCache cache = new(path, capacity: 4))
         {
             Check(await cache.TryGetAsync(request) is null,
-                "A structurally corrupt v3 phrase cache did not fail open as a miss.");
+                "A structurally corrupt v6 phrase cache did not fail open as a miss.");
             Check(await cache.StoreAsync(
                     request,
                     Result(request, "Мы отдыхали у реки.")),
-                "A structurally corrupt v3 phrase cache blocked a subsequent valid generation.");
+                "A structurally corrupt v6 phrase cache blocked a subsequent valid generation.");
             await cache.FlushAsync();
         }
 

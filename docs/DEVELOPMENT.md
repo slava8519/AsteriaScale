@@ -302,16 +302,43 @@ probe занял `1,266 с` при `31,57 token/s`. Это измерение к
 читает. Sentence-wide semantic scaffold передаёт выбранному ranker до 12
 остальных неоднозначных целей исходного предложения; hovered target повторно не
 ранжируется, а синтетическая idiom-парафраза не используется как WSD-контекст.
-Первый direct prompt получает только effective English. При длинном
-тексте, совпавшей истории Textractor, scaffold-терминах или принятом sense
-разрешён один отдельный APE post-edit: до трёх предыдущих строк передаются как
-типизированные `context_only` entries с отдельно помеченной speaker metadata.
+Первый direct prompt получает только effective English. Без sense evidence при
+длинном тексте, совпавшей истории Textractor или scaffold-терминах разрешён один
+прежний APE post-edit. При наличии принятого sense запускается независимый
+conditioned-перевод из CURRENT без direct-черновика. Он получает выбранное
+определение/русскую опору и до четырёх отличимых rejected-поверхностей; затем
+`SensePreservationGate` морфологически сравнивает direct и conditioned. Потерянная
+или добавленная полярность проверяется по остаточным смысловым единицам после
+one-to-one привязки accepted evidence; `никто … не` считается одной единицей.
+Числа и полярность проверяются раньше WSD-оценки, а primary-hint слова под
+курсором — раньше совокупных вторичных смыслов. Оставшийся
+structural-loss, `Conflict`/`Mixed` или `Unresolved` получает один адресный repair,
+поэтому нормальный sense-path
+делает два generation, предельный — три. До трёх
+предыдущих строк передаются как типизированные `context_only` entries с отдельно
+помеченной speaker metadata.
 Текущий speaker label извлекается из OCR/text-hook отдельно от CURRENT; явно
-выбранный для этой игры род передаётся APE только как grammatical metadata без
-имени. Известный мужской/женский род гарантирует попытку APE; если она не прошла,
+выбранный для этой игры род передаётся второму проходу только как grammatical metadata без
+имени. Известный мужской/женский род гарантирует контекстную попытку; если она не прошла,
 полезный direct-result можно показать, но нельзя записать в gender-specific
 кэш. Provider-neutral evidence содержит английские определения
 и выбранные/отвергнутые поверхности как ограниченные, необязательные опоры.
+Gate не меняет margin/решение ranker и не делает selected surface обязательной:
+естественный парафраз получает `Unresolved`, а не display-ошибку, но до
+разрешения не попадает в persistent cache. `банк` не совпадает с `банкет`, а
+`не в порядке` не эквивалентно `в порядке`, но вложенное `в порядке` внутри
+правильного `не в порядке` само по себе не считается rejected-вхождением;
+падежные/глагольные/прилагательные
+формы проверяются консервативной русской морфологией. Если один source встречен
+в CURRENT больше одного раза, spanless hint получает `NotApplicable`, не входит
+в prompt и не может навязать один смысл всем вхождениям.
+
+Conditioned/repair builder ограничивает полный raw prompt 4800 символами при
+закреплённом `ctx-size=2048`: сначала снимает старую скрытую историю, затем
+advisory metadata и второстепенные sense-группы, но сохраняет primary-hint слова
+под курсором, CURRENT и обязательные user/VN terms. Если ни одна однозначная
+группа не помещается, conditioned generation не запускается; при наличии других
+APE-сигналов выполняется обычный context-only post-edit без этих unsafe hints.
 
 Generic guard проверяет размер и русскоязычность ответа, управляющие символы,
 prompt echo исходной и effective-фразы, объяснения и residual English с
@@ -322,18 +349,23 @@ prompt echo исходной и effective-фразы, объяснения и re
 ошибке основной результат остаётся на месте, а вторая строка становится
 `Перевод фразы недоступен`; скрытого генеративного fallback нет. Проверенные
 результаты хранятся в
-`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v5.json`; fingerprint v5
+`%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v7.json`; fingerprint v7
 включает исходную и effective-фразу, identity преобразования, упорядоченную
 скрытую историю, род текущего говорящего, semantic plan, устойчивые собственные имена, model identity и
 prompt version. Model identity включает выбранный CPU/Vulkan backend и профиль
-offload, поэтому GPU и CPU никогда не делят один принятый результат. Cache hit по-прежнему
-сначала проверяет runtime и закреплённые артефакты.
+offload, поэтому GPU и CPU никогда не делят один принятый результат. Cache entry
+сохраняет generation route и точный набор применённых source-групп; приоритет
+hovered evidence входит в ключ. Structural-loss, `Unresolved`/`Mixed`/`Conflict`
+не сохраняются. На cache hit этот набор
+восстанавливается для benchmark telemetry; runtime и закреплённые артефакты
+по-прежнему проверяются первыми.
 
 Default smoke проверяет direct/APE prompt, request, parser, pins обоих runner,
 явную CPU/Vulkan маршрутизацию без fallback, полное
 предложение 1–64 слова, speaker extraction и per-game gender mapping,
-sentence-wide sense evidence, идиоматические и буквальные пары,
-структурный guard, cache v5, miss/abstention
+sentence-wide sense evidence, пять состояний gate, repeated-source abstention,
+negation/numeral priority, bounded conditioned/repair prompt,
+идиоматические и буквальные пары, структурный guard, cache v7, miss/abstention
 routing, независимость основной и второй строк и fail-open без запуска или
 загрузки живой модели.
 Систематический live A/B качества и задержки ещё не проведён.

@@ -165,7 +165,8 @@ internal static partial class SmartPhraseTranslationGuard
         if (enforceSenseFidelity &&
             NeuralSenseFidelityGuard.FindConflictingHints(
                 translation,
-                request.SenseHints).Count > 0)
+                request.SenseHints,
+                request.SourcePhrase).Count > 0)
         {
             return Reject(SmartPhraseRejectionReason.SenseConflict);
         }
@@ -205,6 +206,10 @@ internal static partial class SmartPhraseTranslationGuard
             request.ModelInputPhrase.Contains("<start_of_turn>", StringComparison.Ordinal) ||
             request.ModelInputPhrase.Contains("<end_of_turn>", StringComparison.Ordinal) ||
             request.ProperNames is null ||
+            request.ProperNames.Any(value =>
+                string.IsNullOrWhiteSpace(value) ||
+                value.Length > 128 ||
+                HasUnsafePromptText(value)) ||
             request.PreviousContext is null ||
             request.CurrentSpeaker is { } currentSpeaker &&
             (string.IsNullOrWhiteSpace(currentSpeaker.Name) ||
@@ -229,8 +234,8 @@ internal static partial class SmartPhraseTranslationGuard
                 string.IsNullOrWhiteSpace(term.Translation) ||
                 term.Source.Length > 128 ||
                 term.Translation.Length > 256 ||
-                HasUnsafeSourceControl(term.Source) ||
-                HasUnsafeSourceControl(term.Translation) ||
+                HasUnsafePromptText(term.Source) ||
+                HasUnsafePromptText(term.Translation) ||
                 !double.IsFinite(term.Confidence)) ||
             request.SenseHints.Count > TranslationScaffoldBuilder.MaximumSenseHintCount ||
             request.SenseHints.Any(hint =>
@@ -244,10 +249,12 @@ internal static partial class SmartPhraseTranslationGuard
                 hint.RejectedTranslations is null ||
                 hint.RejectedTranslations.Count > 32 ||
                 hint.RejectedTranslations.Any(value =>
-                    string.IsNullOrWhiteSpace(value) || value.Length > 256) ||
-                HasUnsafeSourceControl(hint.Source) ||
-                HasUnsafeSourceControl(hint.EnglishDefinition) ||
-                HasUnsafeSourceControl(hint.SelectedTranslation) ||
+                    string.IsNullOrWhiteSpace(value) ||
+                    value.Length > 256 ||
+                    HasUnsafePromptText(value)) ||
+                HasUnsafePromptText(hint.Source) ||
+                HasUnsafePromptText(hint.EnglishDefinition) ||
+                HasUnsafePromptText(hint.SelectedTranslation) ||
                 !double.IsFinite(hint.Confidence)) ||
             string.IsNullOrWhiteSpace(request.ModelIdentity) ||
             string.IsNullOrWhiteSpace(request.PromptVersion))
@@ -306,6 +313,11 @@ internal static partial class SmartPhraseTranslationGuard
     private static bool HasUnsafeSourceControl(string value) =>
         value.Any(character =>
             char.IsControl(character) && character is not '\r' and not '\n' and not '\t');
+
+    private static bool HasUnsafePromptText(string value) =>
+        HasUnsafeSourceControl(value) ||
+        value.Contains("<start_of_turn>", StringComparison.Ordinal) ||
+        value.Contains("<end_of_turn>", StringComparison.Ordinal);
 
     private static bool IsIncompleteTranslation(string source, string translation)
     {

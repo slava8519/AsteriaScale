@@ -35,12 +35,25 @@ internal sealed record SmartPhraseTranslationRequest(
 /// only generate text; <see cref="SmartPhraseTranslationGuard"/> decides whether
 /// that text is safe to display as an independent phrase translation.
 /// </summary>
+internal enum SmartPhraseGenerationRoute
+{
+    Direct,
+    ContextPostEdit,
+    SenseConditioned,
+    SenseRepair
+}
+
 internal sealed record SmartPhraseTranslationResult(
     string Translation,
     string ModelIdentity,
     long ElapsedMilliseconds,
     bool FromCache = false,
-    bool Cacheable = true);
+    bool Cacheable = true,
+    SmartPhraseGenerationRoute GenerationRoute = SmartPhraseGenerationRoute.Direct)
+{
+    public IReadOnlyList<ScaffoldSenseHint> AppliedSenseHints { get; init; } =
+        Array.Empty<ScaffoldSenseHint>();
+}
 
 /// <summary>
 /// Narrow DI seam for an optional local phrase model. Failure or rejection is

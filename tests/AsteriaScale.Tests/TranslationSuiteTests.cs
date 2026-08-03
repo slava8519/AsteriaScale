@@ -184,7 +184,8 @@ internal static class TranslationSuiteTests
             SmartPhraseLineStatus.Translated,
             FromCache: false)
         {
-            SenseHints = [selected]
+            SenseHints = [selected],
+            AppliedSenseHints = [selected]
         };
 
         TranslationSuiteSmartMetadata accepted =
@@ -195,11 +196,24 @@ internal static class TranslationSuiteTests
               IsLowerHexSha256(accepted.AppliedSenseEvidenceSha256!),
             "Accepted phrase metadata lost the selected sense hints used by translation.");
 
+        TranslationSuiteSmartMetadata directRoute =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(
+                dictionary,
+                translated with
+                {
+                    AppliedSenseHints = Array.Empty<ScaffoldSenseHint>()
+                });
+        Check(directRoute.SenseEvidence.Count == 1 &&
+              directRoute.AppliedSenseEvidence.Count == 0 &&
+              directRoute.AppliedSenseEvidenceSha256 is null,
+            "A selected direct candidate falsely claimed that WSD evidence reached generation.");
+
         var unavailable = translated with
         {
             Translation = string.Empty,
             Status = SmartPhraseLineStatus.Unavailable,
-            SenseHints = Array.Empty<ScaffoldSenseHint>()
+            SenseHints = Array.Empty<ScaffoldSenseHint>(),
+            AppliedSenseHints = Array.Empty<ScaffoldSenseHint>()
         };
         TranslationSuiteSmartMetadata rejected =
             SmartTranslationSuiteSystem.CreateSmartMetadata(dictionary, unavailable);
@@ -216,7 +230,11 @@ internal static class TranslationSuiteTests
         TranslationSuiteSmartMetadata ignoredFields =
             SmartTranslationSuiteSystem.CreateSmartMetadata(
                 dictionary,
-                translated with { SenseHints = [equivalent] });
+                translated with
+                {
+                    SenseHints = [equivalent],
+                    AppliedSenseHints = [equivalent]
+                });
         Check(ignoredFields.AppliedSenseEvidenceSha256 ==
               accepted.AppliedSenseEvidenceSha256,
             "Confidence or rejected surfaces leaked into prompt-visible sense evidence identity.");
@@ -230,7 +248,11 @@ internal static class TranslationSuiteTests
         TranslationSuiteSmartMetadata emojiMetadata =
             SmartTranslationSuiteSystem.CreateSmartMetadata(
                 dictionary,
-                translated with { SenseHints = [emojiHint] });
+                translated with
+                {
+                    SenseHints = [emojiHint],
+                    AppliedSenseHints = [emojiHint]
+                });
         Check(emojiMetadata.AppliedSenseEvidenceSha256 ==
               "6f53d613312c5e45bedb95a2e9ac4e724561255a2b81a5bb38e039af6b646b0b",
             "C# smart evidence hash no longer matches the UTF-16 cross-runtime contract.");

@@ -16,9 +16,12 @@ internal sealed record SmartHoverPhraseLine(
     SmartPhraseLineStatus Status,
     bool FromCache)
 {
-    // Benchmark diagnostics retain the selected sense hints supplied to a
-    // successful phrase request. Other prompt sections are ranker-invariant.
+    // Benchmark diagnostics distinguish evidence supplied to a request from
+    // evidence that actually reached the selected generated hypothesis.
     public IReadOnlyList<ScaffoldSenseHint> SenseHints { get; init; } =
+        Array.Empty<ScaffoldSenseHint>();
+
+    public IReadOnlyList<ScaffoldSenseHint> AppliedSenseHints { get; init; } =
         Array.Empty<ScaffoldSenseHint>();
 }
 
@@ -754,7 +757,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                 SmartPhraseLineStatus.Translated,
                 translated.FromCache)
             {
-                SenseHints = senseHints
+                SenseHints = senseHints,
+                AppliedSenseHints = translated.AppliedSenseHints
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -786,6 +790,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             .GroupBy(
                 hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
             .Select(group => group.Last())
+            .Select(hint => hint with { IsPrimary = true })
             .Take(TranslationScaffoldBuilder.MaximumSenseHintCount)
             .ToArray();
         HashSet<(string Source, string Definition, string Translation)> hoveredKeys =
@@ -795,14 +800,17 @@ internal sealed class SmartHoverPipeline : IDisposable
                 .ToHashSet();
         int sentenceCapacity = TranslationScaffoldBuilder.MaximumSenseHintCount -
                                distinctHoveredHints.Length;
-        return sentenceHints
+        // Primary hover evidence is retained first. The prompt budgeter also
+        // understands IsPrimary, so this ordering is deterministic rather than
+        // being an accidental last-item-wins convention.
+        return distinctHoveredHints
+            .Concat(sentenceHints
             .Where(hint => !hoveredKeys.Contains(
                 (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation)))
             .GroupBy(
                 hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
             .Select(group => group.Last())
-            .Take(sentenceCapacity)
-            .Concat(distinctHoveredHints)
+            .Take(sentenceCapacity))
             .ToArray();
     }
 

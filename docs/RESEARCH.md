@@ -2377,5 +2377,85 @@ Descriptive chrF2 ConSeC против GlossBERT вырос на `+0,002116`, foc
 advisory evidence внутри TranslateGemma/post-edit. ConSeC остаётся лучшим
 research/scientific профилем; GlossBERT сохраняется stable-default до
 sense-preservation gate. Настройка следующей политики выполняется только на
-dev201, подтверждение — один раз на source-disjoint replication199; frozen
-holdout для этой работы не открывался.
+dev201, подтверждение — один раз на source-disjoint replication199. На момент
+этого A/B frozen holdout не открывался; более поздняя случайная частичная
+экспозиция во время code review отдельно зафиксирована ниже и не использовалась.
+
+## Sense-preservation gate v1 — 31 июля 2026
+
+Downstream bottleneck из MuCoW зафиксирован в runtime без изменения ranker:
+margin `0,25`, GroupId, provider/model identity и общий decision cache не
+трогались. Официальный direct prompt TranslateGemma остаётся byte-exact
+кандидатом A. Когда provider-neutral `SenseHints` непуст, прежний APE
+заменяется свежим conditioned-кандидатом B из CURRENT: direct-черновик ему не
+передаётся, зато передаются выбранное английское определение, inflectable
+русская опора и до четырёх морфологически отличимых rejected-поверхностей.
+
+Новый evaluator выдаёт по каждому Ordinal source `NotApplicable`, `Satisfied`,
+`Unresolved`, `Mixed` или `Conflict`. Positive и negative evidence проверяются
+консервативной русской морфологией: падежи, формы глагола, прилагательные и
+`ё/е` сохраняются, substring вроде `банк` в `банкет` не считается совпадением.
+Span-aware проверка не считает вложенное `в порядке` конфликтом внутри принятого
+`не в порядке`, но видит отдельное rejected-вхождение в той же строке.
+Повторённый source и разные selected-решения без character span дают fail-open
+`NotApplicable`, исключаются из prompt и не навязывают один смысл нескольким
+вхождениям; selected/rejected формы одной парадигмы не создают ложный конфликт.
+Selector лексикографический, без обученного или ручного веса:
+display safety → mandatory user/VN terms → сохранность полярности в обе стороны
+и чисел → состояния primary-hint → меньше совокупных Conflict → Mixed →
+Unresolved → больше Satisfied → advisory terms. Primary слова под курсором не
+может быть перевешен несколькими вторичными source-группами. Полярность считается
+по остаточным смысловым единицам: accepted source/target evidence связывается
+one-to-one с конкретными span, а русское отрицательное согласование (`никто … не`)
+схлопывается в одну единицу. Поэтому лицензированное `не в порядке` не скрывает
+лишнее `не нравится`, а одно сохранившееся отрицание — потерю соседнего.
+Полная ничья остаётся за A;
+известный род говорящего разрешает семантически не худшему B выиграть ничью.
+
+Если лучший A/B всё ещё имеет structural-loss, `Conflict`, `Mixed` или
+`Unresolved`, разрешён ровно один source-grounded repair с кодом нарушения.
+Цикла нет: обычный sense-path имеет два generation,
+предельный — три, все делят прежние lock и 90-секундный timeout. Ошибка B/repair
+fail-open показывает display-safe лучший предыдущий кандидат, но не кэширует
+его, чтобы следующий hover мог повторить улучшение. Финальный `Unresolved`
+также не кэшируется: естественный парафраз можно показать fail-open, но нельзя
+без подтверждения превратить в постоянный «успех».
+
+После независимого diff-review добавлен общий prompt budget: conditioned и
+repair не превышают 4800 символов при `ctx-size=2048`. При переполнении сначала
+удаляется самая старая hidden history, затем advisory metadata и второстепенные
+sense-группы; primary-hint слова под курсором, CURRENT и mandatory user/VN terms
+не режутся. Если не помещается ни одна однозначная source-группа,
+conditioned-запрос не выполняется; context/gender APE при необходимости получает
+копию request без spanless/несовместимых sense hints.
+
+Composite prompt/policy identity поднят до v7; persistent phrase cache также
+стал schema v7 и сохраняет `Direct`/`ContextPostEdit`/`SenseConditioned`/
+`SenseRepair`. Cache entry хранит точные source-группы, реально переданные
+выбранному conditioned/repair prompt; primary-priority входит в fingerprint,
+а structural-loss/`Unresolved`/`Mixed`/`Conflict` не записываются. Benchmark
+telemetry различает supplied и applied evidence даже
+после cache hit: при выбранном direct подсказка не заявляется применённой.
+Добавлены детерминированные тесты пяти агрегатных состояний, repeated source,
+морфологии и операторов, отрицания/чисел, bounded prompt, A/B selector,
+единственного repair, cancellation race, transient fail-open, prompt injection,
+route-aware cache и официального direct.
+Полный smoke: `54/54`; live-модель и frozen holdout как benchmark при реализации
+не запускались.
+
+### Журнал доступа к holdout — 31 июля 2026
+
+Во время независимого test-review слишком широкий `rg` по `assets` случайно
+напечатал несколько одиночных совпадений из
+`assets/Translation/translation-holdout-v1.json` и
+`assets/Ranker/ranker-holdout-v2.json`. Файлы целиком не открывались, строки не
+сохранялись и не использовались ни в проектировании, ни в тестах, ни в выборе
+политики. Тем не менее это считается частичной экспозицией: эти два holdout не
+используются для заявленного one-shot подтверждения текущего gate; для него
+нужен новый source-disjoint blind set либо заранее предусмотренная
+`replication199`.
+
+Следующий измерительный шаг — тот же dev201 A/B baseline против
+`gate v1`, затем ровно одно подтверждение выбранной политики на source-disjoint
+replication199. До этих прогонов утверждать прирост translation-sense или
+приемлемость p95 нельзя; stable-default ranker пока не меняется.

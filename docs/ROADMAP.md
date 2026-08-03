@@ -27,14 +27,14 @@
 | 5 | Декомпозиция HoverTranslationService — **выполнено; после retirement старых Screen/Neural/Qwen-маршрутов ScreenTranslationFlow удалён, остались SmartHoverPipeline + HoverTracking и жизненный цикл текущих моделей** | 2 | M | — |
 | 6 | Память словарей — **этап 1 выполнен: senses −24% (63 МБ, UTF-8-блобы с ленивым декодом), интернирование значений −18.5 МБ, RunDetached устранил удержание hoisted-локалов; FrozenDictionary для больших словарей отвергнут замером (+57 МБ). Цель ≤120 МБ — за mmap-этапом 2** | 2 | M | — |
 | 7 | Bi-энкодер — **выполнено: MiniLM-префильтр (порог >16 групп, top-12, fail-open), протокол v3, офлайн-индекс 225 тыс. векторов; PCA отложена (диск дешевле RAM), k=8 отвергнут замером (терял верный смысл «set»), v3-holdout сознательно не открыт — решения побайтно тождественны cross-пути** | 2 | L | 0, 1 |
-| 8 | Готовые semantic ranker-ы: **SANDWiCH и independent ConSeC CPU интегрированы; MuCoW downstream A/B выполнен — ConSeC улучшает WSD, но TranslateGemma слабо использует evidence; следующий этап — sense-preservation gate, затем feedback/joint planner; GlossBERT пока default** | 3 | XL | 0, 7, 14.2B–C |
+| 8 | Готовые semantic ranker-ы: **SANDWiCH и independent ConSeC CPU интегрированы; MuCoW downstream A/B выполнен; sense-preservation gate v1 внедрён (direct + fresh conditioned, морфологический selector, один targeted repair, route-aware cache v7). Следующий этап — dev201/replication199 A/B gate, затем feedback/joint planner; GlossBERT пока default** | 3 | XL | 0, 7, 14.2B–C |
 | 9 | Умный словарь для японского | 3 | L | 7 |
 | 10 | Пресет ArtCNN — **реализовано и отозвано: конвертер из Magpie PR #1415 генерирует MagpieFX под dev-ветку, Magpie 0.12.1 эффект не компилирует (проверено вживую). Ждём официальной поддержки в релизе Magpie; лицензионный анализ сохранён (официальные веса MIT — да, Ani4Kv2 CC BY-NC — нет), механизм авто-установки эффектов оставлен в MagpieEngineService. Возврат = один файл в assets/Effects + пресет** | 3 | S | Magpie upstream |
 | 11 | UX: редактор словарей, история, Anki — **выполнено: окно «Мой словарь» с поиском/добавлением/удалением и канонизацией ключей, история 200 переводов с персистом, перенос записи из истории в словарь, TSV-экспорт для Anki; попутно устранена давняя флака атомарной записи (AtomicFile)** | 3 | M | — |
 | 12 | HDR capture path | 3 | XL (внешняя) | Magpie upstream |
 
 **Рекомендуемый порядок оставшихся работ:**
-№8 (TranslateGemma sense-preservation, затем ConSeC feedback/joint) → №15 → №18 → №16 → №19; №9 делать рядом с
+№8 (проверка sense-gate на dev201/replication199, затем ConSeC feedback/joint) → №15 → №18 → №16 → №19; №9 делать рядом с
 японской частью №16, mmap-этап №6 — только по описанным триггерам.
 Обоснование: сначала нужно перестать терять реплики и гарантировать качество
 самого EN smart-слоя. Independent ConSeC выиграл открытый sentence-dev и
@@ -1171,10 +1171,10 @@ ellipsis/multi-sentence/wrapped-line tests зелёные; десять сохр
 - основной словарный результат или решение GlossBERT показывается первым и
   больше не меняется; TranslateGemma добавляет отдельную вторую строку;
 - `SmartPhraseContextBuilder` возвращает полное предложение вокруг
-  OCR/text-hook target (2–64 слова, до 1000 символов), не захватывает соседние
+  OCR/text-hook target (1–64 слова, до 1000 символов), не захватывает соседние
   предложения и никогда не выдаёт обрезанный перевод при превышении бюджета;
 - `TranslateGemmaTranslationService` запускает закреплённые
-  `google/translategemma-4b-it` Q4_K_M и llama.cpp b9632 как отдельный CPU-only
+  `google/translategemma-4b-it` Q4_K_M и llama.cpp b9632 как отдельный CPU/Vulkan
   `llama-server`; артефакты не bundled и устанавливаются только после явного
   принятия Gemma Terms;
 - `SmartPhraseIdiomRewriter` перед моделью преобразует только доказанный,
@@ -1184,23 +1184,32 @@ ellipsis/multi-sentence/wrapped-line tests зелёные; десять сохр
   модель переводит его естественнее без парафразы;
 - первый raw `/completion` использует официальный direct EN→RU prompt, где
   единственный переводимый payload — текущее английское предложение либо его
-  EN→EN-парафраза. Для длинного/ролевого текста, semantic evidence или
-  Textractor-контекста выполняется максимум один отдельный APE post-edit;
-  предыдущие строки того же PID и точного hook-потока помечены `DO NOT
-  TRANSLATE`, а принятый GlossBERT-смысл и deterministic scaffold выступают
-  ограниченными подсказками, не меняя primary;
+  EN→EN-парафраза. Без sense evidence длинный/ролевой текст и Textractor-контекст
+  получают прежний один APE. При sense evidence независимый conditioned B снова
+  переводит CURRENT с выбранными и отвергнутыми опорами; детерминированный gate
+  сравнивает A/B по structural safety, mandatory terms и состояниям
+  `NotApplicable/Satisfied/Unresolved/Mixed/Conflict`. Повторённый source без span
+  исключается; primary hover-hint переживает prompt trimming и оценивается раньше
+  всех secondary senses; полярность сопоставляется one-to-one по смысловым
+  единицам (`никто … не` — одна), а вместе с числами проверяется раньше sense
+  score. Оставшийся structural-loss,
+  `Unresolved`/`Mixed`/`Conflict` получает один targeted repair; максимум — три
+  generation в общем 90-секундном и 4800-символьном prompt-бюджете;
 - фаза запускается для любого EN smart-result: miss, abstention,
   trusted/Tatoeba/heuristic/one-outcome, принятый или кэшированный ranker result
   и сохранённая карточка при ошибке. Она не превращает ни один из этих исходов
   в решение GlossBERT;
-- отдельный persistent SHA-LRU schema v4 включает current/effective sentence,
+- отдельный persistent SHA-LRU schema v7 включает current/effective sentence,
   упорядоченный скрытый контекст, semantic plan, transform identity, устойчивые
-  proper names, model identity и prompt version.
+  proper names, model identity, prompt version и выбранный generation route.
+  Entry хранит точные применённые source-группы; финальный
+  structural-loss/`Unresolved`/`Mixed`/`Conflict` не кэшируется, supplied/applied evidence
+  различаются в benchmark telemetry и после cache hit.
   Cache hit не пропускает проверку и прогрев закреплённых артефактов;
 - output guard нормализует одиночный служебный маркер, отклоняет повреждённый
   или слишком длинный ответ, prompt echo, объяснение, нерусский текст и residual
-  English, проверяет deterministic terms и явный конфликт выбранного/
-  отвергнутого GlossBERT-смысла;
+  English, проверяет deterministic terms и явный `Conflict`/`Mixed` выбранного и
+  отвергнутого provider-neutral смысла; естественный парафраз остаётся fail-open;
 - любая ошибка или отклонение сохраняет primary и показывает
   `Перевод фразы недоступен`. Phrase lane не может активировать full-Qwen
   fallback.

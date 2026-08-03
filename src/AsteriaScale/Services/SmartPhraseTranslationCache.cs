@@ -12,7 +12,7 @@ namespace AsteriaScale.Services;
 /// </summary>
 internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
 {
-    internal const int SchemaVersion = 5;
+    internal const int SchemaVersion = 7;
     private const int DefaultCapacity = 4_096;
     private const long DefaultMaximumFileBytes = 4L * 1024 * 1024;
     private const int MaximumStoredTranslationLength =
@@ -33,7 +33,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
             cachePath ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "AsteriaScale",
-                "smart-phrase-translations.v5.json"),
+                "smart-phrase-translations.v7.json"),
             SchemaVersion,
             capacity,
             maximumFileBytes,
@@ -59,8 +59,22 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
                 entry.Translation,
                 entry.ModelIdentity,
                 entry.ElapsedMilliseconds,
-                FromCache: true);
-            if (!SmartPhraseTranslationGuard.ValidateForDisplay(request, result).Accepted)
+                FromCache: true,
+                GenerationRoute: entry.GenerationRoute)
+            {
+                AppliedSenseHints = ResolveAppliedSenseHints(
+                    request,
+                    entry.AppliedSenseHintIndexes)
+            };
+            bool evidenceRoute = entry.GenerationRoute is
+                SmartPhraseGenerationRoute.SenseConditioned or
+                SmartPhraseGenerationRoute.SenseRepair;
+            if (evidenceRoute != (result.AppliedSenseHints.Count > 0) ||
+                result.AppliedSenseHints.Count != entry.AppliedSenseHintIndexes.Length ||
+                !SmartPhraseTranslationGuard.ValidateForDisplay(request, result).Accepted ||
+                SensePreservationGate.HasBlockingSemanticFailure(
+                    request,
+                    result.Translation))
             {
                 access.Entries.Remove(fingerprint);
                 access.MarkDirty();
@@ -74,8 +88,10 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stores only output that passes the display guard. Neural WSD evidence is
-    /// advisory here; deterministic terms, safety and completeness stay strict.
+    /// Stores only output that passes the display guard, preserves structural
+    /// invariants and has no unresolved, mixed or conflicting applicable sense.
+    /// Natural paraphrases may still be displayed fail-open, but are retried
+    /// rather than fossilized in the LRU.
     /// </summary>
     public Task<bool> StoreAsync(
         SmartPhraseTranslationRequest request,
@@ -86,7 +102,22 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
         SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.ValidateForDisplay(
             request,
             result);
-        if (!guarded.Accepted || result.ElapsedMilliseconds < 0)
+        bool evidenceRoute = result.GenerationRoute is
+            SmartPhraseGenerationRoute.SenseConditioned or
+            SmartPhraseGenerationRoute.SenseRepair;
+        int[] appliedHintIndexes = ResolveAppliedSenseHintIndexes(
+            request,
+            result.AppliedSenseHints);
+        bool appliedEvidenceValid =
+            evidenceRoute == (appliedHintIndexes.Length > 0) &&
+            appliedHintIndexes.Length == result.AppliedSenseHints.Count;
+        if (!guarded.Accepted ||
+            !result.Cacheable ||
+            result.ElapsedMilliseconds < 0 ||
+            !appliedEvidenceValid ||
+            SensePreservationGate.HasBlockingSemanticFailure(
+                request,
+                guarded.Translation))
         {
             return Task.FromResult(false);
         }
@@ -99,6 +130,8 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
                 Translation = guarded.Translation,
                 ModelIdentity = result.ModelIdentity,
                 ElapsedMilliseconds = result.ElapsedMilliseconds,
+                GenerationRoute = result.GenerationRoute,
+                AppliedSenseHintIndexes = appliedHintIndexes,
                 LastAccess = access.Touch()
             };
             access.MarkDirty();
@@ -121,7 +154,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
     {
         ValidateRequest(request);
         StringBuilder canonical = new();
-        Append(canonical, "asteria-smart-phrase-cache-v5");
+        Append(canonical, "asteria-smart-phrase-cache-v7");
         Append(canonical, request.SourcePhrase);
         Append(canonical, request.ModelInputPhrase);
         Append(canonical, request.TransformIdentity);
@@ -151,6 +184,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
             Append(canonical, hint.SelectedTranslation);
             AppendList(canonical, "rejected", hint.RejectedTranslations);
             Append(canonical, hint.Confidence.ToString("R", CultureInfo.InvariantCulture));
+            Append(canonical, hint.IsPrimary ? "primary" : "secondary");
         }
 
         Append(canonical, request.ModelIdentity);
@@ -198,8 +232,68 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
                translation is { Length: > 0 and <= MaximumStoredTranslationLength } &&
                modelIdentity is { Length: > 0 and <= MaximumStoredIdentityLength } &&
                entry.ElapsedMilliseconds >= 0 &&
+               Enum.IsDefined(entry.GenerationRoute) &&
+               entry.AppliedSenseHintIndexes is { Length: <=
+                   TranslationScaffoldBuilder.MaximumSenseHintCount } &&
+               entry.AppliedSenseHintIndexes.All(index => index is >= 0 and <
+                   TranslationScaffoldBuilder.MaximumSenseHintCount) &&
+               entry.AppliedSenseHintIndexes.Distinct().Count() ==
+                   entry.AppliedSenseHintIndexes.Length &&
+               (entry.GenerationRoute is
+                    SmartPhraseGenerationRoute.SenseConditioned or
+                    SmartPhraseGenerationRoute.SenseRepair) ==
+                   (entry.AppliedSenseHintIndexes.Length > 0) &&
                entry.LastAccess >= 0;
     }
+
+    private static IReadOnlyList<ScaffoldSenseHint> ResolveAppliedSenseHints(
+        SmartPhraseTranslationRequest request,
+        IReadOnlyList<int> appliedIndexes) =>
+        appliedIndexes
+            .Where(index => index >= 0 && index < request.SenseHints.Count)
+            .Select(index => request.SenseHints[index])
+            .ToArray();
+
+    private static int[] ResolveAppliedSenseHintIndexes(
+        SmartPhraseTranslationRequest request,
+        IReadOnlyList<ScaffoldSenseHint> appliedHints)
+    {
+        HashSet<int> used = [];
+        List<int> indexes = [];
+        foreach (ScaffoldSenseHint applied in appliedHints)
+        {
+            int index = Enumerable.Range(0, request.SenseHints.Count)
+                .FirstOrDefault(
+                    candidate => !used.Contains(candidate) &&
+                                 SameSenseHint(request.SenseHints[candidate], applied),
+                    -1);
+            if (index < 0)
+            {
+                continue;
+            }
+
+            used.Add(index);
+            indexes.Add(index);
+        }
+
+        return indexes.ToArray();
+    }
+
+    private static bool SameSenseHint(ScaffoldSenseHint left, ScaffoldSenseHint right) =>
+        string.Equals(left.Source, right.Source, StringComparison.Ordinal) &&
+        string.Equals(
+            left.EnglishDefinition,
+            right.EnglishDefinition,
+            StringComparison.Ordinal) &&
+        string.Equals(
+            left.SelectedTranslation,
+            right.SelectedTranslation,
+            StringComparison.Ordinal) &&
+        left.RejectedTranslations.SequenceEqual(
+            right.RejectedTranslations,
+            StringComparer.Ordinal) &&
+        left.Confidence.Equals(right.Confidence) &&
+        left.IsPrimary == right.IsPrimary;
 
     private static void AppendList(
         StringBuilder builder,
@@ -228,6 +322,8 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
         public string Translation { get; set; } = string.Empty;
         public string ModelIdentity { get; set; } = string.Empty;
         public long ElapsedMilliseconds { get; set; }
+        public SmartPhraseGenerationRoute GenerationRoute { get; set; }
+        public int[] AppliedSenseHintIndexes { get; set; } = Array.Empty<int>();
         public long LastAccess { get; set; }
     }
 }

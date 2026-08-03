@@ -1535,11 +1535,11 @@ try
                     full.SenseHints).Count == 1 &&
                NeuralSenseFidelityGuard.FindConflictingHints(
                     "На глазах выступили слёзы, но ткань получила разрывы.",
-                    full.SenseHints).Count == 0 &&
+                    full.SenseHints).Count == 1 &&
                NeuralSenseFidelityGuard.FindConflictingHints(
                     "Она едва сдерживала плач.",
                     full.SenseHints).Count == 0,
-            "GlossBERT must retry only an explicit rejected-surface substitution.");
+            "The sense gate must distinguish conflict, mixed evidence and a natural paraphrase.");
         ScaffoldSenseHint bankHint = new(
             "bank",
             "sloping land beside a river",

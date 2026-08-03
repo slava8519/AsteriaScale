@@ -1276,11 +1276,12 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
         TranslationSuiteSenseEvidence[] evidence = ProjectSenseEvidence(selectedHints);
         TranslationSuiteSenseEvidence[] appliedEvidence =
             phrase is { Status: SmartPhraseLineStatus.Translated }
-                ? ProjectSenseEvidence(phrase.SenseHints)
+                ? ProjectSenseEvidence(phrase.AppliedSenseHints)
                 : Array.Empty<TranslationSuiteSenseEvidence>();
         string evidenceFingerprint = FingerprintSenseEvidence(evidence);
         string? appliedFingerprint =
-            phrase is { Status: SmartPhraseLineStatus.Translated }
+            phrase is { Status: SmartPhraseLineStatus.Translated } &&
+            appliedEvidence.Length > 0
                 ? FingerprintSenseEvidence(appliedEvidence)
                 : null;
         return new TranslationSuiteSmartMetadata(

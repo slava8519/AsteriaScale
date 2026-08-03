@@ -174,8 +174,10 @@ internal static class SmartHoverPhraseIntegrationTests
                   .Select(outcome => outcome.GroupId)
                   .SequenceEqual(Enumerable.Range(0, request.Plan.Outcomes.Count))) &&
               translator.LastRequest?.SenseHints.Select(hint => hint.Source)
-                  .SequenceEqual(["birch", "cedar", "amber"], StringComparer.Ordinal) == true,
-            "The phrase request did not preserve local GroupIds or combine sentence-wide senses with the hovered sense.");
+                  .SequenceEqual(["amber", "birch", "cedar"], StringComparer.Ordinal) == true &&
+              translator.LastRequest.SenseHints[0].IsPrimary &&
+              translator.LastRequest.SenseHints.Skip(1).All(hint => !hint.IsPrimary),
+            "The phrase request did not preserve GroupIds or prioritize the hovered sense over sentence-wide evidence.");
     }
 
     private static async Task VerifyIdiomRewriteRanksOriginalSourceAsync(string root)

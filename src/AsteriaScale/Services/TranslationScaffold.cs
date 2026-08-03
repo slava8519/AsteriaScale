@@ -16,6 +16,11 @@ internal sealed record ScaffoldSenseHint(
     IReadOnlyList<string> RejectedTranslations,
     double Confidence)
 {
+    // Hover-selected evidence is the user's immediate lookup intent. Keeping
+    // that bit explicit lets bounded prompts discard secondary sentence senses
+    // first without coupling the translator to hover-pipeline ordering.
+    public bool IsPrimary { get; init; }
+
     public ScaffoldSenseHint(
         string Source,
         string EnglishDefinition,

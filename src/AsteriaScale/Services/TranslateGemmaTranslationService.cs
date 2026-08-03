@@ -19,6 +19,10 @@ internal enum TranslateGemmaExecutionBackend
     Vulkan
 }
 
+internal sealed record SensePromptPlan(
+    string Prompt,
+    IReadOnlyList<ScaffoldSenseHint> AppliedSenseHints);
+
 /// <summary>
 /// Owns an isolated llama.cpp process for the pinned TranslateGemma experiment.
 /// Artifact acquisition is deliberately outside this service: a missing or
@@ -40,7 +44,11 @@ internal sealed class TranslateGemmaTranslationService :
         ModelSha256 + "/llama.cpp-b9632-vulkan-full";
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
     public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v4";
-    public const string PromptIdentity = "translategemma-direct-ape-en-ru-v5";
+    public const string SenseConditionedPromptIdentity =
+        "translategemma-sense-conditioned-en-ru-v2";
+    public const string SenseRepairPromptIdentity = "translategemma-sense-repair-en-ru-v2";
+    public const string SenseGatePolicyIdentity = "translategemma-sense-gate-policy-v2";
+    public const string PromptIdentity = "translategemma-direct-ape-sense-gate-en-ru-v7";
     public const string RunnerBuild = "b9632";
     public const string RunnerArchiveFileName = "llama-b9632-bin-win-cpu-x64.zip";
     public const string RunnerArchiveSha256 =
@@ -60,6 +68,10 @@ internal sealed class TranslateGemmaTranslationService :
     internal const string OllamaBlobFileName = "sha256-" + ModelSha256;
     internal const int MaximumGeneratedTokens = 256;
     internal const int MaximumSourceCharacters = SmartPhraseContextBuilder.MaximumCharacters;
+    // The pinned server has a 2,048-token context and reserves 256 tokens for
+    // output. A conservative character ceiling keeps JSON-heavy multilingual
+    // prompts below that window without relying on an unpinned tokenizer API.
+    internal const int MaximumSensePromptCharacters = 4_800;
 
     private static readonly TimeSpan DefaultStartupTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(90);
@@ -469,6 +481,9 @@ internal sealed class TranslateGemmaTranslationService :
         long started = Stopwatch.GetTimestamp();
         string translation;
         bool cacheable = true;
+        SmartPhraseGenerationRoute generationRoute = SmartPhraseGenerationRoute.Direct;
+        IReadOnlyList<ScaffoldSenseHint> appliedSenseHints =
+            Array.Empty<ScaffoldSenseHint>();
         bool requiresGenderPostEdit =
             request.CurrentSpeaker?.Gender is SpeakerGender.Masculine or SpeakerGender.Feminine;
         await _requestLock.WaitAsync(cancellationToken);
@@ -511,7 +526,42 @@ internal sealed class TranslateGemmaTranslationService :
                 directGuard,
                 directDisplayGuard);
 
-            if (ShouldPostEdit(request, directGuard))
+            SensePromptPlan? conditionedPlan = request.SenseHints.Count > 0
+                ? TryBuildSenseConditionedPromptPlan(request)
+                : null;
+            SmartPhraseTranslationRequest postEditRequest =
+                conditionedPlan is null && request.SenseHints.Count > 0
+                    ? CreateContextOnlyPostEditRequest(request)
+                    : request;
+            if (conditionedPlan is not null)
+            {
+                SensePreservationRunResult gated = await RunSensePreservationGateAsync(
+                    request,
+                    modelIdentity,
+                    direct,
+                    (prompt, token) => SendCompletionAsync(
+                        endpoint,
+                        apiKey,
+                        prompt,
+                        token),
+                    timeout.Token,
+                    cancellationToken,
+                    conditionedPlan);
+                translation = gated.Selected.Translation;
+                generationRoute = gated.Selected.Kind switch
+                {
+                    SensePreservationCandidateKind.Conditioned =>
+                        SmartPhraseGenerationRoute.SenseConditioned,
+                    SensePreservationCandidateKind.Repair =>
+                        SmartPhraseGenerationRoute.SenseRepair,
+                    _ => SmartPhraseGenerationRoute.Direct
+                };
+                appliedSenseHints = gated.Selected.AppliedSenseHints;
+                cacheable = gated.Cacheable &&
+                            (!requiresGenderPostEdit ||
+                             generationRoute != SmartPhraseGenerationRoute.Direct);
+            }
+            else if (ShouldPostEdit(postEditRequest, directGuard))
             {
                 try
                 {
@@ -519,18 +569,18 @@ internal sealed class TranslateGemmaTranslationService :
                     string corrected = await SendCompletionAsync(
                         endpoint,
                         apiKey,
-                        BuildPostEditRawPrompt(request, translation),
+                        BuildPostEditRawPrompt(postEditRequest, translation),
                         timeout.Token);
                     SmartPhraseGuardResult correctedGuard =
                         SmartPhraseTranslationGuard.Validate(
-                            request,
+                            postEditRequest,
                             new SmartPhraseTranslationResult(
                                 corrected,
                                 modelIdentity,
                                 ElapsedMilliseconds: 0));
                     SmartPhraseGuardResult correctedDisplayGuard =
                         SmartPhraseTranslationGuard.ValidateForDisplay(
-                            request,
+                            postEditRequest,
                             new SmartPhraseTranslationResult(
                                 corrected,
                                 modelIdentity,
@@ -538,17 +588,22 @@ internal sealed class TranslateGemmaTranslationService :
                     if (correctedGuard.Accepted)
                     {
                         translation = correctedGuard.Translation;
+                        generationRoute = SmartPhraseGenerationRoute.ContextPostEdit;
                     }
                     else if (correctedDisplayGuard.Accepted)
                     {
-                        translation = requiresGenderPostEdit ||
-                                      !directDisplayGuard.Accepted ||
-                                      IsDisplaySemanticImprovement(
-                                          request,
-                                          directDisplayGuard.Translation,
-                                          correctedDisplayGuard.Translation)
+                        bool useCorrected = requiresGenderPostEdit ||
+                                            !directDisplayGuard.Accepted ||
+                                            IsDisplaySemanticImprovement(
+                                                postEditRequest,
+                                                directDisplayGuard.Translation,
+                                                correctedDisplayGuard.Translation);
+                        translation = useCorrected
                             ? correctedDisplayGuard.Translation
                             : directDisplayGuard.Translation;
+                        generationRoute = useCorrected
+                            ? SmartPhraseGenerationRoute.ContextPostEdit
+                            : SmartPhraseGenerationRoute.Direct;
                     }
                     else if (directDisplayGuard.Accepted)
                     {
@@ -580,7 +635,7 @@ internal sealed class TranslateGemmaTranslationService :
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException(
-                $"TranslateGemma did not finish direct + post-edit within {_requestTimeout.TotalSeconds:0} s. " +
+                $"TranslateGemma did not finish its bounded translation passes within {_requestTimeout.TotalSeconds:0} s. " +
                 ProcessFailureSuffix());
         }
         finally
@@ -595,7 +650,11 @@ internal sealed class TranslateGemmaTranslationService :
             translation,
             modelIdentity,
             elapsed,
-            Cacheable: cacheable);
+            Cacheable: cacheable,
+            GenerationRoute: generationRoute)
+        {
+            AppliedSenseHints = appliedSenseHints
+        };
     }
 
     public async Task UnloadAsync()
@@ -725,6 +784,505 @@ internal sealed class TranslateGemmaTranslationService :
             "\nSEMANTIC EVIDENCE (JSON): " + evidenceJson;
         return "<start_of_turn>user\n" + payload +
                "<end_of_turn>\n<start_of_turn>model\n";
+    }
+
+    internal static string BuildSenseConditionedRawPrompt(
+        SmartPhraseTranslationRequest request)
+        => TryBuildSenseConditionedPromptPlan(request)?.Prompt ??
+           throw new InvalidOperationException(
+               "No unambiguous sense evidence fits the pinned model context.");
+
+    internal static SensePromptPlan? TryBuildSenseConditionedPromptPlan(
+        SmartPhraseTranslationRequest request)
+    {
+        ValidateSensePromptRequest(request);
+        IReadOnlyList<ScaffoldSenseHint> applicable =
+            NeuralSenseFidelityGuard.GetApplicableHints(
+                request.SourcePhrase,
+                request.SenseHints);
+        return BuildBudgetedSensePromptPlan(
+            request,
+            applicable,
+            (context, names, terms, applied) =>
+                BuildSenseConditionedRawPromptCore(
+                    request,
+                    context,
+                    names,
+                    terms,
+                    applied));
+    }
+
+    private static string BuildSenseConditionedRawPromptCore(
+        SmartPhraseTranslationRequest request,
+        IReadOnlyList<string> previousContext,
+        IReadOnlyList<string> properNames,
+        IReadOnlyList<ScaffoldTerm> semanticTerms,
+        IReadOnlyList<ScaffoldSenseHint> appliedHints)
+    {
+        string current = NormalizeSource(request.ModelInputPhrase);
+        string contextJson = BuildPreviousContextPromptJson(previousContext);
+        string currentSpeakerJson = BuildCurrentSpeakerPromptJson(request.CurrentSpeaker);
+        string currentJson = JsonSerializer.Serialize(current, PromptJsonOptions);
+        string evidenceJson = BuildSenseEvidencePromptJson(
+            properNames,
+            semanticTerms,
+            appliedHints);
+        const string instruction =
+            "You are producing an independent English-to-Russian translation candidate. " +
+            "Translate the complete CURRENT text only. PREVIOUS_CONTEXT is context only: never translate, quote, " +
+            "summarize, continue, or output it or its speakerMetadata. CURRENT_SPEAKER is grammatical metadata " +
+            "only and must never become a label or a name in the output. When grammaticalGender is masculine or " +
+            "feminine, use it only for forms whose subject is the current speaker; never transfer it to an " +
+            "addressee or third person. Preserve every clause, semantic role, negation, modality, cause, contrast, " +
+            "tone, deliberate irony, quotation, and both sides of an internal ellipsis. Never invent a name, " +
+            "possessive, modifier, detail, or specificity. SEMANTIC_EVIDENCE contains required concepts and " +
+            "senseConstraints accepted by a separate disambiguator. For each source occurrence, preserve its " +
+            "meaning and use selectedRussian only as an inflectable lexical anchor, not wording to copy. Do not " +
+            "use rejectedRussian to render that source occurrence. A natural Russian paraphrase of the selected " +
+            "meaning is allowed. Return only one complete Russian translation of CURRENT, without labels, " +
+            "numbering, explanations, alternatives, or the English source.";
+        string payload =
+            instruction +
+            "\nPREVIOUS_CONTEXT (DO NOT TRANSLATE, JSON entries): " + contextJson +
+            "\nCURRENT_SPEAKER (DO NOT OUTPUT, JSON metadata): " + currentSpeakerJson +
+            "\nCURRENT (TRANSLATE ONLY THIS JSON string): " + currentJson +
+            "\nSEMANTIC_EVIDENCE (JSON): " + evidenceJson;
+        return "<start_of_turn>user\n" + payload +
+               "<end_of_turn>\n<start_of_turn>model\n";
+    }
+
+    internal static string BuildSenseRepairRawPrompt(
+        SmartPhraseTranslationRequest request,
+        string draft,
+        IReadOnlyList<ScaffoldSenseHint> repairHints,
+        IReadOnlyList<string>? structuralViolationCodes = null)
+        => TryBuildSenseRepairPromptPlan(
+               request,
+               draft,
+               repairHints,
+           structuralViolationCodes)?.Prompt ??
+           throw new InvalidOperationException(
+               "No repair evidence fits the pinned model context.");
+
+    internal static SensePromptPlan? TryBuildSenseRepairPromptPlan(
+        SmartPhraseTranslationRequest request,
+        string draft,
+        IReadOnlyList<ScaffoldSenseHint> repairHints,
+        IReadOnlyList<string>? structuralViolationCodes = null)
+    {
+        ValidateSensePromptRequest(request);
+        ArgumentNullException.ThrowIfNull(repairHints);
+        string[] structuralCodes = (structuralViolationCodes ?? Array.Empty<string>())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (structuralCodes.Any(code => code is not
+                SensePreservationGate.PolarityMismatchCode and not
+                SensePreservationGate.NumberNotPreservedCode))
+        {
+            throw new ArgumentException(
+                "Unknown structural violation code.",
+                nameof(structuralViolationCodes));
+        }
+
+        if (repairHints.Count == 0 && structuralCodes.Length == 0)
+        {
+            throw new ArgumentException(
+                "At least one violated sense or structure fact is required.",
+                nameof(repairHints));
+        }
+
+        string normalizedDraft = SmartPhraseTranslationGuard.NormalizeOutput(draft);
+        if (normalizedDraft.Length == 0 ||
+            normalizedDraft.Length > SmartPhraseTranslationGuard.MaximumOutputCharacters)
+        {
+            throw new ArgumentException("Invalid Russian draft for sense repair.", nameof(draft));
+        }
+
+        HashSet<string> focusSources = repairHints
+            .Select(hint => hint.Source)
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .ToHashSet(StringComparer.Ordinal);
+        IReadOnlyList<ScaffoldSenseHint> allApplicable =
+            NeuralSenseFidelityGuard.GetApplicableHints(
+                request.SourcePhrase,
+                request.SenseHints);
+        IReadOnlyList<ScaffoldSenseHint> applicable = repairHints.Count > 0
+            ? allApplicable
+                .Where(hint => focusSources.Contains(hint.Source))
+                .ToArray()
+            : allApplicable;
+        return BuildBudgetedSensePromptPlan(
+            request,
+            applicable,
+            (context, names, terms, applied) =>
+                BuildSenseRepairRawPromptCore(
+                    request,
+                    normalizedDraft,
+                    context,
+                    names,
+                    terms,
+                    applied,
+                    structuralCodes));
+    }
+
+    private static string BuildSenseRepairRawPromptCore(
+        SmartPhraseTranslationRequest request,
+        string normalizedDraft,
+        IReadOnlyList<string> previousContext,
+        IReadOnlyList<string> properNames,
+        IReadOnlyList<ScaffoldTerm> semanticTerms,
+        IReadOnlyList<ScaffoldSenseHint> appliedHints,
+        IReadOnlyList<string> structuralViolationCodes)
+    {
+        string current = NormalizeSource(request.ModelInputPhrase);
+        string contextJson = BuildPreviousContextPromptJson(previousContext);
+        string currentSpeakerJson = BuildCurrentSpeakerPromptJson(request.CurrentSpeaker);
+        string currentJson = JsonSerializer.Serialize(current, PromptJsonOptions);
+        string draftJson = JsonSerializer.Serialize(normalizedDraft, PromptJsonOptions);
+        string[] focusSources = appliedHints
+            .Select(hint => hint.Source)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        string evidenceJson = BuildSenseEvidencePromptJson(
+            properNames,
+            semanticTerms,
+            appliedHints);
+        object[] violations = focusSources
+            .Select(source => (object)new
+            {
+                source,
+                code = "sense_not_preserved"
+            })
+            .Concat(structuralViolationCodes.Select(code => (object)new { code }))
+            .ToArray();
+        string violationJson = JsonSerializer.Serialize(violations, PromptJsonOptions);
+        const string instruction =
+            "You are repairing one English-to-Russian translation after a deterministic sense-preservation check. " +
+            "Translate the complete CURRENT text only. The RUSSIAN_DRAFT is not authoritative: repair each listed " +
+            "violation while preserving every clause, semantic role, negation, modality, cause, contrast, tone, " +
+            "quotation, and both sides of an internal ellipsis. PREVIOUS_CONTEXT and CURRENT_SPEAKER are hidden " +
+            "context only and must never be output. For each violated source occurrence, preserve the selected " +
+            "English meaning. Treat selectedRussian as an inflectable lexical anchor and do not use rejectedRussian " +
+            "to render that occurrence. Do not delete the concept merely to avoid a rejected word, and do not invent " +
+            "details. Return only one complete corrected Russian translation of CURRENT, without labels, numbering, " +
+            "explanations, or alternatives.";
+        string payload =
+            instruction +
+            "\nPREVIOUS_CONTEXT (DO NOT TRANSLATE, JSON entries): " + contextJson +
+            "\nCURRENT_SPEAKER (DO NOT OUTPUT, JSON metadata): " + currentSpeakerJson +
+            "\nCURRENT (TRANSLATE ONLY THIS JSON string): " + currentJson +
+            "\nRUSSIAN_DRAFT (REPAIR, JSON string): " + draftJson +
+            "\nVIOLATIONS (JSON): " + violationJson +
+            "\nSEMANTIC_EVIDENCE (JSON): " + evidenceJson;
+        return "<start_of_turn>user\n" + payload +
+               "<end_of_turn>\n<start_of_turn>model\n";
+    }
+
+    internal static async Task<SensePreservationRunResult> RunSensePreservationGateAsync(
+        SmartPhraseTranslationRequest request,
+        string modelIdentity,
+        string direct,
+        Func<string, CancellationToken, Task<string>> completeAsync,
+        CancellationToken completionToken,
+        CancellationToken callerCancellationToken,
+        SensePromptPlan? prebuiltConditionedPlan = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
+        ArgumentNullException.ThrowIfNull(direct);
+        ArgumentNullException.ThrowIfNull(completeAsync);
+        if (request.SenseHints.Count == 0)
+        {
+            throw new ArgumentException("Sense gate requires accepted sense evidence.", nameof(request));
+        }
+
+        List<SensePreservationCandidate> candidates =
+        [
+            SensePreservationGate.Evaluate(
+                request,
+                direct,
+                modelIdentity,
+                SensePreservationCandidateKind.Direct)
+        ];
+        SensePromptPlan? conditionedPlan = prebuiltConditionedPlan ??
+                                           TryBuildSenseConditionedPromptPlan(request);
+        if (conditionedPlan is null)
+        {
+            return new SensePreservationRunResult(
+                candidates[0],
+                AdditionalGenerationCount: 0,
+                Cacheable: IsCandidateCacheable(candidates[0]));
+        }
+
+        int additionalGenerations = 0;
+        try
+        {
+            additionalGenerations++;
+            string conditioned = await completeAsync(
+                conditionedPlan.Prompt,
+                completionToken);
+            candidates.Add(SensePreservationGate.Evaluate(
+                request,
+                conditioned,
+                modelIdentity,
+                SensePreservationCandidateKind.Conditioned,
+                conditionedPlan.AppliedSenseHints));
+            callerCancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            callerCancellationToken.ThrowIfCancellationRequested();
+            if (candidates[0].DisplayAccepted)
+            {
+                // The primary dictionary line is already visible. A transient
+                // conditioned-pass failure may show direct A, but must not make it
+                // persistent: the next hover should be allowed to try the gate again.
+                return new SensePreservationRunResult(
+                    candidates[0],
+                    additionalGenerations,
+                    Cacheable: false);
+            }
+
+            throw;
+        }
+
+        SensePreservationCandidate selected =
+            SensePreservationGate.SelectBest(request, candidates);
+        if (!SensePreservationGate.RequiresTargetedRepair(selected))
+        {
+            return new SensePreservationRunResult(
+                selected,
+                additionalGenerations,
+                Cacheable: IsCandidateCacheable(selected));
+        }
+
+        SensePromptPlan? repairPlan = TryBuildSenseRepairPromptPlan(
+            request,
+            selected.Translation,
+            selected.SenseAssessment.RepairHints,
+            selected.StructuralViolationCodes);
+        if (repairPlan is null)
+        {
+            return new SensePreservationRunResult(
+                selected,
+                additionalGenerations,
+                Cacheable: false);
+        }
+
+        try
+        {
+            additionalGenerations++;
+            string repaired = await completeAsync(
+                repairPlan.Prompt,
+                completionToken);
+            candidates.Add(SensePreservationGate.Evaluate(
+                request,
+                repaired,
+                modelIdentity,
+                SensePreservationCandidateKind.Repair,
+                repairPlan.AppliedSenseHints));
+            callerCancellationToken.ThrowIfCancellationRequested();
+            selected = SensePreservationGate.SelectBest(request, candidates);
+            return new SensePreservationRunResult(
+                selected,
+                additionalGenerations,
+                Cacheable: IsCandidateCacheable(selected));
+        }
+        catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            callerCancellationToken.ThrowIfCancellationRequested();
+            if (selected.DisplayAccepted)
+            {
+                return new SensePreservationRunResult(
+                    selected,
+                    additionalGenerations,
+                    Cacheable: false);
+            }
+
+            throw;
+        }
+    }
+
+    private static bool IsCandidateCacheable(SensePreservationCandidate candidate) =>
+        candidate.StructuralPenaltyCount == 0 &&
+        !candidate.SenseAssessment.HasBlockingState;
+
+    private static void ValidateSensePromptRequest(SmartPhraseTranslationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (SmartPhraseTranslationGuard.ValidateRequest(request) !=
+                SmartPhraseRejectionReason.None ||
+            request.SenseHints.Count == 0)
+        {
+            throw new ArgumentException("Invalid sense-conditioned request.", nameof(request));
+        }
+    }
+
+    internal static SmartPhraseTranslationRequest CreateContextOnlyPostEditRequest(
+        SmartPhraseTranslationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        // Repeated or internally incompatible source-level WSD evidence has no
+        // character span. It must not sneak back into the legacy APE prompt
+        // after the gate omits it.
+        return request with { SenseHints = Array.Empty<ScaffoldSenseHint>() };
+    }
+
+    private static SensePromptPlan? BuildBudgetedSensePromptPlan(
+        SmartPhraseTranslationRequest request,
+        IReadOnlyList<ScaffoldSenseHint> applicableHints,
+        Func<
+            IReadOnlyList<string>,
+            IReadOnlyList<string>,
+            IReadOnlyList<ScaffoldTerm>,
+            IReadOnlyList<ScaffoldSenseHint>,
+            string> buildPrompt)
+    {
+        if (applicableHints.Count == 0)
+        {
+            return null;
+        }
+
+        List<string> context = request.PreviousContext.ToList();
+        List<string> names = request.ProperNames.ToList();
+        List<ScaffoldTerm> mandatoryTerms = request.SemanticTerms
+            .Where(ScaffoldTermPolicy.IsMandatory)
+            .ToList();
+        List<ScaffoldTerm> advisoryTerms = request.SemanticTerms
+            .Where(term => !ScaffoldTermPolicy.IsMandatory(term))
+            .ToList();
+        List<string> sources = applicableHints
+            .GroupBy(hint => hint.Source, StringComparer.Ordinal)
+            .OrderByDescending(group => group.Any(hint => hint.IsPrimary))
+            .Select(group => group.Key)
+            .ToList();
+
+        string BuildCurrent()
+        {
+            HashSet<string> included = new(sources, StringComparer.Ordinal);
+            ScaffoldSenseHint[] applied = applicableHints
+                .Where(hint => included.Contains(hint.Source))
+                .GroupBy(hint => hint.Source, StringComparer.Ordinal)
+                .SelectMany(group => group
+                    .GroupBy(hint => hint.EnglishDefinition, StringComparer.Ordinal)
+                    .Select(definitions => definitions.First())
+                    .Take(SemanticSenseEvidenceFactory.MaximumDefinitionsPerSense))
+                .ToArray();
+            return buildPrompt(
+                context,
+                names,
+                mandatoryTerms.Concat(advisoryTerms).ToArray(),
+                applied);
+        }
+
+        string prompt = BuildCurrent();
+        while (prompt.Length > MaximumSensePromptCharacters && context.Count > 0)
+        {
+            context.RemoveAt(0);
+            prompt = BuildCurrent();
+        }
+
+        while (prompt.Length > MaximumSensePromptCharacters && advisoryTerms.Count > 0)
+        {
+            advisoryTerms.RemoveAt(advisoryTerms.Count - 1);
+            prompt = BuildCurrent();
+        }
+
+        while (prompt.Length > MaximumSensePromptCharacters && names.Count > 0)
+        {
+            names.RemoveAt(names.Count - 1);
+            prompt = BuildCurrent();
+        }
+
+        // Sources are ordered by evidence priority. Trimming from the tail
+        // preserves the hover-selected sense whenever at least one group fits.
+        while (prompt.Length > MaximumSensePromptCharacters && sources.Count > 1)
+        {
+            sources.RemoveAt(sources.Count - 1);
+            prompt = BuildCurrent();
+        }
+
+        if (prompt.Length > MaximumSensePromptCharacters || sources.Count == 0)
+        {
+            return null;
+        }
+
+        HashSet<string> appliedSources = new(sources, StringComparer.Ordinal);
+        IReadOnlyList<ScaffoldSenseHint> finalApplied = applicableHints
+            .Where(hint => appliedSources.Contains(hint.Source))
+            .GroupBy(hint => hint.Source, StringComparer.Ordinal)
+            .SelectMany(group => group
+                .GroupBy(hint => hint.EnglishDefinition, StringComparer.Ordinal)
+                .Select(definitions => definitions.First())
+                .Take(SemanticSenseEvidenceFactory.MaximumDefinitionsPerSense))
+            .ToArray();
+        return new SensePromptPlan(prompt, finalApplied);
+    }
+
+    private static string BuildSenseEvidencePromptJson(
+        IReadOnlyList<string> properNames,
+        IReadOnlyList<ScaffoldTerm> semanticTerms,
+        IReadOnlyList<ScaffoldSenseHint> appliedHints)
+    {
+        object[] senseConstraints = appliedHints
+            .GroupBy(hint => hint.Source, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                ScaffoldSenseHint[] grouped = group.ToArray();
+                string[] selected = grouped
+                    .Select(hint => hint.SelectedTranslation)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                if (!NeuralSenseFidelityGuard.AreMutuallyCompatible(selected))
+                {
+                    return null;
+                }
+
+                string selectedRussian = selected[0];
+                string[] rejected = grouped
+                    .SelectMany(hint => hint.RejectedTranslations)
+                    .Where(value => !NeuralSenseFidelityGuard.AreEquivalentSurfaces(
+                        selectedRussian,
+                        value))
+                    .Distinct(StringComparer.Ordinal)
+                    .Take(4)
+                    .ToArray();
+                return (object)new
+                {
+                    source = group.Key,
+                    selectedMeanings = grouped
+                        .Select(hint => hint.EnglishDefinition)
+                        .Where(value => !string.IsNullOrWhiteSpace(value))
+                        .Distinct(StringComparer.Ordinal)
+                        .Take(2),
+                    selectedRussian,
+                    rejectedRussian = rejected
+                };
+            })
+            .Where(value => value is not null)
+            .Cast<object>()
+            .ToArray();
+        var evidence = new
+        {
+            policy = SenseGatePolicyIdentity,
+            properNames,
+            requiredConcepts = semanticTerms.Select(term => new
+            {
+                source = term.Source,
+                russian = term.Translation,
+                mandatory = ScaffoldTermPolicy.IsMandatory(term)
+            }),
+            senseConstraints
+        };
+        return JsonSerializer.Serialize(evidence, PromptJsonOptions);
     }
 
     internal static string BuildPreviousContextPromptJson(
@@ -1021,7 +1579,10 @@ internal sealed class TranslateGemmaTranslationService :
         string translation) =>
         (
             SenseFidelityGuard.FindMissingTerms(translation, request.SemanticTerms).Count,
-            NeuralSenseFidelityGuard.FindConflictingHints(translation, request.SenseHints).Count
+            NeuralSenseFidelityGuard.FindConflictingHints(
+                translation,
+                request.SenseHints,
+                request.SourcePhrase).Count
         );
 
     internal static async Task ValidatePinnedArtifactAsync(
