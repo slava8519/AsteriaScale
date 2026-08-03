@@ -8,6 +8,7 @@ public sealed class WindowInfo
     public string ProcessPath { get; init; } = string.Empty;
     public string ClassName { get; init; } = string.Empty;
     public int ProcessId { get; init; }
+    public long ProcessStartTimeUtcTicks { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
 

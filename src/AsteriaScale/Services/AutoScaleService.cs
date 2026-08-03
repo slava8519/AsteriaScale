@@ -9,6 +9,8 @@ public sealed class AutoScaleService : IAsyncDisposable
     private static readonly TimeSpan IdlePollingInterval = TimeSpan.FromMilliseconds(650);
     private static readonly TimeSpan ScalingPollingInterval = TimeSpan.FromMilliseconds(75);
     private static readonly TimeSpan ScalingSourceGracePeriod = TimeSpan.FromMilliseconds(750);
+    private static readonly TimeSpan ScalingSourceAbandonmentGracePeriod = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan AutomationRetryBackoff = TimeSpan.FromSeconds(10);
 
     private readonly AppSettings _settings;
     private readonly WindowCatalogService _windowCatalog;
@@ -17,8 +19,10 @@ public sealed class AutoScaleService : IAsyncDisposable
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private nint _candidateHandle;
     private DateTime _candidateSince;
-    private nint _lastTriggeredHandle;
     private int _lastTriggeredProcessId;
+    private long _lastTriggeredProcessStartTimeUtcTicks;
+    private AutomationAttemptLatch _deferredAutomationAttempt;
+    private DateTime _automationRetryNotBefore;
     private Task? _activeTick;
     private bool _desktopCursorOverrideActive;
     private bool _magnificationInitialized;
@@ -27,6 +31,7 @@ public sealed class AutoScaleService : IAsyncDisposable
     private bool _scalingSourceReadyObserved;
     private MagpieEngineService.ScalingSessionIdentity _scalingSessionIdentity;
     private DateTime _scalingSourceUnavailableSince;
+    private DateTime _scalingSourceNextVerificationUtc;
     private bool _disposed;
 
     internal enum DesktopCursorAction
@@ -52,6 +57,11 @@ public sealed class AutoScaleService : IAsyncDisposable
         WaitForGrace,
         VerifyAndStop
     }
+
+    internal readonly record struct AutomationAttemptLatch(
+        nint Handle,
+        int ProcessId,
+        long ProcessStartTimeUtcTicks);
 
     public AutoScaleService(
         AppSettings settings,
@@ -157,7 +167,7 @@ public sealed class AutoScaleService : IAsyncDisposable
         }
 
         MagpieEngineService.ScalingSessionSnapshot scalingSession = isScaling
-            ? _engine.GetScalingSessionSnapshot()
+            ? _engine.GetScalingSessionSnapshot(_scalingSessionIdentity)
             : default;
         DateTime now = DateTime.UtcNow;
         TimeSpan unavailableDuration = _scalingSourceUnavailableSince == default
@@ -182,6 +192,7 @@ public sealed class AutoScaleService : IAsyncDisposable
                 _scalingSourceReadyObserved = true;
                 _scalingSessionIdentity = scalingSession.Identity;
                 _scalingSourceUnavailableSince = default;
+                _scalingSourceNextVerificationUtc = default;
                 break;
             case ScalingSourceTrackingAction.WaitForGrace:
                 if (_scalingSourceUnavailableSince == default)
@@ -191,13 +202,29 @@ public sealed class AutoScaleService : IAsyncDisposable
 
                 break;
             case ScalingSourceTrackingAction.VerifyAndStop:
-                // The engine repeats all identity and liveness checks after
-                // acquiring its operation lock. A recovered/new session or a
-                // still-live game window is therefore never killed here.
-                await _engine.StopOwnedEngineIfSourceStillUnavailableAsync(
+                if (now < _scalingSourceNextVerificationUtc)
+                {
+                    break;
+                }
+
+                // The engine repeats identity and liveness checks under its
+                // operation lock. A live source process gets a long recovery
+                // window for HWND replacement, but an abandoned headless
+                // session is eventually released instead of polling forever.
+                bool allowHeadlessSourceProcessStop =
+                    unavailableDuration >= ScalingSourceAbandonmentGracePeriod;
+                bool stopped = await _engine.StopOwnedEngineIfSourceStillUnavailableAsync(
                     _scalingSessionIdentity,
+                    allowHeadlessSourceProcessStop,
                     cancellationToken);
-                _scalingSourceUnavailableSince = now;
+                _scalingSourceNextVerificationUtc = allowHeadlessSourceProcessStop
+                    ? now + TimeSpan.FromSeconds(2)
+                    : _scalingSourceUnavailableSince + ScalingSourceAbandonmentGracePeriod;
+                if (stopped)
+                {
+                    ResetScalingSourceTracking();
+                }
+
                 return;
             default:
                 throw new ArgumentOutOfRangeException();
@@ -214,14 +241,16 @@ public sealed class AutoScaleService : IAsyncDisposable
             _engine.IsScaling,
             foreground?.Handle ?? nint.Zero,
             foreground?.ProcessId ?? 0,
-            _lastTriggeredHandle,
-            _lastTriggeredProcessId);
+            foreground?.ProcessStartTimeUtcTicks ?? 0,
+            _lastTriggeredProcessId,
+            _lastTriggeredProcessStartTimeUtcTicks);
         if (latchAction != AutomationLatchAction.Eligible)
         {
             if (latchAction == AutomationLatchAction.Clear)
             {
-                _lastTriggeredHandle = nint.Zero;
                 _lastTriggeredProcessId = 0;
+                _lastTriggeredProcessStartTimeUtcTicks = 0;
+                ClearDeferredAutomationRetry();
             }
 
             ResetCandidate();
@@ -240,6 +269,20 @@ public sealed class AutoScaleService : IAsyncDisposable
             return;
         }
 
+        if (ShouldDeferAutomationRetry(
+                DateTime.UtcNow,
+                _automationRetryNotBefore,
+                eligibleForeground.ProcessId,
+                eligibleForeground.ProcessStartTimeUtcTicks,
+                _deferredAutomationAttempt.ProcessId,
+                _deferredAutomationAttempt.ProcessStartTimeUtcTicks))
+        {
+            ResetCandidate();
+            return;
+        }
+
+        ClearDeferredAutomationRetry();
+
         if (_candidateHandle != eligibleForeground.Handle)
         {
             _candidateHandle = eligibleForeground.Handle;
@@ -252,19 +295,76 @@ public sealed class AutoScaleService : IAsyncDisposable
             return;
         }
 
+        AutomationAttemptLatch attempt = ArmAutomationAttempt(
+            eligibleForeground.Handle,
+            eligibleForeground.ProcessId,
+            eligibleForeground.ProcessStartTimeUtcTicks);
+        bool commandWasDispatched = false;
+
+        void OnCommandDispatched()
+        {
+            // Fullscreen Magpie can iconify the source before its readiness
+            // handshake completes. Latch at the dispatch boundary so a later
+            // timeout cannot become a focus/toggle loop, while preflight
+            // failures remain retryable after a quiet backoff.
+            commandWasDispatched = true;
+            ArmLastAutomationAttempt(attempt);
+            ClearDeferredAutomationRetry();
+            LogScaleLifecycle(
+                "auto-start",
+                attempt,
+                isScaling: _engine.IsScaling,
+                restored: false);
+        }
+
         try
         {
             StatusChanged?.Invoke(this, string.Format("Автозапуск: {0}", profile.Name));
-            await _engine.ScaleAsync(
+            await _engine.ScaleAutomaticallyAsync(
                 eligibleForeground,
                 PresetCatalog.Find(profile.PresetId),
                 profile.Windowed,
                 _settings.VisualNovelFrameRateLimit,
-                cancellationToken);
-            _lastTriggeredHandle = eligibleForeground.Handle;
-            _lastTriggeredProcessId = eligibleForeground.ProcessId;
+                OnCommandDispatched,
+                cancellationToken: cancellationToken);
+            if (!commandWasDispatched)
+            {
+                // Another caller won the race and already scaled this target.
+                ArmLastAutomationAttempt(attempt);
+                ClearDeferredAutomationRetry();
+            }
+
             _scalingObserved = true;
             _cursorRestorePending = true;
+            LogScaleLifecycle("auto-confirmed", attempt, isScaling: true, restored: false);
+        }
+        catch (Exception exception)
+        {
+            bool isScalingAfterFailure = _engine.IsScaling;
+            bool targetExists = NativeMethods.IsWindow(attempt.Handle);
+            bool targetIconic = targetExists && NativeMethods.IsIconic(attempt.Handle);
+            bool restore = ShouldRestoreTargetAfterFailedStart(
+                commandWasDispatched,
+                isScalingAfterFailure,
+                targetExists,
+                targetIconic);
+            if (restore)
+            {
+                NativeMethods.ShowWindow(attempt.Handle, NativeMethods.SwRestore);
+            }
+
+            LogScaleLifecycle(
+                $"{(commandWasDispatched ? "auto-failed" : "auto-preflight-failed")}:{exception.GetType().Name}",
+                attempt,
+                isScalingAfterFailure,
+                restore);
+            if (!commandWasDispatched)
+            {
+                _deferredAutomationAttempt = attempt;
+                _automationRetryNotBefore = DateTime.UtcNow + AutomationRetryBackoff;
+            }
+
+            throw;
         }
         finally
         {
@@ -283,6 +383,19 @@ public sealed class AutoScaleService : IAsyncDisposable
         _scalingSourceReadyObserved = false;
         _scalingSessionIdentity = default;
         _scalingSourceUnavailableSince = default;
+        _scalingSourceNextVerificationUtc = default;
+    }
+
+    private void ArmLastAutomationAttempt(AutomationAttemptLatch attempt)
+    {
+        _lastTriggeredProcessId = attempt.ProcessId;
+        _lastTriggeredProcessStartTimeUtcTicks = attempt.ProcessStartTimeUtcTicks;
+    }
+
+    private void ClearDeferredAutomationRetry()
+    {
+        _deferredAutomationAttempt = default;
+        _automationRetryNotBefore = default;
     }
 
     internal static DesktopCursorAction PlanDesktopCursorAction(
@@ -350,8 +463,9 @@ public sealed class AutoScaleService : IAsyncDisposable
         bool isScaling,
         nint foregroundHandle,
         int foregroundProcessId,
-        nint lastTriggeredHandle,
-        int lastTriggeredProcessId)
+        long foregroundProcessStartTimeUtcTicks,
+        int lastTriggeredProcessId,
+        long lastTriggeredProcessStartTimeUtcTicks)
     {
         if (!automationEnabled)
         {
@@ -363,10 +477,94 @@ public sealed class AutoScaleService : IAsyncDisposable
             return AutomationLatchAction.Keep;
         }
 
-        return foregroundHandle == lastTriggeredHandle &&
-               foregroundProcessId == lastTriggeredProcessId
+        if (foregroundProcessId != lastTriggeredProcessId ||
+            lastTriggeredProcessId <= 0)
+        {
+            return AutomationLatchAction.Eligible;
+        }
+
+        // VN engines commonly replace their top-level HWND while entering or
+        // leaving fullscreen. PID + start time identifies the game instance;
+        // HWND is intentionally not part of the repeat-start decision.
+        bool bothStartTimesKnown =
+            foregroundProcessStartTimeUtcTicks > 0 &&
+            lastTriggeredProcessStartTimeUtcTicks > 0;
+        return !bothStartTimesKnown ||
+               foregroundProcessStartTimeUtcTicks == lastTriggeredProcessStartTimeUtcTicks
             ? AutomationLatchAction.Keep
             : AutomationLatchAction.Eligible;
+    }
+
+    internal static AutomationAttemptLatch ArmAutomationAttempt(
+        nint handle,
+        int processId,
+        long processStartTimeUtcTicks)
+    {
+        if (handle == nint.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(handle));
+        }
+
+        if (processId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(processId));
+        }
+
+        return new AutomationAttemptLatch(
+            handle,
+            processId,
+            processStartTimeUtcTicks);
+    }
+
+    internal static bool ShouldRestoreTargetAfterFailedStart(
+        bool commandWasDispatched,
+        bool isScaling,
+        bool targetExists,
+        bool targetIconic) =>
+        commandWasDispatched && !isScaling && targetExists && targetIconic;
+
+    internal static bool ShouldDeferAutomationRetry(
+        DateTime now,
+        DateTime retryNotBefore,
+        int currentProcessId,
+        long currentProcessStartTimeUtcTicks,
+        int deferredProcessId,
+        long deferredProcessStartTimeUtcTicks) =>
+        now < retryNotBefore &&
+        MagpieEngineService.IsSameProcessInstance(
+            deferredProcessId,
+            deferredProcessStartTimeUtcTicks,
+            currentProcessId,
+            currentProcessStartTimeUtcTicks);
+
+    private static void LogScaleLifecycle(
+        string action,
+        AutomationAttemptLatch attempt,
+        bool isScaling,
+        bool restored)
+    {
+        try
+        {
+            string directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "AsteriaScale");
+            Directory.CreateDirectory(directory);
+            string path = Path.Combine(directory, "scale-lifecycle.log");
+            FileInfo log = new(path);
+            if (log.Exists && log.Length > 256 * 1024)
+            {
+                File.Move(path, path + ".1", overwrite: true);
+            }
+
+            File.AppendAllText(
+                path,
+                $"[{DateTimeOffset.Now:O}] {action} hwnd=0x{attempt.Handle.ToInt64():X} " +
+                $"pid={attempt.ProcessId} scaling={isScaling} restored={restored}{Environment.NewLine}");
+        }
+        catch
+        {
+            // Scaling diagnostics must never interfere with automation.
+        }
     }
 
     private bool UpdateDesktopCursorOverride(DesktopCursorAction action)

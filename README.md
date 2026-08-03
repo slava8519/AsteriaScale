@@ -173,6 +173,7 @@ Smoke-тесты проверяют каталог пресетов, round-trip 
 
 - настройки Asteria: `%LOCALAPPDATA%\AsteriaScale\settings.json`;
 - диагностический журнал редких ошибок перевода: `%LOCALAPPDATA%\AsteriaScale\hover-translation.log`;
+- диагностический журнал автозапуска Magpie: `%LOCALAPPDATA%\AsteriaScale\scale-lifecycle.log` (не содержит текста или заголовков игры);
 - опциональные TranslateGemma/llama.cpp artifacts: `%LOCALAPPDATA%\AsteriaScale\Models\TranslateGemma`;
 - кэш принятых предложений: `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v7.json`;
 - встроенные автономные словари: `dist\AsteriaScale\Dictionaries` (около 27,3 МБ в сжатом виде);

@@ -115,12 +115,45 @@ public sealed class MagpieEngineService : IAsyncDisposable
 
     public event EventHandler<string>? StatusChanged;
 
-    public async Task ScaleAsync(
+    public Task ScaleAsync(
         WindowInfo target,
         UpscalePreset preset,
         bool windowed,
         int visualNovelFrameRateLimit = VisualNovelFrameRates.Default,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ScaleCoreAsync(
+            target,
+            preset,
+            windowed,
+            visualNovelFrameRateLimit,
+            allowKeyboardFallback: true,
+            commandDispatched: null,
+            cancellationToken);
+
+    internal Task ScaleAutomaticallyAsync(
+        WindowInfo target,
+        UpscalePreset preset,
+        bool windowed,
+        int visualNovelFrameRateLimit,
+        Action commandDispatched,
+        CancellationToken cancellationToken) =>
+        ScaleCoreAsync(
+            target,
+            preset,
+            windowed,
+            visualNovelFrameRateLimit,
+            allowKeyboardFallback: false,
+            commandDispatched,
+            cancellationToken);
+
+    private async Task ScaleCoreAsync(
+        WindowInfo target,
+        UpscalePreset preset,
+        bool windowed,
+        int visualNovelFrameRateLimit,
+        bool allowKeyboardFallback,
+        Action? commandDispatched,
+        CancellationToken cancellationToken)
     {
         ValidateTargetWindow(target);
 
@@ -157,17 +190,25 @@ public sealed class MagpieEngineService : IAsyncDisposable
                     // Another source or another mode: the running session must be
                     // toggled off with *its* mode first, and confirmed stopped, so
                     // the start below cannot read the previous session's state.
-                    await StopScalingLockedAsync(ownedProcessId, activeWindowed, cancellationToken);
+                    await StopScalingLockedAsync(
+                        ownedProcessId,
+                        activeWindowed,
+                        allowKeyboardFallback,
+                        cancellationToken);
                     break;
             }
 
             if (!NativeMethods.TriggerMagpieAction(
                     windowed,
                     ownedProcessId,
-                    allowKeyboardFallback: !HasExternalMagpieProcess()))
+                    allowKeyboardFallback: ShouldUseKeyboardFallback(
+                        allowKeyboardFallback,
+                        HasExternalMagpieProcess())))
             {
                 throw new InvalidOperationException("Magpie не принял команду масштабирования.");
             }
+
+            commandDispatched?.Invoke();
 
             if (!await WaitForStateAsync(
                     () => IsScalingReadyForTarget(target.Handle),
@@ -207,7 +248,11 @@ public sealed class MagpieEngineService : IAsyncDisposable
 
             bool activeWindowedMode = IsWindowedScalingModeState(
                 NativeMethods.GetProp(scalingWindow, "Magpie.Windowed"));
-            await StopScalingLockedAsync(ownedProcessId, activeWindowedMode, cancellationToken);
+            await StopScalingLockedAsync(
+                ownedProcessId,
+                activeWindowedMode,
+                allowKeyboardFallback: true,
+                cancellationToken: cancellationToken);
             Report("Масштабирование остановлено");
         }
         finally
@@ -224,12 +269,15 @@ public sealed class MagpieEngineService : IAsyncDisposable
     private async Task StopScalingLockedAsync(
         int ownedProcessId,
         bool activeWindowedMode,
+        bool allowKeyboardFallback,
         CancellationToken cancellationToken)
     {
         if (!NativeMethods.TriggerMagpieAction(
                 activeWindowedMode,
                 ownedProcessId,
-                allowKeyboardFallback: !HasExternalMagpieProcess()))
+                allowKeyboardFallback: ShouldUseKeyboardFallback(
+                    allowKeyboardFallback,
+                    HasExternalMagpieProcess())))
         {
             throw new InvalidOperationException("Magpie не принял команду остановки масштабирования.");
         }
@@ -339,18 +387,23 @@ public sealed class MagpieEngineService : IAsyncDisposable
 
     internal async Task<bool> StopOwnedEngineIfSourceStillUnavailableAsync(
         ScalingSessionIdentity expectedSession,
+        bool allowHeadlessSourceProcessStop,
         CancellationToken cancellationToken = default)
     {
         await _operationLock.WaitAsync(cancellationToken);
         try
         {
             ThrowIfDisposed();
-            ScalingSessionSnapshot current = GetScalingSessionSnapshot();
+            ScalingSessionSnapshot current = GetScalingSessionSnapshot(expectedSession);
             bool expectedSourceStillAlive = IsExpectedSourceStillAlive(expectedSession);
+            bool expectedSourceHasUsableWindow = expectedSourceStillAlive &&
+                HasUsableTopLevelWindow(expectedSession.SourceProcessId);
             if (!ShouldStopOwnedEngineForStaleSource(
                     expectedSession,
                     current,
-                    expectedSourceStillAlive))
+                    expectedSourceStillAlive,
+                    expectedSourceHasUsableWindow,
+                    allowHeadlessSourceProcessStop))
             {
                 return false;
             }
@@ -644,7 +697,8 @@ public sealed class MagpieEngineService : IAsyncDisposable
             ? NativeMethods.FindTopLevelWindow(className, processId)
             : nint.Zero;
 
-    internal ScalingSessionSnapshot GetScalingSessionSnapshot()
+    internal ScalingSessionSnapshot GetScalingSessionSnapshot(
+        ScalingSessionIdentity knownSession = default)
     {
         if (!TryGetOwnedProcessId(out int engineProcessId))
         {
@@ -665,11 +719,20 @@ public sealed class MagpieEngineService : IAsyncDisposable
         nint sourceWindow = NativeMethods.GetProp(scalingWindow, "Magpie.SrcHWND");
         bool isSourceReady = sourceWindow != nint.Zero && NativeMethods.IsWindow(sourceWindow);
         int sourceProcessId = 0;
+        long sourceProcessStartTimeUtcTicks = 0;
         if (isSourceReady &&
             NativeMethods.GetWindowThreadProcessId(sourceWindow, out uint processId) != 0 &&
             processId <= int.MaxValue)
         {
             sourceProcessId = (int)processId;
+            bool canReuseKnownStartTime =
+                knownSession.EngineProcessId == engineProcessId &&
+                knownSession.ScalingWindow == scalingWindow &&
+                knownSession.SourceProcessId == sourceProcessId &&
+                knownSession.SourceProcessStartTimeUtcTicks > 0;
+            sourceProcessStartTimeUtcTicks = canReuseKnownStartTime
+                ? knownSession.SourceProcessStartTimeUtcTicks
+                : TryGetProcessStartTimeUtcTicks(sourceProcessId);
         }
 
         return new ScalingSessionSnapshot(
@@ -678,34 +741,126 @@ public sealed class MagpieEngineService : IAsyncDisposable
             sourceWindow,
             sourceProcessId,
             IsActive: true,
-            IsSourceReady: isSourceReady && sourceProcessId > 0);
+            IsSourceReady: isSourceReady && sourceProcessId > 0)
+        {
+            SourceProcessStartTimeUtcTicks = sourceProcessStartTimeUtcTicks
+        };
     }
 
     private static bool IsExpectedSourceStillAlive(ScalingSessionIdentity expectedSession)
     {
-        if (expectedSession.SourceWindow == nint.Zero ||
-            expectedSession.SourceProcessId <= 0 ||
-            !NativeMethods.IsWindow(expectedSession.SourceWindow) ||
-            NativeMethods.GetWindowThreadProcessId(
-                expectedSession.SourceWindow,
-                out uint processId) == 0)
+        if (expectedSession.SourceProcessId <= 0)
         {
             return false;
         }
 
-        return processId == (uint)expectedSession.SourceProcessId;
+        try
+        {
+            using Process process = Process.GetProcessById(expectedSession.SourceProcessId);
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            long currentStartTimeUtcTicks = TryGetProcessStartTimeUtcTicks(process);
+            return IsSameProcessInstance(
+                expectedSession.SourceProcessId,
+                expectedSession.SourceProcessStartTimeUtcTicks,
+                process.Id,
+                currentStartTimeUtcTicks);
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                           InvalidOperationException or
+                                           System.ComponentModel.Win32Exception or
+                                           NotSupportedException)
+        {
+            return false;
+        }
     }
+
+    private static bool HasUsableTopLevelWindow(int processId)
+    {
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        bool found = false;
+        NativeMethods.EnumWindows((window, _) =>
+        {
+            if (NativeMethods.GetWindowThreadProcessId(window, out uint ownerProcessId) == 0 ||
+                ownerProcessId != (uint)processId ||
+                !NativeMethods.IsWindow(window) ||
+                !NativeMethods.IsWindowVisible(window) ||
+                NativeMethods.GetWindow(window, NativeMethods.GwOwner) != nint.Zero ||
+                NativeMethods.IsCloaked(window) ||
+                !NativeMethods.GetClientRect(window, out NativeMethods.Rect clientRect) ||
+                clientRect.Width < 240 ||
+                clientRect.Height < 160)
+            {
+                return true;
+            }
+
+            found = true;
+            return false;
+        }, nint.Zero);
+        return found;
+    }
+
+    private static long TryGetProcessStartTimeUtcTicks(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return TryGetProcessStartTimeUtcTicks(process);
+        }
+        catch (Exception exception) when (exception is ArgumentException or
+                                           InvalidOperationException or
+                                           System.ComponentModel.Win32Exception or
+                                           NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
+    private static long TryGetProcessStartTimeUtcTicks(Process process)
+    {
+        try
+        {
+            return process.StartTime.ToUniversalTime().Ticks;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or
+                                           System.ComponentModel.Win32Exception or
+                                           NotSupportedException)
+        {
+            return 0;
+        }
+    }
+
+    internal static bool IsSameProcessInstance(
+        int expectedProcessId,
+        long expectedStartTimeUtcTicks,
+        int currentProcessId,
+        long currentStartTimeUtcTicks) =>
+        expectedProcessId > 0 &&
+        expectedProcessId == currentProcessId &&
+        (expectedStartTimeUtcTicks <= 0 ||
+         currentStartTimeUtcTicks <= 0 ||
+         expectedStartTimeUtcTicks == currentStartTimeUtcTicks);
 
     internal static bool ShouldStopOwnedEngineForStaleSource(
         ScalingSessionIdentity expectedSession,
         ScalingSessionSnapshot current,
-        bool expectedSourceStillAlive) =>
+        bool expectedSourceStillAlive,
+        bool expectedSourceHasUsableWindow = true,
+        bool allowHeadlessSourceProcessStop = false) =>
         expectedSession.IsValid &&
         current.IsActive &&
         current.EngineProcessId == expectedSession.EngineProcessId &&
         current.ScalingWindow == expectedSession.ScalingWindow &&
         !current.IsSourceReady &&
-        !expectedSourceStillAlive;
+        (!expectedSourceStillAlive ||
+         (allowHeadlessSourceProcessStop && !expectedSourceHasUsableWindow));
 
     internal readonly record struct ScalingSessionIdentity(
         int EngineProcessId,
@@ -713,6 +868,8 @@ public sealed class MagpieEngineService : IAsyncDisposable
         nint SourceWindow,
         int SourceProcessId)
     {
+        internal long SourceProcessStartTimeUtcTicks { get; init; }
+
         internal bool IsValid =>
             EngineProcessId > 0 &&
             ScalingWindow != nint.Zero &&
@@ -728,11 +885,16 @@ public sealed class MagpieEngineService : IAsyncDisposable
         bool IsActive,
         bool IsSourceReady)
     {
+        internal long SourceProcessStartTimeUtcTicks { get; init; }
+
         internal ScalingSessionIdentity Identity => new(
             EngineProcessId,
             ScalingWindow,
             SourceWindow,
-            SourceProcessId);
+            SourceProcessId)
+        {
+            SourceProcessStartTimeUtcTicks = SourceProcessStartTimeUtcTicks
+        };
     }
 
     internal static bool IsScalingSourceLostState(
@@ -785,6 +947,11 @@ public sealed class MagpieEngineService : IAsyncDisposable
 
     internal static bool IsWindowedScalingModeState(nint windowedProperty) =>
         windowedProperty != nint.Zero;
+
+    internal static bool ShouldUseKeyboardFallback(
+        bool fallbackRequested,
+        bool hasExternalMagpieProcess) =>
+        fallbackRequested && !hasExternalMagpieProcess;
 
     internal enum ScalingCommand
     {

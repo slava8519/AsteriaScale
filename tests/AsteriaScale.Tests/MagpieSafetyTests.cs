@@ -419,7 +419,21 @@ internal static class MagpieSafetyTests
                 expectedSession,
                 staleSession,
                 expectedSourceStillAlive: true),
-            "A live game window was killed only because Magpie temporarily cleared its source property.");
+            "A live game process was killed only because Magpie temporarily cleared its source property.");
+        Check(MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession,
+                expectedSourceStillAlive: true,
+                expectedSourceHasUsableWindow: false,
+                allowHeadlessSourceProcessStop: true),
+            "An abandoned headless source kept Magpie alive after the extended recovery window.");
+        Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
+                expectedSession,
+                staleSession,
+                expectedSourceStillAlive: true,
+                expectedSourceHasUsableWindow: true,
+                allowHeadlessSourceProcessStop: true),
+            "A live game window lost persistent scaling after a long desktop switch.");
         Check(!MagpieEngineService.ShouldStopOwnedEngineForStaleSource(
                 expectedSession,
                 staleSession with { EngineProcessId = 501 },
@@ -445,33 +459,131 @@ internal static class MagpieSafetyTests
                   isScaling: false,
                   foregroundHandle: sourceWindow,
                   foregroundProcessId: 77,
-                  lastTriggeredHandle: sourceWindow,
-                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Keep,
+                  foregroundProcessStartTimeUtcTicks: 1_000,
+                  lastTriggeredProcessId: 77,
+                  lastTriggeredProcessStartTimeUtcTicks: 1_000) ==
+              AutoScaleService.AutomationLatchAction.Keep,
             "A transient Magpie dropout re-armed the same game window.");
+        AutoScaleService.AutomationAttemptLatch failedAttempt =
+            AutoScaleService.ArmAutomationAttempt(
+                sourceWindow,
+                processId: 77,
+                processStartTimeUtcTicks: 1_000);
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: true,
+                  isScaling: false,
+                  foregroundHandle: nextScalingWindow,
+                  foregroundProcessId: 77,
+                  foregroundProcessStartTimeUtcTicks: 1_000,
+                  lastTriggeredProcessId: failedAttempt.ProcessId,
+                  lastTriggeredProcessStartTimeUtcTicks:
+                      failedAttempt.ProcessStartTimeUtcTicks) ==
+              AutoScaleService.AutomationLatchAction.Keep,
+            "A failed fullscreen start re-armed the same process after it replaced its HWND.");
+        Check(AutoScaleService.PlanAutomationLatch(
+                  automationEnabled: true,
+                  isScaling: false,
+                  foregroundHandle: sourceWindow,
+                  foregroundProcessId: 77,
+                  foregroundProcessStartTimeUtcTicks: 2_000,
+                  lastTriggeredProcessId: failedAttempt.ProcessId,
+                  lastTriggeredProcessStartTimeUtcTicks:
+                      failedAttempt.ProcessStartTimeUtcTicks) ==
+              AutoScaleService.AutomationLatchAction.Eligible,
+            "A new process instance reusing a PID was blocked by the failed-start latch.");
+        Check(AutoScaleService.ShouldRestoreTargetAfterFailedStart(
+                commandWasDispatched: true,
+                isScaling: false,
+                targetExists: true,
+                targetIconic: true),
+            "A failed fullscreen start left its source window minimized.");
+        Check(!AutoScaleService.ShouldRestoreTargetAfterFailedStart(
+                commandWasDispatched: true,
+                isScaling: true,
+                targetExists: true,
+                targetIconic: true),
+            "A live fullscreen session tried to restore its intentionally iconified source.");
+        Check(!AutoScaleService.ShouldRestoreTargetAfterFailedStart(
+                commandWasDispatched: false,
+                isScaling: false,
+                targetExists: true,
+                targetIconic: true),
+            "A preflight failure was treated as if Magpie had already changed the source window.");
+        DateTime retryStarted = new(2026, 8, 3, 0, 0, 0, DateTimeKind.Utc);
+        Check(AutoScaleService.ShouldDeferAutomationRetry(
+                retryStarted.AddSeconds(5),
+                retryStarted.AddSeconds(10),
+                currentProcessId: 77,
+                currentProcessStartTimeUtcTicks: 1_000,
+                deferredProcessId: 77,
+                deferredProcessStartTimeUtcTicks: 1_000),
+            "A preflight failure immediately retried against the same game process.");
+        Check(!AutoScaleService.ShouldDeferAutomationRetry(
+                retryStarted.AddSeconds(11),
+                retryStarted.AddSeconds(10),
+                currentProcessId: 77,
+                currentProcessStartTimeUtcTicks: 1_000,
+                deferredProcessId: 77,
+                deferredProcessStartTimeUtcTicks: 1_000),
+            "An expired automation backoff permanently blocked the game process.");
+        Check(!AutoScaleService.ShouldDeferAutomationRetry(
+                retryStarted.AddSeconds(5),
+                retryStarted.AddSeconds(10),
+                currentProcessId: 77,
+                currentProcessStartTimeUtcTicks: 2_000,
+                deferredProcessId: 77,
+                deferredProcessStartTimeUtcTicks: 1_000),
+            "A new game process instance inherited an old preflight backoff.");
         Check(AutoScaleService.PlanAutomationLatch(
                   automationEnabled: true,
                   isScaling: false,
                   foregroundHandle: nint.Zero,
                   foregroundProcessId: 0,
-                  lastTriggeredHandle: sourceWindow,
-                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Keep,
+                  foregroundProcessStartTimeUtcTicks: 0,
+                  lastTriggeredProcessId: 77,
+                  lastTriggeredProcessStartTimeUtcTicks: 1_000) ==
+              AutoScaleService.AutomationLatchAction.Keep,
             "A temporarily invisible legacy game cleared the one-shot latch.");
         Check(AutoScaleService.PlanAutomationLatch(
                   automationEnabled: true,
                   isScaling: false,
                   foregroundHandle: sourceWindow,
                   foregroundProcessId: 78,
-                  lastTriggeredHandle: sourceWindow,
-                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Eligible,
+                  foregroundProcessStartTimeUtcTicks: 3_000,
+                  lastTriggeredProcessId: 77,
+                  lastTriggeredProcessStartTimeUtcTicks: 1_000) ==
+              AutoScaleService.AutomationLatchAction.Eligible,
             "A new game process reusing an HWND was blocked by the old latch.");
         Check(AutoScaleService.PlanAutomationLatch(
                   automationEnabled: false,
                   isScaling: true,
                   foregroundHandle: sourceWindow,
                   foregroundProcessId: 77,
-                  lastTriggeredHandle: sourceWindow,
-                  lastTriggeredProcessId: 77) == AutoScaleService.AutomationLatchAction.Clear,
+                  foregroundProcessStartTimeUtcTicks: 1_000,
+                  lastTriggeredProcessId: 77,
+                  lastTriggeredProcessStartTimeUtcTicks: 1_000) ==
+              AutoScaleService.AutomationLatchAction.Clear,
             "Disabling automation did not explicitly re-arm its one-shot latch.");
+        Check(MagpieEngineService.IsSameProcessInstance(
+                expectedProcessId: 77,
+                expectedStartTimeUtcTicks: 1_000,
+                currentProcessId: 77,
+                currentStartTimeUtcTicks: 1_000),
+            "A live source process was treated as dead after replacing its window.");
+        Check(!MagpieEngineService.IsSameProcessInstance(
+                expectedProcessId: 77,
+                expectedStartTimeUtcTicks: 1_000,
+                currentProcessId: 77,
+                currentStartTimeUtcTicks: 2_000),
+            "A reused source PID was treated as the original game process.");
+        Check(!MagpieEngineService.ShouldUseKeyboardFallback(
+                fallbackRequested: false,
+                hasExternalMagpieProcess: false),
+            "Automation retained the global keyboard fallback used by the focus loop.");
+        Check(MagpieEngineService.ShouldUseKeyboardFallback(
+                fallbackRequested: true,
+                hasExternalMagpieProcess: false),
+            "An explicit manual start lost its local Magpie keyboard fallback.");
         Check(AutoScaleService.PollingIntervalFor(isScaling: true) <=
               TimeSpan.FromMilliseconds(100),
             "Active scaling is not polled quickly enough to restore the cursor.");

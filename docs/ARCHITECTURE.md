@@ -25,6 +25,17 @@ graph LR
 ```
 
 - **Magpie** установлен отдельно (GPLv3) и выполняет захват и HLSL-апскейл. Asteria только редактирует его `config.json` (идемпотентно, с резервной копией `*.before-asteria.json`) и управляет жизненным циклом — см. `MagpieConfigEditor`, `MagpieEngineService`.
+  Автозапуск защёлкивается сразу после успешной отправки fullscreen-команды,
+  но до ожидания подтверждения, по экземпляру процесса `(PID + start time)`,
+  а не по сменяемому HWND: ошибка подтверждения или пересоздание окна
+  VN-движком не могут породить повторный focus/toggle-цикл. Ошибки до отправки
+  команды повторяются только после короткой паузы.
+  Автоматический путь использует только служебное окно Magpie и никогда не
+  посылает глобальную комбинацию клавиш; keyboard fallback остаётся только у
+  явного ручного запуска. Очистка зависшей сессии проверяет жизнь исходного
+  экземпляра процесса и наличие у него пригодного top-level окна, а не только
+  существование прежнего HWND: Win+D/Alt+Tab сохраняют масштабирование, но
+  действительно headless-процесс после recovery grace не удерживает Magpie.
 - **RankerWorker** — дочерний процесс со строгим протоколом (см. ниже).
   Стабильный профиль по умолчанию — закреплённый GlossBERT; готовый dual-encoder
   SANDWiCH и independent ConSeC доступны как явно выбираемые экспериментальные
@@ -304,6 +315,7 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 |---|---|
 | Настройки | `%LOCALAPPDATA%\AsteriaScale\settings.json` |
 | Журнал ошибок перевода | `%LOCALAPPDATA%\AsteriaScale\hover-translation.log` (ротация при 512 КБ) |
+| Журнал автозапуска масштабирования | `%LOCALAPPDATA%\AsteriaScale\scale-lifecycle.log` (без заголовков окон, ротация при 256 КБ) |
 | Кэш умного словаря | `%LOCALAPPDATA%\AsteriaScale\smart-dictionary-cache.v2.json` |
 | Общий кэш решений semantic ranker (историческое имя файла) | `%LOCALAPPDATA%\AsteriaScale\glossbert-decisions.v1.json` |
 | Кэш принятых предложений TranslateGemma | `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v7.json` |

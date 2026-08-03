@@ -66,10 +66,20 @@ public sealed class WindowCatalogService
 
         string processName;
         string processPath = string.Empty;
+        long processStartTimeUtcTicks = 0;
         try
         {
             using Process process = Process.GetProcessById(processId);
             processName = process.ProcessName;
+            try
+            {
+                processStartTimeUtcTicks = process.StartTime.ToUniversalTime().Ticks;
+            }
+            catch
+            {
+                // PID remains the conservative fallback when process metadata is restricted.
+            }
+
             try
             {
                 processPath = process.MainModule?.FileName ?? string.Empty;
@@ -92,6 +102,7 @@ public sealed class WindowCatalogService
             ProcessPath = processPath,
             ClassName = className,
             ProcessId = processId,
+            ProcessStartTimeUtcTicks = processStartTimeUtcTicks,
             Width = clientRect.Width,
             Height = clientRect.Height
         };
