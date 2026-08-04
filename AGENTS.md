@@ -19,8 +19,10 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Relea
 ```
 
 Always run the full smoke suite after changes; it finishes in ~1 minute and
-includes a real Magpie engine start/stop. Never pass `--live`, `--foundry-live`
-or `--smart-live` unless explicitly asked.
+includes a real Magpie engine start/stop. Never pass `--live` or a
+`--*-benchmark` / `--translation-suite` mode unless explicitly asked. An
+unrecognized option now fails the run instead of falling through to the default
+smoke set, so a removed gated mode cannot report a pass it never performed.
 
 ## Hard rules
 

@@ -49,12 +49,16 @@ internal static class SensePreservationGate
         @"(?<![\p{L}\p{N}])[-+−]?(?:(?:\d{1,3}(?:[ \u00A0\u202F\u2009]\d{3})+|\d+)(?:[,.]\d+)?|[,.]\d+)(?:[eE][-+]?\d+)?(?!\p{N})",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    private static readonly Regex IsoDateRegex = new(
-        @"(?<!\d)(?<year>\d{4})[-/.](?<month>\d{1,2})[-/.](?<day>\d{1,2})(?!\d)",
+    // English writes both m/d/yyyy and d/m/yyyy, so a non-ISO English date is
+    // only field-order ambiguous, never a set of three unrelated numbers. It
+    // must stay one date fact: decomposing it made every correct Russian
+    // дд.мм.гггг translation report number_not_preserved.
+    private static readonly Regex EnglishDateRegex = new(
+        @"(?<!\d)(?:(?<year>\d{4})[-/.](?<month>\d{1,2})[-/.](?<day>\d{1,2})|(?<first>\d{1,2})[-/.](?<second>\d{1,2})[-/.](?<year>\d{4}))(?!\d)",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly Regex RussianDateRegex = new(
-        @"(?<!\d)(?:(?<year>\d{4})[-/.](?<month>\d{1,2})[-/.](?<day>\d{1,2})|(?<day>\d{1,2})\.(?<month>\d{1,2})\.(?<year>\d{4}))(?!\d)",
+        @"(?<!\d)(?:(?<year>\d{4})[-/.](?<month>\d{1,2})[-/.](?<day>\d{1,2})|(?<day>\d{1,2})[-/.](?<month>\d{1,2})[-/.](?<year>\d{4}))(?!\d)",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private static readonly IReadOnlyDictionary<string, (string Digits, string Russian)>
@@ -396,36 +400,23 @@ internal static class SensePreservationGate
             violations.Add(PolarityMismatchCode);
         }
 
-        List<string> sourceNumbers = [.. ExtractNumericFacts(source, english: true)];
+        List<NumericFact> sourceNumbers = [.. ExtractNumericFacts(source, english: true)];
         sourceNumbers.AddRange(sourceTokens
-            .Select((token, index) => (Token: token, Index: index))
-            .Where(item => IsEnglishCardinalOccurrence(sourceTokens, item.Index))
-            .Select(item => CanonicalizeEnglishNumber(
-                CardinalNumbers[item.Token].Digits)));
-        List<string> translationNumbers =
+            .Where(CardinalNumbers.ContainsKey)
+            .Select(token => new NumericFact(
+                CanonicalizeEnglishNumber(CardinalNumbers[token].Digits))));
+        List<NumericFact> translationNumbers =
             [.. ExtractNumericFacts(translation, english: false)];
         translationNumbers.AddRange(russianTokens
             .Where(RussianCardinalNumbers.ContainsKey)
-            .Select(token => CanonicalizeRussianNumber(RussianCardinalNumbers[token])));
+            .Select(token => new NumericFact(
+                CanonicalizeRussianNumber(RussianCardinalNumbers[token]))));
         CompareNumericFacts(
             sourceNumbers,
             translationNumbers,
             violations);
 
         return Array.AsReadOnly(violations.ToArray());
-    }
-
-    private static bool IsEnglishCardinalOccurrence(
-        IReadOnlyList<string> tokens,
-        int index)
-    {
-        if (index < 0 || index >= tokens.Count ||
-            !CardinalNumbers.ContainsKey(tokens[index]))
-        {
-            return false;
-        }
-
-        return true;
     }
 
     private static string CanonicalizeEnglishNumber(string value) =>
@@ -499,15 +490,15 @@ internal static class SensePreservationGate
         return $"{sign}{significantDigits}@{exponentOfFirstDigit.ToString(CultureInfo.InvariantCulture)}";
     }
 
-    private static IReadOnlyList<string> ExtractNumericFacts(string? text, bool english)
+    private static IReadOnlyList<NumericFact> ExtractNumericFacts(string? text, bool english)
     {
         text ??= string.Empty;
-        List<string> facts = [];
+        List<NumericFact> facts = [];
         List<(int Start, int End)> dateSpans = [];
-        Regex dateRegex = english ? IsoDateRegex : RussianDateRegex;
+        Regex dateRegex = english ? EnglishDateRegex : RussianDateRegex;
         foreach (Match match in dateRegex.Matches(text))
         {
-            if (!TryCanonicalizeDate(match, out string date))
+            if (!TryCanonicalizeDate(match, out NumericFact date))
             {
                 continue;
             }
@@ -527,46 +518,82 @@ internal static class SensePreservationGate
                 continue;
             }
 
-            facts.Add(english
+            facts.Add(new NumericFact(english
                 ? CanonicalizeEnglishNumber(match.Value)
-                : CanonicalizeRussianNumber(match.Value));
+                : CanonicalizeRussianNumber(match.Value)));
         }
 
         return facts.AsReadOnly();
     }
 
-    private static bool TryCanonicalizeDate(Match match, out string date)
+    private static bool TryCanonicalizeDate(Match match, out NumericFact date)
     {
-        date = string.Empty;
+        date = default;
         if (!int.TryParse(match.Groups["year"].Value, out int year) ||
-            !int.TryParse(match.Groups["month"].Value, out int month) ||
-            !int.TryParse(match.Groups["day"].Value, out int day) ||
-            year is < 1 or > 9999 ||
-            month is < 1 or > 12 ||
-            day < 1 ||
-            day > DateTime.DaysInMonth(year, month))
+            year is < 1 or > 9999)
         {
             return false;
         }
 
-        date = $"date:{year:D4}-{month:D2}-{day:D2}";
+        // The English day-first/month-first branch reports the two fields
+        // positionally. Only the written reading is primary; the swapped one is
+        // an accepted alternate, so an unambiguous field (> 12) still pins the
+        // date and a genuinely ambiguous one cannot invent a mismatch.
+        bool positional = match.Groups["first"].Success;
+        int firstField = positional
+            ? int.Parse(match.Groups["first"].Value, CultureInfo.InvariantCulture)
+            : 0;
+        int secondField = positional
+            ? int.Parse(match.Groups["second"].Value, CultureInfo.InvariantCulture)
+            : 0;
+        int month = positional
+            ? firstField
+            : int.Parse(match.Groups["month"].Value, CultureInfo.InvariantCulture);
+        int day = positional
+            ? secondField
+            : int.Parse(match.Groups["day"].Value, CultureInfo.InvariantCulture);
+        string? primary = FormatDate(year, month, day);
+        string? swapped = positional && month != day
+            ? FormatDate(year, day, month)
+            : null;
+        if (primary is null)
+        {
+            if (swapped is null)
+            {
+                return false;
+            }
+
+            date = new NumericFact(swapped);
+            return true;
+        }
+
+        date = new NumericFact(primary, swapped);
         return true;
     }
 
+    private static string? FormatDate(int year, int month, int day) =>
+        month is >= 1 and <= 12 &&
+        day >= 1 &&
+        day <= DateTime.DaysInMonth(year, month)
+            ? $"date:{year:D4}-{month:D2}-{day:D2}"
+            : null;
+
     private static void CompareNumericFacts(
-        IReadOnlyList<string> sourceFacts,
-        IReadOnlyList<string> translationFacts,
+        IReadOnlyList<NumericFact> sourceFacts,
+        IReadOnlyList<NumericFact> translationFacts,
         ICollection<string> violations)
     {
         Dictionary<string, int> remainingTranslation = translationFacts
-            .GroupBy(value => value, StringComparer.Ordinal)
+            .GroupBy(fact => fact.Primary, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
                 group => group.Count(),
                 StringComparer.Ordinal);
-        foreach (string sourceFact in sourceFacts)
+        foreach (NumericFact sourceFact in sourceFacts)
         {
-            if (TryConsumeFact(remainingTranslation, sourceFact))
+            if (TryConsumeFact(remainingTranslation, sourceFact.Primary) ||
+                (sourceFact.Alternate is { } alternate &&
+                 TryConsumeFact(remainingTranslation, alternate)))
             {
                 continue;
             }
@@ -1239,6 +1266,14 @@ internal static class SensePreservationGate
 
         return matches;
     }
+
+    /// <summary>
+    /// One comparable numeric or date fact. <see cref="Alternate"/> is set only
+    /// where the written form is genuinely field-order ambiguous, so an
+    /// ambiguous source date cannot manufacture a violation against a correctly
+    /// ordered translation.
+    /// </summary>
+    private readonly record struct NumericFact(string Primary, string? Alternate = null);
 
     private readonly record struct PolarityEvidence(
         string Source,

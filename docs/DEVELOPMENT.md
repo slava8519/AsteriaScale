@@ -384,11 +384,17 @@ Smoke-набор — консольная программа без тестов
 | Аргумент | Что делает |
 |---|---|
 | `--live` | Живой апскейл Notepad через Magpie |
-| `--smart-live` / `--smart-gpu-live` | Живой умный словарь end-to-end |
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
+| `--screen-ocr-image <png>` | Диагностика экранного OCR по изображению |
 | `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
 | `--ranker-sentence-benchmark <set.json> <workerBaseDir> --ranker-cpu-model glossbert\|sandwich\|consec [--sentence-report <report.json>] [--benchmark-only]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается |
 | `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|sandwich\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--benchmark-only]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output |
+
+Нераспознанный аргумент **завершает прогон ошибкой** (`TestCommandLine.FindUnknownOption`).
+Раньше он молча проваливался в обычный smoke-набор, и удалённый gated-режим
+(`--smart-live`, `--foundry-live`, `--translation-benchmark` — все удалены вместе
+с Qwen-конвейером) печатал зелёный `PASS`, хотя ничего живого не запускалось.
+Добавляя режим, добавь его флаги в `TestCommandLine.KnownOptions`.
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (открытый dev, `134` случая, включая `20` научных) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
 Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
@@ -563,6 +569,21 @@ python scripts/test-build-dictionaries.py
 `vn-lexicon.tsv` с явной ролью `hard`, `soft` или `scaffold`; сгенерированные
 TSV вручную не редактируются. Frozen benchmark/holdout-файлы в эту сборку не
 входят.
+
+### Python-тесты инструментов
+
+Инструменты из `tools/` не входят в smoke-набор C# и имеют собственные наборы на
+`unittest`. Запускай их после правки соответствующего скрипта — все три работают
+без сети и без внешних зависимостей:
+
+```powershell
+python scripts/test-build-dictionaries.py        # генератор словарей
+python tools/test-translation-benchmark.py       # tools/translation-benchmark.py
+python tools/tests/test_fetch_benchmark_datasets.py  # tools/fetch-benchmark-datasets.py
+```
+
+`tools/tests/` намеренно без `__init__.py`, поэтому файл запускается напрямую, а
+не через `unittest discover`.
 
 ## Стиль кода
 

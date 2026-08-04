@@ -319,10 +319,21 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 | Кэш умного словаря | `%LOCALAPPDATA%\AsteriaScale\smart-dictionary-cache.v2.json` |
 | Общий кэш решений semantic ranker (историческое имя файла) | `%LOCALAPPDATA%\AsteriaScale\glossbert-decisions.v1.json` |
 | Кэш принятых предложений TranslateGemma | `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v7.json` |
+| История показанных переводов (панель разбора, экспорт в Anki) | `%LOCALAPPDATA%\AsteriaScale\translation-history.v1.json` |
 | Опциональные TranslateGemma/llama.cpp artifacts | `%LOCALAPPDATA%\AsteriaScale\Models\TranslateGemma` |
 | Пользовательские словари | `%LOCALAPPDATA%\AsteriaScale\Dictionaries` |
 | Конфиг Magpie | `%LOCALAPPDATA%\Magpie\config\v4\config.json` (+ backup `.before-asteria.json`) |
 | DPI override игр | `HKCU\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers`; точные значения до изменения — в `settings.json` |
+
+**Где исходный текст всё-таки попадает на диск.** Все три кэша выше хранят
+только SHA-256-отпечаток запроса и результат — исходная английская реплика в них
+не пишется. Единственное исключение — `translation-history.v1.json`
+(`TranslationHistoryService`): это продуктовая функция, а не кэш, поэтому она
+намеренно сохраняет исходный текст и контекст в открытом виде (до 200 записей,
+поля обрезаются до 1000 символов) — иначе панель разбора и экспорт в Anki
+бессмысленны. История чистится через `Clear()` в окне пользовательского словаря.
+Утверждение «исходный текст на диск не пишется» относится к кэшам и не
+распространяется на неё.
 
 `DpiCompatibilityService` применяет стандартный per-app флаг `HIGHDPIAWARE`
 только к выбранному игровому EXE. Перед записью он сохраняет полное прежнее

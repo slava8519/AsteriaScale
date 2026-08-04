@@ -404,6 +404,7 @@ public sealed class TranslationHistoryService : IDisposable
                                 DateTime.UtcNow.Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture) +
                                 "-" + Guid.NewGuid().ToString("N");
             File.Move(_path, brokenPath);
+            PruneQuarantinedHistories();
             return true;
         }
         catch (FileNotFoundException)
@@ -419,6 +420,41 @@ public sealed class TranslationHistoryService : IDisposable
         {
             // A file that cannot be preserved must never be overwritten.
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Keeps only the newest quarantined copies. Repeated corruption would
+    /// otherwise grow an unbounded pile of dead files next to the live history,
+    /// each holding the user's source text.
+    /// </summary>
+    private void PruneQuarantinedHistories()
+    {
+        const int retainedQuarantineCount = 3;
+        try
+        {
+            string? directory = Path.GetDirectoryName(_path);
+            if (string.IsNullOrEmpty(directory))
+            {
+                return;
+            }
+
+            foreach (string stale in Directory
+                         .EnumerateFiles(
+                             directory,
+                             Path.GetFileName(_path) + ".broken-*")
+                         .OrderByDescending(path => path, StringComparer.Ordinal)
+                         .Skip(retainedQuarantineCount))
+            {
+                File.Delete(stale);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or
+                                          UnauthorizedAccessException or
+                                          DirectoryNotFoundException or
+                                          ArgumentException)
+        {
+            // Housekeeping must never break loading the history itself.
         }
     }
 

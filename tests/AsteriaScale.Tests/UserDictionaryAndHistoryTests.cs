@@ -406,6 +406,27 @@ internal static class UserDictionaryAndHistoryTests
             Check(reopened.Snapshot().Any(entry => entry.Source == "new entry"),
                 $"A broken history blocked later persistence: {name}.");
         }
+
+        // Repeated corruption must not grow an unbounded pile of dead files,
+        // each holding the user's source text next to the live history.
+        string prunedPath = Path.Combine(tempRoot, "history", "pruned.json");
+        for (int round = 0; round < 6; round++)
+        {
+            await File.WriteAllTextAsync(prunedPath, "{ broken " + round);
+            using TranslationHistoryService history = new(prunedPath);
+            history.Record("entry " + round, "запись " + round, "СЛОВАРЬ");
+            history.Flush();
+        }
+
+        string[] retained = Directory.GetFiles(
+            Path.GetDirectoryName(prunedPath)!,
+            Path.GetFileName(prunedPath) + ".broken-*");
+        Check(retained.Length == 3,
+            $"Quarantined histories were not pruned to the newest three: {retained.Length}.");
+        Check(retained
+                .Select(File.ReadAllText)
+                .All(content => content.StartsWith("{ broken ", StringComparison.Ordinal)),
+            "Pruning removed the wrong quarantined files.");
     }
 
     private static async Task WaitUntilAsync(

@@ -122,6 +122,14 @@ try
             StringComparison.OrdinalIgnoreCase)),
         "--translation-suite requires --benchmark-only.");
 
+    // A gated mode deleted from the code used to survive in the documentation
+    // and fall through to the default smoke set, reporting a green run for a
+    // check that never executed.
+    if (TestCommandLine.FindUnknownOption(args) is { } unknownOption)
+    {
+        Assert(false, TestCommandLine.DescribeUnknownOption(unknownOption));
+    }
+
     await RunAsync("Preset catalog", () =>
     {
         Assert(PresetCatalog.All.Count >= 5, "Expected at least five presets.");
@@ -2276,6 +2284,47 @@ try
                 reportOption: "--register-report",
                 usage: benchmarkUsage),
             "The register benchmark parser accepted a ranker-only dump option.");
+
+        // A removed gated mode must fail the run instead of falling through to
+        // the default smoke set and reporting a pass it never performed.
+        foreach (string removedMode in new[]
+                 {
+                     "--smart-live", "--smart-gpu-live", "--foundry-live",
+                     "--translation-benchmark"
+                 })
+        {
+            Assert(
+                TestCommandLine.FindUnknownOption([removedMode]) == removedMode,
+                $"A removed gated mode {removedMode} was silently ignored.");
+        }
+
+        Assert(
+            TestCommandLine.FindUnknownOption(
+                ["--benchmark-only", "--translation-suite", "set.jsonl", "worker",
+                 "--system-id", "rtx5080", "--profile", "smart",
+                 "--phrase-backend", "vulkan", "--ranker-cpu-model", "glossbert",
+                 "--translation-output", "out.jsonl",
+                 "--translation-report", "report.json", "--shard", "1/2",
+                 "--max-cases", "10"]) is null,
+            "A fully specified translation-suite invocation was rejected.");
+        Assert(
+            TestCommandLine.FindUnknownOption(
+                ["--ranker-benchmark", "set.json", "worker", "cpu",
+                 "--ranker-cpu-model", "consec", "--dump", "d.json",
+                 "--ranker-report", "r.json"]) is null &&
+            TestCommandLine.FindUnknownOption(
+                ["--register-benchmark", "set.json", "worker", "npu",
+                 "--register-report", "r.json"]) is null &&
+            TestCommandLine.FindUnknownOption(
+                ["--ranker-sentence-benchmark", "set.json", "worker",
+                 "--sentence-report", "s.json", "--output", "o.json"]) is null &&
+            TestCommandLine.FindUnknownOption(
+                ["--live", "--ocr-image", "a.png", "10", "20",
+                 "--screen-ocr-image", "b.png"]) is null,
+            "A supported gated mode was reported as unknown.");
+        Assert(
+            TestCommandLine.FindUnknownOption(["--", "-x", "value"]) is null,
+            "The end-of-options separator or a positional value was treated as an option.");
 
         string artifactBase = Path.Combine(tempRoot, "ranker-artifact-profile");
         string artifactModels = Path.Combine(artifactBase, "Ranker", "Models");

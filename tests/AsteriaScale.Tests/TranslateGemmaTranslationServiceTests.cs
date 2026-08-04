@@ -927,6 +927,75 @@ internal static class TranslateGemmaTranslationServiceTests
               localizedMixedNumber.StructuralPenaltyCount == 0,
             "Localized thousands or decimals were compared as different numeric facts.");
 
+        // A non-ISO English date is field-order ambiguous, never three separate
+        // numbers: decomposing it made every correct дд.мм.гггг translation
+        // report number_not_preserved.
+        SmartPhraseTranslationRequest slashDate = thousands with
+        {
+            SourcePhrase = "They met on 5/1/2024.",
+            ModelInputPhrase = "They met on 5/1/2024."
+        };
+        SensePreservationCandidate localizedSlashDate = SensePreservationGate.Evaluate(
+            slashDate,
+            "Они встретились 01.05.2024.",
+            slashDate.ModelIdentity,
+            SensePreservationCandidateKind.Direct);
+        SensePreservationCandidate swappedSlashDate = SensePreservationGate.Evaluate(
+            slashDate,
+            "Они встретились 05.01.2024.",
+            slashDate.ModelIdentity,
+            SensePreservationCandidateKind.Conditioned);
+        SensePreservationCandidate wrongSlashDate = SensePreservationGate.Evaluate(
+            slashDate,
+            "Они встретились 07.09.2024.",
+            slashDate.ModelIdentity,
+            SensePreservationCandidateKind.Repair);
+        SmartPhraseTranslationRequest isoDate = thousands with
+        {
+            SourcePhrase = "They met on 2024-05-01.",
+            ModelInputPhrase = "They met on 2024-05-01."
+        };
+        SensePreservationCandidate localizedIsoDate = SensePreservationGate.Evaluate(
+            isoDate,
+            "Они встретились 01.05.2024.",
+            isoDate.ModelIdentity,
+            SensePreservationCandidateKind.Direct);
+        SensePreservationCandidate reorderedIsoDate = SensePreservationGate.Evaluate(
+            isoDate,
+            "Они встретились 05.01.2024.",
+            isoDate.ModelIdentity,
+            SensePreservationCandidateKind.Conditioned);
+        // 13 cannot be a month, so this English date is not ambiguous at all.
+        SmartPhraseTranslationRequest unambiguousDayFirst = thousands with
+        {
+            SourcePhrase = "They met on 13/5/2024.",
+            ModelInputPhrase = "They met on 13/5/2024."
+        };
+        SensePreservationCandidate keptUnambiguousDate = SensePreservationGate.Evaluate(
+            unambiguousDayFirst,
+            "Они встретились 13.05.2024.",
+            unambiguousDayFirst.ModelIdentity,
+            SensePreservationCandidateKind.Direct);
+        SensePreservationCandidate movedUnambiguousDate = SensePreservationGate.Evaluate(
+            unambiguousDayFirst,
+            "Они встретились 05.13.2024.",
+            unambiguousDayFirst.ModelIdentity,
+            SensePreservationCandidateKind.Conditioned);
+        Check(localizedSlashDate.StructuralPenaltyCount == 0 &&
+              swappedSlashDate.StructuralPenaltyCount == 0 &&
+              wrongSlashDate.StructuralViolationCodes.Contains(
+                  SensePreservationGate.NumberNotPreservedCode,
+                  StringComparer.Ordinal) &&
+              localizedIsoDate.StructuralPenaltyCount == 0 &&
+              reorderedIsoDate.StructuralViolationCodes.Contains(
+                  SensePreservationGate.NumberNotPreservedCode,
+                  StringComparer.Ordinal) &&
+              keptUnambiguousDate.StructuralPenaltyCount == 0 &&
+              movedUnambiguousDate.StructuralViolationCodes.Contains(
+                  SensePreservationGate.NumberNotPreservedCode,
+                  StringComparer.Ordinal),
+            "A localized date was decomposed into unrelated numeric facts.");
+
         SmartPhraseTranslationRequest collapsedNegation = request with
         {
             SourcePhrase = "It is not possible.",
