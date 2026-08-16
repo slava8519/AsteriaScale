@@ -80,6 +80,41 @@ internal static class TextHookSafetyTests
                    CurrentSpeaker.Name: "LongSpeaker"
                },
             "An inline hook speaker was not separated without shifting the repeated token.");
+
+        // An occurrence ordinal is only meaningful inside one sentence. OCR
+        // hands over a single sentence while one Textractor line usually holds
+        // several, so counting over the whole line bound the repeat from the
+        // neighbouring sentence and sent that sentence to the phrase model.
+        hook.IngestLine(
+            "[FA0:2C64:0:0:0:GetGlyphOutlineW] I went to the bank. The bank was closed.",
+            processId: 111);
+        TextHookMatch? neighbouringSentence = hook.TryGetSentenceContaining(
+            111,
+            "bank",
+            "The bank was closed.",
+            ocrCharacterIndex: 4);
+        Assert(neighbouringSentence is { CharacterIndex: 24 },
+            "A hovered token was bound to a repeat from a neighbouring hook sentence.");
+        SmartPhraseContext? neighbouringPhrase = SmartPhraseContextBuilder.Build(
+            neighbouringSentence!.Text,
+            "bank",
+            neighbouringSentence.CharacterIndex);
+        Assert(neighbouringPhrase?.Text == "The bank was closed.",
+            "The phrase model received a different sentence than the hovered one: " +
+            $"'{neighbouringPhrase?.Text}'");
+
+        // Without a hook sentence that carries the hovered words the ordinal
+        // cannot be transferred at all. A repeated token must then keep OCR
+        // rather than guess, exactly as an unmappable index already does.
+        hook.IngestLine(
+            "[FA0:2C64:0:0:0:GetGlyphOutlineW] I went to the bank. The bank was closed.",
+            processId: 112);
+        Assert(hook.TryGetSentenceContaining(
+                112,
+                "bank",
+                "The bank was open.",
+                ocrCharacterIndex: 4) is null,
+            "A repeated hook token was bound through a sentence OCR never saw.");
         hook.IngestLine(
             "[BRACKET:2C64:0:0:0:GetGlyphOutlineW] [Park staff] Wait beside the bank.",
             processId: 610);

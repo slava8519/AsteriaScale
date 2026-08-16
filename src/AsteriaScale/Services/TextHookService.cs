@@ -342,7 +342,7 @@ public sealed partial class TextHookService : IAsyncDisposable
     /// noisy hook threads simply never match the hovered word.
     /// </summary>
     internal TextHookMatch? TryGetSentenceContaining(int processId, string word) =>
-        TryGetSentenceContaining(processId, word, preferredOccurrenceOrdinal: null, DateTime.UtcNow);
+        TryGetSentenceContaining(processId, word, anchor: null, DateTime.UtcNow);
 
     internal TextHookMatch? TryGetSentenceContaining(
         int processId,
@@ -350,29 +350,29 @@ public sealed partial class TextHookService : IAsyncDisposable
         string ocrText,
         int ocrCharacterIndex)
     {
-        int? occurrenceOrdinal = FindTokenOccurrenceOrdinal(
+        OcrTargetAnchor? anchor = ResolveOcrTargetAnchor(
             ocrText,
             word,
             ocrCharacterIndex);
-        return occurrenceOrdinal is null
+        return anchor is null
             ? null
             : TryGetSentenceContaining(
                 processId,
                 word,
-                occurrenceOrdinal,
+                anchor,
                 DateTime.UtcNow);
     }
 
     internal string? TryGetSentenceContaining(string word) =>
-        TryGetSentenceContaining(0, word, preferredOccurrenceOrdinal: null, DateTime.UtcNow)?.Text;
+        TryGetSentenceContaining(0, word, anchor: null, DateTime.UtcNow)?.Text;
 
     internal string? TryGetSentenceContaining(string word, DateTime nowUtc) =>
-        TryGetSentenceContaining(0, word, preferredOccurrenceOrdinal: null, nowUtc)?.Text;
+        TryGetSentenceContaining(0, word, anchor: null, nowUtc)?.Text;
 
-    internal TextHookMatch? TryGetSentenceContaining(
+    private TextHookMatch? TryGetSentenceContaining(
         int processId,
         string word,
-        int? preferredOccurrenceOrdinal,
+        OcrTargetAnchor? anchor,
         DateTime nowUtc)
     {
         if (string.IsNullOrWhiteSpace(word))
@@ -396,7 +396,7 @@ public sealed partial class TextHookService : IAsyncDisposable
                     TryFindToken(
                         sentence.Text,
                         word,
-                        preferredOccurrenceOrdinal,
+                        anchor,
                         out int characterIndex))
                 {
                     string dialogue = sentence.Text;
@@ -1010,48 +1010,114 @@ public sealed partial class TextHookService : IAsyncDisposable
     private static bool TryFindToken(
         string text,
         string word,
-        int? preferredOccurrenceOrdinal,
+        OcrTargetAnchor? anchor,
         out int characterIndex)
     {
         string expected = word.Trim();
-        int occurrenceOrdinal = 0;
         characterIndex = -1;
-        foreach (Match match in WordRegex().Matches(text))
+        Match[] occurrences = WordRegex()
+            .Matches(text)
+            .Where(match => string.Equals(
+                match.Value,
+                expected,
+                StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (occurrences.Length == 0)
         {
-            if (string.Equals(match.Value, expected, StringComparison.OrdinalIgnoreCase))
-            {
-                if (preferredOccurrenceOrdinal is null ||
-                    occurrenceOrdinal == preferredOccurrenceOrdinal)
-                {
-                    characterIndex = match.Index;
-                    return true;
-                }
+            return false;
+        }
 
-                occurrenceOrdinal++;
+        if (anchor is null)
+        {
+            characterIndex = occurrences[0].Index;
+            return true;
+        }
+
+        // The ordinal was counted inside the one sentence OCR showed, so it may
+        // only be applied inside a hook sentence carrying those same words. One
+        // Textractor line usually holds several sentences; counting across the
+        // whole line silently bound a repeat from a neighbouring one and sent
+        // that sentence to the phrase model instead of the hovered one.
+        // Occurrences arrive in index order and sentence spans do not overlap,
+        // so occurrences sharing a span form one contiguous run.
+        int spanStart = -1;
+        int ordinal = 0;
+        foreach (Match occurrence in occurrences)
+        {
+            (int start, int end) = SentenceBoundaryRules.FindContainingSpan(
+                text,
+                occurrence.Index,
+                occurrence.Index + occurrence.Length);
+            ordinal = start == spanStart ? ordinal + 1 : 0;
+            spanStart = start;
+            if (ordinal == anchor.OccurrenceOrdinal &&
+                SentenceComparison.IsOrderedSubsequence(
+                    anchor.SentenceTokens,
+                    SentenceComparison.Tokens(text[start..end])))
+            {
+                characterIndex = occurrence.Index;
+                return true;
             }
+        }
+
+        // A single occurrence needs no ordinal, so a line OCR read imperfectly
+        // still upgrades the context. A repeated token without a comparable
+        // sentence keeps OCR rather than guessing which one was hovered.
+        if (occurrences.Length == 1)
+        {
+            characterIndex = occurrences[0].Index;
+            return true;
         }
 
         return false;
     }
 
-    private static int? FindTokenOccurrenceOrdinal(
+    /// <summary>
+    /// The hovered target expressed the way a hook line has to be searched: the
+    /// sentence OCR actually showed, plus which occurrence inside that sentence
+    /// carried the cursor. An ordinal alone is not transferable — the two texts
+    /// split into sentences differently.
+    /// </summary>
+    private sealed record OcrTargetAnchor(
+        IReadOnlyList<string> SentenceTokens,
+        int OccurrenceOrdinal);
+
+    private static OcrTargetAnchor? ResolveOcrTargetAnchor(
         string text,
         string word,
         int characterIndex)
     {
+        if (string.IsNullOrEmpty(text) ||
+            characterIndex < 0 ||
+            characterIndex > text.Length)
+        {
+            return null;
+        }
+
+        // Smart mode hands over a single sentence, dictionary mode a whole OCR
+        // line. Narrowing to the sentence around the cursor makes both produce
+        // an ordinal that a hook sentence can actually be searched with.
+        (int start, int end) = SentenceBoundaryRules.FindContainingSpan(
+            text,
+            characterIndex,
+            characterIndex);
+        string sentence = text[start..end];
+        int sentenceIndex = characterIndex - start;
         string expected = word.Trim();
         int occurrenceOrdinal = 0;
-        foreach (Match match in WordRegex().Matches(text))
+        foreach (Match match in WordRegex().Matches(sentence))
         {
             if (!string.Equals(match.Value, expected, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (characterIndex >= match.Index &&
-                characterIndex < match.Index + match.Length)
+            if (sentenceIndex >= match.Index &&
+                sentenceIndex < match.Index + match.Length)
             {
-                return occurrenceOrdinal;
+                return new OcrTargetAnchor(
+                    SentenceComparison.Tokens(sentence),
+                    occurrenceOrdinal);
             }
 
             occurrenceOrdinal++;

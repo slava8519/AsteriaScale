@@ -288,16 +288,16 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             return first with { IsSentenceContextStable = false };
         }
 
-        string[] firstTokens = SentenceComparisonTokens(first.Text);
-        string[] secondTokens = SentenceComparisonTokens(second.Text);
+        string[] firstTokens = SentenceComparison.Tokens(first.Text);
+        string[] secondTokens = SentenceComparison.Tokens(second.Text);
         if (firstTokens.Length == 0 || secondTokens.Length == 0)
         {
             useSecondObservation = false;
             return first with { IsSentenceContextStable = false };
         }
 
-        bool firstFitsSecond = IsOrderedSubsequence(firstTokens, secondTokens);
-        bool secondFitsFirst = IsOrderedSubsequence(secondTokens, firstTokens);
+        bool firstFitsSecond = SentenceComparison.IsOrderedSubsequence(firstTokens, secondTokens);
+        bool secondFitsFirst = SentenceComparison.IsOrderedSubsequence(secondTokens, firstTokens);
         if (!firstFitsSecond && !secondFitsFirst)
         {
             useSecondObservation = false;
@@ -331,39 +331,6 @@ internal sealed partial class WindowsAiOcrService : IDisposable
 
         return selected.CurrentSpeaker ?? first.CurrentSpeaker;
     }
-
-    private static string[] SentenceComparisonTokens(string value) =>
-        SentenceComparisonTokenRegex()
-            .Matches((value ?? string.Empty).Normalize(NormalizationForm.FormC))
-            .Select(match => LocalDictionaryService.NormalizeEnglish(match.Value))
-            .ToArray();
-
-    private static bool IsOrderedSubsequence(
-        IReadOnlyList<string> candidate,
-        IReadOnlyList<string> sequence)
-    {
-        if (candidate.Count > sequence.Count)
-        {
-            return false;
-        }
-
-        int candidateIndex = 0;
-        foreach (string token in sequence)
-        {
-            if (candidateIndex < candidate.Count &&
-                string.Equals(candidate[candidateIndex], token, StringComparison.Ordinal))
-            {
-                candidateIndex++;
-            }
-        }
-
-        return candidateIndex == candidate.Count;
-    }
-
-    [GeneratedRegex(
-        @"[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex SentenceComparisonTokenRegex();
 
     [GeneratedRegex(
         @"\b(I|You|He|She|It|We|They)['\u2019][1Il]{2}\b",
