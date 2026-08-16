@@ -281,6 +281,61 @@ internal static class SmartPhraseTranslationFoundationTests
               !SpeakerMetadataParser.TryParseStandaloneName("Wait", out _),
             "Ordinary colon prose or a one-word utterance was mistaken for a speaker.");
 
+        // A reporting clause is not a name, and stripping it deletes real
+        // sentence content: "Mom always said: never trust a stranger." lost its
+        // attribution and its past framing before the phrase model saw it.
+        // Only the pronoun-subject form of this was covered above.
+        foreach (string reportingClause in new[]
+                 {
+                     "Mom always said: never trust a stranger.",
+                     "The doctor said: your arm is broken.",
+                     "My friend told me: the gate is locked.",
+                     "A voice whispered: someone is here."
+                 })
+        {
+            Check(!SpeakerMetadataParser.TryFindLeadingSpeaker(
+                      reportingClause,
+                      reportingClause.Length - 5,
+                      out _,
+                      out _),
+                $"A reporting clause was mistaken for a speaker label: '{reportingClause}'");
+        }
+
+        // Annotation labels are not speakers either. Here CURRENT survives, but
+        // every such line added a bogus per-game speaker the user could be
+        // asked to assign a gender to.
+        foreach (string annotation in new[]
+                 {
+                     "Warning: Do not open the gate.",
+                     "Note: the bank is closed today.",
+                     "Tip: press space to continue."
+                 })
+        {
+            Check(!SpeakerMetadataParser.TryFindLeadingSpeaker(
+                      annotation,
+                      annotation.Length - 5,
+                      out _,
+                      out _),
+                $"A UI annotation label was recorded as a speaker: '{annotation}'");
+        }
+
+        Check(!SpeakerMetadataParser.TryParseStandaloneName("Warning", out _),
+            "A standalone OCR annotation line was recorded as a speaker nameplate.");
+
+        // Names that collide with English function words stay valid speakers;
+        // the clause test must key on attribution verbs, not on any verb form.
+        foreach (string collidingName in new[] { "Hope", "Will", "May", "Grace" })
+        {
+            string line = $"{collidingName}: I brought the letter.";
+            Check(SpeakerMetadataParser.TryFindLeadingSpeaker(
+                      line,
+                      line.IndexOf("letter", StringComparison.Ordinal),
+                      out CurrentSpeakerContext? colliding,
+                      out _) &&
+                  colliding?.Name == collidingName,
+                $"A speaker name colliding with a function word was rejected: '{line}'");
+        }
+
         CurrentSpeakerContext upstreamSpeaker = new("Sakuya");
         SmartPhraseContext? propagatedSpeaker = SmartPhraseContextBuilder.Build(
             "I was late.",
