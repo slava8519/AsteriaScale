@@ -370,7 +370,7 @@ try
                boundedMeanings.Length <= 4 * 1024,
             "Broad dictionary union did not enforce its pathological-input bound.");
 
-        long managedBefore = GC.GetTotalMemory(true);
+        long managedBefore = SettledManagedBytes();
         Stopwatch loadTimer = Stopwatch.StartNew();
         string bundledDictionaries = Path.Combine(AppContext.BaseDirectory, "Dictionaries");
         string isolatedUserDictionaries = Path.Combine(tempRoot, "local-dictionary-user");
@@ -633,28 +633,30 @@ try
                    StringComparison.OrdinalIgnoreCase),
             "The exact Japanese dialogue sentence was not available as context.");
 
-        long managedDictionaryBytes = GC.GetTotalMemory(true) - managedBefore;
+        long managedDictionaryBytes = AssertManagedBudget(
+            managedBefore,
+            256L * 1024 * 1024,
+            "Layered dictionaries");
         Console.WriteLine(
             $"    dictionary: {dictionary.EntryCount:N0} entries, {dictionary.SourceCount} sources, " +
             $"{managedDictionaryBytes / 1024d / 1024d:N1} MB managed, {loadTimer.ElapsedMilliseconds:N0} ms load");
-        Assert(managedDictionaryBytes < 256L * 1024 * 1024,
-            "Layered dictionaries exceeded the 256 MB managed-memory budget.");
 
-        long managedBeforeSenses = GC.GetTotalMemory(true);
+        long managedBeforeSenses = SettledManagedBytes();
         Stopwatch senseLoadTimer = Stopwatch.StartNew();
         await dictionary.LoadSenseMetadataAsync();
         senseLoadTimer.Stop();
-        long managedSenseBytes = GC.GetTotalMemory(true) - managedBeforeSenses;
         Assert(dictionary.SenseMetadataKeyCount > 140_000 &&
                dictionary.SenseMetadataCandidateCount > 390_000,
             "The complete packaged aligned-sense index was unexpectedly truncated.");
+        long managedSenseBytes = AssertManagedBudget(
+            managedBeforeSenses,
+            128L * 1024 * 1024,
+            "Aligned sense metadata");
         Console.WriteLine(
             $"    senses: {dictionary.SenseMetadataKeyCount:N0} keys, " +
             $"{dictionary.SenseMetadataCandidateCount:N0} candidates, " +
             $"{managedSenseBytes / 1024d / 1024d:N1} MB managed, " +
             $"{senseLoadTimer.ElapsedMilliseconds:N0} ms load");
-        Assert(managedSenseBytes < 128L * 1024 * 1024,
-            "Aligned sense metadata exceeded its 128 MB incremental memory budget.");
         DictionaryLookupResult packagedSenses =
             await dictionary.LookupWithSenseMetadataAsync(
                 "charge",
@@ -3634,6 +3636,54 @@ static string RequireBenchmarkOptionValue(
         $"{option} requires a value. {usage}");
     index++;
     return args[index];
+}
+
+// GC.GetTotalMemory is documented as an approximation, and even with
+// forceFullCollection it only waits a short interval for the collection to
+// finish. A single sample is therefore not a sound basis for a budget: one run
+// in seven reported 146.8 MB for a sense index that measured 71.9 MB on every
+// other run, with an identical key and candidate count both times. Blocking,
+// compacting collections repeated until the figure stops falling measure what
+// the index retains instead of sampling an instant.
+static long SettledManagedBytes()
+{
+    long settled = long.MaxValue;
+    for (int attempt = 0; attempt < 4; attempt++)
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        long current = GC.GetTotalMemory(forceFullCollection: true);
+        if (current >= settled)
+        {
+            break;
+        }
+
+        settled = current;
+    }
+
+    return settled;
+}
+
+/// <summary>
+/// Asserts a retained-memory budget and returns the measured size. A figure
+/// over budget is re-measured before it fails the run, because the budget
+/// describes what the index holds rather than what one instant sampled — a real
+/// regression retains the memory and stays over on the second look. The
+/// mechanism behind the single outlier was never reproduced, so this guard is
+/// deliberately built not to depend on knowing it.
+/// </summary>
+static long AssertManagedBudget(long baselineBytes, long budgetBytes, string subject)
+{
+    long used = SettledManagedBytes() - baselineBytes;
+    if (used >= budgetBytes)
+    {
+        used = Math.Min(used, SettledManagedBytes() - baselineBytes);
+    }
+
+    Assert(used < budgetBytes,
+        $"{subject} exceeded its {budgetBytes / 1024 / 1024} MB managed-memory budget: " +
+        $"{used / 1024d / 1024d:N1} MB retained.");
+    return used;
 }
 
 static void Assert(bool condition, string message)
