@@ -2992,6 +2992,35 @@ try
             "A cached frame accepted a nameplate that was never confirmed twice.");
         Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(null, "Kotori") is null,
             "A missing cached selection must stay missing.");
+
+        // The proportional estimate assumes uniform character width, so on a
+        // real line it lands several characters away from the word box under
+        // the cursor. Resolving the occurrence must not then latch onto the
+        // same letters inside a neighbouring word: "in" lives in "waiting"
+        // twice over, and anchoring there hands the dictionary that token.
+        const string hoveredLine = "I am waiting in line";
+        int resolvedIndex = WindowsAiOcrService.ResolveLineCharacterIndex(
+            hoveredLine,
+            "in",
+            cursorX: 210,
+            lineLeft: 0,
+            lineRight: 400,
+            wordLeft: 205,
+            wordRight: 225);
+        Assert(resolvedIndex == 13,
+            "The hovered word anchored inside a neighbouring word rather than " +
+            $"on its own occurrence: index {resolvedIndex} in '{hoveredLine}'.");
+
+        // A word the line text cannot spell keeps the geometric estimate.
+        Assert(WindowsAiOcrService.ResolveLineCharacterIndex(
+                hoveredLine,
+                "queue",
+                cursorX: 200,
+                lineLeft: 0,
+                lineRight: 400,
+                wordLeft: 195,
+                wordRight: 215) == 10,
+            "An unresolvable OCR word did not fall back to the proportional estimate.");
         return Task.CompletedTask;
     });
 

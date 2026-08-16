@@ -11,6 +11,7 @@ using Microsoft.Windows.AI.Imaging;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 using AsteriaScale.Interop;
+using AsteriaScale.RankerProtocol;
 
 namespace AsteriaScale.Services;
 
@@ -665,20 +666,14 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             string text = Normalize(line.Text);
             if (LooksTranslatable(text))
             {
-                int approximateIndex = Math.Clamp(
-                    (int)(((cursorX - left) / Math.Max(1, right - left)) * text.Length),
-                    0,
-                    text.Length - 1);
-                int wordStart = FindClosestOccurrence(text, closestWord, approximateIndex);
-                double wordRatio = closestWordRight > closestWordLeft
-                    ? Math.Clamp((cursorX - closestWordLeft) / (closestWordRight - closestWordLeft), 0, 0.999)
-                    : 0;
-                int wordOffset = closestWord.Length == 0
-                    ? 0
-                    : Math.Clamp((int)(wordRatio * closestWord.Length), 0, closestWord.Length - 1);
-                int characterIndex = wordStart >= 0
-                    ? wordStart + wordOffset
-                    : approximateIndex;
+                int characterIndex = ResolveLineCharacterIndex(
+                    text,
+                    closestWord,
+                    cursorX,
+                    left,
+                    right,
+                    closestWordLeft,
+                    closestWordRight);
                 candidates.Add(new LineSelection(
                     new OcrLineGeometry(text, left, top, right, bottom),
                     closestWord,
@@ -1073,35 +1068,54 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         return new OcrRecognition(lines);
     }
 
-    private static int FindClosestOccurrence(string text, string word, int approximateIndex)
+    /// <summary>
+    /// Maps the cursor onto a character index inside the recognized line. OCR
+    /// reports the word under the cursor and its box but not where that word
+    /// sits in the line string, so the occurrence has to be resolved by text
+    /// and only then refined by the cursor's position inside the word box.
+    /// Without a usable occurrence the proportional estimate stays, which is
+    /// the long-standing degradation path for lines whose word texts do not
+    /// reassemble into the line text.
+    /// </summary>
+    internal static int ResolveLineCharacterIndex(
+        string text,
+        string hoveredWord,
+        double cursorX,
+        double lineLeft,
+        double lineRight,
+        double wordLeft,
+        double wordRight)
     {
-        if (word.Length == 0)
+        if (text.Length == 0)
         {
-            return -1;
+            return 0;
         }
 
-        int bestIndex = -1;
-        int bestDistance = int.MaxValue;
-        int searchFrom = 0;
-        while (searchFrom < text.Length)
+        int approximateIndex = Math.Clamp(
+            (int)(((cursorX - lineLeft) / Math.Max(1, lineRight - lineLeft)) * text.Length),
+            0,
+            text.Length - 1);
+        // One resolver owns "which occurrence of this surface is meant" for the
+        // whole app. The private copy that used to live here matched on raw
+        // IndexOf, so a short word could anchor inside a longer one — "in"
+        // inside "waiting" — and LocalDictionaryService.FindClosestToken then
+        // handed the dictionary the enclosing token instead of the hovered one.
+        int wordStart = RankerTargetAnchor.FindClosestOccurrence(
+            text,
+            hoveredWord,
+            approximateIndex);
+        if (wordStart < 0)
         {
-            int index = text.IndexOf(word, searchFrom, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-            {
-                break;
-            }
-
-            int distance = Math.Abs((index + (word.Length / 2)) - approximateIndex);
-            if (distance < bestDistance)
-            {
-                bestIndex = index;
-                bestDistance = distance;
-            }
-
-            searchFrom = index + Math.Max(1, word.Length);
+            return approximateIndex;
         }
 
-        return bestIndex;
+        double wordRatio = wordRight > wordLeft
+            ? Math.Clamp((cursorX - wordLeft) / (wordRight - wordLeft), 0, 0.999)
+            : 0;
+        int wordOffset = hoveredWord.Length == 0
+            ? 0
+            : Math.Clamp((int)(wordRatio * hoveredWord.Length), 0, hoveredWord.Length - 1);
+        return wordStart + wordOffset;
     }
 
     internal static Drawing.Rectangle CalculateCaptureBounds(
