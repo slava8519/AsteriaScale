@@ -2956,6 +2956,42 @@ try
                 fingerprint,
                 cachedAt.AddSeconds(31)),
             "The one-entry OCR cache must expire conservatively.");
+
+        // A fingerprint hit proves the frame, not the selection. A static VN
+        // frame makes every hover after the first a cache hit, so the
+        // per-selection gates have to run again on each of them.
+        System.Drawing.Rectangle cacheBounds = new(400, 500, 1600, 720);
+        HoverOcrResult clipped = new(
+            "he opened the gate and walked",
+            "gate",
+            13,
+            cacheBounds)
+        {
+            CurrentSpeaker = new CurrentSpeakerContext("Kotori")
+        };
+        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(clipped, "Kotori") is
+               {
+                   IsSentenceContextStable: false
+               },
+            "A cached frame reported a clipped sentence as stable phrase context.");
+        HoverOcrResult wholeSentence = clipped with
+        {
+            Text = "He opened the gate and walked in."
+        };
+        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, "Kotori") is
+               {
+                   IsSentenceContextStable: true,
+                   CurrentSpeaker.Name: "Kotori"
+               },
+            "A complete sentence from a confirmed frame lost its stability or speaker.");
+        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, null)
+                   ?.CurrentSpeaker is null,
+            "A cached frame resurrected a nameplate that two observations rejected.");
+        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, "Sakuya")
+                   ?.CurrentSpeaker is null,
+            "A cached frame accepted a nameplate that was never confirmed twice.");
+        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(null, "Kotori") is null,
+            "A missing cached selection must stay missing.");
         return Task.CompletedTask;
     });
 

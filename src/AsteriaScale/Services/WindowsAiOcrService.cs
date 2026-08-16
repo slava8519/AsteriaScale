@@ -139,19 +139,23 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         byte[] firstPixels = ReadBgraPixels(firstCapture.Bitmap);
         ulong firstFingerprint = ComputeFrameFingerprint(firstPixels);
         OcrRecognition? firstRecognition = null;
+        string? confirmedSpeakerName = null;
         bool cacheHit = sentenceContext &&
                         TryGetCachedRecognition(
                             firstCapture.Bounds,
                             firstFingerprint,
                             DateTimeOffset.UtcNow,
-                            out firstRecognition);
+                            out firstRecognition,
+                            out confirmedSpeakerName);
         if (cacheHit)
         {
-            HoverOcrResult? cachedSelection = SelectRecognitionNearCursor(
-                firstRecognition,
-                cursor,
-                firstCapture.Bounds,
-                sentenceContext);
+            HoverOcrResult? cachedSelection = ApplyConfirmedFrameGates(
+                SelectRecognitionNearCursor(
+                    firstRecognition,
+                    cursor,
+                    firstCapture.Bounds,
+                    sentenceContext),
+                confirmedSpeakerName);
             TraceRecognition(
                 firstCapture.Bitmap,
                 firstRecognition!,
@@ -229,6 +233,7 @@ internal sealed partial class WindowsAiOcrService : IDisposable
                 selectedCapture.Bounds,
                 selectedFingerprint,
                 selectedRecognition,
+                stabilized.CurrentSpeaker?.Name,
                 DateTimeOffset.UtcNow);
         }
 
@@ -313,6 +318,38 @@ internal sealed partial class WindowsAiOcrService : IDisposable
             CurrentSpeaker = StableObservedSpeaker(first, second, selected)
         };
     }
+
+    /// <summary>
+    /// Re-applies the per-selection gates to a result drawn from a cached
+    /// recognition. The cache carries frame-level agreement only — the two
+    /// captures behind it described the same words — while completeness belongs
+    /// to the one sentence the cursor happened to pick, and a nameplate is only
+    /// accepted once two observations reported the same name.
+    ///
+    /// Both must therefore be re-decided on every hover over the same frame.
+    /// A static VN frame is the common case, not an edge: the picture stops
+    /// changing exactly while the reader looks around it, so a fingerprint hit
+    /// covered every hover after the first. Those hovers selected other lines
+    /// and reported them as fully stable, which let a sentence clipped by the
+    /// capture rectangle reach the phrase model and could resurrect a nameplate
+    /// that <see cref="StableObservedSpeaker"/> had refused.
+    /// </summary>
+    internal static HoverOcrResult? ApplyConfirmedFrameGates(
+        HoverOcrResult? selection,
+        string? confirmedSpeakerName) =>
+        selection is null
+            ? null
+            : selection with
+            {
+                IsSentenceContextStable = LooksLikeCompleteOcrSentence(selection.Text),
+                CurrentSpeaker = confirmedSpeakerName is not null &&
+                                 string.Equals(
+                                     selection.CurrentSpeaker?.Name,
+                                     confirmedSpeakerName,
+                                     StringComparison.Ordinal)
+                    ? selection.CurrentSpeaker
+                    : null
+            };
 
     private static CurrentSpeakerContext? StableObservedSpeaker(
         HoverOcrResult first,
@@ -1192,7 +1229,8 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         Drawing.Rectangle bounds,
         ulong fingerprint,
         DateTimeOffset now,
-        out OcrRecognition? recognition)
+        out OcrRecognition? recognition,
+        out string? confirmedSpeakerName)
     {
         lock (_hoverCacheLock)
         {
@@ -1206,10 +1244,12 @@ internal sealed partial class WindowsAiOcrService : IDisposable
                     now))
             {
                 recognition = _hoverCache.Recognition;
+                confirmedSpeakerName = _hoverCache.ConfirmedSpeakerName;
                 return true;
             }
 
             recognition = null;
+            confirmedSpeakerName = null;
             return false;
         }
     }
@@ -1218,11 +1258,17 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         Drawing.Rectangle bounds,
         ulong fingerprint,
         OcrRecognition recognition,
+        string? confirmedSpeakerName,
         DateTimeOffset now)
     {
         lock (_hoverCacheLock)
         {
-            _hoverCache = new HoverRecognitionCacheEntry(bounds, fingerprint, now, recognition);
+            _hoverCache = new HoverRecognitionCacheEntry(
+                bounds,
+                fingerprint,
+                now,
+                recognition,
+                confirmedSpeakerName);
         }
     }
 
@@ -1459,11 +1505,14 @@ internal sealed partial class WindowsAiOcrService : IDisposable
         public void Dispose() => Bitmap.Dispose();
     }
 
+    // The confirmed name travels with the recognition because agreement was
+    // established between two captures that no later hover can re-observe.
     private sealed record HoverRecognitionCacheEntry(
         Drawing.Rectangle Bounds,
         ulong Fingerprint,
         DateTimeOffset CreatedAt,
-        OcrRecognition Recognition);
+        OcrRecognition Recognition,
+        string? ConfirmedSpeakerName);
 
     private sealed record LineSelection(
         OcrLineGeometry Geometry,
