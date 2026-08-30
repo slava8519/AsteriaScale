@@ -157,6 +157,9 @@ internal static class SmartHoverPhraseIntegrationTests
                     "янтарь",
                     ["сигнал"],
                     0.95)
+                {
+                    Origin = SenseEvidenceOrigin.RankerAccepted
+                }
             ]
         };
 
@@ -346,7 +349,8 @@ internal static class SmartHoverPhraseIntegrationTests
             Source: Context,
             Translation: PhraseTranslation,
             Status: SmartPhraseLineStatus.Translated,
-            FromCache: false
+            FromCache: false,
+            RejectionReason: null
         }, "A guarded translation was not returned as an independent phrase line.");
         Check(primary is
         {
@@ -526,6 +530,8 @@ internal static class SmartHoverPhraseIntegrationTests
             Check(result is { Status: SmartPhraseLineStatus.Unavailable } &&
                   primary.Translation == "берег",
                 "A TranslateGemma exception discarded the primary dictionary result.");
+            Check(result is { RejectionReason: null },
+                "A generation failure was reported as an output-guard verdict.");
             Check(await fixture.PhraseCache.CountAsync() == 0,
                 "A failed phrase generation poisoned its cache.");
         }
@@ -548,6 +554,12 @@ internal static class SmartHoverPhraseIntegrationTests
                   primary.Translation == "берег" &&
                   await fixture.PhraseCache.CountAsync() == 0,
                 "A guard-rejected phrase changed primary output or entered the cache.");
+            // The benchmark reports coverage losses by reason, so the exact
+            // verdict has to survive the hop out of the pipeline: without it
+            // "the guard refused a fluent translation" and "generation failed"
+            // are the same observation.
+            Check(result is { RejectionReason: SmartPhraseRejectionReason.Explanation },
+                "The output-guard verdict did not reach the phrase line.");
         }
     }
 

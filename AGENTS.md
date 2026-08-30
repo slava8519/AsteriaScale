@@ -7,8 +7,10 @@ local Qwen). Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before touching
 translation code; it lists the load-bearing invariants. Build/test/release
 mechanics live in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Ready-made task
 prompts (in Russian) are in [docs/PROMPTS.md](docs/PROMPTS.md). Planned work is
-in [docs/ROADMAP.md](docs/ROADMAP.md); known defects and documentation debt
-found by audit are in [docs/AUDIT-ROADMAP.md](docs/AUDIT-ROADMAP.md).
+in [docs/ROADMAP.md](docs/ROADMAP.md); closed audit findings are archived in
+[docs/AUDIT-ROADMAP.md](docs/AUDIT-ROADMAP.md), and the one open audit pass —
+translation quality and measurement methodology — is
+[docs/audit/pass-e-translation-quality.md](docs/audit/pass-e-translation-quality.md).
 
 ## Commands
 

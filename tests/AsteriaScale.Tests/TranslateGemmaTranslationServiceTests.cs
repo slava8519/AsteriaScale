@@ -82,10 +82,11 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.SenseRepairPromptIdentity ==
               "translategemma-sense-repair-en-ru-v2" &&
               TranslateGemmaTranslationService.SenseGatePolicyIdentity ==
-              "translategemma-sense-gate-policy-v2" &&
+              "translategemma-sense-gate-policy-v3/sense-trust-off-v1" &&
               TranslateGemmaTranslationService.PromptIdentity ==
-              "translategemma-direct-ape-sense-gate-en-ru-v7",
+              "translategemma-direct-ape-sense-gate-en-ru-v8",
             "The experimental service silently changed the model/quantization.");
+        VerifyAlternativeQuantizationPin();
         Check(TranslateGemmaTranslationService.GetModelIdentity(
                   TranslateGemmaExecutionBackend.Cpu) ==
               TranslateGemmaTranslationService.ModelIdentity &&
@@ -144,6 +145,45 @@ internal static class TranslateGemmaTranslationServiceTests
             "The llama.cpp Vulkan runner pin changed.");
         Check(TranslateGemmaTranslationService.ContextSize == 2_048,
             "The official TranslateGemma input budget changed without a measured experiment.");
+    }
+
+    /// <summary>
+    /// Audit card E10. The benchmark may name another quantization, but the
+    /// escape hatch must not become a hole: the alternative pin carries its own
+    /// size and hash, and it renames the identity so a measurement can never be
+    /// mistaken for the shipped artifact.
+    /// </summary>
+    private static void VerifyAlternativeQuantizationPin()
+    {
+        TranslateGemmaTranslationService.TranslateGemmaModelPin shipped =
+            TranslateGemmaTranslationService.TranslateGemmaModelPin.Default;
+        Check(shipped.FileName == "translategemma-4b-it.Q4_K_M.gguf" &&
+              shipped.Bytes == TranslateGemmaTranslationService.ModelSize &&
+              shipped.Sha256 == TranslateGemmaTranslationService.ModelSha256 &&
+              shipped.IdentityFor(TranslateGemmaExecutionBackend.Cpu) ==
+              TranslateGemmaTranslationService.ModelIdentity &&
+              shipped.IdentityFor(TranslateGemmaExecutionBackend.Vulkan) ==
+              TranslateGemmaTranslationService.VulkanModelIdentity,
+            "The default model pin drifted from the shipped constants.");
+
+        TranslateGemmaTranslationService.TranslateGemmaModelPin alternative =
+            AlternativeModelPins.Resolve("q6_k");
+        Check(alternative.FileName != shipped.FileName &&
+              alternative.Bytes != shipped.Bytes &&
+              alternative.Sha256 != shipped.Sha256 &&
+              alternative.BlobFileName == "sha256-" + alternative.Sha256,
+            "The alternative quantization reused the shipped artifact's pin.");
+        Check(!alternative.IdentityFor(TranslateGemmaExecutionBackend.Vulkan)
+                  .Contains(shipped.Sha256, StringComparison.Ordinal) &&
+              alternative.IdentityFor(TranslateGemmaExecutionBackend.Vulkan)
+                  .Contains(alternative.Sha256, StringComparison.Ordinal) &&
+              alternative.IdentityFor(TranslateGemmaExecutionBackend.Vulkan)
+                  .Contains("q6_K", StringComparison.Ordinal),
+            "An alternative-quantization run could claim the shipped identity.");
+
+        ExpectThrows<InvalidOperationException>(
+            () => AlternativeModelPins.Resolve("q4_k_m"),
+            "An unknown quantization tag was accepted.");
     }
 
     private static void VerifyOfficialRawPrompt()
@@ -1868,6 +1908,21 @@ internal static class TranslateGemmaTranslationServiceTests
     }
 
     private static void CheckThrows<TException>(Action action, string message)
+        where TException : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(message);
+    }
+
+    private static void ExpectThrows<TException>(Action action, string message)
         where TException : Exception
     {
         try

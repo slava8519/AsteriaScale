@@ -42,13 +42,46 @@ internal sealed class TranslateGemmaTranslationService :
         "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-vulkan-full";
+    /// <summary>
+    /// One quantization of the pinned model: file name, exact bytes, SHA-256
+    /// and the identity both backends report. Production always uses
+    /// <see cref="Default"/>; a benchmark may name a different quantization,
+    /// but never a looser check — an alternative pin still has to match its own
+    /// size and hash, and it renames the identity so a report can never claim
+    /// numbers were produced by the shipped artifact.
+    /// </summary>
+    internal sealed record TranslateGemmaModelPin(
+        string FileName,
+        long Bytes,
+        string Sha256,
+        string CpuIdentity,
+        string VulkanIdentity)
+    {
+        public static TranslateGemmaModelPin Default { get; } = new(
+            LocalModelFileName,
+            ModelSize,
+            ModelSha256,
+            ModelIdentity,
+            VulkanModelIdentity);
+
+        public string BlobFileName => "sha256-" + Sha256;
+
+        public string IdentityFor(TranslateGemmaExecutionBackend backend) => backend switch
+        {
+            TranslateGemmaExecutionBackend.Cpu => CpuIdentity,
+            TranslateGemmaExecutionBackend.Vulkan => VulkanIdentity,
+            _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
+        };
+    }
+
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
     public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v4";
     public const string SenseConditionedPromptIdentity =
         "translategemma-sense-conditioned-en-ru-v2";
     public const string SenseRepairPromptIdentity = "translategemma-sense-repair-en-ru-v2";
-    public const string SenseGatePolicyIdentity = "translategemma-sense-gate-policy-v2";
-    public const string PromptIdentity = "translategemma-direct-ape-sense-gate-en-ru-v7";
+    public const string SenseGatePolicyIdentity =
+        "translategemma-sense-gate-policy-v3/" + SenseEvidenceTrustPolicy.Identity;
+    public const string PromptIdentity = "translategemma-direct-ape-sense-gate-en-ru-v8";
     public const string RunnerBuild = "b9632";
     public const string RunnerArchiveFileName = "llama-b9632-bin-win-cpu-x64.zip";
     public const string RunnerArchiveSha256 =
@@ -105,6 +138,7 @@ internal sealed class TranslateGemmaTranslationService :
     private Uri? _endpoint;
     private string? _apiKey;
     private string? _runtimeDirectory;
+    private readonly TranslateGemmaModelPin _modelPin;
     private TranslateGemmaExecutionBackend? _activeBackend;
     private string? _activeModelIdentity;
     private VulkanStartupEvidenceTracker? _startupEvidence;
@@ -121,13 +155,35 @@ internal sealed class TranslateGemmaTranslationService :
     {
     }
 
+    /// <summary>
+    /// Benchmark entry point for measuring an alternative quantization. The
+    /// pin is still enforced, and the reported identity names that
+    /// quantization, so a run cannot be mistaken for the shipped artifact.
+    /// </summary>
+    internal TranslateGemmaTranslationService(
+        TranslateGemmaModelPin modelPin,
+        Func<TranslateGemmaExecutionBackend>? backendResolver = null)
+        : this(
+            ResolveDefaultModelRoot(),
+            ResolveDefaultOllamaModelsRoot(),
+            DefaultStartupTimeout,
+            DefaultRequestTimeout,
+            backendResolver: backendResolver,
+            modelPin: modelPin)
+    {
+    }
+
+    internal string ModelIdentityFor(TranslateGemmaExecutionBackend backend) =>
+        _modelPin.IdentityFor(backend);
+
     internal TranslateGemmaTranslationService(
         string modelRoot,
         string ollamaModelsRoot,
         TimeSpan startupTimeout,
         TimeSpan requestTimeout,
         HttpMessageHandler? handler = null,
-        Func<TranslateGemmaExecutionBackend>? backendResolver = null)
+        Func<TranslateGemmaExecutionBackend>? backendResolver = null,
+        TranslateGemmaModelPin? modelPin = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ollamaModelsRoot);
@@ -141,6 +197,7 @@ internal sealed class TranslateGemmaTranslationService :
             throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         }
 
+        _modelPin = modelPin ?? TranslateGemmaModelPin.Default;
         _modelRoot = Path.GetFullPath(modelRoot);
         _ollamaModelsRoot = Path.GetFullPath(ollamaModelsRoot);
         _startupTimeout = startupTimeout;
@@ -188,7 +245,7 @@ internal sealed class TranslateGemmaTranslationService :
     internal TranslateGemmaExecutionBackend? ActiveBackend => _activeBackend;
 
     internal string RequestedModelIdentity =>
-        GetModelIdentity(ResolveRequestedBackend());
+        _modelPin.IdentityFor(ResolveRequestedBackend());
 
     internal static TranslateGemmaExecutionBackend ResolveBackend(string? settingsValue)
     {
@@ -259,7 +316,7 @@ internal sealed class TranslateGemmaTranslationService :
         _activeBackend == backend &&
         string.Equals(
             _activeModelIdentity,
-            GetModelIdentity(backend),
+            _modelPin.IdentityFor(backend),
             StringComparison.Ordinal);
 
     private void EnsureActiveBackend(
@@ -339,7 +396,7 @@ internal sealed class TranslateGemmaTranslationService :
                     await WaitForHealthAsync(startup.Token);
                     await WaitForStartupEvidenceAsync(backend, startup.Token);
                     _activeBackend = backend;
-                    _activeModelIdentity = GetModelIdentity(backend);
+                    _activeModelIdentity = _modelPin.IdentityFor(backend);
                 }
                 catch (OperationCanceledException cancellationFailure)
                     when (cancellationToken.IsCancellationRequested)
@@ -395,7 +452,7 @@ internal sealed class TranslateGemmaTranslationService :
     {
         string source = NormalizeSource(phrase);
         TranslateGemmaExecutionBackend backend = ResolveRequestedBackend();
-        string modelIdentity = GetModelIdentity(backend);
+        string modelIdentity = _modelPin.IdentityFor(backend);
         await WarmUpAsync(backend, cancellationToken);
 
         await _requestLock.WaitAsync(cancellationToken);
@@ -460,7 +517,7 @@ internal sealed class TranslateGemmaTranslationService :
         ArgumentNullException.ThrowIfNull(request);
         TranslateGemmaExecutionBackend backend =
             ResolveBackendIdentity(request.ModelIdentity);
-        string modelIdentity = GetModelIdentity(backend);
+        string modelIdentity = _modelPin.IdentityFor(backend);
 
         if (!string.Equals(request.PromptVersion, PromptIdentity, StringComparison.Ordinal))
         {
@@ -1628,22 +1685,27 @@ internal sealed class TranslateGemmaTranslationService :
         }
     }
 
-    internal static string FindModelPath(string modelRoot, string ollamaModelsRoot)
+    internal static string FindModelPath(
+        string modelRoot,
+        string ollamaModelsRoot,
+        TranslateGemmaModelPin? modelPin = null)
     {
-        string local = Path.Combine(modelRoot, LocalModelFileName);
+        TranslateGemmaModelPin pin = modelPin ?? TranslateGemmaModelPin.Default;
+        string local = Path.Combine(modelRoot, pin.FileName);
         if (File.Exists(local))
         {
             return local;
         }
 
-        string ollamaBlob = Path.Combine(ollamaModelsRoot, "blobs", OllamaBlobFileName);
+        string ollamaBlob = Path.Combine(ollamaModelsRoot, "blobs", pin.BlobFileName);
         if (File.Exists(ollamaBlob))
         {
             return ollamaBlob;
         }
 
         throw new FileNotFoundException(
-            "Не найдена TranslateGemma 4B Q4_K_M. Ожидался локальный GGUF либо закреплённый blob Ollama.",
+            $"Не найдена TranslateGemma 4B ({pin.FileName}). " +
+            "Ожидался локальный GGUF либо закреплённый blob Ollama.",
             local + " | " + ollamaBlob);
     }
 
@@ -1751,11 +1813,11 @@ internal sealed class TranslateGemmaTranslationService :
             archiveSha256,
             cancellationToken);
 
-        string modelPath = FindModelPath(_modelRoot, _ollamaModelsRoot);
+        string modelPath = FindModelPath(_modelRoot, _ollamaModelsRoot, _modelPin);
         await ValidatePinnedArtifactAsync(
             modelPath,
-            ModelSize,
-            ModelSha256,
+            _modelPin.Bytes,
+            _modelPin.Sha256,
             cancellationToken);
 
         string runtimeRoot = Path.Combine(_modelRoot, "Runtime");

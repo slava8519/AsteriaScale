@@ -131,6 +131,16 @@ internal static class TranslationSuiteTests
               first.GetProperty("focus").GetProperty("text").GetString() == "Wait" &&
               first.GetProperty("latencyMilliseconds").GetInt64() >= 0,
             "The C# output no longer matches the reporting CLI contract.");
+        Check(first.GetProperty("rejectionReason").ValueKind == JsonValueKind.Null,
+            "An accepted translation carried an output-guard verdict.");
+        using JsonDocument unavailableOutput = JsonDocument.Parse(outputLines[2]);
+        // The scorer names guard verdicts in camelCase alongside `status`, so
+        // this line is the contract seam between the two languages: the Python
+        // run below refuses an unknown or misspelled reason outright.
+        Check(unavailableOutput.RootElement
+                  .GetProperty("rejectionReason")
+                  .GetString() == "residualEnglish",
+            "The serialized guard verdict drifted from the scorer contract.");
         await VerifyReportingCliContractAsync(dataset, output, report, root);
 
         await VerifyDirectProvenanceAsync(options, root);
@@ -203,9 +213,16 @@ internal static class TranslationSuiteTests
                 {
                     AppliedSenseHints = Array.Empty<ScaffoldSenseHint>()
                 });
+        // The direct route applied nothing, and that is a positive fact: it is
+        // fingerprinted as the empty list, never as null. Null would make an
+        // accepted direct translation indistinguishable from an output that
+        // produced no translation at all, which is what `unavailable` below is.
+        const string emptyEvidenceSha256 =
+            "b47671aaa3a9798ac4cffcde3bb8eb8794acc37d6b09ed3f2ec8c87782f3903c";
         Check(directRoute.SenseEvidence.Count == 1 &&
               directRoute.AppliedSenseEvidence.Count == 0 &&
-              directRoute.AppliedSenseEvidenceSha256 is null,
+              directRoute.AppliedSenseEvidenceSha256 == emptyEvidenceSha256 &&
+              directRoute.AppliedSenseEvidenceSha256 != directRoute.SenseEvidenceSha256,
             "A selected direct candidate falsely claimed that WSD evidence reached generation.");
 
         var unavailable = translated with
@@ -238,6 +255,32 @@ internal static class TranslationSuiteTests
         Check(ignoredFields.AppliedSenseEvidenceSha256 ==
               accepted.AppliedSenseEvidenceSha256,
             "Confidence or rejected surfaces leaked into prompt-visible sense evidence identity.");
+
+        // Audit card E9. Confidence and origin are reported for analysis and
+        // must stay outside the fingerprint: the hash says what the prompt saw,
+        // and a run that differs only in diagnostics has to remain comparable.
+        var diagnosed = selected with
+        {
+            Confidence = 0.42,
+            Origin = SenseEvidenceOrigin.RankerAccepted
+        };
+        TranslationSuiteSmartMetadata diagnostics =
+            SmartTranslationSuiteSystem.CreateSmartMetadata(
+                dictionary,
+                translated with
+                {
+                    SenseHints = [diagnosed],
+                    AppliedSenseHints = [diagnosed]
+                });
+        Check(diagnostics.SenseEvidence[0].Confidence == 0.42 &&
+              diagnostics.SenseEvidence[0].Origin == SenseEvidenceOrigin.RankerAccepted &&
+              diagnostics.AppliedSenseEvidence[0].Origin ==
+              SenseEvidenceOrigin.RankerAccepted,
+            "Hint confidence or origin did not reach benchmark telemetry.");
+        Check(diagnostics.SenseEvidenceSha256 == accepted.SenseEvidenceSha256 &&
+              diagnostics.AppliedSenseEvidenceSha256 ==
+              accepted.AppliedSenseEvidenceSha256,
+            "Reported hint diagnostics changed the prompt-visible evidence identity.");
 
         var emojiHint = new ScaffoldSenseHint(
             "😀",
@@ -608,6 +651,7 @@ internal static class TranslationSuiteTests
                     Focus: null,
                     ErrorCode: "fixture_unavailable",
                     ErrorMessage: "Expected fixture outcome.",
+                    RejectionReason: SmartPhraseRejectionReason.ResidualEnglish,
                     Metadata: CreateSmartMetadata(applied: false))),
                 "case-error" => throw new InvalidOperationException("Expected fixture failure."),
                 _ => throw new InvalidOperationException("Unexpected fixture id.")
@@ -621,17 +665,60 @@ internal static class TranslationSuiteTests
                 return null;
             }
 
-            const string emptyEvidenceSha256 =
-                "b47671aaa3a9798ac4cffcde3bb8eb8794acc37d6b09ed3f2ec8c87782f3903c";
+            // One real hint, so the Python scorer below actually validates the
+            // reported diagnostics instead of an empty list (audit card E9).
+            TranslationSuiteSenseEvidence[] evidence =
+            [
+                new TranslationSuiteSenseEvidence(
+                    "wait",
+                    "to remain in place",
+                    "подождите",
+                    Confidence: 0.73,
+                    Origin: SenseEvidenceOrigin.RankerAccepted)
+            ];
+            string evidenceSha256 = FingerprintFixtureEvidence(evidence);
             return new TranslationSuiteSmartMetadata(
                 "fake-ranker",
                 DictionaryFound: false,
                 DictionaryIsPhrase: false,
                 DictionaryTranslation: string.Empty,
-                SenseEvidence: Array.Empty<TranslationSuiteSenseEvidence>(),
-                SenseEvidenceSha256: emptyEvidenceSha256,
-                AppliedSenseEvidence: Array.Empty<TranslationSuiteSenseEvidence>(),
-                AppliedSenseEvidenceSha256: applied ? emptyEvidenceSha256 : null);
+                SenseEvidence: evidence,
+                SenseEvidenceSha256: evidenceSha256,
+                AppliedSenseEvidence: applied
+                    ? evidence
+                    : Array.Empty<TranslationSuiteSenseEvidence>(),
+                AppliedSenseEvidenceSha256: applied
+                    ? evidenceSha256
+                    : null);
+        }
+
+        /// <summary>
+        /// Mirrors the runner's prompt-visible fingerprint: three fields, no
+        /// diagnostics. Written out here so the fixture cannot drift silently.
+        /// </summary>
+        private static string FingerprintFixtureEvidence(
+            IReadOnlyList<TranslationSuiteSenseEvidence> evidence)
+        {
+            var canonical = new StringBuilder("asteria-smart-sense-evidence-v1\n");
+            foreach (TranslationSuiteSenseEvidence item in evidence)
+            {
+                foreach (string field in new[]
+                         {
+                             item.Source,
+                             item.EnglishDefinition,
+                             item.SelectedTranslation
+                         })
+                {
+                    canonical.Append(field.Length);
+                    canonical.Append(':');
+                    canonical.Append(field);
+                    canonical.Append('\n');
+                }
+            }
+
+            return Convert.ToHexString(
+                    SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+                .ToLowerInvariant();
         }
 
         public async Task<TranslationSuiteSystemProvenance> CaptureProvenanceAsync(

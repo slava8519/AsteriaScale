@@ -113,6 +113,7 @@ internal static class TranslationSuiteRunner
                 timer.ElapsedMilliseconds,
                 result.ErrorCode,
                 result.ErrorMessage,
+                result.RejectionReason,
                 result.Focus,
                 result.FromCache,
                 options.SystemId,
@@ -1022,8 +1023,12 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
     internal DirectTranslationSuiteSystem(TranslationSuiteOptions options)
     {
         _options = options;
-        _translator = new TranslateGemmaTranslationService(
-            backendResolver: () => options.PhraseBackend);
+        _translator = options.PhraseModelPin is { } pin
+            ? new TranslateGemmaTranslationService(
+                pin,
+                backendResolver: () => options.PhraseBackend)
+            : new TranslateGemmaTranslationService(
+                backendResolver: () => options.PhraseBackend);
     }
 
     public Task PrepareAsync(CancellationToken cancellationToken) =>
@@ -1055,7 +1060,9 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
     {
         cancellationToken.ThrowIfCancellationRequested();
         return new TranslationSuiteSystemProvenance(
-            TranslateGemmaTranslationService.GetModelIdentity(_options.PhraseBackend),
+            // Read from the instance, not the shipped constant: an alternative
+            // quantization must name itself in the report.
+            _translator.ModelIdentityFor(_options.PhraseBackend),
             TranslateGemmaTranslationService.DirectPromptIdentity,
             RankerModelVersion: null,
             RankerProvider: null,
@@ -1253,6 +1260,7 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 phrase?.Engine,
                 ErrorCode: "phrase_translation_unavailable",
                 ErrorMessage: "The production Smart Dictionary pipeline did not accept a phrase translation.",
+                RejectionReason: phrase?.RejectionReason,
                 Metadata: metadata);
         }
 
@@ -1279,9 +1287,12 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 ? ProjectSenseEvidence(phrase.AppliedSenseHints)
                 : Array.Empty<TranslationSuiteSenseEvidence>();
         string evidenceFingerprint = FingerprintSenseEvidence(evidence);
+        // An accepted translation always fingerprints what it actually applied,
+        // including nothing at all on the direct route: "applied exactly no
+        // evidence" is a fact worth binding. Null is reserved for outputs that
+        // produced no accepted translation, so the two states stay distinct.
         string? appliedFingerprint =
-            phrase is { Status: SmartPhraseLineStatus.Translated } &&
-            appliedEvidence.Length > 0
+            phrase is { Status: SmartPhraseLineStatus.Translated }
                 ? FingerprintSenseEvidence(appliedEvidence)
                 : null;
         return new TranslationSuiteSmartMetadata(
@@ -1300,7 +1311,9 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
         senseHints.Select(hint => new TranslationSuiteSenseEvidence(
                 hint.Source,
                 hint.EnglishDefinition,
-                hint.SelectedTranslation))
+                hint.SelectedTranslation,
+                hint.Confidence,
+                hint.Origin))
             .ToArray();
 
     private static string FingerprintSenseEvidence(

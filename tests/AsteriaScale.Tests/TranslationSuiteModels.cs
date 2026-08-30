@@ -18,7 +18,8 @@ internal sealed record TranslationSuiteOptions(
     string TranslationReportPath,
     int? MaximumCases,
     int ShardIndex,
-    int ShardCount)
+    int ShardCount,
+    TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null)
 {
     internal const string Usage =
         "Usage: --benchmark-only --translation-suite <dataset.jsonl> " +
@@ -26,7 +27,7 @@ internal sealed record TranslationSuiteOptions(
         "--phrase-backend cpu|vulkan --ranker-cpu-model " +
         "glossbert|sandwich|consec --translation-output <output.jsonl> " +
         "--translation-report <report.json> [--max-cases <N>] " +
-        "[--shard <index>/<count>]";
+        "[--shard <index>/<count>] [--phrase-quant q6_k]";
 
     internal static TranslationSuiteOptions Parse(
         IReadOnlyList<string> arguments,
@@ -54,6 +55,7 @@ internal sealed record TranslationSuiteOptions(
         int shardIndex = 1;
         int shardCount = 1;
         bool shardSeen = false;
+        TranslateGemmaTranslationService.TranslateGemmaModelPin? phraseModelPin = null;
 
         for (int index = optionIndex + 3; index < arguments.Count; index++)
         {
@@ -161,6 +163,11 @@ internal sealed record TranslationSuiteOptions(
                     shardSeen = true;
                     break;
 
+                case "--phrase-quant":
+                    RequireUnset(phraseModelPin, option);
+                    phraseModelPin = AlternativeModelPins.Resolve(value);
+                    break;
+
                 default:
                     throw new InvalidOperationException(
                         $"Неизвестный параметр '{option}'. {Usage}");
@@ -172,6 +179,15 @@ internal sealed record TranslationSuiteOptions(
             translationReportPath is null)
         {
             throw new InvalidOperationException(Usage);
+        }
+
+        // The smart lane builds its own translator inside the hover pipeline,
+        // so an alternative quantization would be silently ignored there. A
+        // gated option that quietly does nothing is exactly defect C1.
+        if (phraseModelPin is not null && profile != TranslationSuiteProfile.Direct)
+        {
+            throw new InvalidOperationException(
+                "--phrase-quant поддерживается только профилем direct. " + Usage);
         }
 
         RequireExtension(datasetPath, ".jsonl", "dataset");
@@ -199,7 +215,8 @@ internal sealed record TranslationSuiteOptions(
             reportFullPath,
             maximumCases,
             shardIndex,
-            shardCount);
+            shardCount,
+            phraseModelPin);
     }
 
     internal string ProfileId => Profile == TranslationSuiteProfile.Direct
@@ -298,7 +315,12 @@ internal enum TranslationSuiteCaseStatus
 internal sealed record TranslationSuiteSenseEvidence(
     string Source,
     string EnglishDefinition,
-    string SelectedTranslation);
+    string SelectedTranslation,
+    // Reported, but deliberately outside the evidence fingerprint: the hash
+    // identifies what the prompt saw, and neither number reaches the prompt.
+    // Keeping them out is what lets two runs with identical prompts compare.
+    double Confidence,
+    SenseEvidenceOrigin Origin);
 
 internal sealed record TranslationSuiteSmartMetadata(
     string DictionaryEngine,
@@ -318,6 +340,9 @@ internal sealed record TranslationSuiteSystemResult(
     string? Engine = null,
     string? ErrorCode = null,
     string? ErrorMessage = null,
+    // Which output guard refused an existing translation, when one did.
+    // `errorCode` only says that the production lane returned nothing.
+    SmartPhraseRejectionReason? RejectionReason = null,
     TranslationSuiteSmartMetadata? Metadata = null);
 
 internal sealed record TranslationSuiteCaseOutput(
@@ -330,6 +355,7 @@ internal sealed record TranslationSuiteCaseOutput(
     long LatencyMilliseconds,
     string? ErrorCode,
     string? ErrorMessage,
+    SmartPhraseRejectionReason? RejectionReason,
     TranslationSuiteFocus? Focus,
     bool FromCache,
     string SystemId,

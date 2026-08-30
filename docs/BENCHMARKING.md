@@ -131,6 +131,12 @@ python .\tools\translation-benchmark.py score `
 Встроенный отчёт считает:
 
 - `chrF2` — символьную референсную метрику;
+- распределение причин отказа (`rejections`): каждая неуспешная строка
+  относится либо к вердикту production-гейта (`residualEnglish`,
+  `explanation`, `structuralMismatch` и прочие значения
+  `SmartPhraseRejectionReason` в camelCase), либо к `unreported` — генерация
+  не дошла до гейта или прогон причину не сохранил. Профиль `direct` вердиктов
+  не даёт: он намеренно идёт мимо output guard;
 - term-anchor recall и остаточную латиницу;
 - generation-adapted contrastive accuracy там, где есть контрастивные варианты;
 - coverage, ошибки и p50/p95 latency;
@@ -139,6 +145,26 @@ python .\tools\translation-benchmark.py score `
 `chrF2` намеренно так и называется: это не `chrF++`, потому что встроенный
 вариант не добавляет словные n-граммы. Для публикационного сравнения стоит
 добавить COMET или MetricX внешним воспроизводимым прогоном.
+
+Нейросетевая метрика считается отдельным инструментом `tools/run-comet.py`,
+поэтому сам стенд остаётся без зависимостей. Окружение и веса не входят в
+поставку и живут в ignored-каталогах:
+
+```powershell
+python -m venv artifacts\comet-env
+.\artifacts\comet-env\Scripts\python.exe -m pip install "unbabel-comet==2.2.6" "setuptools<81"
+.\artifacts\comet-env\Scripts\python.exe tools\run-comet.py `
+  --model <путь к model.ckpt> `
+  --input .\artifacts\Benchmarks\metric-input\wmt25-full\asteria-tg4b-direct-vulkan
+```
+
+`--input` повторяем: загрузка чекпоинта дороже самого скоринга, поэтому весь
+ладер считается одним процессом и одной и той же копией модели. Закреплённая
+модель — `Unbabel/wmt22-comet-da`, revision
+`2760a223ac957f30acfb18c8aa649b01cf1d75f2`, `2 323 649 073` байт, SHA-256
+`e213091cde220f97b89f8bdfa750c458cfea741ad62affb455b59900210ff2af`;
+`setuptools<81` обязателен, потому что `torchmetrics 0.10.3` из зависимостей
+COMET использует удалённый в новых версиях `pkg_resources`.
 
 Экспорт входа для внешней метрики:
 

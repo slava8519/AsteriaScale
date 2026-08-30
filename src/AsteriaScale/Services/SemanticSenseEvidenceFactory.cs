@@ -13,13 +13,15 @@ internal static class SemanticSenseEvidenceFactory
         string source,
         SmartDictionaryRankerPlan plan,
         int selectedGroupId,
-        double confidence)
+        double confidence,
+        SenseEvidenceOrigin origin = SenseEvidenceOrigin.Unknown)
     {
         IReadOnlyList<ScaffoldSenseHint> hints = CreateOptional(
             source,
             plan,
             selectedGroupId,
-            confidence);
+            confidence,
+            origin);
         if (hints.Count == 0)
         {
             throw new InvalidOperationException(
@@ -33,7 +35,8 @@ internal static class SemanticSenseEvidenceFactory
         string source,
         SmartDictionaryRankerPlan plan,
         int selectedGroupId,
-        double confidence)
+        double confidence,
+        SenseEvidenceOrigin origin = SenseEvidenceOrigin.Unknown)
     {
         ArgumentNullException.ThrowIfNull(plan);
         SmartDictionaryRankerOutcome? selectedOutcome = plan.Outcomes.FirstOrDefault(
@@ -69,7 +72,10 @@ internal static class SemanticSenseEvidenceFactory
                 definition,
                 selectedTranslation,
                 rejectedTranslations,
-                stableConfidence))
+                stableConfidence)
+            {
+                Origin = origin
+            })
             .ToArray();
         if (normalizedSource.Length == 0 || selectedTranslation.Length == 0)
         {

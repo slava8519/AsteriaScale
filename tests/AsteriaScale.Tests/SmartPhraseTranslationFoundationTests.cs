@@ -123,6 +123,334 @@ internal static class SmartPhraseTranslationFoundationTests
                   Result(uppercaseRequest, "BANK закрыт.")).Reason ==
               SmartPhraseRejectionReason.ResidualEnglish,
             "An all-caps OCR common word was whitelisted as a proper name.");
+
+        VerifySourcePreservedLatinTokens();
+        VerifyMultiLineOutputIsFolded();
+        VerifyRussianColonOpeningIsNotASpeaker();
+        VerifySenseHintHygiene();
+        VerifySenseEvidenceTrustPolicy();
+        VerifyBlindSetGuardRejections();
+    }
+
+    /// <summary>
+    /// Audit card E3. Only evidence firm enough to steer generation reaches the
+    /// prompt, and firmness is a pair: which path decided, and how sure it was.
+    /// Shipped behaviour keeps everything, because filtering measured worse.
+    /// </summary>
+    private static void VerifySenseEvidenceTrustPolicy()
+    {
+        ScaffoldSenseHint Hint(SenseEvidenceOrigin origin, double confidence) =>
+            new ScaffoldSenseHint("bank", "financial institution", "банк", ["берег"], confidence)
+            {
+                Origin = origin
+            };
+
+        Check(SenseEvidenceTrustPolicy.IsTrusted(
+                  Hint(SenseEvidenceOrigin.RankerAccepted, 0.90)) &&
+              SenseEvidenceTrustPolicy.IsTrusted(
+                  Hint(SenseEvidenceOrigin.RankerAccepted, 0.75)) &&
+              !SenseEvidenceTrustPolicy.IsTrusted(
+                  Hint(SenseEvidenceOrigin.RankerAccepted, 0.74)),
+            "The measured trust rule no longer matches its threshold.");
+
+        // The reason origin exists: a lone aligned sense reports confidence 1
+        // by construction, so confidence alone would rank it above a firm
+        // ranker verdict, while it is measurably the least reliable path.
+        foreach (SenseEvidenceOrigin origin in new[]
+                 {
+                     SenseEvidenceOrigin.SingleOutcome,
+                     SenseEvidenceOrigin.Heuristic,
+                     SenseEvidenceOrigin.ResultCache,
+                     SenseEvidenceOrigin.Unknown
+                 })
+        {
+            Check(!SenseEvidenceTrustPolicy.IsTrusted(Hint(origin, 1.0)),
+                $"Evidence from {origin} was trusted on confidence alone.");
+        }
+
+        // Shipped behaviour is the opposite of the rule above, and deliberately
+        // so: filtering measured worse (card E3), so the merge keeps evidence
+        // the rule would reject. Enabling the rule must change this assertion,
+        // never pass silently.
+        Check(!SenseEvidenceTrustPolicy.Enabled &&
+              SenseEvidenceTrustPolicy.Accepts(
+                  Hint(SenseEvidenceOrigin.SingleOutcome, 1.0)) &&
+              SenseEvidenceTrustPolicy.Accepts(
+                  Hint(SenseEvidenceOrigin.RankerAccepted, 0.10)),
+            "The rejected trust filter is active on the shipped path.");
+        IReadOnlyList<ScaffoldSenseHint> merged = SmartHoverPipeline.MergePhraseSenseHints(
+            [Hint(SenseEvidenceOrigin.SingleOutcome, 1.0) with { Source = "plane" }],
+            [Hint(SenseEvidenceOrigin.RankerAccepted, 0.81)]);
+        Check(merged.Count == 2 &&
+              merged[0] is { Source: "bank", IsPrimary: true } &&
+              merged[1] is { Source: "plane", IsPrimary: false },
+              "Evidence the measurement told us to keep was dropped by the merge.");
+
+        // The policy is part of what a cached translation was produced under.
+        Check(TranslateGemmaTranslationService.SenseGatePolicyIdentity.Contains(
+                  SenseEvidenceTrustPolicy.Identity,
+                  StringComparison.Ordinal),
+            "The trust policy is not folded into the composite policy identity.");
+    }
+
+    /// <summary>
+    /// Audit card E15: the three losses a source-disjoint set found in the E5
+    /// and E13 rules. Each cost a whole line, so each is reproduced verbatim.
+    /// </summary>
+    private static void VerifyBlindSetGuardRejections()
+    {
+        (string Case, string Source, string Translation)[] recovered =
+        [
+            ("mucow-wsd:03727 quoted single-letter grades",
+                "I'll give you an \"A\" for the idea, but a \"D\" for execution.",
+                "Я бы оценил вашу идею на \"A\", но реализацию – на \"D\"."),
+            ("mucow-wsd:03262 glued source token",
+                "- Mr Ewart, ofJanus Cars, had a 20,000 Colombian peso note in his wallet.",
+                "– У мистера Эуарта, представителя компании Janus Cars, в кошельке лежала банкнота."),
+            ("mucow-wsd:00934 brand re-cased by the model",
+                "Youtube is the source of fame of brand new stupid singers like Justin Bieber",
+                "YouTube – это источник славы таких новых исполнителей, как Джастин Бибер.")
+        ];
+        foreach ((string name, string source, string translation) in recovered)
+        {
+            SmartPhraseTranslationRequest request = CreateRequest(source);
+            SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.Validate(
+                request,
+                Result(request, translation));
+            Check(guarded.Accepted, $"A blind-set loss was not recovered: {name}");
+        }
+
+        // The counterexamples each fix could have broken.
+        SmartPhraseTranslationRequest initial = CreateRequest("Sounds professional to me.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  initial,
+                  Result(initial, "Sounds профессионально.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "An untranslated sentence-initial word passed as a re-cased brand.");
+
+        SmartPhraseTranslationRequest glued = CreateRequest("The costOf living rose.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  glued,
+                  Result(glued, "Стоимость of жизни выросла.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "A lowercase fragment of a glued token was preserved as a name.");
+
+        SmartPhraseTranslationRequest wordplay = CreateRequest(
+            "He called it a \"cash cow\" without irony.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  wordplay,
+                  Result(wordplay, "Он назвал это \"cash\" без иронии.")).Reason ==
+              SmartPhraseRejectionReason.StructuralMismatch,
+            "A truncated quoted English phrase passed the structural guard.");
+    }
+
+    /// <summary>
+    /// Audit card E4. Measured on MuCoW201: 26,9 % of supplied hints repeated a
+    /// (source, selected surface) pair and 9,5 % described a closed-class word.
+    /// </summary>
+    private static void VerifySenseHintHygiene()
+    {
+        // Trusted by construction: this block measures deduplication and the
+        // closed-class filter, not the trust policy that card E3 covers.
+        ScaffoldSenseHint Hint(
+            string source,
+            string definition,
+            string translation,
+            params string[] rejected) =>
+            new ScaffoldSenseHint(source, definition, translation, rejected, 0.9)
+            {
+                Origin = SenseEvidenceOrigin.RankerAccepted
+            };
+
+        // One accepted sense, three glosses describing it: one constraint.
+        IReadOnlyList<ScaffoldSenseHint> collapsed = SmartHoverPipeline.MergePhraseSenseHints(
+            [
+                Hint("start", "To begin, commence, initiate.", "запускать", "начало"),
+                Hint("start", "To ready the operation of a machine.", "запускать", "начало"),
+                Hint("plane", "powered aircraft", "самолёт", "плоскость"),
+                Hint("plane", "An airplane; an aeroplane.", "самолёт", "плоскость")
+            ],
+            hoveredHints: []);
+        Check(collapsed.Select(hint => hint.Source)
+                  .SequenceEqual(["start", "plane"], StringComparer.Ordinal),
+            "Repeated glosses of one accepted sense were not collapsed into one hint.");
+
+        // Two genuine senses of one word keep two hints.
+        IReadOnlyList<ScaffoldSenseHint> distinct = SmartHoverPipeline.MergePhraseSenseHints(
+            [
+                Hint("bank", "financial institution", "банк", "берег"),
+                Hint("bank", "land beside a river", "берег", "банк")
+            ],
+            hoveredHints: []);
+        Check(distinct.Count == 2,
+            "Two different accepted surfaces of one word were collapsed into one hint.");
+
+        IReadOnlyList<ScaffoldSenseHint> filtered = SmartHoverPipeline.MergePhraseSenseHints(
+            [
+                Hint("no", "Not (a); not properly.", "не"),
+                Hint("the", "definite article", "тот"),
+                Hint("strawberry", "the edible fruit", "земляника", "клубника")
+            ],
+            hoveredHints: []);
+        Check(filtered.Select(hint => hint.Source)
+                  .SequenceEqual(["strawberry"], StringComparer.Ordinal),
+            "A closed-class word occupied a slot in the bounded sense prompt.");
+
+        // An explicit lookup is intent, not noise: the hovered word survives
+        // the same filter, and stays first and primary.
+        IReadOnlyList<ScaffoldSenseHint> hovered = SmartHoverPipeline.MergePhraseSenseHints(
+            [Hint("strawberry", "the edible fruit", "земляника", "клубника")],
+            [
+                Hint("no", "Not (a); not properly.", "не"),
+                Hint("no", "Used to show disagreement.", "не")
+            ]);
+        Check(hovered.Count == 2 &&
+              hovered[0] is { Source: "no", IsPrimary: true } &&
+              !hovered[1].IsPrimary,
+            "The hovered closed-class word lost its explicit lookup evidence.");
+    }
+
+    /// <summary>
+    /// Audit card E13. Ordinary Russian opens sentences with a colon, and the
+    /// nameplate check used to read every such opening as an invented speaker.
+    /// </summary>
+    private static void VerifyRussianColonOpeningIsNotASpeaker()
+    {
+        (string Source, string Translation)[] ordinary =
+        [
+            ("Our top story, Channel Five News anchor, Torn Tucker, has a meltdown.",
+                "Главная новость: ведущий Channel Five, Торн Такер, сорвался."),
+            ("As he noticed the 3,000,000.99 BYR price tag.",
+                "Он заметил ценник: 3 000 000,99 BYR."),
+            ("All I know, unit A, cell 21, bunk five.",
+                "Я знаю только: блок A, ячейка 21, пятый отсек.")
+        ];
+        foreach ((string source, string translation) in ordinary)
+        {
+            SmartPhraseTranslationRequest request = CreateRequest(source);
+            Check(SmartPhraseTranslationGuard.Validate(
+                      request,
+                      Result(request, translation)).Accepted,
+                $"An ordinary Russian colon opening was read as a speaker label: {translation}");
+        }
+
+        // The invented nameplate this check exists for is still caught: one or
+        // two words, every one of them capitalized.
+        SmartPhraseTranslationRequest plain = CreateRequest("Hey, why do you think ants cry?");
+        foreach (string invented in new[]
+                 {
+                     "Котару: Эй, почему муравьи плачут?",
+                     "Анна Каренина: Эй, почему муравьи плачут?",
+                     "[Котару] Эй, почему муравьи плачут?"
+                 })
+        {
+            Check(SmartPhraseTranslationGuard.Validate(
+                      plain,
+                      Result(plain, invented)).Reason ==
+                  SmartPhraseRejectionReason.StructuralMismatch,
+                $"An invented speaker nameplate reached the phrase result: {invented}");
+        }
+
+        // A label the source itself carries is not invented.
+        SmartPhraseTranslationRequest labelled = CreateRequest("Kotaru: Why do ants cry?");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  labelled,
+                  Result(labelled, "Котару: Почему муравьи плачут?")).Accepted,
+            "A speaker label present in the source was rejected in the translation.");
+    }
+
+    private static void VerifyMultiLineOutputIsFolded()
+    {
+        SmartPhraseTranslationRequest request = CreateRequest(
+            "A trick to ordering food:\nIf a number is called, it is yours.");
+        SmartPhraseGuardResult folded = SmartPhraseTranslationGuard.Validate(
+            request,
+            Result(request, "Хитрость при заказе еды:\nЕсли назвали номер, он ваш."));
+        Check(folded is
+              {
+                  Accepted: true,
+                  Translation: "Хитрость при заказе еды: Если назвали номер, он ваш."
+              },
+            "A correct multi-line translation was rejected as a defective character.");
+
+        // Folding whitespace must not become a licence for real control codes:
+        // they are not whitespace, so normalization leaves them to be caught.
+        Check(SmartPhraseTranslationGuard.Validate(
+                  request,
+                  Result(request, "Хитрость при заказе еды.\u0007")).Reason ==
+              SmartPhraseRejectionReason.InvalidCharacters,
+            "A control code survived the guard once whitespace folding moved first.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  request,
+                  Result(request, "Хитрость\u200bпри заказе еды.")).Reason ==
+              SmartPhraseRejectionReason.InvalidCharacters,
+            "A zero-width format character survived the guard.");
+    }
+
+    /// <summary>
+    /// The five real coverage losses measured on MuCoW201 (audit card E5).
+    /// Each keeps a Latin token that the source itself presents as a code, an
+    /// acronym or a name, which the human reference keeps too.
+    /// </summary>
+    private static void VerifySourcePreservedLatinTokens()
+    {
+        (string Source, string Translation)[] preserved =
+        [
+            ("As he noticed the 3,000,000.99 BYR price tag.",
+                "Он заметил ценник 3 000 000,99 BYR."),
+            ("However, this should represent only a component of a JEP.",
+                "Однако это лишь часть JEP."),
+            // No leading "слово слово слово:" in these renderings on purpose —
+            // that shape trips the separate speaker-prefix defect (card E13),
+            // and this test must fail for its own reason or not at all.
+            ("All I know, unit A, cell 21, bunk five.",
+                "Я знаю только — блок A, ячейка 21, пятый отсек."),
+            ("I thought all you wanted was C-4 and a Jumper.",
+                "Я думал, вам нужны только C-4 и «Jumper»."),
+            ("This is their newspaper, the \"Straight-Up News\", in both languages.",
+                "Это их газета \"Straight-Up News\" на обоих языках.")
+        ];
+        foreach ((string source, string translation) in preserved)
+        {
+            SmartPhraseTranslationRequest request = CreateRequest(source);
+            SmartPhraseGuardResult guarded = SmartPhraseTranslationGuard.Validate(
+                request,
+                Result(request, translation));
+            Check(guarded.Accepted,
+                $"A source code or acronym was rejected as residual English: {source}");
+        }
+
+        // The counterexamples that keep the check worth having.
+        SmartPhraseTranslationRequest untranslated = CreateRequest(
+            "We rested on the bank by the river.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  untranslated,
+                  Result(untranslated, "Мы отдыхали на bank у реки.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "A lowercase untranslated source word was preserved as if it were a code.");
+
+        SmartPhraseTranslationRequest sentenceInitial = CreateRequest(
+            "Bank closed early today.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  sentenceInitial,
+                  Result(sentenceInitial, "Bank закрылся рано.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "Sentence-initial capitalization was mistaken for evidence about the word.");
+
+        SmartPhraseTranslationRequest shouting = CreateRequest("UNIT A CELL 21 BUNK FIVE");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  shouting,
+                  Result(shouting, "БЛОК A, CELL 21.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "An all-caps OCR line was treated as capitalization evidence.");
+
+        SmartPhraseTranslationRequest functionWord = CreateRequest(
+            "The bank near The River was closed.");
+        Check(SmartPhraseTranslationGuard.Validate(
+                  functionWord,
+                  Result(functionWord, "Банк возле The реки был закрыт.")).Reason ==
+              SmartPhraseRejectionReason.ResidualEnglish,
+            "A capitalized English function word was preserved as a name.");
     }
 
     private static void VerifyTargetCenteredPhraseBuilder()
@@ -578,11 +906,18 @@ internal static class SmartPhraseTranslationFoundationTests
                       "LEMU / BANK, BY—WATER; мы отдыхали на берегу.")).Reason ==
               SmartPhraseRejectionReason.PromptEcho,
             "Punctuation changes let a complete all-caps prompt echo pass.");
+        // Previously this asserted rejection. A line break inside one sentence
+        // is layout, not a defective character, and the card-E5 measurement
+        // showed the old rule discarding correct translations; the defective
+        // characters it was meant to catch are handled above.
         Check(SmartPhraseTranslationGuard.Validate(
                   request,
-                  Result(request, "Мы отдыхали\nна берегу.")).Reason ==
-              SmartPhraseRejectionReason.InvalidCharacters,
-            "A multi-line answer reached the phrase result.");
+                  Result(request, "Мы отдыхали\nна берегу.")) is
+              {
+                  Accepted: true,
+                  Translation: "Мы отдыхали на берегу."
+              },
+            "A wrapped line was still treated as a defective character.");
         Check(SmartPhraseTranslationGuard.Validate(
                   request,
                   Result(request, "Мы отдыхали на\u200Bберегу.")).Reason ==

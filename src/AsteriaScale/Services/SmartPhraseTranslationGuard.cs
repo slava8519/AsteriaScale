@@ -82,14 +82,19 @@ internal static partial class SmartPhraseTranslationGuard
             return Reject(SmartPhraseRejectionReason.Empty);
         }
 
-        if (result.Translation.Any(character =>
+        // Normalization first: a line break is layout, not a defective
+        // character, and folding it is exactly what NormalizeOutput exists for.
+        // Checking beforehand rejected every multi-line answer, including the
+        // correct rendering of a multi-line source. Genuinely defective
+        // characters are not whitespace, so they still survive to be caught.
+        string translation = NormalizeOutput(result.Translation);
+        if (translation.Any(character =>
                 char.IsControl(character) ||
                 char.GetUnicodeCategory(character) == UnicodeCategory.Format))
         {
             return Reject(SmartPhraseRejectionReason.InvalidCharacters);
         }
 
-        string translation = NormalizeOutput(result.Translation);
         if (!enforceSenseFidelity)
         {
             translation = NormalizeDisplayStructure(sourcePhrase, translation);
@@ -135,9 +140,17 @@ internal static partial class SmartPhraseTranslationGuard
             .SelectMany(name => AsciiWordRegex().Matches(name).Cast<Match>())
             .Select(match => match.Value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (AsciiWordRegex().Matches(translation)
+        string[] outputAsciiTokens = AsciiWordRegex().Matches(translation)
             .Cast<Match>()
-            .Any(match => !allowedProperNameTokens.Contains(match.Value)))
+            .Select(match => match.Value)
+            .ToArray();
+        HashSet<string> preservedSourceTokens = CollectPreservedSourceTokens(
+            sourcePhrase,
+            modelInputPhrase,
+            outputAsciiTokens);
+        if (outputAsciiTokens
+            .Any(token => !allowedProperNameTokens.Contains(token) &&
+                          !preservedSourceTokens.Contains(token)))
         {
             return Reject(SmartPhraseRejectionReason.ResidualEnglish);
         }
@@ -319,6 +332,125 @@ internal static partial class SmartPhraseTranslationGuard
         value.Contains("<start_of_turn>", StringComparison.Ordinal) ||
         value.Contains("<end_of_turn>", StringComparison.Ordinal);
 
+    /// <summary>
+    /// Latin tokens the source itself presents as a code, an acronym or a name
+    /// (`BYR`, `JEP`, `C-4`, `unit A`, `"Straight-Up News"`). A correct Russian
+    /// translation keeps them, and so do the human references, so rejecting the
+    /// whole line over them loses a good translation instead of catching a bad
+    /// one. `ProperNames` cannot cover these: it requires both letter cases and
+    /// strips punctuation, which excludes every acronym and hyphenated form.
+    /// </summary>
+    /// <remarks>
+    /// The evidence is the source's own capitalization, so an all-lowercase
+    /// word is never preserved this way — an untranslated `bank` is still a
+    /// rejection. A source in full uppercase carries no such evidence at all,
+    /// which is the OCR case, so the rule switches itself off there.
+    /// Accepted trade-off: a single uppercase letter that is also an English
+    /// word (`I`, `A`) is preserved, because distinguishing `unit A` from the
+    /// article needs context the guard does not have. A wholly untranslated
+    /// answer is still caught by the Cyrillic-ratio completeness check.
+    /// </remarks>
+    private static HashSet<string> CollectPreservedSourceTokens(
+        string sourcePhrase,
+        string modelInputPhrase,
+        IReadOnlyList<string> outputTokens)
+    {
+        // Case-insensitive on purpose: a model routinely normalizes a brand's
+        // own spelling (source `Youtube`, output `YouTube`), and that is the
+        // correct rendering, not foreign text. Case still cannot admit a new
+        // token, because only capitalized source tokens enter this set at all.
+        HashSet<string> preserved = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string phrase in new[] { sourcePhrase, modelInputPhrase })
+        {
+            if (!phrase.Any(character => character is >= 'a' and <= 'z'))
+            {
+                continue;
+            }
+
+            Match[] tokens = AsciiWordRegex().Matches(phrase).Cast<Match>().ToArray();
+            for (int index = 0; index < tokens.Length; index++)
+            {
+                string token = tokens[index].Value;
+                // Source text glues words together often enough to matter
+                // (`ofJanus Cars`): the name is present but not as a token, so
+                // a whole-token rule cannot see it. A lower-to-upper boundary
+                // inside one token is evidence of exactly that glue, and the
+                // glued token itself may well start lowercase.
+                foreach (string candidate in
+                         new[] { token }.Concat(SplitCamelCaseBoundaries(token)))
+                {
+                    if (IsPreservableSourceToken(candidate, index > 0, outputTokens))
+                    {
+                        preserved.Add(candidate);
+                    }
+                }
+            }
+        }
+
+        return preserved;
+    }
+
+    private static bool IsPreservableSourceToken(
+        string token,
+        bool afterFirstToken,
+        IReadOnlyList<string> outputTokens)
+    {
+        if (!char.IsUpper(token[0]))
+        {
+            return false;
+        }
+
+        bool allUppercase = !token.Any(char.IsLower);
+        if (!allUppercase &&
+            EnglishContextLexicon.DefinitionStopWords.Contains(
+                EnglishContextLexicon.NormalizeToken(token)))
+        {
+            return false;
+        }
+
+        bool distinctiveShape = allUppercase ||
+                                token.Skip(1).Any(character =>
+                                    char.IsUpper(character) || char.IsDigit(character));
+        if (afterFirstToken || distinctiveShape)
+        {
+            return true;
+        }
+
+        // A sentence opens with a capital regardless of the word, so position
+        // alone says nothing here and `Sounds professional` must stay a
+        // rejection. The one admissible exception is corroborated by the model
+        // itself: it re-cased the word internally (`Youtube` to `YouTube`),
+        // which is a shape an ordinary English word does not acquire.
+        return outputTokens.Any(candidate =>
+            candidate.Length == token.Length &&
+            string.Equals(candidate, token, StringComparison.OrdinalIgnoreCase) &&
+            candidate.Skip(1).Any(char.IsUpper));
+    }
+
+    private static IEnumerable<string> SplitCamelCaseBoundaries(string token)
+    {
+        int start = 0;
+        for (int index = 1; index < token.Length; index++)
+        {
+            if (!char.IsLower(token[index - 1]) || !char.IsUpper(token[index]))
+            {
+                continue;
+            }
+
+            if (index - start > 1)
+            {
+                yield return token[start..index];
+            }
+
+            start = index;
+        }
+
+        if (start > 0 && token.Length - start > 1)
+        {
+            yield return token[start..];
+        }
+    }
+
     private static bool IsIncompleteTranslation(string source, string translation)
     {
         int sourceWordCount = WordRegex().Matches(source)
@@ -398,8 +530,8 @@ internal static partial class SmartPhraseTranslationGuard
             return true;
         }
 
-        if (!LeadingSpeakerPrefixRegex().IsMatch(normalizedSource) &&
-            LeadingSpeakerPrefixRegex().IsMatch(normalizedTranslation))
+        if (!HasLeadingSpeakerLabel(normalizedSource) &&
+            HasLeadingSpeakerLabel(normalizedTranslation))
         {
             return true;
         }
@@ -483,6 +615,38 @@ internal static partial class SmartPhraseTranslationGuard
         return false;
     }
 
+    /// <summary>
+    /// A speaker nameplate the source never had. A bracketed label is one
+    /// unconditionally; a colon is not, because ordinary Russian opens
+    /// sentences that way ("Он заметил ценник: …", "Главная новость: …").
+    /// </summary>
+    /// <remarks>
+    /// The discriminator is name shape, not a word list: D3 solved the mirror
+    /// problem on the OCR side with English sets, and those say nothing about
+    /// Russian output. A nameplate is one or two words that are all capitalized;
+    /// in an ordinary opening only the first word is, because Russian
+    /// capitalizes the sentence, not the phrase.
+    /// </remarks>
+    private static bool HasLeadingSpeakerLabel(string value)
+    {
+        if (LeadingBracketLabelRegex().IsMatch(value))
+        {
+            return true;
+        }
+
+        Match colon = LeadingColonLabelRegex().Match(value);
+        if (!colon.Success)
+        {
+            return false;
+        }
+
+        string[] words = colon.Groups["label"].Value.Split(
+            (char[]?)null,
+            StringSplitOptions.RemoveEmptyEntries);
+        return words.Length is > 0 and <= 2 &&
+               words.All(word => char.IsUpper(word[0]));
+    }
+
     private static bool StartsWithEllipsis(string value) =>
         value.StartsWith("...", StringComparison.Ordinal) ||
         value.StartsWith('\u2026');
@@ -534,9 +698,14 @@ internal static partial class SmartPhraseTranslationGuard
     private static partial Regex LeadingListMarkerRegex();
 
     [GeneratedRegex(
-        """^\s*["'\u00ab\u201c]?\s*(?:\[[^\]\r\n]{1,48}\]\s*|[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}(?:\s+[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}){0,2}\s*:\s*)""",
+        """^\s*["'\u00ab\u201c]?\s*\[[^\]\r\n]{1,48}\]\s*""",
         RegexOptions.CultureInvariant)]
-    private static partial Regex LeadingSpeakerPrefixRegex();
+    private static partial Regex LeadingBracketLabelRegex();
+
+    [GeneratedRegex(
+        """^\s*["'\u00ab\u201c]?\s*(?<label>[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}(?:\s+[\p{L}\p{M}][\p{L}\p{M}'\u2019\-]{0,31}){0,2})\s*:\s*""",
+        RegexOptions.CultureInvariant)]
+    private static partial Regex LeadingColonLabelRegex();
 
     [GeneratedRegex(
         """(?<![A-Za-z])'(?<content>[^'\r\n]{1,96})'(?![A-Za-z])""",
@@ -544,7 +713,7 @@ internal static partial class SmartPhraseTranslationGuard
     private static partial Regex SingleQuotedAsciiSpanRegex();
 
     [GeneratedRegex(
-        """"(?<content>[^"\r\n]{1,96})"""",
+        "\"(?<content>[^\"\r\n]{1,96})\"",
         RegexOptions.CultureInvariant)]
     private static partial Regex DoubleQuotedAsciiSpanRegex();
 

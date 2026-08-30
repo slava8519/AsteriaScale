@@ -42,6 +42,8 @@ SENSE_OUTCOME_METHOD = (
     "full-positive-list-exact-token-yo-fold-no-lemmatization"
 )
 SENSE_EVIDENCE_DOMAIN = "asteria-smart-sense-evidence-v1\n"
+_SENSE_EVIDENCE_PROMPT_FIELDS = {"source", "englishDefinition", "selectedTranslation"}
+_SENSE_EVIDENCE_DIAGNOSTIC_FIELDS = {"confidence", "origin"}
 
 _DATASET_FIELDS = {
     "schemaVersion",
@@ -75,6 +77,7 @@ _OUTPUT_FIELDS = {
     "latencyMilliseconds",
     "errorCode",
     "errorMessage",
+    "rejectionReason",
     "focus",
     "fromCache",
     "systemId",
@@ -482,6 +485,7 @@ def validate_output_records(
         for field in (
             "errorCode",
             "errorMessage",
+            "rejectionReason",
             "profile",
             "backend",
             "ranker",
@@ -493,6 +497,10 @@ def validate_output_records(
         ):
             if raw.get(field) is not None and not isinstance(raw[field], str):
                 raise BenchmarkError(f"{label}.{field} должен быть строкой или null.")
+        if raw.get("rejectionReason") is not None and status == "ok":
+            raise BenchmarkError(
+                f"{label}.rejectionReason задан для принятого перевода."
+            )
         from_cache = raw.get("fromCache")
         if from_cache is not None and not isinstance(from_cache, bool):
             raise BenchmarkError(f"{label}.fromCache должен быть bool или null.")
@@ -749,6 +757,60 @@ def _hover_sense_text(case: dict[str, Any], output: dict[str, Any]) -> str:
     return dictionary_translation if isinstance(dictionary_translation, str) else ""
 
 
+def _primary_hint_diagnostics(
+    case: dict[str, Any], output: dict[str, Any]
+) -> tuple[float | None, str | None]:
+    """Confidence and origin of the hint for the hovered word, when there is one."""
+    metadata = output.get("metadata")
+    if not isinstance(metadata, dict):
+        return None, None
+    focus = case.get("focus")
+    focus_text = focus.get("text", "") if isinstance(focus, dict) else ""
+    for item in metadata.get("senseEvidence") or []:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        if not isinstance(source, str) or not _contains_standalone_ascii_focus(
+            source, focus_text
+        ):
+            continue
+        confidence = item.get("confidence")
+        origin = item.get("origin")
+        return (
+            float(confidence) if isinstance(confidence, (int, float)) else None,
+            origin if isinstance(origin, str) else None,
+        )
+    return None, None
+
+
+def _confidence_bucket(confidence: float | None) -> str:
+    if confidence is None:
+        return "unreported"
+    for upper in (0.25, 0.50, 0.75, 0.90):
+        if confidence < upper:
+            return f"<{upper:.2f}"
+    return ">=0.90"
+
+
+def _grouped_outcome_summary(
+    counts: Counter[tuple[str, str]]
+) -> dict[str, dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for (group, outcome), value in counts.items():
+        entry = groups.setdefault(
+            group,
+            {"correct": 0, "wrong": 0, "mixed": 0, "unresolved": 0},
+        )
+        entry[outcome] = entry.get(outcome, 0) + value
+    for entry in groups.values():
+        evaluated = sum(
+            entry[key] for key in ("correct", "wrong", "mixed", "unresolved")
+        )
+        entry["evaluated"] = evaluated
+        entry["accuracy"] = entry["correct"] / evaluated if evaluated else None
+    return dict(sorted(groups.items()))
+
+
 def _sense_summary(counts: Counter[str]) -> dict[str, Any]:
     evaluated = sum(counts.values())
     resolved = counts["correct"] + counts["wrong"] + counts["mixed"]
@@ -805,10 +867,28 @@ def sense_evidence_sha256(evidence: Sequence[dict[str, Any]]) -> str:
     for index, item in enumerate(evidence):
         if not isinstance(item, dict):
             raise BenchmarkError(f"sense evidence [{index}] должен быть объектом.")
-        if set(item) != {"source", "englishDefinition", "selectedTranslation"}:
+        # confidence/origin are reported for analysis but never hashed: the
+        # fingerprint identifies what the prompt saw, and neither reaches it.
+        # Hashing them would make two runs with identical prompts incomparable.
+        fields = set(item)
+        if not _SENSE_EVIDENCE_PROMPT_FIELDS <= fields or not fields <= (
+            _SENSE_EVIDENCE_PROMPT_FIELDS | _SENSE_EVIDENCE_DIAGNOSTIC_FIELDS
+        ):
             raise BenchmarkError(
                 f"sense evidence [{index}] имеет неизвестные или отсутствующие поля."
             )
+        confidence = item.get("confidence")
+        if confidence is not None and (
+            not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+            or not math.isfinite(float(confidence))
+            or not 0.0 <= float(confidence) <= 1.0
+        ):
+            raise BenchmarkError(
+                f"sense evidence [{index}].confidence должен быть числом в [0; 1]."
+            )
+        if item.get("origin") is not None and not isinstance(item.get("origin"), str):
+            raise BenchmarkError(f"sense evidence [{index}].origin должен быть строкой.")
         for field in ("source", "englishDefinition", "selectedTranslation"):
             value = item.get(field)
             if not isinstance(value, str):
@@ -886,6 +966,9 @@ def score_cases(
     contrast_scored = 0
     translation_sense_outcomes: Counter[str] = Counter()
     hover_sense_outcomes: Counter[str] = Counter()
+    rejection_reasons: Counter[str] = Counter()
+    hint_confidence_outcomes: Counter[tuple[str, str]] = Counter()
+    hint_origin_outcomes: Counter[tuple[str, str]] = Counter()
     all_latencies: list[float] = []
     successful_latencies: list[float] = []
 
@@ -893,6 +976,12 @@ def score_cases(
         status = output["status"]
         successful = status == "ok" and bool(output["hypothesis"].strip())
         statuses[status] += 1
+        if not successful:
+            # "unreported" is a distinct finding, not a rounding bucket: it
+            # means the run could not say whether a guard refused a translation
+            # or generation never produced one.
+            reason = output.get("rejectionReason")
+            rejection_reasons[reason if isinstance(reason, str) and reason else "unreported"] += 1
         hypothesis = output["hypothesis"] if successful else ""
         references = case["references"]
         case_chrf = multi_reference_chrf2(hypothesis, references)
@@ -950,6 +1039,11 @@ def score_cases(
             )
             translation_sense_outcomes[translation_sense_outcome] += 1
             hover_sense_outcomes[hover_sense_outcome] += 1
+            confidence, origin = _primary_hint_diagnostics(case, output)
+            hint_confidence_outcomes[
+                (_confidence_bucket(confidence), hover_sense_outcome)
+            ] += 1
+            hint_origin_outcomes[(origin or "none", hover_sense_outcome)] += 1
 
         latency = output.get("latencyMilliseconds")
         if latency is not None:
@@ -983,6 +1077,10 @@ def score_cases(
         "successful": successful_count,
         "successRate": successful_count / total,
         "statuses": dict(sorted(statuses.items())),
+        "rejections": {
+            "unsuccessfulCases": sum(rejection_reasons.values()),
+            "reasons": dict(sorted(rejection_reasons.items())),
+        },
         "chrF2": {
             "metricId": "asteria.macro-chrf2@1",
             "higherIsBetter": True,
@@ -1011,6 +1109,11 @@ def score_cases(
         },
         "translationSenseOutcome": _sense_summary(translation_sense_outcomes),
         "hoverSenseOutcome": _sense_summary(hover_sense_outcomes),
+        # Hint accuracy split by the ranker's own confidence and by which path
+        # produced the hint. A trust policy cannot be designed from an average
+        # over paths that mean different things.
+        "hintConfidence": _grouped_outcome_summary(hint_confidence_outcomes),
+        "hintOrigin": _grouped_outcome_summary(hint_origin_outcomes),
         "latencyMilliseconds": {
             "samples": len(all_latencies),
             "p50": nearest_rank_percentile(all_latencies, 0.50),

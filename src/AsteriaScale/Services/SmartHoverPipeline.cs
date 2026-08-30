@@ -16,6 +16,13 @@ internal sealed record SmartHoverPhraseLine(
     SmartPhraseLineStatus Status,
     bool FromCache)
 {
+    // A guard rejection and a generation failure both surface as Unavailable,
+    // but only the first is a policy decision about a translation that exists.
+    // Without carrying the reason, coverage losses cannot be attributed to a
+    // policy at all: the diagnostic string reaches the log and dies there.
+    // Null therefore means "no guard verdict", not "no reason".
+    public SmartPhraseRejectionReason? RejectionReason { get; init; }
+
     // Benchmark diagnostics distinguish evidence supplied to a request from
     // evidence that actually reached the selected generated hypothesis.
     public IReadOnlyList<ScaffoldSenseHint> SenseHints { get; init; } =
@@ -262,7 +269,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                         displaySource,
                         plan,
                         tatoebaSelection.Index,
-                        tatoebaSelection.Confidence)
+                        tatoebaSelection.Confidence,
+                        SenseEvidenceOrigin.TatoebaAlignment)
                 };
             }
 
@@ -284,7 +292,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                         displaySource,
                         plan,
                         plan.Outcomes[0].GroupId,
-                        confidence: 1)
+                        confidence: 1,
+                        SenseEvidenceOrigin.SingleOutcome)
                 };
             }
 
@@ -310,7 +319,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                         displaySource,
                         plan,
                         fastSelection.Index,
-                        fastSelection.Confidence)
+                        fastSelection.Confidence,
+                        SenseEvidenceOrigin.Heuristic)
                 };
             }
 
@@ -371,7 +381,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                         displaySource,
                         plan,
                         cachedSelection.Index,
-                        cachedSelection.Confidence)
+                        cachedSelection.Confidence,
+                        // The result cache does not record which path decided,
+                        // so replaying one must not claim a ranker verdict.
+                        SenseEvidenceOrigin.ResultCache)
                 };
                 return cachedResult;
             }
@@ -444,7 +457,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                         displaySource,
                         plan,
                         sharedOutcome.GroupId,
-                        promoted.Confidence)
+                        promoted.Confidence,
+                        SenseEvidenceOrigin.RankerAccepted)
                 };
                 return sharedResult;
             }
@@ -568,7 +582,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                     displaySource,
                     plan,
                     selectedOutcome.GroupId,
-                    cacheSelection.Confidence)
+                    cacheSelection.Confidence,
+                    SenseEvidenceOrigin.RankerAccepted)
             };
             return selectedResult;
         }
@@ -711,7 +726,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                 requestRejection,
                 request,
                 result: null));
-            return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
+            return UnavailablePhraseLine(
+                phrase.Value.Text,
+                phraseBackend,
+                requestRejection);
         }
         try
         {
@@ -738,7 +756,10 @@ internal sealed class SmartHoverPipeline : IDisposable
                     guarded.Reason,
                     request,
                     translated));
-                return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
+                return UnavailablePhraseLine(
+                    phrase.Value.Text,
+                    phraseBackend,
+                    guarded.Reason);
             }
 
             if (!translated.FromCache && translated.Cacheable)
@@ -778,25 +799,37 @@ internal sealed class SmartHoverPipeline : IDisposable
                     "TranslateGemma недоступна — словарный результат сохранён без перевода фразы");
             }
 
-            return UnavailablePhraseLine(phrase.Value.Text, phraseBackend);
+            // Generation failed, so no guard ever ruled on a translation.
+            return UnavailablePhraseLine(
+                phrase.Value.Text,
+                phraseBackend,
+                rejectionReason: null);
         }
     }
 
-    private static IReadOnlyList<ScaffoldSenseHint> MergePhraseSenseHints(
+    internal static IReadOnlyList<ScaffoldSenseHint> MergePhraseSenseHints(
         IReadOnlyList<ScaffoldSenseHint> sentenceHints,
         IReadOnlyList<ScaffoldSenseHint> hoveredHints)
     {
+        // Deduplication is by (source, selected surface), not by definition:
+        // one accepted sense emits one hint per gloss describing it, so a word
+        // routinely arrives two or three times with the same Russian anchor and
+        // the same rejected surfaces. Those repeats constrain nothing and spend
+        // the bounded prompt that the hovered word competes for.
+        // Only evidence firm enough to steer generation reaches the prompt.
+        // Untrusted hints are not weak evidence, they are close to a coin flip
+        // (card E3), and conditioning on one pushes the generator toward a word
+        // the disambiguator itself was unsure about.
         ScaffoldSenseHint[] distinctHoveredHints = hoveredHints
-            .GroupBy(
-                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+            .Where(SenseEvidenceTrustPolicy.Accepts)
+            .GroupBy(hint => (hint.Source, hint.SelectedTranslation))
             .Select(group => group.Last())
             .Select(hint => hint with { IsPrimary = true })
             .Take(TranslationScaffoldBuilder.MaximumSenseHintCount)
             .ToArray();
-        HashSet<(string Source, string Definition, string Translation)> hoveredKeys =
+        HashSet<(string Source, string Translation)> hoveredKeys =
             distinctHoveredHints
-                .Select(hint =>
-                    (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+                .Select(hint => (hint.Source, hint.SelectedTranslation))
                 .ToHashSet();
         int sentenceCapacity = TranslationScaffoldBuilder.MaximumSenseHintCount -
                                distinctHoveredHints.Length;
@@ -806,9 +839,13 @@ internal sealed class SmartHoverPipeline : IDisposable
         return distinctHoveredHints
             .Concat(sentenceHints
             .Where(hint => !hoveredKeys.Contains(
-                (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation)))
-            .GroupBy(
-                hint => (hint.Source, hint.EnglishDefinition, hint.SelectedTranslation))
+                (hint.Source, hint.SelectedTranslation)))
+            // A closed-class word carries no disambiguation for the sentence.
+            // The hovered word is exempt above: an explicit lookup is intent,
+            // not noise, even when the user points at "no".
+            .Where(hint => !IsFunctionWord(hint.Source))
+            .Where(SenseEvidenceTrustPolicy.Accepts)
+            .GroupBy(hint => (hint.Source, hint.SelectedTranslation))
             .Select(group => group.Last())
             .Take(sentenceCapacity))
             .ToArray();
@@ -879,15 +916,22 @@ internal sealed class SmartHoverPipeline : IDisposable
             SenseHints = senseHints
         };
 
+    // The reason is a required argument rather than an optional one: every
+    // unavailable line has to state whether a guard refused an existing
+    // translation or generation never produced one.
     private static SmartHoverPhraseLine UnavailablePhraseLine(
         string source,
-        TranslateGemmaExecutionBackend phraseBackend) =>
+        TranslateGemmaExecutionBackend phraseBackend,
+        SmartPhraseRejectionReason? rejectionReason) =>
         new(
             source,
             string.Empty,
             TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
             SmartPhraseLineStatus.Unavailable,
-            FromCache: false);
+            FromCache: false)
+        {
+            RejectionReason = rejectionReason
+        };
 
     private TranslateGemmaExecutionBackend PhraseBackend =>
         TranslateGemmaTranslationService.ResolveBackend(
@@ -926,15 +970,24 @@ internal sealed class SmartHoverPipeline : IDisposable
             return false;
         }
 
+        return !IsFunctionWord(token);
+    }
+
+    /// <summary>
+    /// A closed-class English word: never a name, and never worth a slot in a
+    /// bounded sense prompt. One definition of the set, two consumers.
+    /// </summary>
+    internal static bool IsFunctionWord(string token)
+    {
         string normalized = EnglishContextLexicon.NormalizeToken(token);
-        return !EnglishContextLexicon.DefinitionStopWords.Contains(normalized) &&
-               !EnglishContextLexicon.SubjectPronouns.Contains(normalized) &&
-               !EnglishContextLexicon.AuxiliaryBe.Contains(normalized) &&
-               !EnglishContextLexicon.AuxiliaryHave.Contains(normalized) &&
-               !EnglishContextLexicon.AuxiliaryDo.Contains(normalized) &&
-               !EnglishContextLexicon.Modals.Contains(normalized) &&
-               !EnglishContextLexicon.Determiners.Contains(normalized) &&
-               !EnglishContextLexicon.Possessives.Contains(normalized);
+        return EnglishContextLexicon.DefinitionStopWords.Contains(normalized) ||
+               EnglishContextLexicon.SubjectPronouns.Contains(normalized) ||
+               EnglishContextLexicon.AuxiliaryBe.Contains(normalized) ||
+               EnglishContextLexicon.AuxiliaryHave.Contains(normalized) ||
+               EnglishContextLexicon.AuxiliaryDo.Contains(normalized) ||
+               EnglishContextLexicon.Modals.Contains(normalized) ||
+               EnglishContextLexicon.Determiners.Contains(normalized) ||
+               EnglishContextLexicon.Possessives.Contains(normalized);
     }
 
     private static string FormatVisibleOutcomes(IReadOnlyList<string> translations)

@@ -21,6 +21,12 @@ internal sealed record ScaffoldSenseHint(
     // first without coupling the translator to hover-pipeline ordering.
     public bool IsPrimary { get; init; }
 
+    // Why this hint is believed. Confidence alone is not comparable across
+    // paths: a single aligned sense is reported as 1 because nothing had to be
+    // decided, which is a different claim from a ranker verdict of 1. A trust
+    // policy has to see the two apart, so the origin travels with the hint.
+    public SenseEvidenceOrigin Origin { get; init; } = SenseEvidenceOrigin.Unknown;
+
     public ScaffoldSenseHint(
         string Source,
         string EnglishDefinition,
@@ -33,6 +39,26 @@ internal sealed record ScaffoldSenseHint(
             Confidence)
     {
     }
+}
+
+/// <summary>
+/// Which decision produced a sense hint. Reported in benchmark telemetry so
+/// hint accuracy can be measured per path instead of being averaged across
+/// paths that mean different things.
+/// </summary>
+internal enum SenseEvidenceOrigin
+{
+    Unknown,
+    /// <summary>One aligned sense: nothing was decided, so nothing can be wrong.</summary>
+    SingleOutcome,
+    /// <summary>Deterministic heuristic fast-path.</summary>
+    Heuristic,
+    /// <summary>Exact Tatoeba sentence alignment.</summary>
+    TatoebaAlignment,
+    /// <summary>A semantic ranker accepted a group above the frozen margin.</summary>
+    RankerAccepted,
+    /// <summary>Replayed from the persistent result cache; its original path is not recorded there.</summary>
+    ResultCache
 }
 
 internal enum ScaffoldTermProvenance
@@ -737,11 +763,16 @@ internal sealed class TranslationScaffoldBuilder
                     $"GlossBERT selected unknown GroupId {selectedGroupId}.");
             }
 
+            // The ranker's own confidence, not the acceptance floor: the trust
+            // policy reads this number, so reporting a constant would make every
+            // sentence-wide hint claim the same firmness regardless of how sure
+            // the disambiguator actually was.
             IReadOnlyList<ScaffoldSenseHint> selectedSenseHints = SemanticSenseEvidenceFactory.Create(
                 target,
                 plan,
                 selectedGroupId,
-                MinimumConfidence);
+                result.Confidence ?? 0,
+                SenseEvidenceOrigin.RankerAccepted);
             return new NeuralSelectionAttempt(
                 selectedSenseHints,
                 CreateNeuralDiagnostic(

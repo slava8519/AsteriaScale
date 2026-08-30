@@ -266,6 +266,49 @@ class TranslationBenchmarkTests(unittest.TestCase):
         self.assertEqual(report["system"]["engine"], "translategemma-4b")
         self.assertEqual(report["outputs"]["selectionSha256"], [self.full_selection])
 
+    def test_rejection_reasons_are_attributed_and_bound_to_failures(self) -> None:
+        normalized = benchmark.validate_dataset_records(self.dataset)
+        guarded = output_for(
+            self.dataset[0],
+            "",
+            system_id="sys",
+            selection=self.selection_a,
+            status="unavailable",
+        )
+        guarded["rejectionReason"] = "residualEnglish"
+        silent = output_for(
+            self.dataset[1],
+            "",
+            system_id="sys",
+            selection=self.selection_a,
+            status="unavailable",
+        )
+        accepted = output_for(
+            self.dataset[2],
+            "Принятый перевод.",
+            system_id="sys",
+            selection=self.selection_a,
+        )
+        outputs = benchmark.validate_output_records(
+            [guarded, silent, accepted],
+            normalized[:3],
+            "sys",
+        )
+        _, summary = benchmark.score_cases(normalized[:3], outputs)
+        self.assertEqual(
+            summary["rejections"],
+            {
+                "unsuccessfulCases": 2,
+                "reasons": {"residualEnglish": 1, "unreported": 1},
+            },
+        )
+
+        # A verdict on an accepted translation is a contradiction: the guard
+        # only rules when it refuses.
+        contradiction = dict(accepted, rejectionReason="explanation")
+        with self.assertRaises(benchmark.BenchmarkError):
+            benchmark.validate_output_records([contradiction], normalized[2:3], "sys")
+
     def test_validation_rejects_source_drift_unknown_fields_and_implicit_source_only(self) -> None:
         normalized = benchmark.validate_dataset_records(self.dataset)
         self.assertEqual(

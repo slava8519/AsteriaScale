@@ -666,7 +666,10 @@ internal static class LocalDictionaryNormalizationTests
                       EnglishDefinition: "land alongside a river",
                       SelectedTranslation: "берег",
                       RejectedTranslations: ["банк"],
-                      Confidence: TranslationScaffoldBuilder.MinimumConfidence
+                      // The ranker's reported confidence, not the acceptance
+                      // floor: the trust policy reads this number (card E3).
+                      Confidence: 0.81,
+                      Origin: SenseEvidenceOrigin.RankerAccepted
                   }
               ] &&
               neural.NeuralDecisions is
