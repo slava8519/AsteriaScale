@@ -227,18 +227,24 @@
           "selector": "mucow-smart-hover-one-per-sense-v1",
           "expectedRecords": 201
         },
-          {
-            "id": "mucow-wsd-smart-hover-balanced-v1",
-            "title": "MuCoW EN-RU balanced Smart Dictionary downstream slice",
-            "selector": "mucow-smart-hover-balanced-v1",
-            "expectedRecords": 400
-          },
-          {
-            "id": "mucow-wsd-smart-hover-replication-v1",
-            "title": "MuCoW EN-RU disjoint-source Smart Dictionary replication slice",
-            "selector": "mucow-smart-hover-replication-v1",
-            "expectedRecords": 199
-          }
+        {
+          "id": "mucow-wsd-smart-hover-balanced-v1",
+          "title": "MuCoW EN-RU balanced Smart Dictionary downstream slice",
+          "selector": "mucow-smart-hover-balanced-v1",
+          "expectedRecords": 400
+        },
+        {
+          "id": "mucow-wsd-smart-hover-replication-v1",
+          "title": "MuCoW EN-RU disjoint-source Smart Dictionary replication slice",
+          "selector": "mucow-smart-hover-replication-v1",
+          "expectedRecords": 199
+        },
+        {
+          "id": "mucow-wsd-smart-hover-blind-v3",
+          "title": "MuCoW EN-RU third-example blind slice, unopened",
+          "selector": "mucow-smart-hover-blind-v3",
+          "expectedRecords": 200
+        }
       ],
       "files": [
         {

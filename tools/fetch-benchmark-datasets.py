@@ -40,6 +40,8 @@ PRODUCTION_GUARD_SELECTOR = "production-phrase-guard-v1"
 MUCOW_SMART_BALANCED_SELECTOR = "mucow-smart-hover-balanced-v1"
 MUCOW_SMART_ONE_PER_SENSE_SELECTOR = "mucow-smart-hover-one-per-sense-v1"
 MUCOW_SMART_REPLICATION_SELECTOR = "mucow-smart-hover-replication-v1"
+MUCOW_SMART_BLIND_SELECTOR = "mucow-smart-hover-blind-v3"
+MUCOW_SMART_BLIND_SEED = "mucow-wsd-smart-hover-blind-v3"
 MUCOW_SMART_BALANCED_SEED = "mucow-wsd-smart-hover-balanced-v1"
 MUCOW_SMART_BALANCED_RECORDS = 400
 MUCOW_DOMAIN_PRIORITY = {
@@ -194,6 +196,7 @@ def _validate_manifest(raw: object, manifest_path: Path) -> dict[str, Any]:
                 MUCOW_SMART_BALANCED_SELECTOR,
                 MUCOW_SMART_ONE_PER_SENSE_SELECTOR,
                 MUCOW_SMART_REPLICATION_SELECTOR,
+                MUCOW_SMART_BLIND_SELECTOR,
             }:
                 raise DatasetToolError(f"{selection_label}.selector: неизвестный selector.")
             _require_int(
@@ -1448,6 +1451,81 @@ def _select_mucow_smart_balanced(
     return selected
 
 
+def _mucow_blind_rank(record: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    digest.update(MUCOW_SMART_BLIND_SEED.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(record["id"].encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(record["sourceSha256"].encode("ascii"))
+    return digest.hexdigest()
+
+
+def _select_mucow_smart_blind(
+    records: Sequence[dict[str, Any]],
+    expected_records: int,
+) -> list[dict[str, Any]]:
+    """Select one further example per sense, disjoint from dev201 and replication199.
+
+    The MuCoW EN-RU suite holds only 203 sense groups and the eligibility filter
+    keeps 201, so a blind set cannot introduce unseen words or senses: the corpus
+    is exhausted. This slice therefore repeats the replication construction on a
+    third source sentence per group, which keeps it directly comparable to the
+    earlier two and keeps their known limitation — it varies context, not the
+    lexical inventory.
+
+    Selection observes no model output: eligibility, grouping and ordering are
+    the pinned ones, and the only new input is a distinct seed.
+    """
+
+    development = _select_mucow_smart_balanced(records, 201)
+    balanced = _select_mucow_smart_balanced(records, MUCOW_SMART_BALANCED_RECORDS)
+    spent = {record["sourceSha256"] for record in balanced}
+    spent.update(record["sourceSha256"] for record in development)
+
+    eligible = [
+        record
+        for record in records
+        if record.get("metadata", {}).get("modelGuardCompatible") is True
+        and record.get("metadata", {}).get("smartHoverWholeSourceCompatible") is True
+        and record.get("metadata", {}).get("focusOccurrenceCount") == 1
+        and bool(record.get("contrastReferences"))
+        and bool(record.get("metadata", {}).get("originalTranslation"))
+        and record.get("metadata", {}).get("wsdSurfaceProxyCompatible") is True
+        and record["sourceSha256"] not in spent
+    ]
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for record in eligible:
+        focus = record.get("focus", {}).get("text")
+        sense = record.get("metadata", {}).get("sense")
+        if not isinstance(focus, str) or not isinstance(sense, str):
+            continue
+        groups.setdefault((focus.casefold(), sense), []).append(record)
+
+    selected: list[dict[str, Any]] = []
+    for key in sorted(groups):
+        candidates = sorted(
+            groups[key],
+            key=lambda record: (
+                MUCOW_DOMAIN_PRIORITY.get(record.get("domain"), 99),
+                _mucow_blind_rank(record),
+                record["id"],
+            ),
+        )
+        selected.append(candidates[0])
+
+    if len(selected) != expected_records:
+        raise DatasetToolError(
+            f"MuCoW blind selector produced {len(selected)} records, "
+            f"expected {expected_records}."
+        )
+    if {record["sourceSha256"] for record in selected} & spent:
+        raise DatasetToolError("MuCoW blind selector reused a spent source sentence.")
+    if len({record["sourceSha256"] for record in selected}) != len(selected):
+        raise DatasetToolError("MuCoW blind selector produced duplicate source sentences.")
+    return selected
+
+
 def _select_mucow_smart_replication(
     records: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1510,6 +1588,8 @@ def import_dataset(
             )
         elif selector == MUCOW_SMART_REPLICATION_SELECTOR:
             selected = _select_mucow_smart_replication(records)
+        elif selector == MUCOW_SMART_BLIND_SELECTOR:
+            selected = _select_mucow_smart_blind(records, selection["expectedRecords"])
         else:
             raise DatasetToolError(f"Неизвестный selector '{selector}'.")
         if len(selected) != selection["expectedRecords"]:
