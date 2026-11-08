@@ -30,6 +30,11 @@ internal sealed record SmartHoverPhraseLine(
 
     public IReadOnlyList<ScaffoldSenseHint> AppliedSenseHints { get; init; } =
         Array.Empty<ScaffoldSenseHint>();
+
+    // Candidate A shown while the sense gate may still replace it (card E18).
+    // A provisional line is never cached and never recorded in history: only
+    // the final line that follows it is an answer.
+    public bool IsProvisional { get; init; }
 }
 
 internal sealed record SmartHoverResult(
@@ -652,7 +657,8 @@ internal sealed class SmartHoverPipeline : IDisposable
     internal async Task<SmartHoverPhraseLine?> TranslatePhraseLineAsync(
         HoverOcrResult recognized,
         SmartHoverResult dictionaryResult,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<SmartHoverPhraseLine>? provisionalLine = null)
     {
         if (!PhraseTranslationEnabled ||
             _smartPhraseTranslator is null ||
@@ -682,6 +688,62 @@ internal sealed class SmartHoverPipeline : IDisposable
             phrase.Value.Text,
             recognized.HoveredWord,
             phrase.Value.CharacterIndex);
+        // Candidate A depends only on the model input, so it runs while the
+        // semantic scaffold is built; on a CPU ranker the scaffold costs as
+        // much as A itself (E16: p50 1.7 s vs 1.2 s). A cache hit or a
+        // rejected request cancels the draft in the finally block below.
+        // Nothing reaches the model before request validation: the scaffold
+        // only adds terms and hints, so the scaffold-free request already
+        // carries every source-side check the full one will repeat.
+        SmartPhraseTranslationRequest scaffoldFreeRequest = CreatePhraseTranslationRequest(
+            modelInput,
+            recognized.PreviousContext,
+            recognized.CurrentSpeaker ?? phrase.Value.CurrentSpeaker,
+            Array.Empty<ScaffoldTerm>(),
+            Array.Empty<ScaffoldSenseHint>(),
+            Array.Empty<string>(),
+            phraseBackend);
+        using CancellationTokenSource draftCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<SmartPhraseDirectDraft?> draftTask =
+            SmartPhraseTranslationGuard.ValidateRequest(scaffoldFreeRequest) ==
+            SmartPhraseRejectionReason.None
+                ? StartDirectDraft(
+                    modelInput.ModelInputPhrase,
+                    phraseBackend,
+                    draftCancellation.Token)
+                : Task.FromResult<SmartPhraseDirectDraft?>(null);
+        try
+        {
+            return await TranslatePhraseLineCoreAsync(
+                recognized,
+                dictionaryResult,
+                phrase.Value,
+                modelInput,
+                phraseBackend,
+                draftTask,
+                provisionalLine,
+                cancellationToken);
+        }
+        finally
+        {
+            draftCancellation.Cancel();
+            await ObserveDirectDraftAsync(draftTask);
+        }
+    }
+
+    private async Task<SmartHoverPhraseLine?> TranslatePhraseLineCoreAsync(
+        HoverOcrResult recognized,
+        SmartHoverResult dictionaryResult,
+        SmartPhraseContext phrase,
+        SmartPhraseModelInput modelInput,
+        TranslateGemmaExecutionBackend phraseBackend,
+        Task<SmartPhraseDirectDraft?> draftTask,
+        Action<SmartHoverPhraseLine>? provisionalLine,
+        CancellationToken cancellationToken)
+    {
+        ISmartPhraseTranslator translator = _smartPhraseTranslator!;
+        SmartPhraseTranslationCache phraseCache = _smartPhraseCache!;
         IReadOnlyCollection<string> preResolvedNeuralSources = new[]
             {
                 recognized.HoveredWord,
@@ -712,7 +774,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         SmartPhraseTranslationRequest request = CreatePhraseTranslationRequest(
             modelInput,
             recognized.PreviousContext,
-            recognized.CurrentSpeaker ?? phrase.Value.CurrentSpeaker,
+            recognized.CurrentSpeaker ?? phrase.CurrentSpeaker,
             modelScaffold.Terms,
             senseHints,
             modelScaffold.ProperNames,
@@ -727,22 +789,59 @@ internal sealed class SmartHoverPipeline : IDisposable
                 request,
                 result: null));
             return UnavailablePhraseLine(
-                phrase.Value.Text,
+                phrase.Text,
                 phraseBackend,
                 requestRejection);
         }
+
+        string engineLabel = TranslateGemmaTranslationService.GetEngineLabel(phraseBackend);
+        SmartHoverPhraseLine? shownPreview = null;
+        Action<SmartPhraseTranslationResult>? directPreview = provisionalLine is null
+            ? null
+            : preview =>
+            {
+                try
+                {
+                    string? displayed = SelectProvisionalTranslation(request, preview);
+                    if (displayed is null)
+                    {
+                        return;
+                    }
+
+                    shownPreview = new SmartHoverPhraseLine(
+                        phrase.Text,
+                        displayed,
+                        engineLabel,
+                        SmartPhraseLineStatus.Translated,
+                        FromCache: false)
+                    {
+                        SenseHints = senseHints,
+                        IsProvisional = true
+                    };
+                    provisionalLine(shownPreview);
+                }
+                catch (Exception exception)
+                {
+                    LogError(exception);
+                }
+            };
         try
         {
             // A phrase-cache hit may skip generation, never artifact/provider
             // validation: otherwise replacing the GGUF could keep serving an
             // answer that claims the pinned model identity.
-            await _smartPhraseTranslator.PrepareAsync(request, cancellationToken);
+            await translator.PrepareAsync(request, cancellationToken);
             SmartPhraseTranslationResult? translated =
-                await _smartPhraseCache.TryGetAsync(request, cancellationToken);
+                await phraseCache.TryGetAsync(request, cancellationToken);
             if (translated is null)
             {
-                translated = await _smartPhraseTranslator.TranslateAsync(
+                SmartPhraseDirectDraft? draft = await AwaitDirectDraftAsync(
+                    draftTask,
+                    cancellationToken);
+                translated = await translator.TranslateAsync(
                     request,
+                    draft,
+                    directPreview,
                     cancellationToken);
             }
 
@@ -756,15 +855,19 @@ internal sealed class SmartHoverPipeline : IDisposable
                     guarded.Reason,
                     request,
                     translated));
-                return UnavailablePhraseLine(
-                    phrase.Value.Text,
-                    phraseBackend,
-                    guarded.Reason);
+                // The preview passed this same guard. Withdrawing a shown
+                // line for "unavailable" would be strictly less useful.
+                return shownPreview is null
+                    ? UnavailablePhraseLine(
+                        phrase.Text,
+                        phraseBackend,
+                        guarded.Reason)
+                    : shownPreview with { IsProvisional = false };
             }
 
             if (!translated.FromCache && translated.Cacheable)
             {
-                await _smartPhraseCache.StoreAsync(
+                await phraseCache.StoreAsync(
                     request,
                     translated,
                     CancellationToken.None);
@@ -772,9 +875,9 @@ internal sealed class SmartHoverPipeline : IDisposable
 
             _phraseSetupFailureReported = false;
             return new SmartHoverPhraseLine(
-                phrase.Value.Text,
+                phrase.Text,
                 guarded.Translation,
-                TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
+                engineLabel,
                 SmartPhraseLineStatus.Translated,
                 translated.FromCache)
             {
@@ -792,6 +895,14 @@ internal sealed class SmartHoverPipeline : IDisposable
             // failure inside the optional phase prevents the outer ranker catch
             // from replacing a useful dictionary answer with an unavailable phrase line.
             LogError(exception);
+            // A refinement failure after the preview leaves candidate A, which
+            // is what the gate itself falls back to when a later pass fails.
+            // The runtime answered once, so "unavailable" would be untrue.
+            if (shownPreview is not null)
+            {
+                return shownPreview with { IsProvisional = false };
+            }
+
             if (!_phraseSetupFailureReported)
             {
                 _phraseSetupFailureReported = true;
@@ -801,9 +912,91 @@ internal sealed class SmartHoverPipeline : IDisposable
 
             // Generation failed, so no guard ever ruled on a translation.
             return UnavailablePhraseLine(
-                phrase.Value.Text,
+                phrase.Text,
                 phraseBackend,
                 rejectionReason: null);
+        }
+    }
+
+    /// <summary>
+    /// Decides whether candidate A may stand in while the gate runs. It must
+    /// pass the display guard, and it must not carry a defect the gate has
+    /// already detected: a known wrong sense of the hovered word or a lost
+    /// negation/number would be read as the answer before it is replaced.
+    /// </summary>
+    internal static string? SelectProvisionalTranslation(
+        SmartPhraseTranslationRequest request,
+        SmartPhraseTranslationResult preview)
+    {
+        SmartPhraseGuardResult display =
+            SmartPhraseTranslationGuard.ValidateForDisplay(request, preview);
+        if (!display.Accepted)
+        {
+            return null;
+        }
+
+        SensePreservationCandidate candidate = SensePreservationGate.Evaluate(
+            request,
+            preview.Translation,
+            preview.ModelIdentity,
+            SensePreservationCandidateKind.Direct);
+        bool primaryContradicted = candidate.SenseAssessment.Sources.Any(source =>
+            source.Representative.IsPrimary &&
+            source.State is NeuralSenseFidelityState.Conflict or
+                NeuralSenseFidelityState.Mixed);
+        return candidate.StructuralPenaltyCount > 0 || primaryContradicted
+            ? null
+            : display.Translation;
+    }
+
+    private Task<SmartPhraseDirectDraft?> StartDirectDraft(
+        string modelInputPhrase,
+        TranslateGemmaExecutionBackend phraseBackend,
+        CancellationToken cancellationToken)
+    {
+        ISmartPhraseTranslator translator = _smartPhraseTranslator!;
+        string modelIdentity = TranslateGemmaTranslationService.GetModelIdentity(phraseBackend);
+        // The thread-pool hop guarantees the overlap: a first warm-up hashes
+        // the pinned GGUF before its first real await.
+        return Task.Run(
+            () => translator.GenerateDirectDraftAsync(
+                modelInputPhrase,
+                modelIdentity,
+                cancellationToken),
+            cancellationToken);
+    }
+
+    private static async Task<SmartPhraseDirectDraft?> AwaitDirectDraftAsync(
+        Task<SmartPhraseDirectDraft?> draftTask,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await draftTask;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // The one-shot path regenerates A and owns the user-facing report
+            // if the runtime is really down; a lost draft only costs latency.
+            LogError(exception);
+            return null;
+        }
+    }
+
+    private static async Task ObserveDirectDraftAsync(Task<SmartPhraseDirectDraft?> draftTask)
+    {
+        try
+        {
+            await draftTask;
+        }
+        catch (Exception)
+        {
+            // AwaitDirectDraftAsync already logged a failure that mattered; a
+            // draft cancelled by a cache hit or a rejected request has no use.
         }
     }
 

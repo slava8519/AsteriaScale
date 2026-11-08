@@ -14,6 +14,7 @@ internal static class TranslateGemmaTranslationServiceTests
         VerifySensePrompts();
         VerifySenseGateStatesAndSelection();
         await VerifySenseGateCoordinatorAsync();
+        await VerifyDirectPreviewAsync();
         VerifyDeterministicCompletionRequest();
         VerifyCompletionResponseParsing();
         VerifyBackendServerStartInfo();
@@ -1464,6 +1465,111 @@ internal static class TranslateGemmaTranslationServiceTests
                 repairRaceCaller.Token,
                 repairRaceCaller.Token),
             "The repair fail-open path swallowed concurrent caller cancellation.");
+    }
+
+    // Card E18: the refinement reuses a drafted A and offers it as a preview
+    // only when a later pass may still replace it, always before that pass.
+    private static async Task VerifyDirectPreviewAsync()
+    {
+        SmartPhraseTranslationRequest gated = CreateSenseGateRequest(
+            "We rested on the bank after sunset.");
+        List<string> events = [];
+        SmartPhraseRefinement refined = await TranslateGemmaTranslationService.RefineDirectAsync(
+            gated,
+            gated.ModelIdentity,
+            "Мы отдыхали в банке после заката.",
+            (_, _) =>
+            {
+                events.Add("complete");
+                return Task.FromResult("Мы отдыхали у берега после заката.");
+            },
+            CancellationToken.None,
+            CancellationToken.None,
+            preview => events.Add("preview:" + preview.Translation));
+        Check(events is ["preview:Мы отдыхали в банке после заката.", "complete"] &&
+              refined.Route == SmartPhraseGenerationRoute.SenseConditioned &&
+              refined.Translation == "Мы отдыхали у берега после заката.",
+            "The gate did not offer candidate A before its conditioned pass.");
+
+        SmartPhraseTranslationRequest plain = new(
+            "Hello there.",
+            "Hello there.",
+            SmartPhraseIdiomRewriter.NoTransformIdentity,
+            Array.Empty<string>(),
+            TranslateGemmaTranslationService.ModelIdentity,
+            TranslateGemmaTranslationService.PromptIdentity);
+        int completions = 0;
+        bool previewed = false;
+        SmartPhraseRefinement final = await TranslateGemmaTranslationService.RefineDirectAsync(
+            plain,
+            plain.ModelIdentity,
+            "Привет.",
+            (_, _) =>
+            {
+                completions++;
+                return Task.FromResult("Здравствуйте.");
+            },
+            CancellationToken.None,
+            CancellationToken.None,
+            _ => previewed = true);
+        Check(!previewed && completions == 0 &&
+              final is { Route: SmartPhraseGenerationRoute.Direct, Cacheable: true } &&
+              final.Translation == "Привет.",
+            "A final candidate A was offered as provisional and would render twice.");
+
+        events.Clear();
+        SmartPhraseTranslationRequest contextual = plain with
+        {
+            PreviousContext = ["She waved from the door."]
+        };
+        await TranslateGemmaTranslationService.RefineDirectAsync(
+            contextual,
+            contextual.ModelIdentity,
+            "Привет.",
+            (_, _) =>
+            {
+                events.Add("complete");
+                return Task.FromResult("Привет.");
+            },
+            CancellationToken.None,
+            CancellationToken.None,
+            preview => events.Add("preview"));
+        Check(events is ["preview", "complete"],
+            "The context post-edit route did not offer candidate A before its pass.");
+
+        SmartPhraseRefinement survived = await TranslateGemmaTranslationService.RefineDirectAsync(
+            gated,
+            gated.ModelIdentity,
+            "Мы отдыхали в банке после заката.",
+            (_, _) => Task.FromResult("Мы отдыхали у берега после заката."),
+            CancellationToken.None,
+            CancellationToken.None,
+            _ => throw new InvalidOperationException("preview consumer failed"));
+        Check(survived.Route == SmartPhraseGenerationRoute.SenseConditioned,
+            "A failing preview consumer cost the refinement its final line.");
+
+        SmartPhraseDirectDraft draft = new(
+            "We rested.",
+            TranslateGemmaTranslationService.ModelIdentity,
+            "Мы отдохнули.",
+            ElapsedMilliseconds: 9);
+        Check(TranslateGemmaTranslationService.CanReuseDirectDraft(
+                  draft,
+                  "We rested.",
+                  TranslateGemmaTranslationService.ModelIdentity) &&
+              !TranslateGemmaTranslationService.CanReuseDirectDraft(
+                  draft,
+                  "We rested!",
+                  TranslateGemmaTranslationService.ModelIdentity) &&
+              !TranslateGemmaTranslationService.CanReuseDirectDraft(
+                  draft,
+                  "We rested.",
+                  TranslateGemmaTranslationService.VulkanModelIdentity) &&
+              !TranslateGemmaTranslationService.CanReuseDirectDraft(
+                  null,
+                  "We rested.",
+                  TranslateGemmaTranslationService.ModelIdentity),
+            "A draft for another input or backend would stand in for candidate A.");
     }
 
     private static SmartPhraseTranslationRequest CreateSenseGateRequest(string current) =>

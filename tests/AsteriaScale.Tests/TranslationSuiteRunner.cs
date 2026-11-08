@@ -1108,6 +1108,8 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
     private readonly SmartPhraseTranslationCache _phraseCache;
     private readonly TranslateGemmaTranslationService _translator;
     private readonly SmartHoverPipeline _pipeline;
+    private readonly SenseGateTraceTranslator? _traceTranslator;
+    private SenseGateTraceWriter? _traceWriter;
     private bool _disposed;
 
     internal SmartTranslationSuiteSystem(TranslationSuiteOptions options)
@@ -1157,6 +1159,10 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 decisionCache,
                 () => GlossBertRankerProvider.Cpu,
                 () => dictionary.VersionToken);
+            SenseGateTraceTranslator? traceTranslator =
+                options.SenseGateTracePath is null
+                    ? null
+                    : new SenseGateTraceTranslator(translator);
             pipeline = new SmartHoverPipeline(
                 settings,
                 dictionary,
@@ -1164,9 +1170,10 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 resultCache,
                 decisionCache,
                 static _ => { },
-                translator,
+                traceTranslator ?? (ISmartPhraseTranslator)translator,
                 phraseCache,
                 scaffoldRanker.RankAsync);
+            _traceTranslator = traceTranslator;
 
             _dictionary = dictionary;
             _selector = selector;
@@ -1202,6 +1209,10 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
         await Task.WhenAll(
             _selector.WarmUpAsync(GlossBertRankerProvider.Cpu, cancellationToken),
             _translator.WarmUpAsync(cancellationToken));
+        if (_options.SenseGateTracePath is { } tracePath)
+        {
+            _traceWriter ??= new SenseGateTraceWriter(tracePath);
+        }
     }
 
     public async Task<TranslationSuiteSystemResult> TranslateAsync(
@@ -1238,14 +1249,43 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
             PreviousContext = benchmarkCase.PreviousContext,
             CurrentSpeaker = speaker
         };
+        _traceTranslator?.Reset();
+        long caseStarted = Stopwatch.GetTimestamp();
         SmartHoverResult dictionaryResult = await _pipeline.ResolveSmartHoverAsync(
             recognized,
             SmartDictionaryBackends.Cpu,
             cancellationToken);
+        long cardFinished = Stopwatch.GetTimestamp();
+        // The provisional callback only observes the line production would
+        // paint; it cannot change the final result the suite scores.
+        long provisionalShown = 0;
+        string? provisionalTranslation = null;
         SmartHoverPhraseLine? phrase = await _pipeline.TranslatePhraseLineAsync(
             recognized,
             dictionaryResult,
-            cancellationToken);
+            cancellationToken,
+            _traceTranslator is null
+                ? null
+                : provisional =>
+                {
+                    provisionalShown = Stopwatch.GetTimestamp();
+                    provisionalTranslation = provisional.Translation;
+                });
+        long finalShown = Stopwatch.GetTimestamp();
+        if (_traceTranslator is not null)
+        {
+            await WriteSenseGateTraceAsync(
+                benchmarkCase.Id,
+                caseStarted,
+                cardFinished,
+                phrase,
+                new SenseGateTraceLines(
+                    provisionalShown == 0 ? null : provisionalShown,
+                    provisionalTranslation,
+                    finalShown),
+                cancellationToken);
+        }
+
         TranslationSuiteSmartMetadata metadata = CreateSmartMetadata(
             dictionaryResult,
             phrase);
@@ -1272,6 +1312,101 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
             phrase.Engine,
             Metadata: metadata);
     }
+
+    private sealed record SenseGateTraceLines(
+        long? ProvisionalTimestamp,
+        string? ProvisionalTranslation,
+        long FinalTimestamp);
+
+    private async Task WriteSenseGateTraceAsync(
+        string caseId,
+        long caseStarted,
+        long cardFinished,
+        SmartHoverPhraseLine? phrase,
+        SenseGateTraceLines lines,
+        CancellationToken cancellationToken)
+    {
+        SenseGateTraceTranslator trace = _traceTranslator!;
+        SenseGateTraceWriter writer = _traceWriter ??
+            throw new InvalidOperationException("The sense-gate trace was not prepared.");
+        SmartPhraseTranslationRequest? request = trace.Request;
+        SmartPhraseTranslationResult? result = trace.Result;
+        SmartPhraseDirectDraft? draft = trace.Draft;
+        SenseGateTraceCandidate? direct = null;
+        long? replayMilliseconds = null;
+        string? replayError = null;
+        if (request is { SenseHints.Count: > 0 } && result is not null && draft is not null)
+        {
+            // The draft is the very A the gate evaluated; no replay needed.
+            direct = SenseGateTraceCandidate.From(SensePreservationGate.Evaluate(
+                request,
+                draft.Translation,
+                result.ModelIdentity,
+                SensePreservationCandidateKind.Direct));
+        }
+        else if (request is { SenseHints.Count: > 0 } && result is not null)
+        {
+            // Same official direct prompt and greedy decoding as the gate's
+            // candidate A. Generated after the production call so its cost
+            // never leaks into GateMilliseconds.
+            long replayStarted = Stopwatch.GetTimestamp();
+            try
+            {
+                string replayed = await _translator.TranslatePhraseToRussianAsync(
+                    request.ModelInputPhrase,
+                    cancellationToken);
+                replayMilliseconds = ElapsedMilliseconds(
+                    replayStarted,
+                    Stopwatch.GetTimestamp());
+                direct = SenseGateTraceCandidate.From(SensePreservationGate.Evaluate(
+                    request,
+                    replayed,
+                    result.ModelIdentity,
+                    SensePreservationCandidateKind.Direct));
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                replayError = exception.GetType().Name + ": " + exception.Message;
+            }
+        }
+
+        await writer.WriteAsync(new SenseGateTraceEntry(
+            SenseGateTraceEntry.CurrentSchemaVersion,
+            caseId,
+            ElapsedMilliseconds(caseStarted, cardFinished),
+            request is null
+                ? null
+                : ElapsedMilliseconds(cardFinished, trace.CallStartedTimestamp),
+            request is null
+                ? null
+                : ElapsedMilliseconds(trace.CallStartedTimestamp, trace.CallFinishedTimestamp),
+            replayMilliseconds,
+            trace.Calls,
+            request?.SenseHints.Count ?? 0,
+            result?.GenerationRoute,
+            phrase is { Status: SmartPhraseLineStatus.Translated } ? phrase.Translation : null,
+            direct,
+            replayError)
+        {
+            DraftMilliseconds = draft is null
+                ? null
+                : ElapsedMilliseconds(trace.DraftStartedTimestamp, trace.DraftFinishedTimestamp),
+            FirstLineMilliseconds = lines.ProvisionalTimestamp is { } shown
+                ? ElapsedMilliseconds(caseStarted, shown)
+                : null,
+            FinalLineMilliseconds = ElapsedMilliseconds(caseStarted, lines.FinalTimestamp),
+            ProvisionalTranslation = lines.ProvisionalTranslation
+        });
+    }
+
+    private static long ElapsedMilliseconds(long started, long finished) =>
+        (long)Math.Round(
+            Stopwatch.GetElapsedTime(started, finished).TotalMilliseconds,
+            MidpointRounding.AwayFromZero);
 
     internal static TranslationSuiteSmartMetadata CreateSmartMetadata(
         SmartHoverResult dictionaryResult,
@@ -1375,14 +1510,22 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
         }
 
         _disposed = true;
-        IReadOnlyList<Exception> cleanupFailures =
-            await DisposeOwnedResourcesBestEffortAsync(
+        List<Exception> cleanupFailures =
+        [
+            .. await DisposeOwnedResourcesBestEffortAsync(
                 _pipeline,
                 _translator,
                 _selector,
                 _resultCache,
                 _phraseCache,
-                _decisionCache);
+                _decisionCache)
+        ];
+        if (_traceWriter is { } traceWriter)
+        {
+            cleanupFailures.AddRange(
+                await DisposeStepsBestEffortAsync(traceWriter.DisposeAsync));
+        }
+
         DeleteIsolationRootBestEffort(_isolatedRoot);
         ThrowCleanupFailures(
             cleanupFailures,

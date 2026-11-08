@@ -254,11 +254,7 @@ public partial class HoverTranslationOverlay : Window
         string displayText = translated
             ? phraseLine.Translation.Trim()
             : "Перевод фразы недоступен";
-        PhraseEngineText.Text = phraseLine.Engine.Contains(
-            "VULKAN",
-            StringComparison.Ordinal)
-                ? "Фраза · TG4B · GPU"
-                : "Фраза · TG4B · CPU";
+        PhraseEngineText.Text = PhraseEngineLabel(phraseLine);
         PhraseTranslationText.Text = displayText;
         PhraseTranslationText.FontSize = translated ? 14.5 : 11.5;
         PhraseTranslationText.FontWeight = translated
@@ -269,6 +265,16 @@ public partial class HoverTranslationOverlay : Window
             : MediaColor.FromRgb(0xA0, 0x96, 0x7F));
         PhrasePanel.Visibility = Visibility.Visible;
         return displayText;
+    }
+
+    // The provisional marker tells the reader that candidate A may still be
+    // replaced by the sense gate, so a changed line is expected, not a glitch.
+    internal static string PhraseEngineLabel(SmartHoverPhraseLine phraseLine)
+    {
+        string label = phraseLine.Engine.Contains("VULKAN", StringComparison.Ordinal)
+            ? "Фраза · TG4B · GPU"
+            : "Фраза · TG4B · CPU";
+        return phraseLine.IsProvisional ? label + " · уточняется…" : label;
     }
 
     private void ConfigureSpeaker(

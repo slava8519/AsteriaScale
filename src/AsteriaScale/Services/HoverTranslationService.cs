@@ -624,12 +624,33 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
             }
 
+            // Candidate A may stand in while the sense gate runs (card E18);
+            // the final line below replaces it on the same card.
+            void ShowProvisionalPhrase(SmartHoverPhraseLine provisional) =>
+                ShowTranslation(
+                    source,
+                    translation,
+                    engine,
+                    cursor,
+                    dictionaryFound,
+                    isPhrase,
+                    language,
+                    confidence,
+                    recognized.Text,
+                    displayGeneration,
+                    requireCursorNear: true,
+                    textSource: recognized.TextSource,
+                    phraseLine: provisional,
+                    textHookStatus: textHookStatus,
+                    currentSpeaker: recognized.CurrentSpeaker,
+                    speakerEditorAvailable: SpeakerEditorAvailable);
             SmartHoverPhraseLine? phraseLine = resolvedSmartResult is null
                 ? null
                 : await _smartPipeline.TranslatePhraseLineAsync(
                     recognized,
                     resolvedSmartResult,
-                    cancellationToken);
+                    cancellationToken,
+                    ShowProvisionalPhrase);
             if (phraseLine is not null)
             {
                 ShowTranslation(
@@ -947,11 +968,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
                     _history.Record(source, translation, engine, context);
                 }
 
-                if (phraseLine is
-                    {
-                        Status: SmartPhraseLineStatus.Translated,
-                        Translation.Length: > 0
-                    })
+                if (IsPhraseHistoryEntry(phraseLine))
                 {
                     _history.Record(
                         phraseLine.Source,
@@ -963,6 +980,18 @@ public sealed class HoverTranslationService : IAsyncDisposable
             },
             DispatcherPriority.Normal);
     }
+
+    // A provisional line is followed by the final one on the same card, so
+    // recording both would duplicate history with a hypothesis the sense gate
+    // may have rejected.
+    internal static bool IsPhraseHistoryEntry(
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] SmartHoverPhraseLine? phraseLine) =>
+        phraseLine is
+        {
+            Status: SmartPhraseLineStatus.Translated,
+            Translation.Length: > 0,
+            IsProvisional: false
+        };
 
     /// <summary>History of shown translations, for the review panel and export.</summary>
     public TranslationHistoryService History => _history;

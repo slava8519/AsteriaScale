@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.IO.Compression;
 using System.Text;
+using AsteriaScale;
 using AsteriaScale.Models;
 using AsteriaScale.RankerProtocol;
 using AsteriaScale.Services;
@@ -30,6 +31,292 @@ internal static class SmartHoverPhraseIntegrationTests
         await VerifyFailureStaysOnPrimaryAsync(Path.Combine(root, "fail-open"));
         await VerifyCancellationPropagatesAsync(Path.Combine(root, "cancellation"));
         await VerifyDisabledModeSkipsTranslatorAsync(Path.Combine(root, "disabled"));
+        await VerifyDraftOverlapsScaffoldAsync(Path.Combine(root, "draft-overlap"));
+        await VerifyProvisionalLineThenFinalAsync(Path.Combine(root, "provisional"));
+        await VerifyContradictedDraftIsNotShownAsync(Path.Combine(root, "provisional-conflict"));
+        await VerifyRefinementFailureKeepsProvisionalAsync(Path.Combine(root, "provisional-failure"));
+        await VerifyCacheHitCancelsDraftAsync(Path.Combine(root, "draft-cache-hit"));
+        await VerifyRejectedRequestNeverDraftsAsync(Path.Combine(root, "draft-rejected"));
+        VerifyProvisionalSelectionPolicy();
+    }
+
+    // Card E18: candidate A needs only the model input, so it must run while
+    // the sentence-wide scaffold is still ranking, and the gate must reuse it.
+    private static async Task VerifyDraftOverlapsScaffoldAsync(string root)
+    {
+        const string context = "I compared amber, birch, and cedar.";
+        DraftingPhraseTranslator translator = new()
+        {
+            Draft = "Я сравнил янтарь, берёзу и кедр.",
+            Final = "Я сравнил янтарь, берёзу и кедр."
+        };
+        int rankerCalls = 0;
+        int overlappedRankerCalls = 0;
+        TranslationScaffoldNeuralRanker ranker = async (request, cancellationToken) =>
+        {
+            Interlocked.Increment(ref rankerCalls);
+            // A sequential pipeline starts A only after this scaffold returns,
+            // so the draft can never begin while the ranker is waiting here.
+            Task started = translator.DraftStarted.Task;
+            if (await Task.WhenAny(started, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken)) ==
+                started)
+            {
+                Interlocked.Increment(ref overlappedRankerCalls);
+            }
+
+            return new TranslationScaffoldNeuralResult(
+                request.Plan.Outcomes[0].GroupId,
+                Abstained: false,
+                Margin: 0.5,
+                Score: 0.8,
+                Confidence: 0.8,
+                GlossBertRankerProvider.Cpu,
+                GlossBertDictionarySelectorService.CpuExecutionProvider,
+                "CPU",
+                "test-model",
+                "test-independent",
+                ElapsedMilliseconds: 1);
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator,
+            ranker);
+        SmartHoverResult primary = new(
+            "amber",
+            "янтарь",
+            GlossBertDictionarySelectorService.CpuEngineLabel,
+            DictionaryFound: true,
+            IsPhrase: false,
+            Language: "EN",
+            Confidence: 0.95);
+
+        SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(context, "amber"),
+            primary,
+            CancellationToken.None);
+
+        Check(rankerCalls > 0 && overlappedRankerCalls == rankerCalls,
+            "Candidate A waited for the sentence scaffold instead of overlapping it.");
+        Check(line is { Status: SmartPhraseLineStatus.Translated, IsProvisional: false } &&
+              translator.DraftCalls == 1 &&
+              translator.ReceivedDraft is { } draft &&
+              draft.ModelInputPhrase == context &&
+              draft.ModelIdentity == TranslateGemmaTranslationService.ModelIdentity,
+            "The refinement did not receive the overlapped draft, so A would be generated twice.");
+    }
+
+    private static async Task VerifyProvisionalLineThenFinalAsync(string root)
+    {
+        DraftingPhraseTranslator translator = new();
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        List<SmartHoverPhraseLine> provisional = [];
+
+        SmartHoverPhraseLine? final = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(Context, Target),
+            CreatePrimaryResult(),
+            CancellationToken.None,
+            line =>
+            {
+                translator.Record("shown");
+                provisional.Add(line);
+            });
+
+        Check(provisional is
+              [
+                  {
+                      IsProvisional: true,
+                      Status: SmartPhraseLineStatus.Translated,
+                      FromCache: false
+                  }
+              ] &&
+              provisional[0].Translation == translator.Draft &&
+              provisional[0].Engine.Contains("CPU", StringComparison.Ordinal),
+            "Candidate A was not shown as one provisional line while the gate ran.");
+        Check(final is { IsProvisional: false, Status: SmartPhraseLineStatus.Translated } &&
+              final.Translation == translator.Final &&
+              translator.Events.IndexOf("shown") < translator.Events.IndexOf("refined"),
+            "The gate's final line did not replace the provisional candidate A.");
+        Check(!HoverTranslationService.IsPhraseHistoryEntry(provisional[0]) &&
+              HoverTranslationService.IsPhraseHistoryEntry(final),
+            "A provisional hypothesis would be recorded in the translation history.");
+        Check(HoverTranslationOverlay.PhraseEngineLabel(provisional[0]) ==
+              "Фраза · TG4B · CPU · уточняется…" &&
+              HoverTranslationOverlay.PhraseEngineLabel(final!) == "Фраза · TG4B · CPU",
+            "The card did not mark the provisional line as still being refined.");
+    }
+
+    private static async Task VerifyContradictedDraftIsNotShownAsync(string root)
+    {
+        DraftingPhraseTranslator translator = new()
+        {
+            Draft = "Мы отдыхали в банке у реки.",
+            Final = "Мы отдыхали на берегу реки."
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        SmartHoverResult primary = CreatePrimaryResult() with
+        {
+            SelectedSenseHints =
+            [
+                new ScaffoldSenseHint(
+                    Target,
+                    "sloping land beside a body of water",
+                    "берег",
+                    ["банк"],
+                    0.93)
+                {
+                    Origin = SenseEvidenceOrigin.RankerAccepted
+                }
+            ]
+        };
+        List<SmartHoverPhraseLine> provisional = [];
+
+        SmartHoverPhraseLine? final = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(Context, Target),
+            primary,
+            CancellationToken.None,
+            provisional.Add);
+
+        Check(provisional.Count == 0 && translator.PreviewOffers == 1,
+            "A draft that the gate already knows uses the rejected sense was shown as the answer.");
+        Check(final is { IsProvisional: false } && final.Translation == translator.Final,
+            "Suppressing the contradicted draft lost the gate's final line.");
+    }
+
+    private static async Task VerifyRefinementFailureKeepsProvisionalAsync(string root)
+    {
+        DraftingPhraseTranslator translator = new()
+        {
+            RefinementFailure = new IOException("conditioned pass failed")
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        List<SmartHoverPhraseLine> provisional = [];
+
+        SmartHoverPhraseLine? final = await fixture.Pipeline.TranslatePhraseLineAsync(
+            Recognized(Context, Target),
+            CreatePrimaryResult(),
+            CancellationToken.None,
+            provisional.Add);
+
+        Check(provisional.Count == 1 &&
+              final is
+              {
+                  IsProvisional: false,
+                  Status: SmartPhraseLineStatus.Translated,
+                  FromCache: false
+              } &&
+              final.Translation == translator.Draft &&
+              await fixture.PhraseCache.CountAsync() == 0,
+            "A failed refinement replaced the shown candidate A with an unavailable line.");
+    }
+
+    private static async Task VerifyCacheHitCancelsDraftAsync(string root)
+    {
+        DraftingPhraseTranslator translator = new();
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        SmartHoverPhraseLine? first = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(first is { FromCache: false } && await fixture.PhraseCache.CountAsync() == 1,
+            "The first progressive hover did not store its final line.");
+
+        translator.HoldDraftUntilCancelled = true;
+        List<SmartHoverPhraseLine> provisional = [];
+        SmartHoverPhraseLine? cached = await fixture.Pipeline.TranslatePhraseLineAsync(
+                Recognized(Context, Target),
+                CreatePrimaryResult(),
+                CancellationToken.None,
+                provisional.Add)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Check(cached is { FromCache: true, IsProvisional: false } &&
+              cached.Translation == translator.Final &&
+              provisional.Count == 0 &&
+              translator.TranslateCalls == 1 &&
+              translator.DraftCancelled,
+            "A phrase-cache hit left the overlapped draft generating or showed it.");
+    }
+
+    private static async Task VerifyRejectedRequestNeverDraftsAsync(string root)
+    {
+        DraftingPhraseTranslator translator = new();
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        HoverOcrResult recognized = Recognized(Context, Target) with
+        {
+            PreviousContext = Enumerable
+                .Range(0, TextHookService.MaximumContextSentences + 1)
+                .Select(index => $"Earlier line {index}.")
+                .ToArray()
+        };
+
+        SmartHoverPhraseLine? line = await fixture.Pipeline.TranslatePhraseLineAsync(
+            recognized,
+            CreatePrimaryResult(),
+            CancellationToken.None,
+            _ => throw new InvalidOperationException("A rejected request painted a line."));
+
+        Check(line is { Status: SmartPhraseLineStatus.Unavailable, RejectionReason: not null } &&
+              translator.DraftCalls == 0 &&
+              translator.TranslateCalls == 0,
+            "An invalid request reached the phrase model through the early draft.");
+    }
+
+    private static void VerifyProvisionalSelectionPolicy()
+    {
+        SmartPhraseTranslationRequest request = new(
+            "We rested on the bank for 3 days.",
+            "We rested on the bank for 3 days.",
+            SmartPhraseIdiomRewriter.NoTransformIdentity,
+            Array.Empty<string>(),
+            TranslateGemmaTranslationService.ModelIdentity,
+            TranslateGemmaTranslationService.PromptIdentity)
+        {
+            SenseHints =
+            [
+                new ScaffoldSenseHint(
+                    Target,
+                    "sloping land beside a body of water",
+                    "берег",
+                    ["банк"],
+                    0.93)
+                {
+                    IsPrimary = true
+                }
+            ]
+        };
+        string? Select(string translation) =>
+            SmartHoverPipeline.SelectProvisionalTranslation(
+                request,
+                new SmartPhraseTranslationResult(
+                    translation,
+                    request.ModelIdentity,
+                    ElapsedMilliseconds: 0));
+
+        Check(Select("Мы отдыхали на берегу 3 дня.") == "Мы отдыхали на берегу 3 дня." &&
+              Select("Мы отдыхали 3 дня.") == "Мы отдыхали 3 дня.",
+            "A satisfied or merely unresolved candidate A was withheld from the provisional line.");
+        Check(Select("Мы отдыхали в банке 3 дня.") is null,
+            "A candidate A contradicting the hovered sense was offered as a provisional line.");
+        Check(Select("Мы отдыхали на берегу 5 дней.") is null,
+            "A candidate A with a changed number was offered as a provisional line.");
+        Check(Select("We rested on the bank for 3 days.") is null,
+            "A candidate A the display guard rejects was offered as a provisional line.");
     }
 
     private static async Task VerifyNonCacheableResultIsRetriedAsync(string root)
@@ -711,6 +998,110 @@ internal static class SmartHoverPhraseIntegrationTests
                     ElapsedMilliseconds: 11,
                     Cacheable: Cacheable))
                 : Task.FromException<SmartPhraseTranslationResult>(TranslationFailure);
+        }
+    }
+
+    // A draft-aware stand-in for TranslateGemma: A comes from the draft, the
+    // refinement offers it as a preview and then returns the gate's final line.
+    private sealed class DraftingPhraseTranslator : ISmartPhraseTranslator
+    {
+        private readonly object _gate = new();
+        private readonly List<string> _events = [];
+        private int _draftCalls;
+
+        public string Draft { get; init; } = PhraseTranslation;
+        public string Final { get; init; } = "Мы отдыхали на берегу реки.";
+        public Exception? RefinementFailure { get; init; }
+        public bool HoldDraftUntilCancelled { get; set; }
+        public TaskCompletionSource DraftStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool DraftCancelled { get; private set; }
+        public int DraftCalls => Volatile.Read(ref _draftCalls);
+        public int TranslateCalls { get; private set; }
+        public int PreviewOffers { get; private set; }
+        public SmartPhraseDirectDraft? ReceivedDraft { get; private set; }
+
+        public List<string> Events
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return [.. _events];
+                }
+            }
+        }
+
+        public void Record(string name)
+        {
+            lock (_gate)
+            {
+                _events.Add(name);
+            }
+        }
+
+        public Task<SmartPhraseTranslationResult> TranslateAsync(
+            SmartPhraseTranslationRequest request,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                "The progressive pipeline bypassed the draft-aware entry point.");
+
+        public async Task<SmartPhraseDirectDraft?> GenerateDirectDraftAsync(
+            string modelInputPhrase,
+            string modelIdentity,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _draftCalls);
+            Record("draft");
+            DraftStarted.TrySetResult();
+            if (HoldDraftUntilCancelled)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    DraftCancelled = true;
+                    throw;
+                }
+            }
+
+            return new SmartPhraseDirectDraft(
+                modelInputPhrase,
+                modelIdentity,
+                Draft,
+                ElapsedMilliseconds: 5);
+        }
+
+        public Task<SmartPhraseTranslationResult> TranslateAsync(
+            SmartPhraseTranslationRequest request,
+            SmartPhraseDirectDraft? directDraft,
+            Action<SmartPhraseTranslationResult>? directPreview,
+            CancellationToken cancellationToken)
+        {
+            TranslateCalls++;
+            ReceivedDraft = directDraft;
+            if (directPreview is not null)
+            {
+                PreviewOffers++;
+                directPreview(new SmartPhraseTranslationResult(
+                    directDraft?.Translation ?? Draft,
+                    request.ModelIdentity,
+                    ElapsedMilliseconds: 0,
+                    Cacheable: false));
+            }
+
+            Record("refined");
+            return RefinementFailure is null
+                ? Task.FromResult(new SmartPhraseTranslationResult(
+                    Final,
+                    request.ModelIdentity,
+                    ElapsedMilliseconds: 11,
+                    // An evidence route would need applied hints to be
+                    // cacheable; the cache-hit test stores this final line.
+                    GenerationRoute: SmartPhraseGenerationRoute.ContextPostEdit))
+                : Task.FromException<SmartPhraseTranslationResult>(RefinementFailure);
         }
     }
 

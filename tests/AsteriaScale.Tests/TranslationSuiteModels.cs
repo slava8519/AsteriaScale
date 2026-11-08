@@ -19,7 +19,8 @@ internal sealed record TranslationSuiteOptions(
     int? MaximumCases,
     int ShardIndex,
     int ShardCount,
-    TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null)
+    TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null,
+    string? SenseGateTracePath = null)
 {
     internal const string Usage =
         "Usage: --benchmark-only --translation-suite <dataset.jsonl> " +
@@ -27,7 +28,8 @@ internal sealed record TranslationSuiteOptions(
         "--phrase-backend cpu|vulkan --ranker-cpu-model " +
         "glossbert|sandwich|consec --translation-output <output.jsonl> " +
         "--translation-report <report.json> [--max-cases <N>] " +
-        "[--shard <index>/<count>] [--phrase-quant q6_k]";
+        "[--shard <index>/<count>] [--phrase-quant q6_k] " +
+        "[--sense-gate-trace <trace.jsonl>]";
 
     internal static TranslationSuiteOptions Parse(
         IReadOnlyList<string> arguments,
@@ -56,6 +58,7 @@ internal sealed record TranslationSuiteOptions(
         int shardCount = 1;
         bool shardSeen = false;
         TranslateGemmaTranslationService.TranslateGemmaModelPin? phraseModelPin = null;
+        string? senseGateTracePath = null;
 
         for (int index = optionIndex + 3; index < arguments.Count; index++)
         {
@@ -168,6 +171,11 @@ internal sealed record TranslationSuiteOptions(
                     phraseModelPin = AlternativeModelPins.Resolve(value);
                     break;
 
+                case "--sense-gate-trace":
+                    RequireUnset(senseGateTracePath, option);
+                    senseGateTracePath = value;
+                    break;
+
                 default:
                     throw new InvalidOperationException(
                         $"Неизвестный параметр '{option}'. {Usage}");
@@ -190,18 +198,36 @@ internal sealed record TranslationSuiteOptions(
                 "--phrase-quant поддерживается только профилем direct. " + Usage);
         }
 
+        // The direct profile never runs the sense gate, so a trace there would
+        // be an empty file that looks like a measurement (defect C1 again).
+        if (senseGateTracePath is not null && profile != TranslationSuiteProfile.Smart)
+        {
+            throw new InvalidOperationException(
+                "--sense-gate-trace поддерживается только профилем smart. " + Usage);
+        }
+
         RequireExtension(datasetPath, ".jsonl", "dataset");
         RequireExtension(translationOutputPath, ".jsonl", "translation output");
         RequireExtension(translationReportPath, ".json", "translation report");
+        if (senseGateTracePath is not null)
+        {
+            RequireExtension(senseGateTracePath, ".jsonl", "sense-gate trace");
+        }
+
         string datasetFullPath = Path.GetFullPath(datasetPath);
         string outputFullPath = Path.GetFullPath(translationOutputPath);
         string reportFullPath = Path.GetFullPath(translationReportPath);
-        if (string.Equals(datasetFullPath, outputFullPath, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(datasetFullPath, reportFullPath, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(outputFullPath, reportFullPath, StringComparison.OrdinalIgnoreCase))
+        string? traceFullPath = senseGateTracePath is null
+            ? null
+            : Path.GetFullPath(senseGateTracePath);
+        string[] distinctPaths = traceFullPath is null
+            ? [datasetFullPath, outputFullPath, reportFullPath]
+            : [datasetFullPath, outputFullPath, reportFullPath, traceFullPath];
+        if (distinctPaths.Distinct(StringComparer.OrdinalIgnoreCase).Count() !=
+            distinctPaths.Length)
         {
             throw new InvalidOperationException(
-                "Dataset, output JSONL and report JSON must use three different paths.");
+                "Dataset, output JSONL, report JSON and trace JSONL must use different paths.");
         }
 
         return new TranslationSuiteOptions(
@@ -216,7 +242,8 @@ internal sealed record TranslationSuiteOptions(
             maximumCases,
             shardIndex,
             shardCount,
-            phraseModelPin);
+            phraseModelPin,
+            traceFullPath);
     }
 
     internal string ProfileId => Profile == TranslationSuiteProfile.Direct

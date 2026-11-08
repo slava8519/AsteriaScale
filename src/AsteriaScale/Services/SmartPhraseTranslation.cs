@@ -56,6 +56,27 @@ internal sealed record SmartPhraseTranslationResult(
 }
 
 /// <summary>
+/// Outcome of the passes after candidate A, before timing and identity are
+/// attached to the public result.
+/// </summary>
+internal sealed record SmartPhraseRefinement(
+    string Translation,
+    SmartPhraseGenerationRoute Route,
+    IReadOnlyList<ScaffoldSenseHint> AppliedSenseHints,
+    bool Cacheable);
+
+/// <summary>
+/// Candidate A generated before the full request exists. The official direct
+/// prompt depends only on the model input, so it can run while the semantic
+/// scaffold is still being built (card E18).
+/// </summary>
+internal sealed record SmartPhraseDirectDraft(
+    string ModelInputPhrase,
+    string ModelIdentity,
+    string Translation,
+    long ElapsedMilliseconds);
+
+/// <summary>
 /// Narrow DI seam for an optional local phrase model. Failure or rejection is
 /// handled by the caller without changing the primary dictionary result.
 /// </summary>
@@ -68,4 +89,29 @@ internal interface ISmartPhraseTranslator
     Task<SmartPhraseTranslationResult> TranslateAsync(
         SmartPhraseTranslationRequest request,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Generates candidate A from the model input alone. Null means the
+    /// translator has no separable direct pass; the caller then falls back to
+    /// the one-shot <see cref="TranslateAsync(SmartPhraseTranslationRequest, CancellationToken)"/>.
+    /// </summary>
+    Task<SmartPhraseDirectDraft?> GenerateDirectDraftAsync(
+        string modelInputPhrase,
+        string modelIdentity,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<SmartPhraseDirectDraft?>(null);
+
+    /// <summary>
+    /// The one-shot contract, except that a draft generated for the same model
+    /// input and identity replaces the candidate-A pass, and candidate A is
+    /// reported through <paramref name="directPreview"/> only when a later pass
+    /// may still replace it. The preview is a raw hypothesis: the caller owns
+    /// the display decision exactly as it does for the final result.
+    /// </summary>
+    Task<SmartPhraseTranslationResult> TranslateAsync(
+        SmartPhraseTranslationRequest request,
+        SmartPhraseDirectDraft? directDraft,
+        Action<SmartPhraseTranslationResult>? directPreview,
+        CancellationToken cancellationToken) =>
+        TranslateAsync(request, cancellationToken);
 }

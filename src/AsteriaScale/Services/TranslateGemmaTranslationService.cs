@@ -510,8 +510,70 @@ internal sealed class TranslateGemmaTranslationService :
         }
     }
 
+    public Task<SmartPhraseTranslationResult> TranslateAsync(
+        SmartPhraseTranslationRequest request,
+        CancellationToken cancellationToken) =>
+        TranslateAsync(
+            request,
+            directDraft: null,
+            directPreview: null,
+            cancellationToken);
+
+    /// <summary>
+    /// Sends the byte-exact official direct prompt that
+    /// <see cref="TranslateAsync(SmartPhraseTranslationRequest, SmartPhraseDirectDraft?, Action{SmartPhraseTranslationResult}?, CancellationToken)"/>
+    /// would send first. Handing the draft back changes when candidate A is
+    /// computed, never what it is, so the sense gate sees the same hypothesis.
+    /// </summary>
+    public async Task<SmartPhraseDirectDraft?> GenerateDirectDraftAsync(
+        string modelInputPhrase,
+        string modelIdentity,
+        CancellationToken cancellationToken)
+    {
+        TranslateGemmaExecutionBackend backend = ResolveBackendIdentity(modelIdentity);
+        string pinnedIdentity = _modelPin.IdentityFor(backend);
+        string source = NormalizeSource(modelInputPhrase);
+        await WarmUpAsync(backend, cancellationToken);
+        await _requestLock.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            EnsureActiveBackend(backend, pinnedIdentity);
+            Uri endpoint = _endpoint ??
+                throw new InvalidOperationException("TranslateGemma is not warmed up.");
+            string apiKey = _apiKey ??
+                throw new InvalidOperationException("TranslateGemma did not obtain a local API key.");
+            using CancellationTokenSource timeout =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_requestTimeout);
+            long started = Stopwatch.GetTimestamp();
+            string direct = await SendCompletionAsync(
+                endpoint,
+                apiKey,
+                BuildRawPrompt(source),
+                timeout.Token);
+            return new SmartPhraseDirectDraft(
+                source,
+                pinnedIdentity,
+                direct,
+                ElapsedMillisecondsSince(started));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"TranslateGemma did not finish the direct pass within {_requestTimeout.TotalSeconds:0} s. " +
+                ProcessFailureSuffix());
+        }
+        finally
+        {
+            _requestLock.Release();
+        }
+    }
+
     public async Task<SmartPhraseTranslationResult> TranslateAsync(
         SmartPhraseTranslationRequest request,
+        SmartPhraseDirectDraft? directDraft,
+        Action<SmartPhraseTranslationResult>? directPreview,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -534,15 +596,10 @@ internal sealed class TranslateGemmaTranslationService :
         }
 
         string source = NormalizeSource(request.ModelInputPhrase);
+        bool reuseDraft = CanReuseDirectDraft(directDraft, source, modelIdentity);
         await WarmUpAsync(backend, cancellationToken);
         long started = Stopwatch.GetTimestamp();
-        string translation;
-        bool cacheable = true;
-        SmartPhraseGenerationRoute generationRoute = SmartPhraseGenerationRoute.Direct;
-        IReadOnlyList<ScaffoldSenseHint> appliedSenseHints =
-            Array.Empty<ScaffoldSenseHint>();
-        bool requiresGenderPostEdit =
-            request.CurrentSpeaker?.Gender is SpeakerGender.Masculine or SpeakerGender.Feminine;
+        SmartPhraseRefinement refined;
         await _requestLock.WaitAsync(cancellationToken);
         try
         {
@@ -552,142 +609,25 @@ internal sealed class TranslateGemmaTranslationService :
                 throw new InvalidOperationException("TranslateGemma is not warmed up.");
             string apiKey = _apiKey ??
                 throw new InvalidOperationException("TranslateGemma did not obtain a local API key.");
+            // A reused draft spent its own bounded budget; this one covers the
+            // remaining passes, so the per-pass worst case is unchanged.
             using CancellationTokenSource timeout =
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(_requestTimeout);
+            Func<string, CancellationToken, Task<string>> completeAsync =
+                (prompt, token) => SendCompletionAsync(endpoint, apiKey, prompt, token);
 
-            string direct = await SendCompletionAsync(
-                endpoint,
-                apiKey,
-                BuildRawPrompt(source),
-                timeout.Token);
-            SmartPhraseGuardResult directGuard = SmartPhraseTranslationGuard.Validate(
+            string direct = reuseDraft
+                ? directDraft!.Translation
+                : await completeAsync(BuildRawPrompt(source), timeout.Token);
+            refined = await RefineDirectAsync(
                 request,
-                new SmartPhraseTranslationResult(
-                    direct,
-                    modelIdentity,
-                    ElapsedMilliseconds: 0));
-            SmartPhraseGuardResult directDisplayGuard =
-                SmartPhraseTranslationGuard.ValidateForDisplay(
-                    request,
-                    new SmartPhraseTranslationResult(
-                        direct,
-                        modelIdentity,
-                        ElapsedMilliseconds: 0));
-            translation = directGuard.Accepted
-                ? directGuard.Translation
-                : directDisplayGuard.Accepted
-                    ? directDisplayGuard.Translation
-                    : SmartPhraseTranslationGuard.NormalizeOutput(direct);
-            string? postEditFailureFallback = SelectPostEditFailureFallback(
-                directGuard,
-                directDisplayGuard);
-
-            SensePromptPlan? conditionedPlan = request.SenseHints.Count > 0
-                ? TryBuildSenseConditionedPromptPlan(request)
-                : null;
-            SmartPhraseTranslationRequest postEditRequest =
-                conditionedPlan is null && request.SenseHints.Count > 0
-                    ? CreateContextOnlyPostEditRequest(request)
-                    : request;
-            if (conditionedPlan is not null)
-            {
-                SensePreservationRunResult gated = await RunSensePreservationGateAsync(
-                    request,
-                    modelIdentity,
-                    direct,
-                    (prompt, token) => SendCompletionAsync(
-                        endpoint,
-                        apiKey,
-                        prompt,
-                        token),
-                    timeout.Token,
-                    cancellationToken,
-                    conditionedPlan);
-                translation = gated.Selected.Translation;
-                generationRoute = gated.Selected.Kind switch
-                {
-                    SensePreservationCandidateKind.Conditioned =>
-                        SmartPhraseGenerationRoute.SenseConditioned,
-                    SensePreservationCandidateKind.Repair =>
-                        SmartPhraseGenerationRoute.SenseRepair,
-                    _ => SmartPhraseGenerationRoute.Direct
-                };
-                appliedSenseHints = gated.Selected.AppliedSenseHints;
-                cacheable = gated.Cacheable &&
-                            (!requiresGenderPostEdit ||
-                             generationRoute != SmartPhraseGenerationRoute.Direct);
-            }
-            else if (ShouldPostEdit(postEditRequest, directGuard))
-            {
-                try
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    string corrected = await SendCompletionAsync(
-                        endpoint,
-                        apiKey,
-                        BuildPostEditRawPrompt(postEditRequest, translation),
-                        timeout.Token);
-                    SmartPhraseGuardResult correctedGuard =
-                        SmartPhraseTranslationGuard.Validate(
-                            postEditRequest,
-                            new SmartPhraseTranslationResult(
-                                corrected,
-                                modelIdentity,
-                                ElapsedMilliseconds: 0));
-                    SmartPhraseGuardResult correctedDisplayGuard =
-                        SmartPhraseTranslationGuard.ValidateForDisplay(
-                            postEditRequest,
-                            new SmartPhraseTranslationResult(
-                                corrected,
-                                modelIdentity,
-                                ElapsedMilliseconds: 0));
-                    if (correctedGuard.Accepted)
-                    {
-                        translation = correctedGuard.Translation;
-                        generationRoute = SmartPhraseGenerationRoute.ContextPostEdit;
-                    }
-                    else if (correctedDisplayGuard.Accepted)
-                    {
-                        bool useCorrected = requiresGenderPostEdit ||
-                                            !directDisplayGuard.Accepted ||
-                                            IsDisplaySemanticImprovement(
-                                                postEditRequest,
-                                                directDisplayGuard.Translation,
-                                                correctedDisplayGuard.Translation);
-                        translation = useCorrected
-                            ? correctedDisplayGuard.Translation
-                            : directDisplayGuard.Translation;
-                        generationRoute = useCorrected
-                            ? SmartPhraseGenerationRoute.ContextPostEdit
-                            : SmartPhraseGenerationRoute.Direct;
-                    }
-                    else if (directDisplayGuard.Accepted)
-                    {
-                        translation = directDisplayGuard.Translation;
-                        cacheable = !requiresGenderPostEdit;
-                    }
-                    else if (!directGuard.Accepted)
-                    {
-                        // Returning the rejected correction makes the shared
-                        // caller guard report unavailable and keeps it out of
-                        // the persistent cache.
-                        translation = corrected;
-                    }
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch when (postEditFailureFallback is not null)
-                {
-                    // The primary dictionary line is already visible. A valid
-                    // direct translation remains useful if optional post-edit
-                    // exhausts the shared budget or the server rejects it.
-                    translation = postEditFailureFallback!;
-                    cacheable = !requiresGenderPostEdit;
-                }
-            }
+                modelIdentity,
+                direct,
+                completeAsync,
+                timeout.Token,
+                cancellationToken,
+                directPreview);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -700,19 +640,220 @@ internal sealed class TranslateGemmaTranslationService :
             _requestLock.Release();
         }
 
-        long elapsed = (long)Math.Round(
-            Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-            MidpointRounding.AwayFromZero);
+        long elapsed = ElapsedMillisecondsSince(started) +
+                       (reuseDraft ? directDraft!.ElapsedMilliseconds : 0);
         return new SmartPhraseTranslationResult(
-            translation,
+            refined.Translation,
             modelIdentity,
             elapsed,
-            Cacheable: cacheable,
-            GenerationRoute: generationRoute)
+            Cacheable: refined.Cacheable,
+            GenerationRoute: refined.Route)
         {
-            AppliedSenseHints = appliedSenseHints
+            AppliedSenseHints = refined.AppliedSenseHints
         };
     }
+
+    internal static bool CanReuseDirectDraft(
+        SmartPhraseDirectDraft? draft,
+        string normalizedSource,
+        string modelIdentity) =>
+        draft is not null &&
+        string.Equals(draft.ModelInputPhrase, normalizedSource, StringComparison.Ordinal) &&
+        string.Equals(draft.ModelIdentity, modelIdentity, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Everything after candidate A: the sense gate when accepted evidence
+    /// yields a conditioned prompt, otherwise the optional context post-edit.
+    /// Static and completion-injected so the orchestration, including when the
+    /// preview fires, is testable without a llama-server process.
+    /// </summary>
+    internal static async Task<SmartPhraseRefinement> RefineDirectAsync(
+        SmartPhraseTranslationRequest request,
+        string modelIdentity,
+        string direct,
+        Func<string, CancellationToken, Task<string>> completeAsync,
+        CancellationToken completionToken,
+        CancellationToken callerCancellationToken,
+        Action<SmartPhraseTranslationResult>? directPreview = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(direct);
+        ArgumentNullException.ThrowIfNull(completeAsync);
+        bool cacheable = true;
+        SmartPhraseGenerationRoute generationRoute = SmartPhraseGenerationRoute.Direct;
+        IReadOnlyList<ScaffoldSenseHint> appliedSenseHints =
+            Array.Empty<ScaffoldSenseHint>();
+        bool requiresGenderPostEdit =
+            request.CurrentSpeaker?.Gender is SpeakerGender.Masculine or SpeakerGender.Feminine;
+        SmartPhraseGuardResult directGuard = SmartPhraseTranslationGuard.Validate(
+            request,
+            new SmartPhraseTranslationResult(
+                direct,
+                modelIdentity,
+                ElapsedMilliseconds: 0));
+        SmartPhraseGuardResult directDisplayGuard =
+            SmartPhraseTranslationGuard.ValidateForDisplay(
+                request,
+                new SmartPhraseTranslationResult(
+                    direct,
+                    modelIdentity,
+                    ElapsedMilliseconds: 0));
+        string translation = directGuard.Accepted
+            ? directGuard.Translation
+            : directDisplayGuard.Accepted
+                ? directDisplayGuard.Translation
+                : SmartPhraseTranslationGuard.NormalizeOutput(direct);
+        string? postEditFailureFallback = SelectPostEditFailureFallback(
+            directGuard,
+            directDisplayGuard);
+
+        SensePromptPlan? conditionedPlan = request.SenseHints.Count > 0
+            ? TryBuildSenseConditionedPromptPlan(request)
+            : null;
+        SmartPhraseTranslationRequest postEditRequest =
+            conditionedPlan is null && request.SenseHints.Count > 0
+                ? CreateContextOnlyPostEditRequest(request)
+                : request;
+        bool postEdit = conditionedPlan is null &&
+                        ShouldPostEdit(postEditRequest, directGuard);
+        if (conditionedPlan is not null || postEdit)
+        {
+            // Only a hypothesis that a later pass may still replace is worth
+            // a provisional line; a final A would just render twice.
+            PublishDirectPreview(directPreview, direct, modelIdentity);
+        }
+
+        if (conditionedPlan is not null)
+        {
+            SensePreservationRunResult gated = await RunSensePreservationGateAsync(
+                request,
+                modelIdentity,
+                direct,
+                completeAsync,
+                completionToken,
+                callerCancellationToken,
+                conditionedPlan);
+            translation = gated.Selected.Translation;
+            generationRoute = gated.Selected.Kind switch
+            {
+                SensePreservationCandidateKind.Conditioned =>
+                    SmartPhraseGenerationRoute.SenseConditioned,
+                SensePreservationCandidateKind.Repair =>
+                    SmartPhraseGenerationRoute.SenseRepair,
+                _ => SmartPhraseGenerationRoute.Direct
+            };
+            appliedSenseHints = gated.Selected.AppliedSenseHints;
+            cacheable = gated.Cacheable &&
+                        (!requiresGenderPostEdit ||
+                         generationRoute != SmartPhraseGenerationRoute.Direct);
+        }
+        else if (postEdit)
+        {
+            try
+            {
+                callerCancellationToken.ThrowIfCancellationRequested();
+                string corrected = await completeAsync(
+                    BuildPostEditRawPrompt(postEditRequest, translation),
+                    completionToken);
+                SmartPhraseGuardResult correctedGuard =
+                    SmartPhraseTranslationGuard.Validate(
+                        postEditRequest,
+                        new SmartPhraseTranslationResult(
+                            corrected,
+                            modelIdentity,
+                            ElapsedMilliseconds: 0));
+                SmartPhraseGuardResult correctedDisplayGuard =
+                    SmartPhraseTranslationGuard.ValidateForDisplay(
+                        postEditRequest,
+                        new SmartPhraseTranslationResult(
+                            corrected,
+                            modelIdentity,
+                            ElapsedMilliseconds: 0));
+                if (correctedGuard.Accepted)
+                {
+                    translation = correctedGuard.Translation;
+                    generationRoute = SmartPhraseGenerationRoute.ContextPostEdit;
+                }
+                else if (correctedDisplayGuard.Accepted)
+                {
+                    bool useCorrected = requiresGenderPostEdit ||
+                                        !directDisplayGuard.Accepted ||
+                                        IsDisplaySemanticImprovement(
+                                            postEditRequest,
+                                            directDisplayGuard.Translation,
+                                            correctedDisplayGuard.Translation);
+                    translation = useCorrected
+                        ? correctedDisplayGuard.Translation
+                        : directDisplayGuard.Translation;
+                    generationRoute = useCorrected
+                        ? SmartPhraseGenerationRoute.ContextPostEdit
+                        : SmartPhraseGenerationRoute.Direct;
+                }
+                else if (directDisplayGuard.Accepted)
+                {
+                    translation = directDisplayGuard.Translation;
+                    cacheable = !requiresGenderPostEdit;
+                }
+                else if (!directGuard.Accepted)
+                {
+                    // Returning the rejected correction makes the shared
+                    // caller guard report unavailable and keeps it out of
+                    // the persistent cache.
+                    translation = corrected;
+                }
+            }
+            catch (OperationCanceledException) when (callerCancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch when (postEditFailureFallback is not null)
+            {
+                // The primary dictionary line is already visible. A valid
+                // direct translation remains useful if optional post-edit
+                // exhausts the shared budget or the server rejects it.
+                translation = postEditFailureFallback!;
+                cacheable = !requiresGenderPostEdit;
+            }
+        }
+
+        return new SmartPhraseRefinement(
+            translation,
+            generationRoute,
+            appliedSenseHints,
+            cacheable);
+    }
+
+    private static void PublishDirectPreview(
+        Action<SmartPhraseTranslationResult>? directPreview,
+        string direct,
+        string modelIdentity)
+    {
+        if (directPreview is null)
+        {
+            return;
+        }
+
+        try
+        {
+            directPreview(new SmartPhraseTranslationResult(
+                direct,
+                modelIdentity,
+                ElapsedMilliseconds: 0,
+                Cacheable: false,
+                GenerationRoute: SmartPhraseGenerationRoute.Direct));
+        }
+        catch (Exception)
+        {
+            // The preview only paints a provisional line. A consumer failure
+            // must not cost the refinement that the final line depends on; the
+            // consumer logs its own errors.
+        }
+    }
+
+    private static long ElapsedMillisecondsSince(long started) =>
+        (long)Math.Round(
+            Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            MidpointRounding.AwayFromZero);
 
     public async Task UnloadAsync()
     {

@@ -2567,6 +2567,10 @@ try
         () => TranslationSuiteTests.RunAsync(tempRoot));
 
     await RunAsync(
+        "Sense-gate trace for early-exit measurement",
+        () => SenseGateTraceTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Sentence semantic benchmark schema",
         () => RankerSentenceBenchmarkTests.RunAsync(tempRoot));
 
