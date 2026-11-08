@@ -1,6 +1,6 @@
 # Архитектура Asteria Scale
 
-Документ описывает устройство проекта для разработчиков и ИИ-агентов. Пользовательское описание — в [README.md](../README.md), исследовательские заметки и калибровка — в [RESEARCH.md](RESEARCH.md).
+Документ описывает устройство проекта для разработчиков и ИИ-агентов. Пользовательское описание — в [README.ru.md](../README.ru.md), исследовательские заметки и калибровка — в [RESEARCH.md](RESEARCH.md).
 
 ## Состав решения
 
@@ -8,11 +8,11 @@
 |---|---|
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
 | `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: путь `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Основа будущей macOS-версии |
-| `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером |
+| `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT, SANDWiCH или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI |
 | `scripts/` | Сборка, установка, запуск, генерация словарей (`build-dictionaries.py`) |
-| `assets/` | Данные: словари TSV.gz, бенчмарк-наборы ранжировщика |
+| `assets/` | Данные: словари TSV.gz (`Dictionaries/`), морфословарь (`Morphology/`), таблица hook-кодов для Textractor (`TextHook/`), бенчмарк-наборы ранжировщика (`Ranker/`) и исторические наборы полного перевода (`Translation/`; их CLI-режимы удалены вместе с Qwen-конвейером) |
 | `packaging/Identity` | MSIX identity-пакет для Windows AI API |
 
 ## Процессная модель
@@ -23,6 +23,8 @@ graph LR
     A -->|Windows AI| OCR[NPU OCR]
     A -->|JSONL stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / SANDWiCH / ConSeC]
     A -->|HTTP loopback| T[llama-server b9632 CPU / Vulkan GPU<br/>TranslateGemma 4B: контекстная вторая строка]
+    A -->|stdin/stdout UTF-16LE| X[TextractorCLI.exe x86/x64<br/>внешний, опциональный text-hook]
+    X -->|attach -P pid: инжекция| G[процесс игры]
 ```
 
 - **Magpie** установлен отдельно (GPLv3) и выполняет захват и HLSL-апскейл. Asteria только редактирует его `config.json` (идемпотентно, с резервной копией `*.before-asteria.json`) и управляет жизненным циклом — см. `MagpieConfigEditor`, `MagpieEngineService`.
@@ -37,7 +39,7 @@ graph LR
   экземпляра процесса и наличие у него пригодного top-level окна, а не только
   существование прежнего HWND: Win+D/Alt+Tab сохраняют масштабирование, но
   действительно headless-процесс после recovery grace не удерживает Magpie.
-- **RankerWorker** — дочерний процесс со строгим протоколом (см. ниже).
+- **RankerWorker** — дочерний процесс со строгим протоколом (см. «Протокол ranker-воркера» ниже).
   Стабильный профиль по умолчанию — закреплённый GlossBERT; готовый dual-encoder
   SANDWiCH и independent ConSeC доступны как явно выбираемые экспериментальные
   CPU-профили. UI называет ConSeC `ConSeC — лучший для науки, CPU` по результату
@@ -65,10 +67,132 @@ graph LR
   остаётся рабочим, а независимая строка деградирует явно.
   Модель и runner не входят в публикацию и устанавливаются отдельно после
   явного принятия Gemma Terms.
+- **TextractorCLI** — опциональный text-hook (`TextHookEnabled`, по умолчанию
+  выключен) из установленного пользователем Textractor (`TextractorDirectory`).
+  `TextHookService` выбирает `x86\` или `x64\TextractorCLI.exe` по разрядности
+  игры, запускает его скрытым с UTF-16LE на stdin/stdout и отправляет
+  `attach -P<pid>` и hook-коды, то есть Textractor внедряется в процесс игры.
+  Строки хука дают точный текст реплики и скрытую историю в пределах
+  `PreviousContextLimits`; если CLI не найден или не запустился, hover остаётся
+  на OCR.
+
+## Протокол ranker-воркера
+
+Хост (`GlossBertDictionarySelectorService` в ядре) запускает
+`Ranker\AsteriaScale.RankerWorker.exe --provider cpu|npu --cpu-model … --model-directory …`
+и говорит с ним JSON Lines по stdin/stdout: одна строка запроса — ровно одна
+строка ответа (инвариант 6). Типы `RankerRequest`/`RankerResponse` лежат в
+`src/AsteriaScale.RankerProtocol/RankerProtocol.cs`; текущая версия — `"4"`
+(`RankerProtocolV2.Version`, имя класса историческое). Команды: `hello` при
+старте процесса, `warm`, `select`, `shutdown`. Пример `select` в форме из
+smoke-фикстур (`GlossBertDictionarySelectorServiceTests`); числа ответа взяты из
+поддельного воркера теста, а не из модели:
+
+```text
+→ {"version":"4","command":"select","requestId":"shape","context":"He sat on the bank.","target":"bank","characterIndex":14,"sourceLanguage":"English","candidates":["bank: financial institution","bank: land beside water"],"candidateGroupIds":[17,29]}
+← {"version":"4","requestId":"shape","ok":true,"index":29,"abstained":false,"margin":0.5,"score":0.9,"confidence":0.9,"provider":"CPUExecutionProvider","device":"CPU","modelVersion":"GlossBERT:0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a:fp32-dynamic:…","pipeline":"cross","errorCode":null,"error":null}
+```
+
+`candidateGroupIds` параллельны `candidates`, и `index` ответа — один из этих
+стабильных GroupId, а не позиция глосса. При воздержании `index` равен `null`, а
+`abstained` — `true`. Ошибка приходит в том же конверте с `ok:false`,
+`errorCode` и `error`. Хост (`ValidateResponse`) сверяет версию, `requestId`,
+заявленные provider/device и префикс `modelVersion` закреплённой модели до того,
+как читать `ok`. Контракт выбора смысла и NPU-проверка описаны в
+[src/AsteriaScale.RankerWorker/README.md](../src/AsteriaScale.RankerWorker/README.md).
+
+## Разделение платформ и общие признаки провайдеров
+
+`src/AsteriaScale.Core` — обычный `net10.0` без `RuntimeIdentifier`; он ссылается
+только на `AsteriaScale.RankerProtocol` и не имеет NuGet-зависимостей. `CA1416`
+объявлен ошибкой (`WarningsAsErrors` в `AsteriaScale.Core.csproj`), поэтому API,
+помеченный как Windows-only, ломает уже Windows-сборку. Типы ядра сохранили прежнюю видимость: большинство `internal`, но часть публична
+(например, `AppSettings`, `LocalDictionaryService`,
+`GlossBertDictionarySelectorService`). `InternalsVisibleTo` выдан только
+`AsteriaScale` и `AsteriaScale.Tests` (`Properties/AssemblyInfo.cs`): новому
+потребителю internal-членов нужна своя строка. `RootNamespace` ядра — `AsteriaScale`, и перенесённые файлы
+сохранили пространства имён (`AsteriaScale.Services`, `AsteriaScale.Models`),
+поэтому сборку типа показывает путь файла, а не namespace.
+
+В ядро идёт то, чему хватает BCL и `RankerProtocol`: словари и нормализация,
+морфология, выбор смысла, каркас и фразовый перевод, клиент TranslateGemma,
+кэши, настройки. WPF, P/Invoke (`Interop/NativeMethods.cs`), реестр
+(`DpiCompatibilityService`, `StartupService`), Windows AI OCR, Magpie,
+Textractor, трей и хоткеи остаются в `src/AsteriaScale`.
+
+CA1416 не ловит строковые имена Windows-бинарников. В ядре их три:
+
+- путь `Ranker\AsteriaScale.RankerWorker.exe` в конструкторе
+  `GlossBertDictionarySelectorService`;
+- архивы `llama-b9632-bin-win-cpu-x64.zip` и `llama-b9632-bin-win-vulkan-x64.zip`
+  (`RunnerArchiveFileName`, `VulkanRunnerArchiveFileName` в
+  `TranslateGemmaTranslationService`);
+- `llama-server.exe`, который `TranslateGemmaTranslationService` ищет в
+  распакованном runner.
+
+Для другой платформы эти имена должен передавать хост.
+
+Разделение потребовало трёх швов, все в `src/AsteriaScale.Core/Services`:
+
+- `OcrResults.cs` — записи, которые OCR-бэкенд отдаёт ядру (`HoverOcrResult`,
+  `ScreenOcrResult`, `OcrRecognition` и геометрия строк/слов). Раньше они
+  лежали рядом с `WindowsAiOcrService` и тянули в конвейер типы Windows App SDK.
+- `PreviousContextLimits` — `3` предыдущие реплики и `1 200` символов. По этим
+  числам `TextHookService` в хосте собирает контекст, а
+  `SmartPhraseTranslationGuard` в ядре отвергает больший.
+- `HoverDiagnostics` — журнал `%LOCALAPPDATA%\AsteriaScale\hover-translation.log`
+  (ротация при 512 КБ); `HoverTranslationService.LogError`/`LogDiagnostic`
+  перенаправляют в него.
+
+**`RankerProviderTraits`** (`src/AsteriaScale.RankerProtocol`) — общая таблица
+признаков execution provider: хост и воркер читают их отсюда, а не решают каждый
+сам, «CPU ли это»:
+
+| Признак | Смысл | CPU | NPU |
+|---|---|---|---|
+| `WireName` | значение `--provider` воркера | `cpu` | `npu` |
+| `ExecutionProvider` / `Device` | что воркер обязан сообщить; хост сверяет в `ValidateResponse` | `CPUExecutionProvider` / `CPU` | `VitisAIExecutionProvider` / `NPU` |
+| `EnrichedGlosses` | глоссы в обогащённом виде; форма входит в ключ кэша решений | да | нет |
+| `BiEncoderPrefilter` | разрешён конвейер `bi+cross` | да | нет |
+| `AlternativeModels` | разрешены DeBERTa, SANDWiCH, ConSeC | да | нет |
+
+Хост сопоставляет `GlossBertRankerProvider` с признаками в
+`GlossBertDictionarySelectorService.cs`, воркер — `RankerProvider` в
+`WorkerOptions.cs`. Необъявленный провайдер даёт `ArgumentOutOfRangeException`;
+`GetEngineLabel` и `GetModelCacheId` — исчерпывающие switch, поэтому новый
+провайдер не унаследует CPU-identity кэша. Новый провайдер добавляется так:
+экземпляр со всеми шестью признаками в `RankerProviderTraits` и в `All`, значения
+в обоих перечислениях и обоих `Traits()`, ветви в `GetEngineLabel` и
+`GetModelCacheId`, обновлённые закреплённые значения в smoke-тесте
+«Ranker provider traits» (`RankerProviderTraitsTests`: значения, оба
+сопоставления и round-trip аргументов хост → `WorkerOptions.TryParse`). Смена
+признака меняет вход модели или identity кэша, поэтому требует тех же
+доказательств, что и любая правка ranker. Настройка ONNX-сессии внутри воркера
+(`RankerEngine.cs`: проверка NPU-исполнения, формы тензоров, artifact tag в
+`modelVersion`) по-прежнему сравнивает `RankerProvider` напрямую — новый
+провайдер должен пройти и эти места.
 
 ## Конвейер hover-перевода
 
-`HoverTranslationService` — оркестратор. Таймер 90 мс следит за курсором; при стабильности позиции (радиус 15 px, задержка 350–1500 мс) запускается распознавание и перевод. Пользовательский UI и runtime поддерживают только `Smart` и `Dictionary`; сохранённые старые настройки `Neural`/`Screen` при загрузке мигрируют в `Smart`, но соответствующих маршрутов больше нет.
+`HoverTranslationService` в Windows-хосте — фасад: владеет сервисами и оверлеями, вызывает OCR или text-hook и показывает результат; сам конвейер «Умного словаря» — `SmartHoverPipeline` в ядре. Таймер 90 мс (`HoverTracking`) следит за курсором; при стабильности позиции (радиус 15 px, задержка 350–1500 мс) запускается распознавание и перевод. Пользовательский UI и runtime поддерживают только `Smart` и `Dictionary`; сохранённые старые настройки `Neural`/`Screen` при загрузке мигрируют в `Smart`, но соответствующих маршрутов больше нет.
+
+### Карта кода
+
+| Этап | Классы | Сборка |
+|---|---|---|
+| Курсор: таймер 90 мс, радиус 15 px, задержка | `HoverTracking` | `AsteriaScale` (хост) |
+| Фасад: подготовка режима, выбор OCR/hook, показ, выгрузка | `HoverTranslationService` | хост |
+| OCR под курсором | `WindowsAiOcrService` → записи из `OcrResults.cs` | хост → `AsteriaScale.Core` |
+| Строка и история игры | `TextHookService` (TextractorCLI), лимиты `PreviousContextLimits` | хост; лимиты — ядро |
+| Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |
+| Режим `Smart`, шаги 1–11 ниже | `SmartHoverPipeline.ResolveSmartHoverAsync` → `LocalDictionaryService`, `SmartDictionaryHeuristicRanker`, `SmartDictionarySenseResolver`, `SmartDictionaryResultCache`, `GlossBertDecisionCache` | ядро |
+| IPC с ranker-воркером | `GlossBertDictionarySelectorService` | ядро |
+| Выбор смысла GlossBERT / SANDWiCH / ConSeC | `RankerEngine` | `AsteriaScale.RankerWorker`, отдельный процесс |
+| Вторая строка, шаг 12 ниже | `SmartHoverPipeline.TranslatePhraseLineAsync` → `SmartPhraseContextBuilder`, `SmartPhraseIdiomRewriter`, `TranslationScaffoldBuilder`, `SemanticSenseEvidenceFactory`, `SensePreservationGate`, `SmartPhraseTranslationGuard`, `SmartPhraseTranslationCache` | ядро |
+| Генерация через `llama-server` | `TranslateGemmaTranslationService` | ядро |
+| Карточка | `HoverTranslationOverlay` | хост |
+| История показанных переводов | `TranslationHistoryService` | ядро |
+| Журнал ошибок, выгрузка моделей | `HoverDiagnostics`, `ModelActivityGate` | ядро |
 
 ### Режим «Умный словарь» (порядок этапов)
 
@@ -334,7 +458,8 @@ graph LR
    для TranslateGemma APE. Эти строки не попадают в карточку «Умного словаря»,
    residual repair или обычный фразовый поиск.
 5. **Диалоговый слой** (`*-dialogue.*`, Tatoeba/MASSIVE) — целые предложения,
-   отдельное множество `_dialogueEnglishSentences`; не участвует во фразовом
+   отдельный словарь «предложение → перевод» `_dialogueEnglishTranslations`
+   (для японского — `_dialogueJapaneseTranslations`); не участвует во фразовом
    поиске, служит контекстом и exact-sentence evidence.
 
 Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar для умного словаря
@@ -353,7 +478,7 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 5. **Fail-open POS-фильтр.** Фильтр не применяется, если оставляет < 2 групп или не меняет состав; неполные метаданные не могут стереть все смыслы.
 6. **Дисциплина IPC.** После записи запроса в stdin воркера транзакция не отменяется: ровно один ответ вычитывается из stdout, иначе следующий запрос получит чужой ответ. Ошибка протокола → kill всего дерева процесса. stderr дренируется отдельно и никогда не смешивается с JSONL.
 7. **Замороженные наборы.** `ranker-holdout*.json` не используются при подборе модели, порога, промтов или группировки — только для финального подтверждения; каждое открытие фиксируется в RESEARCH.md.
-8. **Хеши артефактов.** Размеры и SHA-256 модели закреплены в `RankerEngine.cs` и `assets/Ranker/README.md`; воркер отказывается работать с несовпадающими файлами.
+8. **Хеши артефактов.** Размеры и SHA-256 модели закреплены в `RankerEngine.cs` и `assets/Ranker/README.md` (бандл ConSeC — в `ConsecArtifactBundle.cs`, TranslateGemma и runner llama.cpp — в `TranslateGemmaTranslationService.cs`); и воркер, и `TranslateGemmaTranslationService` отказываются работать с несовпадающими файлами.
 
 ## Общие лингвистические модули
 

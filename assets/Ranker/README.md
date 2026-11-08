@@ -38,8 +38,10 @@ The automatic path is deliberately narrow:
 - duplicate glosses that produce the same visible translation are grouped;
 - a decision is accepted only when the score margin is at least `0.25`;
 - a low-margin abstention always stays a dictionary result;
-- only a missing dictionary entry or ranker failure may invoke full translation,
-  and only when the user explicitly selects the `Automatic` fallback.
+- there is no generative fallback: a missing dictionary entry or a ranker
+  failure keeps the dictionary result and never invokes another translator.
+  The optional TranslateGemma line is an independent opt-in second line in
+  Smart dictionary mode (off by default), not a fallback for the ranker.
 
 CPU is the default provider and uses the unquantized FP32 reference graph. The
 precompiled AMD Vitis NPU provider never silently falls back to CPU or GPU. On

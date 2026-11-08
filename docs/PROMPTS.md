@@ -12,8 +12,10 @@
 > Прочитай AGENTS.md и docs/ARCHITECTURE.md перед изменениями. После правок
 > собери `dotnet build AsteriaScale.slnx -c Release` и прогони smoke-набор
 > `dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c
-> Release --no-build`. Не запускай `--live`-режимы. Поведенческий фикс — только
-> вместе с тестом, который падает до фикса.
+> Release --no-build`; после правки Python-скрипта прогони его набор из таблицы
+> в AGENTS.md. Не запускай `--live`-режимы, `scripts/install-*.cmd` и флаги
+> `-Accept*Terms`. Поведенческий фикс — только вместе с тестом, который падает
+> до фикса.
 
 ## 1. Онбординг / аудит
 
@@ -31,7 +33,10 @@
 > (src/AsteriaScale.Core/Services/LocalDictionaryService.cs). Помни инвариант №1:
 > ключи всех слоёв канонизируются при загрузке той же нормализацией, что и
 > ключи поиска, а python-генератор scripts/build-dictionaries.py обязан давать
-> ту же форму — если меняешь нормализацию, меняй обе стороны. Добавь
+> ту же форму — если меняешь нормализацию, сначала добавь строку в общий
+> контракт scripts/dictionary-normalization-contract.tsv (его читают и
+> C#-smoke, и генератор), затем меняй обе стороны и прогони
+> `python scripts/test-build-dictionaries.py`. Добавь
 > регрессионный тест в tests/AsteriaScale.Tests/LocalDictionaryNormalizationTests.cs
 > (изолированные временные каталоги через internal-конструктор, не трогай
 > реальный %LOCALAPPDATA%). Прогони smoke-набор — тест «Local dictionary
@@ -45,32 +50,52 @@
 > EnglishContextLexicon и RussianMorphology — расширяй их, а не локальные копии;
 > POS-инференс в двух файлах сознательно раздельный, не объединяй его. Эвристика
 > имеет право сработать только при высокой уверенности — при сомнении верни
-> null/воздержание, решение примет GlossBERT. Добавь случаи в тестовые блоки
+> null/воздержание, решение примет нейронный ранжировщик смыслов. Добавь
+> случаи в тестовые блоки
 > «Smart dictionary sense grouping and surface selection» и «Smart dictionary
 > deterministic heuristic ranker» в tests/AsteriaScale.Tests/Program.cs: и
 > позитивный, и случай обязательного воздержания.
 
-## 4. Ранжировщик GlossBERT / worker
+## 4. Ранжировщик смыслов / worker
 
 > Задача по ранжировщику: `<описание>`. Код: src/AsteriaScale.RankerWorker
-> (RankerEngine, PairTokenizer) и хост GlossBertDictionarySelectorService.
-> Жёсткие правила: порог margin 0.25 и критерии принятия решения не меняются
-> без прогона бенчмарка; тихий fallback NPU→CPU запрещён; после записи запроса
-> в stdin транзакция не отменяется — ровно один ответ вычитывается из stdout;
-> хеши артефактов модели закреплены. Валидация: собери Release, сделай junction
-> `<scratch>\rankerbase\Ranker` на bin-выход воркера и прогони
-> `dotnet run --project tests/AsteriaScale.Tests/... -- --ranker-benchmark
-> assets/Ranker/ranker-benchmark.json <scratch>\rankerbase cpu` (и npu, если
-> доступен). Holdout-наборы не используй для подбора — только одно финальное
-> подтверждение с записью в docs/RESEARCH.md. Приведи цифры до/после в отчёте.
+> (RankerEngine, PairTokenizer, Consec*), хост
+> src/AsteriaScale.Core/Services/GlossBertDictionarySelectorService.cs и общий
+> контракт src/AsteriaScale.RankerProtocol (RankerProviderTraits,
+> RankerAbstention). Жёсткие правила: порог margin 0.25 и критерии принятия
+> решения не меняются без прогона бенчмарка; тихий fallback NPU→CPU запрещён;
+> всё, о чём хост и воркер договариваются про провайдер, читается из
+> RankerProviderTraits — новый провайдер = запись в таблице, исчерпывающие
+> switch на обеих сторонах и обновлённый RankerProviderTraitsTests; после
+> записи запроса в stdin транзакция не отменяется — ровно один ответ
+> вычитывается из stdout; хеши артефактов модели закреплены. Меряй ConSeC —
+> рабочую конфигурацию владельца (default кода — GlossBERT, его не меняй); если
+> нет src/AsteriaScale.RankerWorker/Models/Consec, остановись и спроси.
+> Валидация: собери Release, сделай junction `<scratch>\rankerbase\Ranker` на
+> bin-выход воркера
+> (src/AsteriaScale.RankerWorker/bin/Release/net10.0-windows10.0.26100.0/win-x64)
+> и прогони
+> `dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c
+> Release --no-build -- --benchmark-only --ranker-benchmark
+> assets/Ranker/ranker-benchmark.json <scratch>\rankerbase cpu
+> --ranker-cpu-model consec --ranker-report artifacts/Ranker/<имя>.json`.
+> ConSeC работает только на CPU; прогон `npu` без `--ranker-cpu-model` нужен,
+> только если задача касается GlossBERT на NPU и NPU доступен. Holdout-наборы
+> не используй для подбора — только одно финальное подтверждение с записью в
+> docs/RESEARCH.md. Приведи цифры до/после в отчёте и назови ранжировщик
+> каждой руки.
 
 ## 5. Новый словарный слой / регенерация словарей
 
 > Добавь словарный слой `<источник, лицензия, направление>`. Изучи
 > scripts/build-dictionaries.py и assets/Dictionaries/README.md. Требования:
 > ключи — через normalize_english/normalize_japanese (паритет с C#-стороной);
-> имя файла определяет роль слоя (`-vn.` кураторский, `-dialogue.` предложения,
-> `-senses.` sidecar, остальное — broad с объединением значений); лицензию
+> имя файла определяет роль слоя (`-vn.` кураторский VN-hard, `-vn-soft.`
+> сливается с broad, `-scaffold.` только для каркаса полного перевода и в
+> поиске не виден, `-dialogue.` предложения, `-senses.` sidecar, остальное —
+> broad с объединением значений); после правки генератора прогони
+> `python scripts/test-build-dictionaries.py`, а хеши в
+> assets/Dictionaries/vn-build-manifest.json вручную не правь; лицензию
 > добавь в THIRD_PARTY_NOTICES.md и README словарей; broad-слой не должен
 > перекрывать кураторские записи. После генерации прогони smoke-набор: тест
 > «Local dictionary lookup» проверяет реальные данные и счётчик источников.
@@ -111,7 +136,15 @@
 > остановись с вопросом, если нет. По завершении обнови саму карточку
 > (пометь выполненное) и, если требуется карточкой, RESEARCH.md.
 
-## 10. Дообучение ранжировщика на машине с дискретной GPU
+## 10. Дообучение ранжировщика на машине с дискретной GPU (архив)
+
+**Архив, не для новых задач.** Эксперимент закрыт: новые прогоны собственного
+fine-tune не планируются, а roadmap №8 теперь про готовые ранжировщики
+(SANDWiCH/ConSeC). Промт ниже сохранён как исторический и местами устарел:
+закреплённый lock теперь `tools/requirements-wsd-torch-cu130.txt`, расписание —
+шесть эпох. Воспроизводимая процедура для аудита — раздел «Закрытый
+эксперимент WSD/DeBERTa на RTX 5080» в [DEVELOPMENT.md](DEVELOPMENT.md) и
+`tools/README-wsd-rtx5080.md`; итог — в [RESEARCH.md](RESEARCH.md).
 
 Промт для отдельной машины (проверялся под RTX 5080). Обучение идёт там,
 приёмка — на машине с Asteria, потому что решает только `--ranker-benchmark`
@@ -186,4 +219,6 @@
 > holdout-наборы при подборе; включать тихий CPU/GPU-fallback для NPU; менять
 > приоритет словарных слоёв; редактировать dist/ руками; коммитить файлы
 > >100 МБ; ослаблять валидацию протокола воркера; удалять резервную копию
-> конфига Magpie.
+> конфига Magpie; запускать `scripts/install-*.cmd`, флаги `-Accept*Terms` и
+> скачивание датасетов; ослаблять проверки `build.cmd` на артефакты модели и
+> сертификат; править хеши в `vn-build-manifest.json` вручную.

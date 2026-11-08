@@ -16,7 +16,37 @@
 
 ## Артефакты модели GlossBERT
 
-Файлы в `src/AsteriaScale.RankerWorker/Models/GlossBert` **не хранятся в git** (626 МБ, отдельные файлы превышают лимит GitHub 100 МБ). Перед сборкой поместите их туда вручную — из Git LFS, GitHub Release или экспортировав [kanishka/GlossBERT](https://huggingface.co/kanishka/GlossBERT) ревизии `0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a` в ONNX. Ожидаемые размеры и SHA-256 закреплены в [assets/Ranker/README.md](../assets/Ranker/README.md) и проверяются воркером при запуске: с несовпадающими файлами ранжировщик откажется работать.
+Набор GlossBERT в `src/AsteriaScale.RankerWorker/Models/GlossBert` занимает 626 МБ,
+и три его файла **не хранятся в git** (`.gitignore`; отдельные файлы превышают
+лимит GitHub 100 МБ): `Cpu/glossbert-fp32-dynamic.onnx`,
+`Npu/glossbert-eager-vitis-context.onnx` и
+`Npu/glossbert-eager-vitis-context.onnx_VITISAI.bin`. В git лежат только
+`tokenizer.json` и `Npu/glossbert-eager-vitis-context.onnx.compatibility.txt`.
+Публичного источника трёх больших файлов сейчас нет: Git LFS не настроен
+(в `.gitattributes` нет `filter=lfs`), GitHub Release и тегов нет, а ONNX-экспорт в `tools/` есть только для SANDWiCH и ConSeC
+(`export-sandwich-onnx.py`, `export-consec-onnx.py`) и для дообучаемого
+DeBERTa-ранжировщика (`train-wsd-ranker.py`), но не для GlossBERT.
+
+Что о закреплённых файлах записано в репозитории: CPU-граф — непроквантованный
+динамический FP32 ONNX модели [kanishka/GlossBERT](https://huggingface.co/kanishka/GlossBERT)
+ревизии `0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a` (MIT); NPU-набор — заранее
+скомпилированный AMD Vitis AI EPContext, чей compatibility-файл указывает
+устройство `IPU_STRIX` (`AMD_AIE2PS_VAIML`). Точная процедура экспорта и компиляции не
+записана. Размеры и SHA-256 всех пяти файлов закреплены в `RankerEngine.cs` и
+[assets/Ranker/README.md](../assets/Ranker/README.md) и проверяются воркером до
+загрузки: с несовпадающими файлами ранжировщик откажется работать. Поэтому
+собственный экспорт или повторная компиляция не заменяют закреплённые файлы:
+для NPU-контекста воспроизвести закреплённый SHA-256 по записанным в репозитории
+данным нельзя, а другой артефакт означает перепин в коде и документации, а не
+подмену файла.
+
+Кроме работы GlossBERT в самом приложении, от этих файлов зависят только
+публикация и gated-бенчмарки. `dotnet build AsteriaScale.slnx` их не требует (csproj воркера подбирает
+`Models\GlossBert\**` по glob), smoke-набор тоже: тесты пишут однобайтовые
+заглушки, а тест-проект не ссылается на ONNX Runtime. `scripts/build.cmd`,
+напротив, без условий требует все пять файлов GlossBERT и три файла
+GlossEmbeddings (`Get-AsteriaRequiredRankerFiles` в `scripts/build-state.ps1`)
+и останавливается с `Publish is incomplete. Missing: …`.
 
 Раскладка:
 
@@ -47,7 +77,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\verify-sandwich.ps1
 ```
 
-Неинтерактивный личный/CI-запуск после отдельной проверки условий upstream:
+Неинтерактивный (скриптовый) запуск после отдельной проверки условий upstream:
 
 ```powershell
 .\scripts\install-sandwich.cmd -AcceptUpstreamTerms
@@ -379,6 +409,45 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Relea
 
 Smoke-набор — консольная программа без тестового фреймворка: каждый тест — `await RunAsync("имя", ...)` c `Assert`. По умолчанию прогоняются все базовые тесты, включая короткий реальный жизненный цикл Magpie («Engine lifecycle»). Тестовые классы — `internal static class XxxTests` с `RunAsync(tempRoot)`; доступ к internal-членам приложения открыт через `InternalsVisibleTo("AsteriaScale.Tests")`.
 
+### Стратегия тестирования
+
+Объём на коммите `45fb776`: default-путь `tests/AsteriaScale.Tests/Program.cs`
+содержит `56` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
+`XxxTests.RunAsync`. В `tests/` `45` файлов C# — `26 179` строк вместе с harness
+gated-бенчмарков — против `36 776` строк C# в `src/`. Отдельно есть четыре
+Python-набора `unittest` на `53` теста (см. «Python-тесты инструментов»).
+
+| Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
+|---|---|---|---|
+| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером | блоки `Program.cs`, `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
+| Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `WsdTrainingToolTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py`, `tools/build-wsd-training-set.py` и `tools/atomic_output.py` |
+| Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, дедлайн ответа с остановкой воркера, общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `SandwichInstallerTransactionTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
+| Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |
+| Gated-бенчмарки | качество, покрытие и задержку на открытых и замороженных наборах через собранную публикацию | режимы из таблицы ниже, только по явному аргументу | `workerBaseDir` с воркером и моделями; для `npu` — AMD NPU; для `--translation-suite` — установленная TranslateGemma и скачанные наборы |
+
+Сознательно не покрыто default-набором:
+
+- **WPF UI.** Окна и оверлеи не создаются; `App.xaml` и `AsteriaScale.csproj`
+  проверяются только как XML.
+- **Живой NPU OCR.** Проверяются статические помощники `WindowsAiOcrService`
+  (сборка предложения, границы захвата, починка mixed-script); распознавание
+  Windows AI запускают только `--ocr-image` и `--screen-ocr-image`.
+- **Инференс моделей и качество вывода GPU.** Тест-проект не ссылается на ONNX
+  Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan
+  `llama-server` и окружение процесса без его запуска. Живой вывод проверяют
+  gated-режимы и `scripts/verify-translategemma.ps1`.
+- **Локальные бандлы SANDWiCH/ConSeC.** Сверка их tokenizer с закреплёнными
+  эталонами молча пропускается, если бандл не установлен
+  (`GlossBertDecisionCacheTests`, `ConsecRankerTests`); контракт кэша и
+  установщика проверяется без артефактов.
+
+Почему раннер — консольная программа, а не xUnit, в репозитории не записано.
+Фактически это один процесс: блоки идут последовательно, первое исключение
+завершает прогон строкой `FAIL` и кодом `1`, тот же исполняемый файл обслуживает
+gated-режимы, а internal-члены открыты через `InternalsVisibleTo`. Правило из
+[AGENTS.md](../AGENTS.md): исправление поведения приходит вместе с тестом,
+который без исправления падает.
+
 ### Gated-режимы тестов (по аргументам CLI)
 
 | Аргумент | Что делает |
@@ -386,9 +455,20 @@ Smoke-набор — консольная программа без тестов
 | `--live` | Живой апскейл Notepad через Magpie |
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--screen-ocr-image <png>` | Диагностика экранного OCR по изображению |
-| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
-| `--ranker-sentence-benchmark <set.json> <workerBaseDir> --ranker-cpu-model glossbert\|sandwich\|consec [--sentence-report <report.json>] [--benchmark-only]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается |
-| `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|sandwich\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--benchmark-only]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output |
+| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec] [--dump <path>] [--ranker-report <path>]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
+| `--register-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec] [--register-report <path>]` | Сохраняет ли выбранная русская поверхность регистр английского смысла (роадмап №14.2C); набор — `assets/Ranker/ranker-register-benchmark.json`, отчёт schema 3 |
+| `--ranker-sentence-benchmark <set.json> <workerBaseDir> [--ranker-cpu-model glossbert\|sandwich\|consec] [--sentence-report <report.json>]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается. `--output` — синоним `--sentence-report` |
+| `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|sandwich\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--phrase-quant q6_k] [--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on\|off] [--phrase-cache-prompt on\|off]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output. Диагностические опции: `--phrase-quant q6_k` (только `direct`) подменяет модель на альтернативный, так же строго закреплённый Q6_K из `tests/AsteriaScale.Tests/AlternativeModelPins.cs` под собственной identity; `--sense-gate-trace` (только `smart`), `--phrase-coopmat` (только с `--phrase-backend vulkan`) и `--phrase-cache-prompt` (только `direct`) описаны в [BENCHMARKING.md](BENCHMARKING.md) |
+
+У `--ranker-benchmark` и `--register-benchmark` по умолчанию `cpu` и
+`glossbert`; `--ranker-sentence-benchmark` работает только на CPU, и по
+умолчанию у него `glossbert`. Другой профиль указывайте явно.
+`--benchmark-only` ставится **перед** флагом режима: тогда smoke-набор не
+запускается, а в одном вызове допускается ровно одно семейство бенчмарков. Для
+`--translation-suite` он обязателен; остальные бенчмарки без него выполняются
+после полного smoke-набора, включая Magpie. Опции translation-suite разбирает
+`TranslationSuiteOptions.Parse` (`TranslationSuiteModels.cs`), его `Usage` —
+полный список.
 
 Нераспознанный аргумент **завершает прогон ошибкой** (`TestCommandLine.FindUnknownOption`).
 Раньше он молча проваливался в обычный smoke-набор, и удалённый gated-режим
@@ -397,7 +477,7 @@ Smoke-набор — консольная программа без тестов
 Добавляя режим, добавь его флаги в `TestCommandLine.KnownOptions`.
 
 `workerBaseDir` — каталог, содержащий `Ranker\AsteriaScale.RankerWorker.exe` (удобно сделать junction на bin-выход воркера). Наборы: `assets/Ranker/ranker-benchmark.json` (открытый dev, `134` случая, включая `20` научных) и `ranker-holdout*.json` (замороженные — только финальные подтверждения, каждое открытие фиксируется в [RESEARCH.md](RESEARCH.md)).
-Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это CI-gate результата, а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
+Команда завершается с ошибкой, если в наборе меньше 20 случаев, отсутствуют ранжируемые/размеченные решения, точность принятых решений ниже `90 %`, expected-inventory coverage ниже `70 %`, доля принятых размеченных решений ниже `45 %` или end-to-end correct coverage с учётом детерминированных решений ниже `45 %`. Это ручной gate результата (CI-конфигурации в репозитории нет: прогон запускают локально, итог записывают в [RESEARCH.md](RESEARCH.md)), а не дополнительный критерий воздержания модели: runtime по-прежнему использует только замороженный margin `0,25`.
 
 Sentence-бенчмарк запускается одинаково для всех CPU-профилей, всегда подаёт
 `previousContext` только как скрытый вход и корректирует индекс target. Он
@@ -572,22 +652,30 @@ TSV вручную не редактируются. Frozen benchmark/holdout-ф�
 
 ### Python-тесты инструментов
 
-Инструменты из `tools/` не входят в smoke-набор C# и имеют собственные наборы на
-`unittest`. Запускай их после правки соответствующего скрипта — все три работают
-без сети и без внешних зависимостей:
+Python-инструменты имеют четыре собственных набора на `unittest` (`53` теста).
+Запускай соответствующий после правки скрипта — все четыре работают без сети и
+без внешних пакетов; единственный тест, которому нужен `pymorphy3`
+(лемматизация в `sense-gate-early-exit.py`), без него пропускается:
 
 ```powershell
-python scripts/test-build-dictionaries.py        # генератор словарей
-python tools/test-translation-benchmark.py       # tools/translation-benchmark.py
-python tools/tests/test_fetch_benchmark_datasets.py  # tools/fetch-benchmark-datasets.py
+python scripts/test-build-dictionaries.py            # генератор словарей (16)
+python tools/test-translation-benchmark.py           # tools/translation-benchmark.py (18)
+python tools/test-sense-gate-early-exit.py           # tools/sense-gate-early-exit.py (8)
+python tools/tests/test_fetch_benchmark_datasets.py  # tools/fetch-benchmark-datasets.py (11)
 ```
+
+C#-smoke эти наборы не запускает, но сам вызывает `python` для части `tools/`:
+`TranslationSuiteTests` прогоняет `tools/translation-benchmark.py score` на
+output C#-runner, `WsdTrainingToolTests` — `tools/build-wsd-training-set.py`,
+`AtomicOutputSafetyTests` — `tools/atomic_output.py`. Без `python` в `PATH`
+полный smoke падает.
 
 `tools/tests/` намеренно без `__init__.py`, поэтому файл запускается напрямую, а
 не через `unittest discover`.
 
 ## Стиль кода
 
-- C# 13, file-scoped namespaces, `sealed` по умолчанию, records для DTO.
+- C# 14 — версия языка по умолчанию для .NET 10 SDK: `LangVersion` не задан ни в одном `.csproj`, `Directory.Build.props` нет. File-scoped namespaces, `sealed` по умолчанию, records для DTO.
 - Комментарии — по-английски и только про «почему» (инвариант, который код не показывает), не про «что делает строка».
 - Строковые сравнения — явные: `StringComparer.Ordinal` для ключей, `OrdinalIgnoreCase` для путей/имён файлов.
 - Ошибки внешних подсистем не роняют hover-путь: словари, кэш и диагностика деградируют мягко (см. существующие catch-блоки — они узкие и мотивированные).

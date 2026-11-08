@@ -272,9 +272,11 @@ p50/p95 `140/205 мс`, cold start `6 420 мс`, peak `1 500 МБ`;
 Остаток принципиален: одна context-only contrast pair не разрешилась, а пять
 ошибок были уверенно приняты. Поэтому UI уже предлагает
 `ConSeC — лучший для науки, CPU`, но GlossBERT остаётся стабильным default.
-Следующий эксперимент — feedback/joint planner для нескольких целей и затем
-provider-neutral A/B влияния evidence на TranslateGemma/full-text. Frozen
-`ranker-holdout*.json` при этой работе не открывались.
+Frozen `ranker-holdout*.json` при этой работе не открывались. Дальнейшая
+история профиля — downstream A/B влияния evidence на TranslateGemma,
+sense-preservation gate и promotion gate на `replication199` (не пройден) — и
+его текущий статус ведутся в №8 [docs/ROADMAP.md](../docs/ROADMAP.md);
+feedback/joint planner пока не реализован.
 
 Нужен существенный запас ресурсов: checkpoint mmap занимает около 4.9 ГБ на
 диске, raw ONNX временно соседствует с external-data bundle, а экспорт/проверка

@@ -1,5 +1,7 @@
 # Обучение WSD/DeBERTa на RTX 5080
 
+> **Архив: закрытый эксперимент.** Собственный fine-tune WSD/DeBERTa закрыт 29 июля 2026, новые прогоны не планируются; проект перешёл к готовым SANDWiCH и ConSeC. Этот файл — исходник автономного `README.md`, который `tools/package-wsd-ranker-training.ps1` кладёт в корень переносимого ZIP, поэтому ниже речь идёт об «этом ZIP». Инструкция сохранена для воспроизводимости уже полученных результатов; итог и причины закрытия — в `docs/ROADMAP.md` (№8) и `docs/DEVELOPMENT.md` («Закрытый эксперимент WSD/DeBERTa на RTX 5080»).
+
 Этот ZIP содержит только воспроизводимый пакет обучения ранжировщика значений: trainer, launcher, закреплённые зависимости и канонический train/valid-набор. В нём нет весов моделей, checkpoints и `ranker-holdout*.json`.
 
 Данные подготовлены из English Wiktionary через Kaikki/wiktextract (dump `2026.07.06`, extraction `2026.07.16`) и наследуют условия CC BY-SA/GFDL. Точные источники, revisions, размеры и SHA-256 находятся в `package-manifest.json`.

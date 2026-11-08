@@ -1,197 +1,154 @@
 # Asteria Scale
 
-Asteria Scale — Windows-приложение для масштабирования low-res окон и локального перевода текста под курсором или поверх всего экрана. Оно ориентировано на визуальные новеллы, мангу, художественную и научную литературу: сохраняет тонкие линии, текст и градиенты, запоминает программы, автоматически включает нужный пресет и после закрытия окна остаётся единственным значком в трее.
+English · [Русский](README.ru.md)
 
-Низкоуровневый захват и HLSL-рендеринг выполняет установленный отдельно [Magpie](https://github.com/Blinue/Magpie) (GPLv3). Asteria управляет его конфигурацией и скрывает служебное окно/значок движка.
+**On-device upscaling and hover translation for visual novels and other low-resolution
+Windows apps.** Point at a line of English or Japanese text and a Russian translation
+appears next to the cursor — OCR, dictionaries, word-sense disambiguation and the
+optional neural sentence translation all run locally, with no cloud calls.
 
-## Что реализовано
+![Asteria Scale main window](docs/media/main-window.png)
 
-- выбор любого обычного окна Windows;
-- полноэкранное и оконное масштабирование;
-- специализированные цепочки CuNNy2 для visual novel;
-- режимы Anime4K, AMD FSR и xBRZ;
-- автоматические профили по пути процесса и классу окна;
-- автозапуск вместе с Windows и запуск сразу в трей;
-- один пользовательский значок в трее;
-- перевод английских, японских и других реплик на русский по задержке курсора;
-- NPU-OCR через Windows AI, локальные словари и опциональный перевод
-  TranslateGemma без отправки скриншота в облако;
-- 881 тысяча автономных английских и японских слов/выражений из одиннадцати загружаемых словарных слоёв;
-- полный, а не частотный English Wiktionary: 148 019 английских словоформ и фраз,
-  447 097 смысловых кандидатов выровнены с полными английскими определениями и частями речи для умного режима;
-- умный словарь и контекстный перевод английского предложения: definition-aware ranker выбирает
-  словарный смысл по контексту и создаёт общие semantic evidence для
-  TranslateGemma, не переписывая перевод целиком; стабильный GlossBERT
-  остаётся моделью по умолчанию, готовый SANDWiCH доступен как экспериментальный
-  CPU-профиль, а ConSeC — как отдельный исследовательский CPU-профиль для
-  совместной работы с предложениями и научной лексикой;
-- опциональная TranslateGemma 4B добавляет второй строкой перевод полного
-  текущего английского предложения; основной словарный результат показывается
-  сразу и не меняется, а принятый ranker-смысл и история Textractor могут
-  помочь отдельному post-edit;
-- независимое включение перевода из главного окна и трея;
-- безопасная резервная копия исходной конфигурации Magpie;
-- per-app DPI-оптимизация старых игр без изменения удобного масштаба рабочего стола;
-- корректная работа при Per-Monitor V2 DPI, включая экран 3200×2000 при 200%.
+## What it does
 
-## Быстрый запуск
+- **Upscales any ordinary window** through the separately installed [Magpie](https://github.com/Blinue/Magpie)
+  engine: eight presets (CuNNy2, Anime4K, AMD FSR, xBRZ chains), per-game automation
+  profiles, and a per-app Windows DPI override for old DPI-unaware games.
+- **Translates the text under the cursor** (English and Japanese → Russian): NPU OCR,
+  optionally backed by a Textractor text hook that reads the exact line from the game
+  process, and 12 layered offline dictionaries; for English, a context-aware sense ranker
+  picks the dictionary meaning that fits the sentence, and an optional TranslateGemma 4B
+  line translates the whole sentence.
+- **Runs from the tray** and switches itself on per game.
 
-Потребуются: Windows 11 (build 26100+ для NPU OCR), .NET 10 SDK, установленный отдельно [Magpie](https://github.com/Blinue/Magpie) 0.12.1 и Windows AI Text Recognition. Артефакты ranker-моделей не хранятся в git — как получить обязательный GlossBERT и опциональные SANDWiCH/ConSeC, описано в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Foundry Local и Qwen больше не требуются.
+## Engineering highlights
 
-```powershell
-./scripts/build.cmd
-./scripts/install.cmd
+- **Offline pipeline with explicit contracts.** OCR → ~342k dictionary keys plus ~540k
+  sentence pairs in 12 layers with a documented priority order and one canonical key
+  normalization shared by the C# loader and the Python generator (a parity fixture is
+  checked on both sides) → definition-aware word-sense ranker → optional local LLM.
+- **Isolated model worker.** The sense ranker (GlossBERT, SANDWiCH or ConSeC on ONNX
+  Runtime) runs in its own process behind a versioned JSONL protocol. Every request line
+  gets exactly one drained response line, even on cancellation; a protocol violation
+  kills the worker tree; switching modes or the optional idle unload returns the memory.
+- **No silent fallback.** A requested NPU or Vulkan path either runs there or fails
+  loudly; the host validates the provider, device and model identity the worker
+  reports. Host and worker read provider capabilities from one shared table, pinned by a
+  test, so they cannot disagree about what a cached decision was computed from.
+- **Measurement discipline.** Model files are pinned by size and SHA-256; benchmark
+  provenance hashes the exact dataset bytes. Frozen holdouts are reserved for one-shot
+  confirmation, and every opening, accidental ones included, is logged. Promotion criteria are declared before a blind run — and when the
+  sentence-translation gate failed (McNemar p = 0.064, three guard verdicts), the fixed
+  configuration that later met every criterion on the same, now-spent set was *not*
+  counted as a pass; a new blind set was created and left unopened instead.
+- **Tracing order-dependent output.** TranslateGemma's output depended on request order.
+  A direct llama-server probe localised the cause to Vulkan cooperative-matrix shaders, not
+  prompt caching; the product now runs Vulkan without coopmat, and that path is part of
+  the model's cache identity.
+- **Groundwork for a second platform.** The translation core (~20k lines) is a separate
+  `net10.0` library; calling a Windows-only API there fails the build (CA1416 as error).
+  The ranker worker and three hard-coded binary names are still Windows-specific.
+
+## Results
+
+Word-sense disambiguation on the open sentence development set (46 sentences, 138
+targets), same build:
+
+| Ranker | Correct sense group | Scientific slice | Sentences with all targets correct |
+|---|---:|---:|---:|
+| GlossBERT (default) | 91 / 138 | 69 / 108 | 20 / 46 |
+| SANDWiCH | 120 / 138 | 96 / 108 | 31 / 46 |
+| ConSeC | 131 / 138 | 106 / 108 | 41 / 46 |
+
+ConSeC: accepted precision 96.32 %, coverage 98.55 %, warm p50/p95 140/205 ms on CPU.
+These are WSD numbers, not translation quality. Sentence translation is evaluated
+separately with chrF2, COMET-22 and a sense-level intention-to-treat metric
+([docs/BENCHMARKING.md](docs/BENCHMARKING.md), [docs/RESEARCH.md](docs/RESEARCH.md)).
+
+## Architecture
+
+```mermaid
+graph LR
+    A[AsteriaScale.exe<br/>WPF host, tray] -->|config v4 JSON| M[Magpie<br/>external upscaler]
+    A -->|Windows AI| OCR[NPU OCR]
+    A -->|JSONL over stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / SANDWiCH / ConSeC]
+    A -->|HTTP loopback| T[llama-server<br/>TranslateGemma 4B, CPU or Vulkan]
+    A -->|stdin/stdout| X[TextractorCLI.exe<br/>optional text hook]
+    X -->|attach| G[game process]
 ```
 
-Экспериментальная TranslateGemma 4B не входит в обычную установку. Она занимает
-около `2,5 ГБ`, поддерживает явно выбираемые CPU и Vulkan GPU runtime и
-распространяется по отдельным
-[Gemma Terms](https://ai.google.dev/gemma/terms). CPU остаётся совместимым
-backend по умолчанию; Vulkan никогда не подменяется CPU при ошибке. Если вы хотите испытать
-контекстный перевод полного предложения второй строкой, запустите отдельный
-установщик и подтвердите условия словом `ПРИНИМАЮ`:
+| Project | Role |
+|---|---|
+| `src/AsteriaScale` | WPF host and everything Windows-specific: UI and overlays, tray, hotkeys, Magpie control, DPI, Windows AI OCR, Textractor |
+| `src/AsteriaScale.Core` | Platform-neutral translation core: dictionaries, morphology, sense-ranking host, phrase translation, caches |
+| `src/AsteriaScale.RankerProtocol` | Contract shared by host and worker: JSONL protocol, provider traits, abstention threshold |
+| `src/AsteriaScale.RankerWorker` | Isolated ONNX Runtime worker for the sense rankers |
+| `tests/AsteriaScale.Tests` | Regression suite (56 smoke tests, including a real Magpie start/stop) |
+
+## Tech stack
+
+C# / .NET 10 · WPF and Win32 interop · Windows AI Text Recognition (NPU) · ONNX Runtime
+(CPU, AMD Vitis AI NPU) · llama.cpp (CPU, Vulkan) · Python (dictionary builds, ONNX
+export, benchmarking) · PowerShell build with MSIX identity signing.
+
+About 37k lines of C# in `src/`, 26k lines of C# tests, 17k lines of Python tooling.
+
+## How this project is built
+
+A solo project by [@slava8519](https://github.com/slava8519). I own the product scope,
+the architecture and its invariants, the evaluation protocol and the model decisions.
+Most of the code was written with AI coding agents (Claude Code) working under the rules
+in [AGENTS.md](AGENTS.md): a failing test before every behaviour fix, no silent
+provider fallback, no access to frozen holdouts while tuning, and recorded review passes
+([docs/AUDIT-ROADMAP.md](docs/AUDIT-ROADMAP.md),
+[docs/audit/](docs/audit/pass-e-translation-quality.md)). Most commits carry a
+`Co-Authored-By` trailer naming the AI model.
+
+## Status and limitations
+
+Version 0.9.3, a personal project.
+
+- Windows 11 build 26100 or newer; OCR needs a compatible NPU.
+- Russian is the only target language.
+- Third-party model weights are not stored in the repository, and the required GlossBERT files
+  have no public download yet, so a clean clone builds and passes the tests but cannot
+  publish the app (details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
+- A macOS port is planned: the core is split out; the worker and a Mac host are not.
+
+## Build and test
+
+Requirements: Windows 11, .NET 10 SDK, Magpie 0.12.1 or newer for the engine test, and
+Python 3.11+ as `python` on `PATH`.
 
 ```powershell
-.\scripts\install-translategemma.cmd
-```
-
-Затем выберите `Умный словарь` → `Перевод фразы второй строкой` →
-`TranslateGemma 4B — перевод предложения второй строкой` и отдельно укажите
-ускоритель `CPU` или `Vulkan GPU`. По умолчанию эта фаза выключена; ни сборка,
-ни обычный `install.cmd`, ни запуск Asteria модель не скачивают.
-
-Чтобы сравнить готовый SANDWiCH с моделью по умолчанию, установите его отдельно:
-
-```powershell
-.\scripts\install-sandwich.cmd
-```
-
-Затем пересоберите приложение и выберите
-`Умный словарь` → `Модель ранжирования` →
-`SANDWiCH — исследовательский CPU`. Профиль занимает около `1,1 ГБ` ONNX,
-работает только на CPU и не делает скрытого перехода с NPU. Его текущие
-open-dev результаты не прошли 90%-ный accepted-sense gate и уступают GlossBERT
-по качеству и памяти; профиль сохранён для воспроизводимости, а GlossBERT
-остаётся рекомендуемым вариантом.
-
-Для личного научного/некоммерческого исследования можно отдельно установить
-ConSeC/WNGT. Установщик требует явного принятия CC BY-NC-SA 4.0, проверяет все
-четыре артефакта по размеру и SHA-256 и не добавляет модель в git или обычную
-публикацию. Он не скачивает checkpoint: `SourceBundle` сначала создаётся по
-[инструкции безопасного экспорта](tools/README-consec.md):
-
-```powershell
-.\scripts\install-consec.cmd `
-  -SourceBundle "$env:LOCALAPPDATA\AsteriaScale\Models\Consec-WNGT-ONNX"
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\scripts\verify-consec.ps1
-```
-
-После пересборки выберите `Умный словарь` → `Модель ранжирования` →
-`ConSeC — лучший для науки, CPU`. Это CPU-only исследовательский профиль:
-официальная end-to-end parity подтверждена, а на открытом sentence-dev он
-выиграл у GlossBERT и SANDWiCH, особенно на научных статьях. GlossBERT всё же
-остаётся стабильным вариантом по умолчанию до завершения joint-planner и
-full-text A/B.
-
-После публикации EXE находится здесь:
-
-```text
-dist/AsteriaScale/AsteriaScale.exe
-```
-
-Для запуска без установки ярлыка:
-
-```powershell
-./scripts/run.cmd
-```
-
-## Использование
-
-1. Запустите visual novel в её родном низком разрешении и оставьте окно несвёрнутым.
-2. Выберите окно слева.
-3. Если блок «DPI игры» предлагает оптимизацию, включите её и один раз перезапустите игру. Масштаб Windows 125–200% можно оставить удобным: override применяется только к EXE игры.
-4. Оставьте `Visual Novel HQ` или выберите другой пресет.
-5. Нажмите «Запустить на весь экран».
-6. Чтобы программа впредь включалась сама, нажмите «Добавить в автоматизацию».
-7. Закройте главное окно Asteria — приложение продолжит работать в трее.
-
-Старые DPI-unaware игры Windows предварительно растягивает ещё до захвата. При 200% это увеличивает число исходных пикселей в четыре раза, скрывает разницу между моделями и зря нагружает Magpie. Asteria включает стандартный Windows override `Application` для выбранного игрового EXE, сохраняет точное прежнее значение и умеет его вернуть. Настройка, сделанная вручную через свойства файла, распознаётся, но не присваивается Asteria и не удаляется ею.
-
-Для перевода включите «Перевод текста». Подсказки не перехватывают клики. Доступны два пользовательских режима:
-
-- `Умный словарь` распознаёт предложение целиком и сопоставляет контекст с полными определениями English Wiktionary. По умолчанию специализированный GlossBERT работает на CPU; экспериментальные варианты — его NPU-путь, готовый dual-encoder SANDWiCH и исследовательский ConSeC на CPU. ConSeC сохраняет полный контекст предложения, независимо оценивает каждую запрошенную цель и особенно полезен для научной лексики; следующий этап — feedback/joint planner. Результат принимается только при разрыве оценок не менее `0,25`; обычное воздержание с малым разрывом всегда показывает словарные варианты. Проверенные user/VN-hard и однозначные фразы берутся без модели, а неоднозначные broad-фразы проходят то же definition-aligned разрешение смыслов, что и отдельные слова. Поиск всегда предпочитает самое длинное выражение: например, проверенное `if you wish` не уступает вложенному саркастическому `you wish`. Опциональная TranslateGemma работает для любого английского smart-result и переводит второй строкой полное текущее предложение (1–64 слова), не обрезая его вокруг курсора. Выбранный ranker последовательно разбирает до 12 остальных неоднозначных слов всего исходного предложения; уже обработанное слово под курсором повторно не запускает inference. Первый проход получает только current English. Без смысловых подсказок длинный текст или Textractor-контекст допускает один APE; с подсказками независимый второй кандидат переводит CURRENT заново с выбранными и отвергнутыми значениями. Морфологический gate выбирает безопаснейший вариант, не отдавая смыслу приоритет над полярностью и числами; оставшийся конфликт, непроверяемый смысл или structural-loss получает не более одного адресного repair и не закрепляется в кэше. Подсказка слова под курсором сохраняется при сокращении prompt первой. Не имеющая character span подсказка для повторённого слова консервативно пропускается и не попадает в context-only APE. Предыдущие строки того же hook-потока служат только скрытым типизированным контекстом, а deterministic scaffold и принятые смыслы предложения — ограниченными опорами. Они не меняют основную словарную строку и не попадают в вывод. Для VN карточка отдельно показывает распознанного говорящего. `Ctrl+Shift+G` открывает компактный редактор с уже заполненным именем и крупными вариантами «Мужской», «Женский», «Не учитывать»; выбор хранится только локально и только для этой игры. TranslateGemma получает лишь выбранный род, без имени и ключа игры, и применяет его только к формам текущего говорящего. Общий guard очищает одиночную служебную нумерацию, проверяет обязательные термины, конфликт смысла и структуру CURRENT: имя говорящего, внешние кавычки, начальное многоточие и обрезанная цитата не могут прийти из истории или быть додуманы моделью. При ошибке вторая строка явно сообщает, что перевод недоступен; скрытого генеративного fallback нет;
-- `Словарный` сначала ищет самое длинное выражение, проходящее через позицию курсора, затем отдельное слово. Он запускается почти мгновенно и не загружает модели значений или TranslateGemma.
-
-Опциональный text-hook: если установлен [Textractor](https://github.com/Artikash/Textractor), включите «Text-hook (Textractor)» в разделе перевода (путь к папке с `x86`/`x64` `TextractorCLI.exe` подставится автоматически, включая `C:\Textractor`). Галочка «Hook» у профиля автоматизации управляет хуком для конкретной игры; в профиле можно задать и hook-код (H-код) для движков, где автоматические хуки не срабатывают. Тогда для совместимых движков контекст реплики берётся напрямую из процесса игры (без OCR-ошибок), а слово под курсором по-прежнему определяет OCR — перевод остаётся универсальным для любых программ и документов. Метка `HOOK` в карточке появляется только после свежего текста Textractor, реально совпавшего с OCR-якорем; если её нет, использован OCR-fallback. Хук — это инъекция в процесс игры: антивирус может ругаться, окна от администратора требуют запуска Asteria с теми же правами.
-
-Горячие клавиши движка:
-
-- `Alt+Shift+A` — включить или выключить полноэкранный режим;
-- `Alt+Shift+Q` — включить оконный режим;
-- `Ctrl+Shift+G` — назначить род говорящего, показанного в текущей карточке.
-
-## Пресеты
-
-| Пресет | Цепочка | Для чего |
-|---|---|---|
-| Visual Novel HQ | CuNNy2 4×24 NVL → FSR EASU → Adaptive Sharpen | Рекомендуемый баланс текста, линий и скорости |
-| Visual Novel Ultra | CuNNy2 8×32 NVL → FSR EASU → Adaptive Sharpen | Статичные CG и максимум качества |
-| Visual Novel Soft | CuNNy2 4×16 NVL → SSim Downscaler | Светлый мелкий текст, минимум ореолов |
-| Anime Line Art | Anime4K Restore → Anime4K Upscale → FSR | Анимированные 2D-сцены |
-| Universal FSR | FSR EASU → RCAS | 3D и высокая частота кадров |
-| Pixel Perfect | xBRZ Freescale | Пиксель-арт и старые игры |
-
-## Как используются GPU и NPU
-
-Эталонная машина разработки — AMD NPU с драйвером `32.0.203.329`, Windows 11 build 26200 и Radeon 860M. Windows ML умеет выбирать CPU/GPU/NPU execution provider, но CuNNy2 и Anime4K поставляются как HLSL-эффекты. Их GPU-путь сохраняет кадр в видеопамяти от захвата до вывода. Перенос каждого кадра в отдельный ONNX/NPU-конвейер без специально скомпилированной модели добавил бы копирование и задержку.
-
-Масштабирование остаётся на FP16 GPU. NPU выполняет OCR участка экрана через Windows AI Text Recognition. Контекстный выбор словарного смысла в «Умном словаре» и semantic evidence для независимой строки TranslateGemma делает явно выбранный definition-aware ranker. Закреплённый GlossBERT CPU — надёжный вариант по умолчанию; его AMD Vitis NPU-путь, готовый SANDWiCH CPU и ConSeC CPU — экспериментальные профили. Опциональная TranslateGemma использует отдельный llama.cpp runtime: CPU остаётся default, а явный Vulkan-путь закреплён за `Vulkan0` и принимается только при полном GPU-offload. При ошибке Vulkan вторая строка становится недоступной без скрытого CPU fallback. CPU и Vulkan имеют разные cache identity, поскольку даже при одинаковой модели их вывод может различаться.
-
-Ранжировщик изолирован в дочернем процессе: это позволяет полностью вернуть занятую моделью память при переходе в режим, которому он не нужен, при отключении перевода или после пяти минут простоя. Перевод и разрушительная выгрузка моделей разделены общей lifecycle-защёлкой, поэтому таймер простоя не может остановить ranker или TranslateGemma посреди нового запроса. Выбор NPU не включает скрытый CPU/GPU fallback: при несовместимом драйвере приложение сохраняет словарный результат, а пользователь может явно выбрать CPU. SANDWiCH всегда требует явного CPU-профиля. Подробности, ограничения контрольного набора и хеши артефактов: [docs/RESEARCH.md](docs/RESEARCH.md).
-
-## Сборка и тесты
-
-```powershell
+dotnet restore AsteriaScale.slnx
 dotnet build AsteriaScale.slnx -c Release
-dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release
+dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Release --no-build
 ```
 
-Smoke-тесты проверяют каталог пресетов, round-trip настроек, идемпотентное редактирование Magpie config, наличие всех HLSL-эффектов и реальный жизненный цикл движка.
+Publishing (`./scripts/build.cmd`) additionally needs the pinned model files and a
+one-time self-signed signing certificate; see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-## Ограничения версии 0.9
+## Documentation
 
-- Защищённые DRM-окна и некоторые hardware overlays могут не захватываться.
-- Окно, запущенное от администратора, требует запуска Asteria с тем же уровнем прав.
-- В HDR возможны отличия цвета; отдельный FP16/HDR capture path пока не добавлен.
-- Программа выполняет spatial super-resolution. Temporal-алгоритмы требуют motion vectors/depth из самой игры, которых при захвате произвольного окна нет.
-- Сейчас целевой язык перевода — русский. OCR требует Windows 11 build 26100+ и совместимый NPU.
-- Защищённые окна могут блокировать не только масштабирование, но и снимок для OCR.
-- Обычный словарный режим не разрешает неоднозначность; для этого предназначен «Умный словарь». Малый разрыв оценок всегда оставляет словарные варианты. Независимая вторая строка TranslateGemma запускается только в «Умном словаре» и только когда явно включена; отсутствие словарной записи или ошибка ранжировщика не активируют другой переводчик.
+The project documentation is in Russian; [docs/README.md](docs/README.md) is the map.
 
-## Данные и восстановление
+| Document | What it covers |
+|---|---|
+| [README.ru.md](README.ru.md) | User guide: install, translation modes, presets, data locations |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Processes, the hover pipeline, dictionary layers, invariants, platform split |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Build, tests and testing strategy, model artifacts, publishing, data regeneration |
+| [docs/BENCHMARKING.md](docs/BENCHMARKING.md) | Translation benchmark protocol and tracks |
+| [docs/RESEARCH.md](docs/RESEARCH.md) | Dated research and measurement log; the source of the numbers cited by the roadmap and audit |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned work and its design |
+| [AGENTS.md](AGENTS.md) | Rules for AI coding agents (in English) |
 
-- настройки Asteria: `%LOCALAPPDATA%\AsteriaScale\settings.json`;
-- диагностический журнал редких ошибок перевода: `%LOCALAPPDATA%\AsteriaScale\hover-translation.log`;
-- диагностический журнал автозапуска Magpie: `%LOCALAPPDATA%\AsteriaScale\scale-lifecycle.log` (не содержит текста или заголовков игры);
-- опциональные TranslateGemma/llama.cpp artifacts: `%LOCALAPPDATA%\AsteriaScale\Models\TranslateGemma`;
-- кэш принятых предложений: `%LOCALAPPDATA%\AsteriaScale\smart-phrase-translations.v7.json`;
-- встроенные автономные словари: `dist\AsteriaScale\Dictionaries` (около 27,3 МБ в сжатом виде);
-- пользовательские словари с высшим приоритетом: `%LOCALAPPDATA%\AsteriaScale\Dictionaries`;
-- config движка: `%LOCALAPPDATA%\Magpie\config\v4\config.json`;
-- резервная копия до первого изменения: `config.json.before-asteria.json`.
+## License
 
-## Документация
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — устройство: процессы, конвейер перевода, структура словарей и инварианты;
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — сборка, тесты, публикация, артефакты модели, регенерация словарей;
-- [docs/BENCHMARKING.md](docs/BENCHMARKING.md) — публичные EN→RU-наборы, production A/B TranslateGemma и локальный HTML/CSV-ладер;
-- [docs/RESEARCH.md](docs/RESEARCH.md) — выбор моделей, калибровка воздержания, бенчмарки;
-- [docs/ROADMAP.md](docs/ROADMAP.md) — роадмап доработок с архитектурой каждой задачи;
-- [docs/PROMPTS.md](docs/PROMPTS.md) — готовые промты для ИИ-агентов;
-- [AGENTS.md](AGENTS.md) — правила для ИИ-агентов (Claude Code читает его через `CLAUDE.md`);
-- [assets/Dictionaries/README.md](assets/Dictionaries/README.md) и [assets/Ranker/README.md](assets/Ranker/README.md) — данные и регрессионные наборы.
-
-## Лицензии
-
-Код Asteria Scale распространяется по MIT. Magpie устанавливается как отдельная программа и остаётся под GPLv3; эффекты имеют собственные лицензии. Опциональная TranslateGemma не входит в Asteria и остаётся под Gemma Terms; её llama.cpp runtime — MIT. SANDWiCH code/models заявлены upstream как MIT и устанавливаются отдельно без BabelNet-данных. ConSeC/WNGT устанавливается только отдельно для личного научного/некоммерческого исследования по CC BY-NC-SA 4.0; его checkpoint и ONNX не входят в git, обычную установку или публичную поставку. См. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Source code and original documentation: MIT ([LICENSE](LICENSE)). Dictionary and
+morphology data, apart from the project's own curated layers, are derived from
+third-party sources and keep their own licences (mostly CC BY-SA; also EDRDG, CC BY 2.0 FR
+and CC BY 4.0) — see [DATA-LICENSES.md](DATA-LICENSES.md). Magpie (GPLv3) and
+Textractor are separate programs; model licences, including the Gemma Terms for the
+optional TranslateGemma and CC BY-NC-SA for the research-only ConSeC install, are listed
+in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -163,7 +163,8 @@ outcome. The worker:
 3. converts the two classifier logits to positive-class probability;
 4. takes the maximum gloss score for each distinct stable group;
 5. compares the best two distinct group scores;
-6. returns a normal abstained v2 response when the margin is below `0.25`.
+6. returns a normal successful protocol v4 response with `abstained: true` when
+   the margin is below `0.25`.
 
 At most 128 glosses are accepted. CPU inference uses dynamic inputs in chunks
 of 32 and pads only to the longest pair in that chunk, capped at 128 tokens.

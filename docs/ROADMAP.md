@@ -37,15 +37,20 @@
 | 12 | HDR capture path | 3 | XL (внешняя) | Magpie upstream |
 
 **Рекомендуемый порядок оставшихся работ:**
-№8 (проверка sense-gate на dev201/replication199, затем ConSeC feedback/joint) → №15 → №18 → №16 → №19; №9 делать рядом с
+№8 (один заранее объявленный прогон на слепом `blind-v3` после заморозки конфигурации, затем ConSeC feedback/joint) → №15 → №18 → №16 → №19; №9 делать рядом с
 японской частью №16, mmap-этап №6 — только по описанным триггерам.
 Обоснование: сначала нужно перестать терять реплики и гарантировать качество
-самого EN smart-слоя. Independent ConSeC выиграл открытый sentence-dev и
-MuCoW WSD-часть downstream A/B, но TranslateGemma изменила только `21/201`
-ответов и не улучшила точную передачу target. Поэтому сначала нужен
-sense-preservation gate для уже готового provider-neutral evidence, затем —
-feedback/joint decoding для оставшихся abstain. №11 кормит будущую память
-переводов №18.
+самого EN smart-слоя. Проверка sense-preservation gate уже выполнена: на
+открытом dev201 (16–17 августа 2026) и одним gate-прогоном на
+`replication199` (17 августа 2026). Каркас помогает, но promotion gate не
+пройден, а `replication199` израсходован. Июльский downstream A/B, где
+TranslateGemma изменила только `21/201` ответов, описывает состояние до гейта;
+после гейта переводы ConSeC и GlossBERT расходятся в `58/201` случаях
+([RESEARCH.md](RESEARCH.md), «ConSeC против GlossBERT после гейта»). Поэтому
+следующая попытка продвижения ConSeC возможна только на новом слепом наборе
+`mucow-wsd-smart-hover-blind-v3` (создан 17 августа 2026, не открывался), а
+затем — feedback/joint decoding для оставшихся abstain. №11 кормит будущую
+память переводов №18.
 
 ---
 
@@ -341,7 +346,8 @@ same-build сравнения, а не более новым названием 
    на публичном MuCoW sentence-level срезе~~ — выполнено: ConSeC улучшил WSD,
    но не конечную точность target;
 5. реализовать sense-preservation gate для TranslateGemma, затем feedback/joint
-   planner для нескольких целей одной реплики;
+   planner для нескольких целей одной реплики — gate внедрён (`b293be9`,
+   3 августа 2026) и измерен (итог ниже), feedback/joint planner ещё впереди;
 6. сохранять GlossBERT production-default до прохождения общего promotion gate.
 
 Оба новых пути обязаны возвращать общий provider-neutral semantic evidence
@@ -549,6 +555,8 @@ identity обязана включать policy version.
 После заморозки политики выполняется один подтверждающий прогон на
 `mucow-wsd-smart-hover-replication-v1`: `199` source-disjoint предложений для
 тех же lexical-sense strata. Balanced400 включает dev и replication и поэтому
+не используется как «независимый» третий тест.
+
 **Итог gate — 17 августа 2026.** Вопрос gate по решению владельца был изменён
 до вскрытия набора: вместо «ConSeC против GlossBERT ≥ 5 п.п.» (на dev201 эта
 пара дала `+2,49` п.п. при `p=0,2266`, то есть критерий заведомо непроходим)
@@ -572,11 +580,14 @@ GlossBERT, рабочая конфигурация владельца — ConSeC
 бренда (`Youtube` против `YouTube`), склейка токенов в источнике (`ofJanus`) и
 кавычки вокруг одиночной буквы-оценки. Каждый стоит целой строки и около
 `0,45` COMET; именно они, а не качество перевода, утянули корпусный COMET вниз.
+Карточка `E15` закрыта; перезамер после исправления на том же наборе вердикт
+gate не меняет, потому что набор уже был вскрыт
+([RESEARCH.md](RESEARCH.md), «E15 и перезамер на replication199»).
 
 Исходная формулировка P1 сохранена ниже как история:
 
-не используется как «независимый» третий тест. Promotion gate P1 оценивается на
-replication199: ConSeC final target ITT выше GlossBERT минимум на `5` п.п.;
+Promotion gate P1 оценивается на replication199: ConSeC final target ITT выше
+GlossBERT минимум на `5` п.п.;
 focus-word bootstrap 95% CI не пересекает `0`; case-level McNemar `p<0,05`
 служит дополнительной проверкой; chrF2/contrastive/coverage/safety не хуже
 baseline; p95 растёт не более чем на `20 %`. После этого всё равно требуется
