@@ -82,6 +82,15 @@ internal sealed record SmartPhraseDirectDraft(
 /// </summary>
 internal interface ISmartPhraseTranslator
 {
+    /// <summary>
+    /// The identity every request to this translator must carry and every
+    /// result will report. It comes from the instance, not a constant, so a
+    /// translator running a measured variant (another quantization or Vulkan
+    /// numeric path) gets requests the identity guard can still match.
+    /// </summary>
+    string ModelIdentityFor(TranslateGemmaExecutionBackend backend) =>
+        TranslateGemmaTranslationService.GetModelIdentity(backend);
+
     Task PrepareAsync(
         SmartPhraseTranslationRequest request,
         CancellationToken cancellationToken) => Task.CompletedTask;

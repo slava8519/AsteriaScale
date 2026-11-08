@@ -955,7 +955,10 @@ internal sealed class SmartHoverPipeline : IDisposable
         CancellationToken cancellationToken)
     {
         ISmartPhraseTranslator translator = _smartPhraseTranslator!;
-        string modelIdentity = TranslateGemmaTranslationService.GetModelIdentity(phraseBackend);
+        // The draft must carry the identity the request will carry, which
+        // comes from the translator instance (a measured variant included);
+        // otherwise the refinement could never reuse it.
+        string modelIdentity = translator.ModelIdentityFor(phraseBackend);
         // The thread-pool hop guarantees the overlap: a first warm-up hashes
         // the pinned GGUF before its first real await.
         return Task.Run(
@@ -1100,7 +1103,9 @@ internal sealed class SmartHoverPipeline : IDisposable
                 .Concat(scaffoldProperNames)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray(),
-            TranslateGemmaTranslationService.GetModelIdentity(phraseBackend),
+            (_smartPhraseTranslator ?? throw new InvalidOperationException(
+                    "TranslateGemma phrase request without a translator."))
+                .ModelIdentityFor(phraseBackend),
             TranslateGemmaTranslationService.PromptIdentity)
         {
             PreviousContext = previousContext,

@@ -20,6 +20,8 @@ internal static class SmartHoverPhraseIntegrationTests
         await VerifyGenerationAndCacheHitAsync(Path.Combine(root, "cache-hit"));
         await VerifyBackendCacheIsolationAsync(Path.Combine(root, "backend-cache"));
         await VerifyBackendSnapshotAsync(Path.Combine(root, "backend-snapshot"));
+        await VerifyRequestIdentityComesFromTranslatorAsync(
+            Path.Combine(root, "translator-identity"));
         await VerifyNonCacheableResultIsRetriedAsync(Path.Combine(root, "non-cacheable"));
         await VerifySentenceWideSenseHintsAsync(Path.Combine(root, "sentence-wide-wsd"));
         await VerifyIdiomRewriteRanksOriginalSourceAsync(Path.Combine(root, "idiom-wsd"));
@@ -369,6 +371,61 @@ internal static class SmartHoverPhraseIntegrationTests
               translator.LastRequest?.ModelIdentity ==
               TranslateGemmaTranslationService.ModelIdentity,
             "A settings change altered the identity or label of one in-flight CPU request.");
+    }
+
+    /// <summary>
+    /// A translator running a measured variant (here whichever Vulkan coopmat
+    /// path does not ship) must receive requests stamped with its own identity.
+    /// With a constant identity the guard would reject every variant result
+    /// as a model mismatch, and the phrase cache would mix both numeric paths
+    /// under one key.
+    /// </summary>
+    private static async Task VerifyRequestIdentityComesFromTranslatorAsync(string root)
+    {
+        string variant = TranslateGemmaTranslationService.RuntimeIdentity(
+            TranslateGemmaTranslationService.TranslateGemmaModelPin.Default,
+            TranslateGemmaExecutionBackend.Vulkan,
+            TranslateGemmaTranslationService.ShippedVulkanCoopmat ==
+            TranslateGemmaTranslationService.VulkanCoopmat.Enabled
+                ? TranslateGemmaTranslationService.VulkanCoopmat.Disabled
+                : TranslateGemmaTranslationService.VulkanCoopmat.Enabled);
+        Check(variant != TranslateGemmaTranslationService.VulkanModelIdentity,
+            "The variant identity collapsed into the shipped one.");
+        RecordingPhraseTranslator translator = new()
+        {
+            IdentityOverride = backend => backend == TranslateGemmaExecutionBackend.Vulkan
+                ? variant
+                : TranslateGemmaTranslationService.ModelIdentity
+        };
+        await using PipelineFixture fixture = new(
+            root,
+            SmartPhraseTranslationModes.TranslateGemma,
+            translator);
+        fixture.Settings.SmartPhraseTranslationBackend = SmartPhraseTranslationBackends.Vulkan;
+
+        SmartHoverPhraseLine? line = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(translator.LastPreparedRequest?.ModelIdentity == variant &&
+              translator.LastRequest?.ModelIdentity == variant,
+            "The hover pipeline stamped requests with a constant instead of the translator's identity.");
+        Check(line is { Status: SmartPhraseLineStatus.Translated, FromCache: false } &&
+              line.Translation == PhraseTranslation,
+            "A translation from the variant runtime was not accepted by the identity guard.");
+
+        // The shipped identity must not find the variant's cache entry.
+        translator.IdentityOverride = null;
+        SmartHoverPhraseLine? shipped = await RunPhrasePhaseAsync(
+            fixture,
+            CreatePrimaryResult(),
+            CancellationToken.None);
+        Check(shipped is { FromCache: false } &&
+              translator.TranslateCalls == 2 &&
+              translator.LastRequest?.ModelIdentity ==
+              TranslateGemmaTranslationService.VulkanModelIdentity &&
+              await fixture.PhraseCache.CountAsync() == 2,
+            "The shipped Vulkan path reused a phrase-cache entry of the other coopmat path.");
     }
 
     private static async Task VerifyBackendCacheIsolationAsync(string root)
@@ -964,6 +1021,11 @@ internal static class SmartHoverPhraseIntegrationTests
         public List<string> Events { get; } = [];
         public SmartPhraseTranslationRequest? LastRequest { get; private set; }
         public SmartPhraseTranslationRequest? LastPreparedRequest { get; private set; }
+        public Func<TranslateGemmaExecutionBackend, string>? IdentityOverride { get; set; }
+
+        public string ModelIdentityFor(TranslateGemmaExecutionBackend backend) =>
+            IdentityOverride?.Invoke(backend) ??
+            TranslateGemmaTranslationService.GetModelIdentity(backend);
 
         public Task PrepareAsync(
             SmartPhraseTranslationRequest request,

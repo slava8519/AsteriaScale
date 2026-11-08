@@ -48,6 +48,7 @@ internal static class TranslationSuiteTests
             "Direct translation provenance must not claim an unused ranker.");
 
         VerifyParserRejectsInvalidTails(dataset, worker, output, report);
+        VerifyCoopmatOption(dataset, worker, output, report);
         await VerifySchemaRejectionsAsync(root);
 
         IReadOnlyList<TranslationSuiteCase> loaded =
@@ -446,7 +447,20 @@ internal static class TranslationSuiteTests
                 value == "glossbert" ? "deberta" : value).ToArray()),
             ("zero maximum", () => [.. ValidTail(), "--max-cases", "0"]),
             ("invalid shard", () => [.. ValidTail(), "--shard", "3/2"]),
-            ("missing required", () => ValidTail()[..^2])
+            ("missing required", () => ValidTail()[..^2]),
+            ("unknown coopmat value", () =>
+                [.. ValidTail(), "--phrase-coopmat", "false"]),
+            ("duplicate coopmat", () =>
+                [.. ValidTail(), "--phrase-coopmat", "off", "--phrase-coopmat", "off"]),
+            ("coopmat without value", () => [.. ValidTail(), "--phrase-coopmat"]),
+            // Only the Vulkan runner reads the variable: on CPU the switch
+            // would change nothing while the run claimed a variant.
+            ("coopmat on cpu", () =>
+                [.. ValidTail().Select(value => value == "vulkan" ? "cpu" : value),
+                 "--phrase-coopmat", "off"]),
+            ("explicit coopmat default on cpu", () =>
+                [.. ValidTail().Select(value => value == "vulkan" ? "cpu" : value),
+                 "--phrase-coopmat", "on"])
         ];
         foreach ((string name, Func<string[]> mutate) in invalid)
         {
@@ -454,6 +468,59 @@ internal static class TranslationSuiteTests
                 () => TranslationSuiteOptions.Parse(mutate(), 1),
                 $"The strict parser accepted {name}.");
         }
+    }
+
+    /// <summary>
+    /// Audit E17 follow-up: the coopmat A/B must run on both lanes, and
+    /// each run must name its numeric path in the identity every output
+    /// carries.
+    /// </summary>
+    private static void VerifyCoopmatOption(
+        string dataset,
+        string worker,
+        string output,
+        string report)
+    {
+        string[] Tail(string profile, params string[] extra) =>
+        [
+            "--benchmark-only", "--translation-suite", dataset, worker,
+            "--system-id", "fake", "--profile", profile,
+            "--phrase-backend", "vulkan", "--ranker-cpu-model", "consec",
+            "--translation-output", output, "--translation-report", report,
+            .. extra
+        ];
+
+        foreach (string profile in new[] { "direct", "smart" })
+        {
+            TranslationSuiteOptions shipped = TranslationSuiteOptions.Parse(Tail(profile), 1);
+            TranslationSuiteOptions on = TranslationSuiteOptions.Parse(
+                Tail(profile, "--phrase-coopmat", "ON"),
+                1);
+            TranslationSuiteOptions off = TranslationSuiteOptions.Parse(
+                Tail(profile, "--phrase-coopmat", "off"),
+                1);
+            Check(shipped.PhraseVulkanCoopmat == TranslateGemmaTranslationService.ShippedVulkanCoopmat &&
+                  on.PhraseVulkanCoopmat == TranslateGemmaTranslationService.VulkanCoopmat.Enabled &&
+                  off.PhraseVulkanCoopmat == TranslateGemmaTranslationService.VulkanCoopmat.Disabled,
+                $"The {profile} lane did not map --phrase-coopmat to the requested numeric path.");
+            Check(TestCommandLine.FindUnknownOption(Tail(profile, "--phrase-coopmat", "off")) is null,
+                "The suite-level option guard does not know --phrase-coopmat.");
+        }
+
+        // The identity reaches outputs through the translator instance both
+        // lanes construct from these options.
+        string Identity(TranslateGemmaTranslationService.VulkanCoopmat coopmat) =>
+            TranslateGemmaTranslationService.RuntimeIdentity(
+                TranslateGemmaTranslationService.TranslateGemmaModelPin.Default,
+                TranslateGemmaExecutionBackend.Vulkan,
+                coopmat);
+        Check(Identity(TranslateGemmaTranslationService.VulkanCoopmat.Enabled) ==
+              TranslateGemmaTranslationService.VulkanCoopmatModelIdentity &&
+              Identity(TranslateGemmaTranslationService.VulkanCoopmat.Disabled)
+                  .EndsWith("/llama.cpp-b9632-vulkan-full-nocoopmat", StringComparison.Ordinal) &&
+              Identity(TranslateGemmaTranslationService.ShippedVulkanCoopmat) ==
+              TranslateGemmaTranslationService.VulkanModelIdentity,
+            "A run on either coopmat path could report the other path's identity.");
     }
 
     private static async Task VerifySchemaRejectionsAsync(string root)
