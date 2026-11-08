@@ -38,17 +38,26 @@ internal sealed class TranslateGemmaTranslationService :
         "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-cpu";
-    public const string VulkanModelIdentity =
+    /// <summary>
+    /// The runner's own Vulkan numeric path, KHR_coopmat allowed. It shipped
+    /// until 8 November 2026, so every stored run before that date carries
+    /// this identity; a benchmark reproduces it with --phrase-coopmat on.
+    /// </summary>
+    internal const string VulkanCoopmatModelIdentity =
         "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
         "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
         ModelSha256 + "/llama.cpp-b9632-vulkan-full";
+    public const string VulkanModelIdentity =
+        VulkanCoopmatModelIdentity + NoCoopmatIdentitySuffix;
     /// <summary>
     /// One quantization of the pinned model: file name, exact bytes, SHA-256
     /// and the identity both backends report. Production always uses
     /// <see cref="Default"/>; a benchmark may name a different quantization,
     /// but never a looser check — an alternative pin still has to match its own
     /// size and hash, and it renames the identity so a report can never claim
-    /// numbers were produced by the shipped artifact.
+    /// numbers were produced by the shipped artifact. The Vulkan identity here
+    /// is the runner-default numeric path; <see cref="RuntimeIdentity"/> adds
+    /// the coopmat choice on top of it.
     /// </summary>
     internal sealed record TranslateGemmaModelPin(
         string FileName,
@@ -62,7 +71,7 @@ internal sealed class TranslateGemmaTranslationService :
             ModelSize,
             ModelSha256,
             ModelIdentity,
-            VulkanModelIdentity);
+            VulkanCoopmatModelIdentity);
 
         public string BlobFileName => "sha256-" + Sha256;
 
@@ -73,6 +82,31 @@ internal sealed class TranslateGemmaTranslationService :
             _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
         };
     }
+
+    /// <summary>
+    /// Whether ggml-vulkan may use its KHR_coopmat (cooperative-matrix)
+    /// shaders. On b9632 with the Radeon 860M those shaders make greedy output
+    /// depend on earlier requests to the same server process (audit E17);
+    /// without them a completion is a function of its prompt alone, at a
+    /// measured latency cost. The choice changes the numeric path, so it is
+    /// part of the Vulkan runtime identity and never an invisible tweak.
+    /// </summary>
+    internal enum VulkanCoopmat
+    {
+        Enabled,
+        Disabled
+    }
+
+    /// <summary>
+    /// The numeric path production runs. A benchmark may select the other one,
+    /// but the identity then names it, so stored runs cannot be mixed.
+    /// Disabled since the same-build dev201 A/B of 8 November 2026: no sense
+    /// or COMET loss in either lane, output order-free, +6–10 % latency
+    /// (RESEARCH.md, "Vulkan без coopmat"). Changing it requires a new A/B.
+    /// </summary>
+    internal const VulkanCoopmat ShippedVulkanCoopmat = VulkanCoopmat.Disabled;
+    internal const string DisableCoopmatEnvironmentVariable = "GGML_VK_DISABLE_COOPMAT";
+    internal const string NoCoopmatIdentitySuffix = "-nocoopmat";
 
     public const string DirectPromptIdentity = "translategemma-direct-en-ru-v1";
     public const string CorrectionPromptIdentity = "translategemma-ape-en-ru-v4";
@@ -139,6 +173,7 @@ internal sealed class TranslateGemmaTranslationService :
     private string? _apiKey;
     private string? _runtimeDirectory;
     private readonly TranslateGemmaModelPin _modelPin;
+    private readonly VulkanCoopmat _vulkanCoopmat;
     private TranslateGemmaExecutionBackend? _activeBackend;
     private string? _activeModelIdentity;
     private VulkanStartupEvidenceTracker? _startupEvidence;
@@ -156,25 +191,35 @@ internal sealed class TranslateGemmaTranslationService :
     }
 
     /// <summary>
-    /// Benchmark entry point for measuring an alternative quantization. The
-    /// pin is still enforced, and the reported identity names that
-    /// quantization, so a run cannot be mistaken for the shipped artifact.
+    /// Benchmark entry point for measuring an alternative quantization or
+    /// Vulkan numeric path. The pin is still enforced, and the reported
+    /// identity names both choices, so a run cannot be mistaken for the
+    /// shipped runtime.
     /// </summary>
     internal TranslateGemmaTranslationService(
         TranslateGemmaModelPin modelPin,
-        Func<TranslateGemmaExecutionBackend>? backendResolver = null)
+        Func<TranslateGemmaExecutionBackend>? backendResolver = null,
+        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat)
         : this(
             ResolveDefaultModelRoot(),
             ResolveDefaultOllamaModelsRoot(),
             DefaultStartupTimeout,
             DefaultRequestTimeout,
             backendResolver: backendResolver,
-            modelPin: modelPin)
+            modelPin: modelPin,
+            vulkanCoopmat: vulkanCoopmat)
     {
     }
 
-    internal string ModelIdentityFor(TranslateGemmaExecutionBackend backend) =>
-        _modelPin.IdentityFor(backend);
+    /// <summary>
+    /// The model/runtime identity this instance answers for. Requests must
+    /// carry exactly this value, so a pipeline built around a variant cannot
+    /// receive a translation produced under another numeric path.
+    /// </summary>
+    public string ModelIdentityFor(TranslateGemmaExecutionBackend backend) =>
+        RuntimeIdentity(_modelPin, backend, _vulkanCoopmat);
+
+    internal VulkanCoopmat VulkanCoopmatMode => _vulkanCoopmat;
 
     internal TranslateGemmaTranslationService(
         string modelRoot,
@@ -183,7 +228,8 @@ internal sealed class TranslateGemmaTranslationService :
         TimeSpan requestTimeout,
         HttpMessageHandler? handler = null,
         Func<TranslateGemmaExecutionBackend>? backendResolver = null,
-        TranslateGemmaModelPin? modelPin = null)
+        TranslateGemmaModelPin? modelPin = null,
+        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ollamaModelsRoot);
@@ -197,7 +243,13 @@ internal sealed class TranslateGemmaTranslationService :
             throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         }
 
+        if (!Enum.IsDefined(vulkanCoopmat))
+        {
+            throw new ArgumentOutOfRangeException(nameof(vulkanCoopmat));
+        }
+
         _modelPin = modelPin ?? TranslateGemmaModelPin.Default;
+        _vulkanCoopmat = vulkanCoopmat;
         _modelRoot = Path.GetFullPath(modelRoot);
         _ollamaModelsRoot = Path.GetFullPath(ollamaModelsRoot);
         _startupTimeout = startupTimeout;
@@ -245,7 +297,7 @@ internal sealed class TranslateGemmaTranslationService :
     internal TranslateGemmaExecutionBackend? ActiveBackend => _activeBackend;
 
     internal string RequestedModelIdentity =>
-        _modelPin.IdentityFor(ResolveRequestedBackend());
+        ModelIdentityFor(ResolveRequestedBackend());
 
     internal static TranslateGemmaExecutionBackend ResolveBackend(string? settingsValue)
     {
@@ -288,12 +340,44 @@ internal sealed class TranslateGemmaTranslationService :
             $"TranslateGemma не поддерживает model identity {modelIdentity}.");
     }
 
-    internal static string GetModelIdentity(TranslateGemmaExecutionBackend backend) => backend switch
+    /// <summary>
+    /// Maps a request identity to the backend of this instance. Unlike
+    /// <see cref="ResolveBackendIdentity"/>, it accepts only what this
+    /// instance itself reports: a request built for another quantization or
+    /// numeric path fails here instead of later as an identity mismatch.
+    /// </summary>
+    internal TranslateGemmaExecutionBackend ResolveRequestBackend(string modelIdentity)
     {
-        TranslateGemmaExecutionBackend.Cpu => ModelIdentity,
-        TranslateGemmaExecutionBackend.Vulkan => VulkanModelIdentity,
-        _ => throw new ArgumentOutOfRangeException(nameof(backend), backend, null)
-    };
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelIdentity);
+        foreach (TranslateGemmaExecutionBackend backend in Enum.GetValues<TranslateGemmaExecutionBackend>())
+        {
+            if (string.Equals(modelIdentity, ModelIdentityFor(backend), StringComparison.Ordinal))
+            {
+                return backend;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"TranslateGemma не поддерживает model identity {modelIdentity}.");
+    }
+
+    internal static string GetModelIdentity(TranslateGemmaExecutionBackend backend) =>
+        RuntimeIdentity(TranslateGemmaModelPin.Default, backend, ShippedVulkanCoopmat);
+
+    internal static string RuntimeIdentity(
+        TranslateGemmaModelPin modelPin,
+        TranslateGemmaExecutionBackend backend,
+        VulkanCoopmat vulkanCoopmat)
+    {
+        ArgumentNullException.ThrowIfNull(modelPin);
+        string identity = modelPin.IdentityFor(backend);
+        // Only the Vulkan runner reads the variable; the CPU identity must
+        // stay comparable across both settings.
+        return backend == TranslateGemmaExecutionBackend.Vulkan &&
+               vulkanCoopmat == VulkanCoopmat.Disabled
+            ? identity + NoCoopmatIdentitySuffix
+            : identity;
+    }
 
     internal static string GetEngineLabel(TranslateGemmaExecutionBackend backend) => backend switch
     {
@@ -316,7 +400,7 @@ internal sealed class TranslateGemmaTranslationService :
         _activeBackend == backend &&
         string.Equals(
             _activeModelIdentity,
-            _modelPin.IdentityFor(backend),
+            ModelIdentityFor(backend),
             StringComparison.Ordinal);
 
     private void EnsureActiveBackend(
@@ -344,7 +428,7 @@ internal sealed class TranslateGemmaTranslationService :
     {
         ArgumentNullException.ThrowIfNull(request);
         return WarmUpAsync(
-            ResolveBackendIdentity(request.ModelIdentity),
+            ResolveRequestBackend(request.ModelIdentity),
             cancellationToken);
     }
 
@@ -396,7 +480,7 @@ internal sealed class TranslateGemmaTranslationService :
                     await WaitForHealthAsync(startup.Token);
                     await WaitForStartupEvidenceAsync(backend, startup.Token);
                     _activeBackend = backend;
-                    _activeModelIdentity = _modelPin.IdentityFor(backend);
+                    _activeModelIdentity = ModelIdentityFor(backend);
                 }
                 catch (OperationCanceledException cancellationFailure)
                     when (cancellationToken.IsCancellationRequested)
@@ -452,7 +536,7 @@ internal sealed class TranslateGemmaTranslationService :
     {
         string source = NormalizeSource(phrase);
         TranslateGemmaExecutionBackend backend = ResolveRequestedBackend();
-        string modelIdentity = _modelPin.IdentityFor(backend);
+        string modelIdentity = ModelIdentityFor(backend);
         await WarmUpAsync(backend, cancellationToken);
 
         await _requestLock.WaitAsync(cancellationToken);
@@ -516,8 +600,8 @@ internal sealed class TranslateGemmaTranslationService :
     {
         ArgumentNullException.ThrowIfNull(request);
         TranslateGemmaExecutionBackend backend =
-            ResolveBackendIdentity(request.ModelIdentity);
-        string modelIdentity = _modelPin.IdentityFor(backend);
+            ResolveRequestBackend(request.ModelIdentity);
+        string modelIdentity = ModelIdentityFor(backend);
 
         if (!string.Equals(request.PromptVersion, PromptIdentity, StringComparison.Ordinal))
         {
@@ -1715,8 +1799,14 @@ internal sealed class TranslateGemmaTranslationService :
         string modelPath,
         int port,
         string apiKey,
-        TranslateGemmaExecutionBackend backend = TranslateGemmaExecutionBackend.Cpu)
+        TranslateGemmaExecutionBackend backend = TranslateGemmaExecutionBackend.Cpu,
+        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat)
     {
+        if (!Enum.IsDefined(vulkanCoopmat))
+        {
+            throw new ArgumentOutOfRangeException(nameof(vulkanCoopmat));
+        }
+
         ProcessStartInfo startInfo = new(executable)
         {
             WorkingDirectory = workingDirectory,
@@ -1754,6 +1844,23 @@ internal sealed class TranslateGemmaTranslationService :
                 startInfo.ArgumentList.Add("off");
                 startInfo.ArgumentList.Add("-lv");
                 startInfo.ArgumentList.Add("4");
+                // ggml-vulkan disables KHR_coopmat when the variable exists
+                // with any value. It is set or removed explicitly so that an
+                // inherited environment can never move the numeric path away
+                // from the identity this runtime reports. The startup log
+                // cannot confirm the choice: b9632 registers its backends
+                // before -lv applies, so the device-capability line is never
+                // printed and both paths log identically. This launch
+                // environment is therefore the single source of truth.
+                if (vulkanCoopmat == VulkanCoopmat.Disabled)
+                {
+                    startInfo.Environment[DisableCoopmatEnvironmentVariable] = "1";
+                }
+                else
+                {
+                    startInfo.Environment.Remove(DisableCoopmatEnvironmentVariable);
+                }
+
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(backend), backend, null);
@@ -1880,7 +1987,8 @@ internal sealed class TranslateGemmaTranslationService :
                 artifacts.ModelPath,
                 port,
                 apiKey,
-                artifacts.Backend),
+                artifacts.Backend,
+                _vulkanCoopmat),
             EnableRaisingEvents = true
         };
 

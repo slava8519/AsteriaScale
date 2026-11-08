@@ -53,8 +53,12 @@ graph LR
   владеет отдельным `llama-server` b9632, слушающим только loopback с
   одноразовым API-ключом. Backend выбирается явно и является частью runtime/model
   identity: CPU использует закреплённую CPU-сборку с `--n-gpu-layers 0`, а
-  Vulkan — отдельную закреплённую сборку с `--device Vulkan0`, полным offload и
-  отключённым автоматическим fit. Успешный `/health` сам по себе не доказывает
+  Vulkan — отдельную закреплённую сборку с `--device Vulkan0`, полным offload,
+  отключённым автоматическим fit и `GGML_VK_DISABLE_COOPMAT=1`. Без последнего
+  cooperative-matrix-шейдеры делают текст зависимым от предыдущих запросов
+  процесса. Этот численный путь входит в Vulkan identity (`…-nocoopmat`), и
+  hover-пайплайн берёт identity запроса у экземпляра переводчика, а не из
+  константы. Успешный `/health` сам по себе не доказывает
   GPU-исполнение: Vulkan-путь дополнительно проверяет выбранный Vulkan0 device и полный
   offload `35/35`. Ошибка Vulkan не запускает CPU — основной словарный результат
   остаётся рабочим, а независимая строка деградирует явно.
@@ -248,7 +252,8 @@ graph LR
     Persistent SHA-LRU v7 включает исходное/effective-предложение, упорядоченную
     скрытую историю, род текущего говорящего, semantic plan, identity преобразования, proper names,
     model identity и prompt version; model identity включает выбранный
-    CPU/Vulkan backend и профиль offload, поэтому результаты разных runtime не
+    CPU/Vulkan backend, профиль offload и численный путь Vulkan (coopmat),
+    поэтому результаты разных runtime не
     пересекаются. Кэш сохраняет route (`Direct`, `ContextPostEdit`,
     `SenseConditioned`, `SenseRepair`) и точные source-группы, реально вошедшие
     в выбранный prompt. Финальные structural-loss, `Unresolved`/`Mixed`/`Conflict`

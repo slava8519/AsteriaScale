@@ -19,7 +19,9 @@ internal sealed record TranslationSuiteOptions(
     int? MaximumCases,
     int ShardIndex,
     int ShardCount,
-    TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null)
+    TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null,
+    TranslateGemmaTranslationService.VulkanCoopmat PhraseVulkanCoopmat =
+        TranslateGemmaTranslationService.ShippedVulkanCoopmat)
 {
     internal const string Usage =
         "Usage: --benchmark-only --translation-suite <dataset.jsonl> " +
@@ -27,7 +29,8 @@ internal sealed record TranslationSuiteOptions(
         "--phrase-backend cpu|vulkan --ranker-cpu-model " +
         "glossbert|sandwich|consec --translation-output <output.jsonl> " +
         "--translation-report <report.json> [--max-cases <N>] " +
-        "[--shard <index>/<count>] [--phrase-quant q6_k]";
+        "[--shard <index>/<count>] [--phrase-quant q6_k] " +
+        "[--phrase-coopmat on|off]";
 
     internal static TranslationSuiteOptions Parse(
         IReadOnlyList<string> arguments,
@@ -56,6 +59,7 @@ internal sealed record TranslationSuiteOptions(
         int shardCount = 1;
         bool shardSeen = false;
         TranslateGemmaTranslationService.TranslateGemmaModelPin? phraseModelPin = null;
+        TranslateGemmaTranslationService.VulkanCoopmat? phraseVulkanCoopmat = null;
 
         for (int index = optionIndex + 3; index < arguments.Count; index++)
         {
@@ -168,6 +172,16 @@ internal sealed record TranslationSuiteOptions(
                     phraseModelPin = AlternativeModelPins.Resolve(value);
                     break;
 
+                case "--phrase-coopmat":
+                    RequireUnset(phraseVulkanCoopmat, option);
+                    phraseVulkanCoopmat = value.ToLowerInvariant() switch
+                    {
+                        "on" => TranslateGemmaTranslationService.VulkanCoopmat.Enabled,
+                        "off" => TranslateGemmaTranslationService.VulkanCoopmat.Disabled,
+                        _ => throw new InvalidOperationException(Usage)
+                    };
+                    break;
+
                 default:
                     throw new InvalidOperationException(
                         $"Неизвестный параметр '{option}'. {Usage}");
@@ -188,6 +202,18 @@ internal sealed record TranslationSuiteOptions(
         {
             throw new InvalidOperationException(
                 "--phrase-quant поддерживается только профилем direct. " + Usage);
+        }
+
+        // Only the Vulkan runner reads GGML_VK_DISABLE_COOPMAT. On the CPU
+        // backend the switch would change nothing while the run claimed a
+        // variant, which is defect C1 again. Both profiles accept it: the
+        // smart lane passes the same translator instance into the hover
+        // pipeline, and the pipeline takes its request identity from it.
+        if (phraseVulkanCoopmat is not null &&
+            phraseBackend != TranslateGemmaExecutionBackend.Vulkan)
+        {
+            throw new InvalidOperationException(
+                "--phrase-coopmat поддерживается только с --phrase-backend vulkan. " + Usage);
         }
 
         RequireExtension(datasetPath, ".jsonl", "dataset");
@@ -216,7 +242,8 @@ internal sealed record TranslationSuiteOptions(
             maximumCases,
             shardIndex,
             shardCount,
-            phraseModelPin);
+            phraseModelPin,
+            phraseVulkanCoopmat ?? TranslateGemmaTranslationService.ShippedVulkanCoopmat);
     }
 
     internal string ProfileId => Profile == TranslationSuiteProfile.Direct

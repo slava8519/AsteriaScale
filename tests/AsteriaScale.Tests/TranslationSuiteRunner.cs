@@ -1023,12 +1023,11 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
     internal DirectTranslationSuiteSystem(TranslationSuiteOptions options)
     {
         _options = options;
-        _translator = options.PhraseModelPin is { } pin
-            ? new TranslateGemmaTranslationService(
-                pin,
-                backendResolver: () => options.PhraseBackend)
-            : new TranslateGemmaTranslationService(
-                backendResolver: () => options.PhraseBackend);
+        _translator = new TranslateGemmaTranslationService(
+            options.PhraseModelPin ??
+                TranslateGemmaTranslationService.TranslateGemmaModelPin.Default,
+            backendResolver: () => options.PhraseBackend,
+            vulkanCoopmat: options.PhraseVulkanCoopmat);
     }
 
     public Task PrepareAsync(CancellationToken cancellationToken) =>
@@ -1061,7 +1060,7 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
         cancellationToken.ThrowIfCancellationRequested();
         return new TranslationSuiteSystemProvenance(
             // Read from the instance, not the shipped constant: an alternative
-            // quantization must name itself in the report.
+            // quantization or Vulkan numeric path must name itself.
             _translator.ModelIdentityFor(_options.PhraseBackend),
             TranslateGemmaTranslationService.DirectPromptIdentity,
             RankerModelVersion: null,
@@ -1141,8 +1140,13 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 Path.Combine(_isolatedRoot, "ranker-decisions.json"));
             phraseCache = new SmartPhraseTranslationCache(
                 Path.Combine(_isolatedRoot, "phrase-translations.json"));
+            // The hover pipeline takes its request identity from this
+            // instance, so a measured Vulkan variant reaches the server and
+            // the identity guard in the production code path unchanged.
             translator = new TranslateGemmaTranslationService(
-                backendResolver: () => options.PhraseBackend);
+                TranslateGemmaTranslationService.TranslateGemmaModelPin.Default,
+                backendResolver: () => options.PhraseBackend,
+                vulkanCoopmat: options.PhraseVulkanCoopmat);
             var settings = new AppSettings
             {
                 SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
@@ -1357,7 +1361,7 @@ internal sealed class SmartTranslationSuiteSystem : ITranslationSuiteSystem
                 modelVersion,
                 cancellationToken);
         return new TranslationSuiteSystemProvenance(
-            TranslateGemmaTranslationService.GetModelIdentity(_options.PhraseBackend),
+            _translator.ModelIdentityFor(_options.PhraseBackend),
             TranslateGemmaTranslationService.PromptIdentity,
             modelVersion,
             GlossBertRankerProvider.Cpu.ToString(),

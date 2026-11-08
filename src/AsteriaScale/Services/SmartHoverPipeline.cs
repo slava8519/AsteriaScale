@@ -907,7 +907,9 @@ internal sealed class SmartHoverPipeline : IDisposable
                 .Concat(scaffoldProperNames)
                 .Distinct(StringComparer.Ordinal)
                 .ToArray(),
-            TranslateGemmaTranslationService.GetModelIdentity(phraseBackend),
+            (_smartPhraseTranslator ?? throw new InvalidOperationException(
+                    "TranslateGemma phrase request without a translator."))
+                .ModelIdentityFor(phraseBackend),
             TranslateGemmaTranslationService.PromptIdentity)
         {
             PreviousContext = previousContext,

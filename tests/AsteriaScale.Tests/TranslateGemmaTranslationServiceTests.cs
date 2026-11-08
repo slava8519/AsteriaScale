@@ -17,6 +17,8 @@ internal static class TranslateGemmaTranslationServiceTests
         VerifyDeterministicCompletionRequest();
         VerifyCompletionResponseParsing();
         VerifyBackendServerStartInfo();
+        VerifyVulkanCoopmatStartInfo();
+        await VerifyVulkanCoopmatIdentityAsync(tempRoot);
         VerifyVulkanStartupEvidence();
         await VerifyArtifactValidationAsync(tempRoot);
         await VerifyRunnerArchiveResolutionAsync(tempRoot);
@@ -102,6 +104,14 @@ internal static class TranslateGemmaTranslationServiceTests
               TranslateGemmaTranslationService.ModelIdentity !=
               TranslateGemmaTranslationService.VulkanModelIdentity,
             "CPU and Vulkan execution identities are not distinct and pinned.");
+        // The coopmat-free path shipped on 8 November 2026 (E17 follow-up);
+        // the bump keeps every earlier stored run distinguishable.
+        Check(TranslateGemmaTranslationService.VulkanCoopmatModelIdentity.EndsWith(
+                  "/llama.cpp-b9632-vulkan-full",
+                  StringComparison.Ordinal) &&
+              TranslateGemmaTranslationService.VulkanModelIdentity ==
+              TranslateGemmaTranslationService.VulkanCoopmatModelIdentity + "-nocoopmat",
+            "The shipped Vulkan identity no longer names the coopmat-free numeric path.");
         Check(TranslateGemmaTranslationService.ResolveBackend("cpu") ==
                   TranslateGemmaExecutionBackend.Cpu &&
               TranslateGemmaTranslationService.ResolveBackend(null) ==
@@ -163,7 +173,7 @@ internal static class TranslateGemmaTranslationServiceTests
               shipped.IdentityFor(TranslateGemmaExecutionBackend.Cpu) ==
               TranslateGemmaTranslationService.ModelIdentity &&
               shipped.IdentityFor(TranslateGemmaExecutionBackend.Vulkan) ==
-              TranslateGemmaTranslationService.VulkanModelIdentity,
+              TranslateGemmaTranslationService.VulkanCoopmatModelIdentity,
             "The default model pin drifted from the shipped constants.");
 
         TranslateGemmaTranslationService.TranslateGemmaModelPin alternative =
@@ -1582,6 +1592,160 @@ internal static class TranslateGemmaTranslationServiceTests
             "The Vulkan server is not pinned to full Vulkan0 offload without auto-fit.");
     }
 
+    /// <summary>
+    /// Audit E17 follow-up. The coopmat switch must reach llama-server as the
+    /// one environment variable ggml-vulkan reads, change nothing else in the
+    /// launch, and never leak in from the parent process unasked.
+    /// </summary>
+    private static void VerifyVulkanCoopmatStartInfo()
+    {
+        const string variable = TranslateGemmaTranslationService.DisableCoopmatEnvironmentVariable;
+        Check(variable == "GGML_VK_DISABLE_COOPMAT" &&
+              TranslateGemmaTranslationService.ShippedVulkanCoopmat ==
+              TranslateGemmaTranslationService.VulkanCoopmat.Disabled,
+            "The coopmat variable name or the shipped Vulkan numeric path changed " +
+            "without a measured A/B and a new identity.");
+
+        // Production launches without naming the mode: the default itself must
+        // carry the variable, or the shipped identity would describe a path
+        // the runner never took.
+        ProcessStartInfo production = TranslateGemmaTranslationService.CreateServerStartInfo(
+            @"C:\runtime\llama-server.exe",
+            @"C:\runtime",
+            @"C:\models\translate gemma.gguf",
+            43126,
+            "production-secret",
+            TranslateGemmaExecutionBackend.Vulkan);
+        Check(production.Environment.TryGetValue(variable, out string? shippedValue) &&
+              shippedValue == "1",
+            "The production Vulkan launch runs the coopmat path its identity disowns.");
+
+        ProcessStartInfo Create(
+            TranslateGemmaExecutionBackend backend,
+            TranslateGemmaTranslationService.VulkanCoopmat coopmat) =>
+            TranslateGemmaTranslationService.CreateServerStartInfo(
+                @"C:\runtime\llama-server.exe",
+                @"C:\runtime",
+                @"C:\models\translate gemma.gguf",
+                43125,
+                "coopmat-secret",
+                backend,
+                coopmat);
+
+        string? inherited = Environment.GetEnvironmentVariable(variable);
+        try
+        {
+            // A parent shell that exported the variable must not turn the
+            // shipped runtime into the variant behind its back.
+            Environment.SetEnvironmentVariable(variable, "1");
+            ProcessStartInfo enabled = Create(
+                TranslateGemmaExecutionBackend.Vulkan,
+                TranslateGemmaTranslationService.VulkanCoopmat.Enabled);
+            ProcessStartInfo disabled = Create(
+                TranslateGemmaExecutionBackend.Vulkan,
+                TranslateGemmaTranslationService.VulkanCoopmat.Disabled);
+            Check(!enabled.Environment.ContainsKey(variable),
+                "An inherited GGML_VK_DISABLE_COOPMAT reached the coopmat-enabled runtime.");
+            Check(disabled.Environment.TryGetValue(variable, out string? value) && value == "1",
+                "The coopmat-disabled runtime did not pass GGML_VK_DISABLE_COOPMAT=1.");
+            Check(enabled.ArgumentList.SequenceEqual(disabled.ArgumentList, StringComparer.Ordinal),
+                "The coopmat switch changed a llama-server argument, not only the environment.");
+
+            ProcessStartInfo cpuEnabled = Create(
+                TranslateGemmaExecutionBackend.Cpu,
+                TranslateGemmaTranslationService.VulkanCoopmat.Enabled);
+            ProcessStartInfo cpuDisabled = Create(
+                TranslateGemmaExecutionBackend.Cpu,
+                TranslateGemmaTranslationService.VulkanCoopmat.Disabled);
+            Check(cpuEnabled.ArgumentList.SequenceEqual(cpuDisabled.ArgumentList, StringComparer.Ordinal),
+                "The Vulkan-only coopmat switch changed the CPU launch.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, inherited);
+        }
+
+        CheckThrows<ArgumentOutOfRangeException>(
+            () => Create(
+                TranslateGemmaExecutionBackend.Vulkan,
+                (TranslateGemmaTranslationService.VulkanCoopmat)42),
+            "An undefined coopmat mode silently selected a numeric path.");
+    }
+
+    /// <summary>
+    /// The coopmat choice renames only the Vulkan identity, and an instance
+    /// accepts only requests that carry its own identity. Otherwise a
+    /// pipeline built for one numeric path could receive text produced on the
+    /// other. Both modes are named explicitly, so the test does not depend on
+    /// which one ships.
+    /// </summary>
+    private static async Task VerifyVulkanCoopmatIdentityAsync(string tempRoot)
+    {
+        string modelRoot = Path.Combine(tempRoot, "translategemma-coopmat");
+        string ollamaRoot = Path.Combine(tempRoot, "translategemma-coopmat-ollama");
+        TranslateGemmaTranslationService Create(TranslateGemmaTranslationService.VulkanCoopmat? coopmat) =>
+            coopmat is { } mode
+                ? new(modelRoot, ollamaRoot, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1),
+                    vulkanCoopmat: mode)
+                : new(modelRoot, ollamaRoot, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        await using TranslateGemmaTranslationService shipped = Create(null);
+        await using TranslateGemmaTranslationService coopmat =
+            Create(TranslateGemmaTranslationService.VulkanCoopmat.Enabled);
+        await using TranslateGemmaTranslationService scalar =
+            Create(TranslateGemmaTranslationService.VulkanCoopmat.Disabled);
+
+        const string Base =
+            "google/translategemma-4b-it@10042cb0e6e7fdce748996a71dc3dc432a4e0c89" +
+            "/mradermacher-static-q4_K_M@35a7486e128b19642cdc72d7b91b21ba388aaf42:" +
+            TranslateGemmaTranslationService.ModelSha256;
+        string coopmatVulkan = coopmat.ModelIdentityFor(TranslateGemmaExecutionBackend.Vulkan);
+        string scalarVulkan = scalar.ModelIdentityFor(TranslateGemmaExecutionBackend.Vulkan);
+        Check(coopmatVulkan == Base + "/llama.cpp-b9632-vulkan-full" &&
+              scalarVulkan == Base + "/llama.cpp-b9632-vulkan-full-nocoopmat" &&
+              coopmat.ModelIdentityFor(TranslateGemmaExecutionBackend.Cpu) ==
+              TranslateGemmaTranslationService.ModelIdentity &&
+              scalar.ModelIdentityFor(TranslateGemmaExecutionBackend.Cpu) ==
+              TranslateGemmaTranslationService.ModelIdentity,
+            "The coopmat choice must rename exactly the Vulkan identity.");
+        Check(shipped.VulkanCoopmatMode == TranslateGemmaTranslationService.ShippedVulkanCoopmat &&
+              shipped.ModelIdentityFor(TranslateGemmaExecutionBackend.Vulkan) ==
+              TranslateGemmaTranslationService.VulkanModelIdentity &&
+              TranslateGemmaTranslationService.VulkanModelIdentity == scalarVulkan &&
+              TranslateGemmaTranslationService.GetModelIdentity(TranslateGemmaExecutionBackend.Vulkan) ==
+              scalarVulkan,
+            "The shipped service does not report the coopmat-free identity it runs.");
+        // SmartPhraseTranslationCache drops entries whose identity exceeds
+        // 256 characters, which would turn every cache hit into a miss.
+        Check(scalarVulkan.Length <= 256,
+            "The Vulkan identity no longer fits the phrase cache's identity bound.");
+
+        Check(scalar.ResolveRequestBackend(scalarVulkan) == TranslateGemmaExecutionBackend.Vulkan &&
+              coopmat.ResolveRequestBackend(coopmatVulkan) == TranslateGemmaExecutionBackend.Vulkan &&
+              scalar.ResolveRequestBackend(TranslateGemmaTranslationService.ModelIdentity) ==
+              TranslateGemmaExecutionBackend.Cpu,
+            "A service rejected a request that carries its own identity.");
+        CheckThrows<InvalidOperationException>(
+            () => scalar.ResolveRequestBackend(coopmatVulkan),
+            "The coopmat-free runtime accepted a request built for the coopmat path.");
+        CheckThrows<InvalidOperationException>(
+            () => coopmat.ResolveRequestBackend(scalarVulkan),
+            "The coopmat runtime accepted a request built for the coopmat-free path.");
+        await CheckThrowsAsync<InvalidOperationException>(
+            () => ((ISmartPhraseTranslator)coopmat).PrepareAsync(
+                new SmartPhraseTranslationRequest(
+                    "Hello there.",
+                    "Hello there.",
+                    SmartPhraseIdiomRewriter.NoTransformIdentity,
+                    [],
+                    scalarVulkan,
+                    TranslateGemmaTranslationService.PromptIdentity),
+                CancellationToken.None),
+            "A mismatched request reached runtime warm-up instead of failing on identity.");
+        Check(((ISmartPhraseTranslator)coopmat).ModelIdentityFor(
+                  TranslateGemmaExecutionBackend.Vulkan) == coopmatVulkan,
+            "The pipeline-facing identity differs from the runtime's own identity.");
+    }
+
     private static void VerifyVulkanStartupEvidence()
     {
         TranslateGemmaTranslationService.VulkanStartupEvidenceTracker accepted = new();
@@ -1605,6 +1769,16 @@ internal static class TranslateGemmaTranslationServiceTests
         Check(!wrongDevice.IsComplete &&
               wrongDevice.DescribeMissing().Contains("Vulkan0", StringComparison.Ordinal),
             "A different Vulkan device satisfied the pinned Vulkan0 contract.");
+
+        // Verbatim b9632 lines, captured with and without
+        // GGML_VK_DISABLE_COOPMAT=1: both numeric paths log identically, so
+        // the same evidence must accept either one.
+        TranslateGemmaTranslationService.VulkanStartupEvidenceTracker b9632 = new();
+        b9632.Observe("0.00.301.622 I llama_prepare_model_devices: using device Vulkan0 " +
+                      "(AMD Radeon(TM) 860M Graphics) (unknown id) - 17345 MiB free");
+        b9632.Observe("0.00.899.308 I load_tensors: offloaded 35/35 layers to GPU");
+        Check(b9632.IsComplete,
+            "The startup evidence rejected the real b9632 Vulkan log.");
     }
 
     private static async Task VerifyArtifactValidationAsync(string tempRoot)

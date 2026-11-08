@@ -21,6 +21,7 @@ internal static class TestCommandLine
             "--ocr-image",
             "--output",
             "--phrase-backend",
+            "--phrase-coopmat",
             "--phrase-quant",
             "--profile",
             "--ranker-benchmark",
