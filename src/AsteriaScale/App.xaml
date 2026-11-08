@@ -36,6 +36,15 @@
         <SolidColorBrush x:Key="PositiveBorderBrush" Color="#CFDCC6" />
         <SolidColorBrush x:Key="StepBadgeBrush" Color="#E8DFCC" />
         <SolidColorBrush x:Key="StepBadgeTextBrush" Color="#7E6142" />
+        <!-- A recessed tone between the window and the card backgrounds, so
+             grouped sub-panels read as wells instead of floating boxes. -->
+        <SolidColorBrush x:Key="SurfaceSunkenBrush" Color="#F6F0E5" />
+        <SolidColorBrush x:Key="PlaceholderTextBrush" Color="#ADA287" />
+        <SolidColorBrush x:Key="BodyTextBrush" Color="#5E5644" />
+        <SolidColorBrush x:Key="PositiveTextBrush" Color="#4E5A46" />
+        <SolidColorBrush x:Key="PositiveMutedTextBrush" Color="#6F7A66" />
+        <SolidColorBrush x:Key="StatusChipBrush" Color="#E2E9DA" />
+        <SolidColorBrush x:Key="QuoteRuleBrush" Color="#DCCDAF" />
 
         <Style TargetType="Window">
             <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
@@ -232,7 +241,16 @@
                                               Content="{TemplateBinding SelectionBoxItem}"
                                               ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                               ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
-                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                                              TextElement.Foreground="{TemplateBinding Foreground}">
+                                <!-- A narrow combo used to clip its text under the
+                                     chevron mid-glyph; an ellipsis at least shows
+                                     that the open list holds the full name. -->
+                                <ContentPresenter.Resources>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                    </Style>
+                                </ContentPresenter.Resources>
+                            </ContentPresenter>
 
                             <Border x:Name="ChevronPlate" Width="30" Height="28" Margin="0,0,5,0"
                                     HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -383,6 +401,238 @@
                                 <Setter Property="Cursor" Value="Arrow" />
                             </Trigger>
                         </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ============================================================
+             MAIN WINDOW BUILDING BLOCKS
+             Keyed, so the overlays and the dictionary window keep their
+             current look; only the main window opts in. The one implicit
+             style is ToolTip: the system tooltip is cold grey on this palette.
+             ============================================================ -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+            <Setter Property="Padding" Value="9,6" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="StepBadgeStyle" TargetType="ContentControl">
+            <Setter Property="Width" Value="24" />
+            <Setter Property="Height" Value="24" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{StaticResource StepBadgeTextBrush}" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="IsTabStop" Value="False" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Border Background="{StaticResource StepBadgeBrush}" CornerRadius="12">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CardTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+            <Setter Property="Margin" Value="2,0,0,6" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <Style x:Key="HintTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="{StaticResource SecondaryTextBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style x:Key="InsetPanelStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SurfaceSunkenBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="14" />
+        </Style>
+
+        <Style x:Key="PositivePanelStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PositiveTintBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource PositiveBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="14,12" />
+        </Style>
+
+        <Style x:Key="SmallButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="IconButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+
+        <!-- The DPI action is disabled whenever there is nothing to do, and then
+             its caption ("Не требуется", "Уже настроено") is a status, not a
+             command. A greyed-out button made it look broken, so the disabled
+             state is drawn as a quiet status chip instead. -->
+        <Style x:Key="StatusActionButtonStyle" TargetType="Button" BasedOn="{StaticResource SmallButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="9" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.8" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource StatusChipBrush}" />
+                                <Setter TargetName="Root" Property="BorderBrush" Value="Transparent" />
+                                <Setter TargetName="Root" Property="CornerRadius" Value="999" />
+                                <Setter TargetName="Root" Property="Padding" Value="10,4" />
+                                <Setter Property="Foreground" Value="{StaticResource PositiveMutedTextBrush}" />
+                                <Setter Property="FontWeight" Value="Normal" />
+                                <Setter Property="FontSize" Value="11.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Rounded field with a placeholder taken from Tag. TextBoxBase applies
+             Padding to the text itself, so the template must not apply it again;
+             the placeholder mirrors it (+2 for the caret gutter) to line up. -->
+        <Style x:Key="FieldTextBoxStyle" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="9" SnapsToDevicePixels="True">
+                            <Grid>
+                                <TextBlock x:Name="Placeholder"
+                                           Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                           Margin="{TemplateBinding Padding}" Padding="2,0,0,0"
+                                           VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                           Foreground="{StaticResource PlaceholderTextBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           IsHitTestVisible="False" Visibility="Collapsed" />
+                                <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              HorizontalScrollBarVisibility="Hidden"
+                                              VerticalScrollBarVisibility="Hidden" />
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Text" Value="">
+                                <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#CBBE9F" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Root" Property="Opacity" Value="0.45" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- On/off for a whole feature. A plain checkbox at the far edge of a
+             header read as unrelated to the section; a switch placed right
+             after the title says what it turns on. -->
+        <Style x:Key="SwitchStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource PrimaryTextBrush}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid x:Name="SwitchRoot" Background="Transparent" MinHeight="22" SnapsToDevicePixels="True">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="Track" Width="34" Height="20" CornerRadius="10"
+                                    VerticalAlignment="Center"
+                                    Background="#E6DDCB" BorderBrush="#CDBFA4" BorderThickness="1">
+                                <Ellipse x:Name="Knob" Width="14" Height="14" Margin="2,0"
+                                         HorizontalAlignment="Left" VerticalAlignment="Center"
+                                         Fill="White" Stroke="#CDBFA4" StrokeThickness="1" />
+                            </Border>
+                            <ContentPresenter x:Name="Label" Grid.Column="1" Margin="8,0,0,0"
+                                              VerticalAlignment="Center" RecognizesAccessKey="True" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Content" Value="{x:Null}">
+                                <Setter TargetName="Label" Property="Margin" Value="0" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="Track" Property="BorderThickness" Value="2" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="Track" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                                <Setter TargetName="Knob" Property="Stroke" Value="{x:Null}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="SwitchRoot" Property="Opacity" Value="0.4" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Lists that sit inside a scrolling column. Without an inner
+             ScrollViewer the list grows with its items and the mouse wheel
+             reaches the column; a nested viewer swallowed the wheel even when
+             the list itself had nothing to scroll. -->
+        <Style x:Key="PlainListBoxStyle" TargetType="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <ItemsPresenter />
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
