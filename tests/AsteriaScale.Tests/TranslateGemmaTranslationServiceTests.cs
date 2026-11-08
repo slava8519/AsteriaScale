@@ -16,6 +16,7 @@ internal static class TranslateGemmaTranslationServiceTests
         await VerifySenseGateCoordinatorAsync();
         await VerifyDirectPreviewAsync();
         VerifyDeterministicCompletionRequest();
+        await VerifyCachePromptSwitchAsync(tempRoot);
         VerifyCompletionResponseParsing();
         VerifyBackendServerStartInfo();
         VerifyVulkanCoopmatStartInfo();
@@ -1627,6 +1628,39 @@ internal static class TranslateGemmaTranslationServiceTests
         Check(stop.MoveNext() && stop.Current.GetString() == "<end_of_turn>" &&
               !stop.MoveNext(),
             "The generation stop marker differs from the Ollama model parameters.");
+
+        // The E17 diagnostic switch changes exactly one field; every other
+        // decoding parameter must stay byte-identical so the arms differ only
+        // in KV prefix reuse.
+        string uncachedJson = TranslateGemmaTranslationService.BuildCompletionRequestJson(
+            "Hello!",
+            cachePrompt: false);
+        using JsonDocument uncached = JsonDocument.Parse(uncachedJson);
+        Check(!uncached.RootElement.GetProperty("cache_prompt").GetBoolean(),
+            "The diagnostic request still asks the server to reuse the KV prefix.");
+        Check(uncachedJson.Replace("\"cache_prompt\":false", "\"cache_prompt\":true",
+                  StringComparison.Ordinal) == requestJson,
+            "Disabling the prompt cache changed another decoding parameter.");
+    }
+
+    private static async Task VerifyCachePromptSwitchAsync(string tempRoot)
+    {
+        string modelRoot = Path.Combine(tempRoot, "translategemma-cache-prompt");
+        string ollamaRoot = Path.Combine(tempRoot, "translategemma-cache-prompt-ollama");
+        await using TranslateGemmaTranslationService shipped = new(
+            modelRoot,
+            ollamaRoot,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1));
+        await using TranslateGemmaTranslationService diagnostic = new(
+            modelRoot,
+            ollamaRoot,
+            TimeSpan.FromSeconds(1),
+            TimeSpan.FromSeconds(1),
+            cachePrompt: false);
+        Check(shipped.CachePrompt && !diagnostic.CachePrompt,
+            "The production default must reuse the KV prefix; only the explicit " +
+            "diagnostic switch may turn it off.");
     }
 
     private static void VerifyCompletionResponseParsing()

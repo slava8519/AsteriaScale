@@ -174,6 +174,7 @@ internal sealed class TranslateGemmaTranslationService :
     private string? _runtimeDirectory;
     private readonly TranslateGemmaModelPin _modelPin;
     private readonly VulkanCoopmat _vulkanCoopmat;
+    private readonly bool _cachePrompt;
     private TranslateGemmaExecutionBackend? _activeBackend;
     private string? _activeModelIdentity;
     private VulkanStartupEvidenceTracker? _startupEvidence;
@@ -194,12 +195,16 @@ internal sealed class TranslateGemmaTranslationService :
     /// Benchmark entry point for measuring an alternative quantization or
     /// Vulkan numeric path. The pin is still enforced, and the reported
     /// identity names both choices, so a run cannot be mistaken for the
-    /// shipped runtime.
+    /// shipped runtime. <paramref name="cachePrompt"/> = false makes every
+    /// completion recompute its whole prompt instead of reusing the server's
+    /// KV prefix; it exists to measure order dependence (audit E17), which it
+    /// showed the cache does not cause.
     /// </summary>
     internal TranslateGemmaTranslationService(
         TranslateGemmaModelPin modelPin,
         Func<TranslateGemmaExecutionBackend>? backendResolver = null,
-        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat)
+        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat,
+        bool cachePrompt = true)
         : this(
             ResolveDefaultModelRoot(),
             ResolveDefaultOllamaModelsRoot(),
@@ -207,7 +212,8 @@ internal sealed class TranslateGemmaTranslationService :
             DefaultRequestTimeout,
             backendResolver: backendResolver,
             modelPin: modelPin,
-            vulkanCoopmat: vulkanCoopmat)
+            vulkanCoopmat: vulkanCoopmat,
+            cachePrompt: cachePrompt)
     {
     }
 
@@ -221,6 +227,8 @@ internal sealed class TranslateGemmaTranslationService :
 
     internal VulkanCoopmat VulkanCoopmatMode => _vulkanCoopmat;
 
+    internal bool CachePrompt => _cachePrompt;
+
     internal TranslateGemmaTranslationService(
         string modelRoot,
         string ollamaModelsRoot,
@@ -229,7 +237,8 @@ internal sealed class TranslateGemmaTranslationService :
         HttpMessageHandler? handler = null,
         Func<TranslateGemmaExecutionBackend>? backendResolver = null,
         TranslateGemmaModelPin? modelPin = null,
-        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat)
+        VulkanCoopmat vulkanCoopmat = ShippedVulkanCoopmat,
+        bool cachePrompt = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ollamaModelsRoot);
@@ -250,6 +259,7 @@ internal sealed class TranslateGemmaTranslationService :
 
         _modelPin = modelPin ?? TranslateGemmaModelPin.Default;
         _vulkanCoopmat = vulkanCoopmat;
+        _cachePrompt = cachePrompt;
         _modelRoot = Path.GetFullPath(modelRoot);
         _ollamaModelsRoot = Path.GetFullPath(ollamaModelsRoot);
         _startupTimeout = startupTimeout;
@@ -548,7 +558,7 @@ internal sealed class TranslateGemmaTranslationService :
                 throw new InvalidOperationException("TranslateGemma не прогрета.");
             string apiKey = _apiKey ??
                 throw new InvalidOperationException("TranslateGemma не получила ключ локального API.");
-            string requestJson = BuildCompletionRequestJson(source);
+            string requestJson = BuildCompletionRequestJson(source, _cachePrompt);
 
             using HttpRequestMessage request = new(
                 HttpMethod.Post,
@@ -1684,15 +1694,15 @@ internal sealed class TranslateGemmaTranslationService :
         return words is >= 1 and <= 3;
     }
 
-    internal static string BuildCompletionRequestJson(string phrase)
-        => BuildCompletionRequestJsonFromPrompt(BuildRawPrompt(phrase));
+    internal static string BuildCompletionRequestJson(string phrase, bool cachePrompt = true)
+        => BuildCompletionRequestJsonFromPrompt(BuildRawPrompt(phrase), cachePrompt);
 
     internal static string BuildPostEditRequestJson(
         SmartPhraseTranslationRequest request,
         string draft) =>
-        BuildCompletionRequestJsonFromPrompt(BuildPostEditRawPrompt(request, draft));
+        BuildCompletionRequestJsonFromPrompt(BuildPostEditRawPrompt(request, draft), cachePrompt: true);
 
-    private static string BuildCompletionRequestJsonFromPrompt(string prompt)
+    private static string BuildCompletionRequestJsonFromPrompt(string prompt, bool cachePrompt)
     {
         var payload = new
         {
@@ -1704,7 +1714,7 @@ internal sealed class TranslateGemmaTranslationService :
             min_p = 0.0,
             seed = 0,
             stream = false,
-            cache_prompt = true,
+            cache_prompt = cachePrompt,
             stop = new[] { "<end_of_turn>" }
         };
         return JsonSerializer.Serialize(payload);
@@ -1758,7 +1768,7 @@ internal sealed class TranslateGemmaTranslationService :
         string prompt,
         CancellationToken cancellationToken)
     {
-        string requestJson = BuildCompletionRequestJsonFromPrompt(prompt);
+        string requestJson = BuildCompletionRequestJsonFromPrompt(prompt, _cachePrompt);
         using HttpRequestMessage request = new(
             HttpMethod.Post,
             new Uri(endpoint, "completion"));

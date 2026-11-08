@@ -1027,8 +1027,15 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
             options.PhraseModelPin ??
                 TranslateGemmaTranslationService.TranslateGemmaModelPin.Default,
             backendResolver: () => options.PhraseBackend,
-            vulkanCoopmat: options.PhraseVulkanCoopmat);
+            vulkanCoopmat: options.PhraseVulkanCoopmat,
+            cachePrompt: options.PhraseCachePrompt);
     }
+
+    internal static string ResolveEngineLabel(TranslationSuiteOptions options) =>
+        TranslateGemmaTranslationService.GetEngineLabel(options.PhraseBackend) +
+        (options.PhraseCachePrompt
+            ? string.Empty
+            : TranslationSuiteOptions.CachePromptOffEngineSuffix);
 
     public Task PrepareAsync(CancellationToken cancellationToken) =>
         _translator.WarmUpAsync(cancellationToken);
@@ -1050,7 +1057,7 @@ internal sealed class DirectTranslationSuiteSystem : ITranslationSuiteSystem
             translation,
             FromCache: false,
             Focus: null,
-            TranslateGemmaTranslationService.GetEngineLabel(_options.PhraseBackend));
+            ResolveEngineLabel(_options));
     }
 
     public async Task<TranslationSuiteSystemProvenance> CaptureProvenanceAsync(

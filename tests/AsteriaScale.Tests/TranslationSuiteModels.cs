@@ -22,7 +22,8 @@ internal sealed record TranslationSuiteOptions(
     TranslateGemmaTranslationService.TranslateGemmaModelPin? PhraseModelPin = null,
     string? SenseGateTracePath = null,
     TranslateGemmaTranslationService.VulkanCoopmat PhraseVulkanCoopmat =
-        TranslateGemmaTranslationService.ShippedVulkanCoopmat)
+        TranslateGemmaTranslationService.ShippedVulkanCoopmat,
+    bool PhraseCachePrompt = true)
 {
     internal const string Usage =
         "Usage: --benchmark-only --translation-suite <dataset.jsonl> " +
@@ -31,7 +32,14 @@ internal sealed record TranslationSuiteOptions(
         "glossbert|sandwich|consec --translation-output <output.jsonl> " +
         "--translation-report <report.json> [--max-cases <N>] " +
         "[--shard <index>/<count>] [--phrase-quant q6_k] " +
-        "[--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on|off]";
+        "[--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on|off] " +
+        "[--phrase-cache-prompt on|off]";
+
+    /// <summary>
+    /// Appended to the engine label of every output when the KV prefix cache
+    /// is off, so a diagnostic run can never be read as the production lane.
+    /// </summary>
+    internal const string CachePromptOffEngineSuffix = "  •  cache_prompt off";
 
     internal static TranslationSuiteOptions Parse(
         IReadOnlyList<string> arguments,
@@ -62,6 +70,7 @@ internal sealed record TranslationSuiteOptions(
         TranslateGemmaTranslationService.TranslateGemmaModelPin? phraseModelPin = null;
         string? senseGateTracePath = null;
         TranslateGemmaTranslationService.VulkanCoopmat? phraseVulkanCoopmat = null;
+        bool? phraseCachePrompt = null;
 
         for (int index = optionIndex + 3; index < arguments.Count; index++)
         {
@@ -179,6 +188,16 @@ internal sealed record TranslationSuiteOptions(
                     senseGateTracePath = value;
                     break;
 
+                case "--phrase-cache-prompt":
+                    RequireUnset(phraseCachePrompt, option);
+                    phraseCachePrompt = value.ToLowerInvariant() switch
+                    {
+                        "on" => true,
+                        "off" => false,
+                        _ => throw new InvalidOperationException(Usage)
+                    };
+                    break;
+
                 case "--phrase-coopmat":
                     RequireUnset(phraseVulkanCoopmat, option);
                     phraseVulkanCoopmat = value.ToLowerInvariant() switch
@@ -209,6 +228,15 @@ internal sealed record TranslationSuiteOptions(
         {
             throw new InvalidOperationException(
                 "--phrase-quant поддерживается только профилем direct. " + Usage);
+        }
+
+        // Same reason: the smart lane constructs its translator inside the
+        // hover pipeline with the production request, so the cache switch
+        // would not reach the server there.
+        if (phraseCachePrompt is not null && profile != TranslationSuiteProfile.Direct)
+        {
+            throw new InvalidOperationException(
+                "--phrase-cache-prompt поддерживается только профилем direct. " + Usage);
         }
 
         // The direct profile never runs the sense gate, so a trace there would
@@ -269,7 +297,8 @@ internal sealed record TranslationSuiteOptions(
             shardCount,
             phraseModelPin,
             traceFullPath,
-            phraseVulkanCoopmat ?? TranslateGemmaTranslationService.ShippedVulkanCoopmat);
+            phraseVulkanCoopmat ?? TranslateGemmaTranslationService.ShippedVulkanCoopmat,
+            phraseCachePrompt ?? true);
     }
 
     internal string ProfileId => Profile == TranslationSuiteProfile.Direct

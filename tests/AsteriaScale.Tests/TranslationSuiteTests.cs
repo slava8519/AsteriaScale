@@ -49,6 +49,7 @@ internal static class TranslationSuiteTests
 
         VerifyParserRejectsInvalidTails(dataset, worker, output, report);
         VerifyCoopmatOption(dataset, worker, output, report);
+        VerifyCachePromptOption(dataset, worker, output, report);
         await VerifySchemaRejectionsAsync(root);
 
         IReadOnlyList<TranslationSuiteCase> loaded =
@@ -460,7 +461,20 @@ internal static class TranslationSuiteTests
                  "--phrase-coopmat", "off"]),
             ("explicit coopmat default on cpu", () =>
                 [.. ValidTail().Select(value => value == "vulkan" ? "cpu" : value),
-                 "--phrase-coopmat", "on"])
+                 "--phrase-coopmat", "on"]),
+            ("unknown cache-prompt value", () =>
+                [.. ValidTail(), "--phrase-cache-prompt", "false"]),
+            ("duplicate cache-prompt", () =>
+                [.. ValidTail(), "--phrase-cache-prompt", "off",
+                 "--phrase-cache-prompt", "off"]),
+            // The smart lane builds its translator inside the hover pipeline
+            // with the production request, so the switch would not reach it.
+            ("cache-prompt on smart", () =>
+                [.. ValidTail().Select(value => value == "direct" ? "smart" : value),
+                 "--phrase-cache-prompt", "off"]),
+            ("explicit cache-prompt default on smart", () =>
+                [.. ValidTail().Select(value => value == "direct" ? "smart" : value),
+                 "--phrase-cache-prompt", "on"])
         ];
         foreach ((string name, Func<string[]> mutate) in invalid)
         {
@@ -521,6 +535,45 @@ internal static class TranslationSuiteTests
               Identity(TranslateGemmaTranslationService.ShippedVulkanCoopmat) ==
               TranslateGemmaTranslationService.VulkanModelIdentity,
             "A run on either coopmat path could report the other path's identity.");
+    }
+
+    private static void VerifyCachePromptOption(
+        string dataset,
+        string worker,
+        string output,
+        string report)
+    {
+        string[] DirectTail(params string[] extra) =>
+        [
+            "--benchmark-only", "--translation-suite", dataset, worker,
+            "--system-id", "fake", "--profile", "direct",
+            "--phrase-backend", "vulkan", "--ranker-cpu-model", "glossbert",
+            "--translation-output", output, "--translation-report", report,
+            .. extra
+        ];
+
+        TranslationSuiteOptions shipped = TranslationSuiteOptions.Parse(DirectTail(), 1);
+        TranslationSuiteOptions explicitOn = TranslationSuiteOptions.Parse(
+            DirectTail("--phrase-cache-prompt", "ON"),
+            1);
+        TranslationSuiteOptions off = TranslationSuiteOptions.Parse(
+            DirectTail("--phrase-cache-prompt", "off"),
+            1);
+        Check(shipped.PhraseCachePrompt && explicitOn.PhraseCachePrompt &&
+              !off.PhraseCachePrompt,
+            "The direct lane must default to the production prompt cache and " +
+            "turn it off only on an explicit --phrase-cache-prompt off.");
+
+        string shippedEngine = DirectTranslationSuiteSystem.ResolveEngineLabel(shipped);
+        string offEngine = DirectTranslationSuiteSystem.ResolveEngineLabel(off);
+        Check(shippedEngine == TranslateGemmaTranslationService.GetEngineLabel(
+                  TranslateGemmaExecutionBackend.Vulkan) &&
+              offEngine == shippedEngine + TranslationSuiteOptions.CachePromptOffEngineSuffix,
+            "A cache-off run must name itself in every output's engine label, and " +
+            "a production run must keep the shipped label.");
+        Check(TestCommandLine.FindUnknownOption(DirectTail("--phrase-cache-prompt", "off"))
+              is null,
+            "The suite-level option guard does not know --phrase-cache-prompt.");
     }
 
     private static async Task VerifySchemaRejectionsAsync(string root)
