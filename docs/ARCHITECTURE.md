@@ -9,7 +9,7 @@
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
 | `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: путь `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Основа будущей macOS-версии |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
-| `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT, SANDWiCH или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime |
+| `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI |
 | `scripts/` | Сборка, установка, запуск, генерация словарей (`build-dictionaries.py`) |
 | `assets/` | Данные: словари TSV.gz (`Dictionaries/`), морфословарь (`Morphology/`), таблица hook-кодов для Textractor (`TextHook/`), бенчмарк-наборы ранжировщика (`Ranker/`) и исторические наборы полного перевода (`Translation/`; их CLI-режимы удалены вместе с Qwen-конвейером) |
@@ -21,7 +21,7 @@
 graph LR
     A[AsteriaScale.exe<br/>WPF, трей] -->|конфиг v4 JSON| M[Magpie<br/>внешний движок]
     A -->|Windows AI| OCR[NPU OCR]
-    A -->|JSONL stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / SANDWiCH / ConSeC]
+    A -->|JSONL stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / ConSeC]
     A -->|HTTP loopback| T[llama-server b9632 CPU / Vulkan GPU<br/>TranslateGemma 4B: контекстная вторая строка]
     A -->|stdin/stdout UTF-16LE| X[TextractorCLI.exe x86/x64<br/>внешний, опциональный text-hook]
     X -->|attach -P pid: инжекция| G[процесс игры]
@@ -40,13 +40,15 @@ graph LR
   существование прежнего HWND: Win+D/Alt+Tab сохраняют масштабирование, но
   действительно headless-процесс после recovery grace не удерживает Magpie.
 - **RankerWorker** — дочерний процесс со строгим протоколом (см. «Протокол ranker-воркера» ниже).
-  Стабильный профиль по умолчанию — закреплённый GlossBERT; готовый dual-encoder
-  SANDWiCH и independent ConSeC доступны как явно выбираемые экспериментальные
-  CPU-профили. UI называет ConSeC `ConSeC — лучший для науки, CPU` по результату
-  открытого sentence-бенчмарка. Профиль модели и execution provider — разные
-  настройки: SANDWiCH и ConSeC не имеют NPU-варианта, поэтому их выбор явно
-  переводит ranker на CPU, а не маскирует fallback. Изоляция позволяет полностью
-  вернуть память модели при выгрузке.
+  Стабильный профиль по умолчанию — закреплённый GlossBERT; independent ConSeC
+  доступен как явно выбираемый экспериментальный CPU-профиль. UI называет ConSeC
+  `ConSeC — лучший для науки, CPU` по результату открытого sentence-бенчмарка.
+  Профиль модели и execution provider — разные настройки: у ConSeC нет
+  NPU-варианта, поэтому его выбор явно переводит ranker на CPU, а не маскирует
+  fallback. Профили SANDWiCH и GlossDeBERTa удалены 8 ноября 2026; сохранённое
+  значение `sandwich` или `deberta` в `settings.json` нормализуется к GlossBERT
+  без сброса файла. Изоляция позволяет полностью вернуть память модели при
+  выгрузке.
 - **TranslateGemma 4B** — выключенный по умолчанию экспериментальный переводчик
   текущего EN→RU-предложения во второй строке «Умного словаря». Он не меняет
   основной словарный результат или решение semantic ranker; отдельный
@@ -154,7 +156,7 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 | `ExecutionProvider` / `Device` | что воркер обязан сообщить; хост сверяет в `ValidateResponse` | `CPUExecutionProvider` / `CPU` | `VitisAIExecutionProvider` / `NPU` |
 | `EnrichedGlosses` | глоссы в обогащённом виде; форма входит в ключ кэша решений | да | нет |
 | `BiEncoderPrefilter` | разрешён конвейер `bi+cross` | да | нет |
-| `AlternativeModels` | разрешены DeBERTa, SANDWiCH, ConSeC | да | нет |
+| `AlternativeModels` | разрешены модели кроме GlossBERT (сейчас ConSeC) | да | нет |
 
 Хост сопоставляет `GlossBertRankerProvider` с признаками в
 `GlossBertDictionarySelectorService.cs`, воркер — `RankerProvider` в
@@ -187,7 +189,7 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 | Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |
 | Режим `Smart`, шаги 1–11 ниже | `SmartHoverPipeline.ResolveSmartHoverAsync` → `LocalDictionaryService`, `SmartDictionaryHeuristicRanker`, `SmartDictionarySenseResolver`, `SmartDictionaryResultCache`, `GlossBertDecisionCache` | ядро |
 | IPC с ranker-воркером | `GlossBertDictionarySelectorService` | ядро |
-| Выбор смысла GlossBERT / SANDWiCH / ConSeC | `RankerEngine` | `AsteriaScale.RankerWorker`, отдельный процесс |
+| Выбор смысла GlossBERT / ConSeC | `RankerEngine` | `AsteriaScale.RankerWorker`, отдельный процесс |
 | Вторая строка, шаг 12 ниже | `SmartHoverPipeline.TranslatePhraseLineAsync` → `SmartPhraseContextBuilder`, `SmartPhraseIdiomRewriter`, `TranslationScaffoldBuilder`, `SemanticSenseEvidenceFactory`, `SensePreservationGate`, `SmartPhraseTranslationGuard`, `SmartPhraseTranslationCache` | ядро |
 | Генерация через `llama-server` | `TranslateGemmaTranslationService` | ядро |
 | Карточка | `HoverTranslationOverlay` | хост |
@@ -206,7 +208,7 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 6. Один видимый результат → без модели. Иначе `SmartDictionaryHeuristicRanker.TrySelect` — детерминированные правила (past-agreement, вид глагола, семантические cue-правила, POS).
 7. `SmartDictionaryResultCache` — persistent LRU; ключи SHA-256, исходный текст на диск не пишется.
    Ключ описывает **ровно тот контекст, который получает выбранная модель**.
-   Для GlossBERT/SANDWiCH и ключ, и вход воркера строит один
+   Для GlossBERT и ключ, и вход воркера строит один
    `TargetCenteredContextBuilder` (роадмап №14.2B); для ConSeC ключ содержит
    точное неизменённое предложение и канонический индекс цели, потому что его
    sentence input размечает уже worker.
@@ -239,11 +241,9 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 9. Definition-aware воркер принимает решение только при margin ≥ 0.25 между
    **группами**, иначе воздержание — пользователю показываются словарные варианты.
    GlossBERT размечает точное вхождение цели кавычками и оценивает пары
-   context/gloss одним cross-encoder. SANDWiCH использует собственные буквальные
-   маркеры `[D] target [D]`, прогоняет каждую пару через официальные `encoder-nv`
-   и `encoder-v`, усредняет positive-class probabilities и применяет официальный
-   confidence-weighted reducer к уже существующим стабильным GroupId. Поэтому
-   инвариант `GroupId == индекс` и единый margin-контракт сохраняются. ConSeC
+   context/gloss одним cross-encoder; оценки сводятся к уже существующим
+   стабильным GroupId, поэтому инвариант `GroupId == индекс` и единый
+   margin-контракт сохраняются. ConSeC
    получает неизменённое предложение и отдельный канонический индекс target,
    вставляет свои `<d>...</d>`/`DEF_SEP` маркеры внутри worker и возвращает
    `pipeline=consec-independent`. Он не усекает последовательность: длина

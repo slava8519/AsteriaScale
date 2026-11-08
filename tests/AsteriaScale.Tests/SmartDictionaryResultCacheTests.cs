@@ -9,7 +9,7 @@ internal static class SmartDictionaryResultCacheTests
         Directory.CreateDirectory(root);
 
         await VerifyKeyNormalizationAsync(root);
-        await VerifySandwichKeyExactnessAsync();
+        await VerifyExactTextKeyAsync();
         await VerifyConsecKeyExactnessAsync();
         await VerifyPersistenceAndValidationAsync(root);
         await VerifyRegisterLabelIdentityAsync(root);
@@ -333,8 +333,21 @@ internal static class SmartDictionaryResultCacheTests
                 request with { RankingPipeline = "bi+cross" }),
             "The actual cross/bi+cross pipeline must participate in the cache key.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
-                request with { RankingPipeline = "sandwich" }),
-            "The SANDWiCH pipeline must participate in the cache key.");
+                request with { RankingPipeline = "consec-independent" }),
+            "The ConSeC pipeline must participate in the cache key.");
+        bool removedPipelineRejected = false;
+        try
+        {
+            _ = SmartDictionaryResultCache.CreateKeyFingerprint(
+                request with { RankingPipeline = "sandwich" });
+        }
+        catch (ArgumentException)
+        {
+            removedPipelineRejected = true;
+        }
+
+        Check(removedPipelineRejected,
+            "The removed SANDWiCH pipeline was still accepted as a cache identity.");
         Check(first != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { DictionaryVersion = "dictionary-v2" }),
             "Dictionary version must participate in the cache key.");
@@ -366,7 +379,11 @@ internal static class SmartDictionaryResultCacheTests
         return Task.CompletedTask;
     }
 
-    private static Task VerifySandwichKeyExactnessAsync()
+    /// <summary>
+    /// Every model other than the pinned GlossBERT gets the exact-text key
+    /// domain; ConSeC is the profile that uses it today.
+    /// </summary>
+    private static Task VerifyExactTextKeyAsync()
     {
         const string context = "She sat on the bank and watched the water.";
         SmartDictionaryCacheRequest request = CreateRequest(
@@ -375,9 +392,9 @@ internal static class SmartDictionaryResultCacheTests
             ["банк", "берег"]) with
         {
             Backend = "cpu",
-            ModelId = GlossBertDictionarySelectorService.SandwichCpuModelCacheId +
-                      ":pipeline-sandwich",
-            RankingPipeline = "sandwich"
+            ModelId = GlossBertDictionarySelectorService.ConsecCpuModelCacheId +
+                      ":pipeline-consec-independent",
+            RankingPipeline = "consec-independent"
         };
         string baseline = SmartDictionaryResultCache.CreateKeyFingerprint(request);
 
@@ -391,10 +408,10 @@ internal static class SmartDictionaryResultCacheTests
                         "Bank",
                         StringComparison.Ordinal)
                 }),
-            "The SANDWiCH hover key folded exact context casing.");
+            "The ConSeC hover key folded exact context casing.");
         Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { Target = "Bank" }),
-            "The SANDWiCH hover key folded exact target casing.");
+            "The ConSeC hover key folded exact target casing.");
 
         char[] exactScalars = ['\u200D', '\u00AD', '\u0001', '\u000B', '\u2060'];
         HashSet<string> contextKeys = new(StringComparer.Ordinal) { baseline };
@@ -411,7 +428,7 @@ internal static class SmartDictionaryResultCacheTests
                     CharacterIndex = variant.IndexOf("bank", StringComparison.Ordinal)
                 });
             Check(contextKeys.Add(key),
-                $"The SANDWiCH hover context U+{(int)scalar:X4} collided with another exact input.");
+                $"The ConSeC hover context U+{(int)scalar:X4} collided with another exact input.");
         }
 
         const string doubleSpaced =
@@ -422,37 +439,41 @@ internal static class SmartDictionaryResultCacheTests
                     Context = doubleSpaced,
                     CharacterIndex = doubleSpaced.IndexOf("bank", StringComparison.Ordinal)
                 }),
-            "The SANDWiCH hover key folded internal whitespace.");
+            "The ConSeC hover key folded internal whitespace.");
         Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { Candidates = ["БАНК", "БЕРЕГ"] }),
-            "The SANDWiCH hover key folded exact ordered candidate surfaces.");
+            "The ConSeC hover key folded exact ordered candidate surfaces.");
         Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { Candidates = ["берег", "банк"] }),
-            "The SANDWiCH hover key ignored candidate/GroupId order.");
+            "The ConSeC hover key ignored candidate/GroupId order.");
         Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { ModelId = request.ModelId.ToUpperInvariant() }),
-            "The SANDWiCH hover key folded exact model identity.");
+            "The ConSeC hover key folded exact model identity.");
         Check(baseline != SmartDictionaryResultCache.CreateKeyFingerprint(
                 request with { DictionaryVersion = "dictionary-v1.abstain-margin=0.18" }),
-            "The SANDWiCH hover key ignored its threshold-bearing dictionary epoch.");
+            "The ConSeC hover key ignored its threshold-bearing dictionary epoch.");
 
-        SmartDictionaryCacheRequest deberta = request with
-        {
-            ModelId = GlossBertDictionarySelectorService.DebertaCpuModelCacheId,
-            RankingPipeline = "cross"
-        };
-        string debertaBaseline = SmartDictionaryResultCache.CreateKeyFingerprint(deberta);
+        string joined = context.Replace(
+            "She sat",
+            "Shesat",
+            StringComparison.Ordinal);
         string controlled = context.Replace(
             "She sat",
             "She\u000Bsat",
             StringComparison.Ordinal);
-        Check(debertaBaseline != SmartDictionaryResultCache.CreateKeyFingerprint(
-                deberta with
-                {
-                    Context = controlled,
-                    CharacterIndex = controlled.IndexOf("bank", StringComparison.Ordinal)
-                }),
-            "A non-BERT DeBERTa profile inherited BERT control deletion in the hover key.");
+        Check(SmartDictionaryResultCache.CreateKeyFingerprint(
+                  request with
+                  {
+                      Context = joined,
+                      CharacterIndex = joined.IndexOf("bank", StringComparison.Ordinal)
+                  }) !=
+              SmartDictionaryResultCache.CreateKeyFingerprint(
+                  request with
+                  {
+                      Context = controlled,
+                      CharacterIndex = controlled.IndexOf("bank", StringComparison.Ordinal)
+                  }),
+            "A non-BERT profile inherited BERT control deletion in the hover key.");
 
         return Task.CompletedTask;
     }

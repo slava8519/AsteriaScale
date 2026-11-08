@@ -446,6 +446,8 @@ internal static class TranslationSuiteTests
             ("duplicate option", () => [.. ValidTail(), "--profile", "smart"]),
             ("unsupported ranker", () => ValidTail().Select(value =>
                 value == "glossbert" ? "deberta" : value).ToArray()),
+            ("removed SANDWiCH ranker", () => ValidTail().Select(value =>
+                value == "glossbert" ? "sandwich" : value).ToArray()),
             ("zero maximum", () => [.. ValidTail(), "--max-cases", "0"]),
             ("invalid shard", () => [.. ValidTail(), "--shard", "3/2"]),
             ("missing required", () => ValidTail()[..^2]),

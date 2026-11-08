@@ -123,32 +123,35 @@ internal static class RankerSentenceBenchmarkMetricTests
               options.OutputPath == "report.json",
             "The sentence benchmark parser rejected ConSeC or reordered options.");
 
-        SentenceRankerBenchmarkOptions sandwich =
+        SentenceRankerBenchmarkOptions aliased =
             SentenceRankerBenchmarkOptions.Parse(
                 [
                     "--ranker-sentence-benchmark",
                     "sentences.json",
                     "dist",
                     "--ranker-cpu-model",
-                    "SANDWICH",
+                    "CONSEC",
                     "--output",
-                    "sandwich.json"
+                    "consec.json"
                 ],
                 0);
-        Check(sandwich.CpuModel == RankerCpuModelProfile.Sandwich &&
-              sandwich.OutputPath == "sandwich.json",
-            "The sentence benchmark output alias or SANDWiCH profile was rejected.");
+        Check(aliased.CpuModel == RankerCpuModelProfile.Consec &&
+              aliased.OutputPath == "consec.json",
+            "The sentence benchmark output alias or a case-insensitive profile was rejected.");
 
-        CheckThrows(() => SentenceRankerBenchmarkOptions.Parse(
-                [
-                    "--ranker-sentence-benchmark",
-                    "sentences.json",
-                    "dist",
-                    "--ranker-cpu-model",
-                    "deberta"
-                ],
-                0),
-            "The closed DeBERTa experiment leaked into the sentence selector profiles.");
+        foreach (string removedProfile in new[] { "sandwich", "deberta" })
+        {
+            CheckThrows(() => SentenceRankerBenchmarkOptions.Parse(
+                    [
+                        "--ranker-sentence-benchmark",
+                        "sentences.json",
+                        "dist",
+                        "--ranker-cpu-model",
+                        removedProfile
+                    ],
+                    0),
+                $"The removed '{removedProfile}' profile leaked into the sentence selector profiles.");
+        }
         CheckThrows(() => SentenceRankerBenchmarkOptions.Parse(
                 [
                     "--ranker-sentence-benchmark",

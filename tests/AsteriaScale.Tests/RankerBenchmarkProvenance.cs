@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text.Json;
 using AsteriaScale.RankerProtocol;
 using AsteriaScale.RankerWorker;
 using AsteriaScale.Services;
@@ -168,24 +167,6 @@ internal static class RankerBenchmarkProvenance
                 $"The ranker model directory is missing: '{modelDirectory}'.");
         }
 
-        if (cpuModelProfile == RankerCpuModelProfile.Deberta &&
-            (provider != GlossBertRankerProvider.Cpu ||
-             !modelVersion.StartsWith(
-                 GlossBertDictionarySelectorService.DebertaCpuModelCacheId,
-                 StringComparison.Ordinal)))
-        {
-            throw new InvalidDataException(
-                "A DeBERTa report requires the exact pinned CPU artifact identity.");
-        }
-        if (cpuModelProfile == RankerCpuModelProfile.Sandwich &&
-            (provider != GlossBertRankerProvider.Cpu ||
-             !modelVersion.StartsWith(
-                 GlossBertDictionarySelectorService.SandwichCpuModelCacheId,
-                 StringComparison.Ordinal)))
-        {
-            throw new InvalidDataException(
-                "A SANDWiCH report requires the exact pinned CPU artifact identity.");
-        }
         if (cpuModelProfile == RankerCpuModelProfile.Consec &&
             (provider != GlossBertRankerProvider.Cpu ||
              !string.Equals(
@@ -199,28 +180,7 @@ internal static class RankerBenchmarkProvenance
         }
 
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (cpuModelProfile == RankerCpuModelProfile.Deberta)
-        {
-            string bundle = Path.Combine(modelDirectory, "GlossDeberta");
-            string manifestPath = Path.Combine(bundle, "model-manifest.json");
-            string modelFile = ReadPinnedDebertaModelFile(manifestPath);
-            AddRequiredArtifact(paths, Path.Combine(bundle, "tokenizer.json"));
-            AddRequiredArtifact(paths, manifestPath);
-            AddRequiredArtifact(paths, Path.Combine(bundle, "Cpu", modelFile));
-        }
-        else if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
-        {
-            string bundle = Path.Combine(modelDirectory, "Sandwich");
-            AddRequiredArtifact(paths, Path.Combine(bundle, "model-manifest.json"));
-            AddRequiredArtifact(paths, Path.Combine(bundle, "tokenizer.json"));
-            AddRequiredArtifact(
-                paths,
-                Path.Combine(bundle, "Cpu", "encoder-nv-fp32.onnx"));
-            AddRequiredArtifact(
-                paths,
-                Path.Combine(bundle, "Cpu", "encoder-v-fp32.onnx"));
-        }
-        else if (cpuModelProfile == RankerCpuModelProfile.Consec)
+        if (cpuModelProfile == RankerCpuModelProfile.Consec)
         {
             string bundle = Path.Combine(modelDirectory, "Consec");
             AddRequiredArtifact(paths, Path.Combine(bundle, "model-manifest.json"));
@@ -410,44 +370,6 @@ internal static class RankerBenchmarkProvenance
         return paths
             .Select(item => new NamedArtifactPath(item.Key, item.Value))
             .ToArray();
-    }
-
-    private static string ReadPinnedDebertaModelFile(string manifestPath)
-    {
-        if (!File.Exists(manifestPath))
-        {
-            throw new InvalidDataException(
-                $"The pinned DeBERTa manifest is missing: '{manifestPath}'.");
-        }
-
-        byte[] bytes = File.ReadAllBytes(manifestPath);
-        string sha256 = Convert.ToHexString(SHA256.HashData(bytes));
-        if (bytes.LongLength !=
-                GlossBertDictionarySelectorService.DebertaManifestLength ||
-            !string.Equals(
-                sha256,
-                GlossBertDictionarySelectorService.DebertaManifestSha256,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                "The DeBERTa report manifest does not match the pinned runtime " +
-                $"bundle: '{manifestPath}'.");
-        }
-
-        using JsonDocument document = JsonDocument.Parse(bytes);
-        string? modelFile = document.RootElement
-            .GetProperty("modelFile")
-            .GetString();
-        if (string.IsNullOrWhiteSpace(modelFile) ||
-            Path.IsPathRooted(modelFile) ||
-            !string.Equals(Path.GetFileName(modelFile), modelFile, StringComparison.Ordinal) ||
-            !modelFile.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                $"The pinned DeBERTa manifest has an invalid modelFile: '{manifestPath}'.");
-        }
-
-        return modelFile;
     }
 
     private static bool IsDictionaryDataFile(string path) =>

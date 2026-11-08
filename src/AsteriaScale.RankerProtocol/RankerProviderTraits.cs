@@ -80,7 +80,7 @@ public sealed class RankerProviderTraits
     public bool BiEncoderPrefilter { get; }
 
     /// <summary>
-    /// Whether models other than GlossBERT (DeBERTa, SANDWiCH, ConSeC) may run
+    /// Whether models other than GlossBERT (currently ConSeC) may run
     /// on this provider.
     /// </summary>
     public bool AlternativeModels { get; }

@@ -21,7 +21,7 @@ upstream-ревизиями/хешами, адаптеры и тесты. Frozen
 | Document-level | WMT25 General MT | 87 полных документов с референсами и четырьмя закреплёнными baseline outputs | Внешний/reference-анализ; документы не выдаются за live Asteria-тест, потому что превышают production sentence guard | не скачан; расширение sentence-level среза этим набором — открытая карточка E14 | — |
 | Будущий WMT | WMT26 General MT | Актуальные английские источники | Пока только генерация: в текущем upstream русские референсы пусты | не скачан | — |
 | Контекст | Voita et al. | Дейксис, эллипсис и лексическая связность | Контрастивная оценка генерации; это адаптация для black-box переводчика, а не официальный model-scoring протокол | не скачан | — |
-| Значение слова | MuCoW EN→RU | Передачу нужного смысла многозначного слова | Проверяет влияние GlossBERT/SANDWiCH/ConSeC на итог TranslateGemma | прогнан: dev201 — с 30 июля 2026, последние замеры 8 ноября 2026; replication199 — gate 17 августа 2026 (набор израсходован) и перезамер после E15; `blind-v3` создан 17 августа 2026 и не открывался | раздел 6 ниже; RESEARCH.md: «MuCoW A/B», «Gate на replication199», «E15 и перезамер на replication199», «Новый слепой набор `mucow-wsd-smart-hover-blind-v3`» |
+| Значение слова | MuCoW EN→RU | Передачу нужного смысла многозначного слова | Проверяет влияние GlossBERT и ConSeC на итог TranslateGemma | прогнан: dev201 — с 30 июля 2026, последние замеры 8 ноября 2026; replication199 — gate 17 августа 2026 (набор израсходован) и перезамер после E15; `blind-v3` создан 17 августа 2026 и не открывался | раздел 6 ниже; RESEARCH.md: «MuCoW A/B», «Gate на replication199», «E15 и перезамер на replication199», «Новый слепой набор `mucow-wsd-smart-hover-blind-v3`» |
 | Род | WinoMT | Гендерную согласованность на профессиях и местоимениях | Набор source-only; нужен специальный evaluator или ручная разметка русского вывода | не скачан | — |
 | Наука | WMT24 Biomedical | Заголовки и аннотации | Терминология и длинные научные конструкции | не скачан | — |
 | Термины | WMT25 Terminology | EN→RU IT-термины в контексте | Точность терминов отдельно от беглости | скачан и импортирован; прогона и отчёта нет | — |
@@ -99,13 +99,13 @@ dotnet run --project .\tests\AsteriaScale.Tests\AsteriaScale.Tests.csproj `
 полносегментного `direct`; запуск `smart` на нём методологически неверен, потому
 что часть WMT-сегментов содержит несколько предложений, а карточка переводит
 только предложение под курсором. После этого на whole-hover-срезе можно менять
-GlossBERT, SANDWiCH и ConSeC на одной машине и одном canonical dataset.
+GlossBERT и ConSeC на одной машине и одном canonical dataset.
 Скорость разных машин в одну таблицу качества помещать можно, но сравнивать её
 как ускорение нельзя.
 
 `direct` против `smart` показывает пользу/цену **всего** production-каркаса, а
 не изолированный вклад ranker: при наличии `previousContext` профиль `smart`
-видит ещё и историю. Для чистого сравнения GlossBERT/SANDWiCH/ConSeC запускают
+видит ещё и историю. Для чистого сравнения GlossBERT и ConSeC запускают
 несколько `smart`-прогонов с одинаковым контекстом, меняя только
 `--ranker-cpu-model`.
 
@@ -408,7 +408,6 @@ translation-sense и hover-sense; chrF2-интервалы остаются desc
 python .\tools\translation-benchmark.py paired `
   --reports `
     .\artifacts\Benchmarks\reports\asteria-smart-glossbert-vulkan-mucow201-applied-v2.json `
-    .\artifacts\Benchmarks\reports\asteria-smart-sandwich-vulkan-mucow201-applied-v2.json `
     .\artifacts\Benchmarks\reports\asteria-smart-consec-vulkan-mucow201-applied-v2.json `
   --bootstrap-samples 10000 `
   --seed 20260730 `
@@ -425,7 +424,7 @@ llama.cpp b9632, Vulkan full-offload и prompt v5. Во всех профиля�
 | Ранжировщик | Smart-смысл, ITT | Ошибочная/смешанная подсказка | Итоговый смысл, ITT | chrF2 | p50 / p95 |
 |---|---:|---:|---:|---:|---:|
 | GlossBERT | 45,77 % (`92/201`) | 79/201 | 37,31 % (`75/201`) | 0,43367 | 7,88 / 15,42 с |
-| SANDWiCH | 43,78 % (`88/201`) | 71/201 | 37,31 % (`75/201`) | 0,43471 | 7,24 / 15,22 с |
+| SANDWiCH (профиль удалён 8 ноября 2026) | 43,78 % (`88/201`) | 71/201 | 37,31 % (`75/201`) | 0,43471 | 7,24 / 15,22 с |
 | **ConSeC** | **58,71 % (`118/201`)** | **39/201** | 37,31 % (`75/201`) | **0,43578** | **6,55 / 12,15 с** |
 
 ConSeC против GlossBERT дал `29` парных улучшений Smart-смысла при `3`

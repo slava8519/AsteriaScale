@@ -9,7 +9,6 @@ internal static class SemanticRankerProfileResolver
         ArgumentNullException.ThrowIfNull(settings);
         return SmartDictionaryRankerModels.Normalize(settings.SmartDictionaryRankerModel) switch
         {
-            SmartDictionaryRankerModels.Sandwich => RankerCpuModelProfile.Sandwich,
             SmartDictionaryRankerModels.Consec => RankerCpuModelProfile.Consec,
             _ => RankerCpuModelProfile.GlossBert
         };
@@ -17,9 +16,7 @@ internal static class SemanticRankerProfileResolver
 
     public static string DisplayName(RankerCpuModelProfile profile) => profile switch
     {
-        RankerCpuModelProfile.Sandwich => "SANDWiCH",
         RankerCpuModelProfile.Consec => "ConSeC",
-        RankerCpuModelProfile.Deberta => "GlossDeBERTa",
         _ => "GlossBERT"
     };
 }

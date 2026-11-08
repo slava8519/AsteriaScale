@@ -129,12 +129,8 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         // before clean_text removes controls or collapses whitespace. Applying
         // the original cursor after normalization can select a different one of
         // two repeated targets and reuse a verdict for the wrong occurrence.
-        bool sandwich = IsSandwichModel(modelIdentity);
         bool consec = IsConsecModel(modelIdentity);
         bool exactText = !IsPinnedGlossBertModel(modelIdentity);
-        RankerTargetMarker marker = sandwich
-            ? RankerTargetMarker.SandwichD
-            : RankerTargetMarker.Quoted;
         int consecAnchor = consec
             ? RankerTargetAnchor.FindClosestOccurrence(sentence, target, characterIndex)
             : -1;
@@ -151,7 +147,6 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
                 sentence,
                 target,
                 characterIndex,
-                marker,
                 out markedSentence);
         }
         string fingerprintSentence = exactText
@@ -390,11 +385,6 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
     private static string PreserveExact(string? value) =>
         RankerCacheTextNormalizer.PreserveExact(value);
 
-    private static bool IsSandwichModel(string modelIdentity) =>
-        modelIdentity.StartsWith(
-            GlossBertDictionarySelectorService.SandwichExpectedModelVersionPrefix,
-            StringComparison.Ordinal);
-
     private static bool IsConsecModel(string modelIdentity) =>
         modelIdentity.StartsWith(
             GlossBertDictionarySelectorService.ConsecExpectedModelVersionPrefix,
@@ -407,11 +397,6 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
 
     private static string ResolvePipelineIdentity(string modelIdentity)
     {
-        if (IsSandwichModel(modelIdentity))
-        {
-            return "sandwich";
-        }
-
         if (IsConsecModel(modelIdentity))
         {
             return "consec-independent";

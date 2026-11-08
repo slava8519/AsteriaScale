@@ -29,7 +29,7 @@ internal sealed record TranslationSuiteOptions(
         "Usage: --benchmark-only --translation-suite <dataset.jsonl> " +
         "<workerBaseDirectory> --system-id <id> --profile direct|smart " +
         "--phrase-backend cpu|vulkan --ranker-cpu-model " +
-        "glossbert|sandwich|consec --translation-output <output.jsonl> " +
+        "glossbert|consec --translation-output <output.jsonl> " +
         "--translation-report <report.json> [--max-cases <N>] " +
         "[--shard <index>/<count>] [--phrase-quant q6_k] " +
         "[--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on|off] " +
@@ -117,7 +117,6 @@ internal sealed record TranslationSuiteOptions(
                     rankerCpuModel = value.ToLowerInvariant() switch
                     {
                         "glossbert" => RankerCpuModelProfile.GlossBert,
-                        "sandwich" => RankerCpuModelProfile.Sandwich,
                         "consec" => RankerCpuModelProfile.Consec,
                         _ => throw new InvalidOperationException(Usage)
                     };
@@ -311,7 +310,6 @@ internal sealed record TranslationSuiteOptions(
 
     internal string RankerCpuModelId => RankerCpuModel switch
     {
-        RankerCpuModelProfile.Sandwich => "sandwich",
         RankerCpuModelProfile.Consec => "consec",
         _ => "glossbert"
     };

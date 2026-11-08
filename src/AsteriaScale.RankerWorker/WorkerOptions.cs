@@ -24,8 +24,6 @@ internal static class RankerProviderExtensions
 internal enum CpuRankerModel
 {
     GlossBert,
-    Deberta,
-    Sandwich,
     Consec
 }
 
@@ -78,21 +76,13 @@ internal sealed record WorkerOptions(
                 if (++i >= args.Count)
                 {
                     options = null;
-                    error = "--cpu-model requires glossbert, deberta, sandwich, or consec.";
+                    error = "--cpu-model requires glossbert or consec.";
                     return false;
                 }
 
                 if (string.Equals(args[i], "glossbert", StringComparison.OrdinalIgnoreCase))
                 {
                     cpuModel = CpuRankerModel.GlossBert;
-                }
-                else if (string.Equals(args[i], "deberta", StringComparison.OrdinalIgnoreCase))
-                {
-                    cpuModel = CpuRankerModel.Deberta;
-                }
-                else if (string.Equals(args[i], "sandwich", StringComparison.OrdinalIgnoreCase))
-                {
-                    cpuModel = CpuRankerModel.Sandwich;
                 }
                 else if (string.Equals(args[i], "consec", StringComparison.OrdinalIgnoreCase))
                 {
@@ -103,7 +93,7 @@ internal sealed record WorkerOptions(
                     options = null;
                     error =
                         $"Unsupported CPU model '{args[i]}'. " +
-                        "Expected glossbert, deberta, sandwich, or consec.";
+                        "Expected glossbert or consec.";
                     return false;
                 }
 
@@ -186,7 +176,7 @@ internal sealed record WorkerOptions(
             options = null;
             error =
                 $"Unknown argument '{args[i]}'. Expected --provider npu|cpu, " +
-                "--cpu-model glossbert|deberta|sandwich|consec, " +
+                "--cpu-model glossbert|consec, " +
                 "--model-directory <path>, or --smoke.";
             return false;
         }

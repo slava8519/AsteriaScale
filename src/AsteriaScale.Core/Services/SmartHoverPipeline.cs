@@ -1269,17 +1269,13 @@ internal sealed class SmartHoverPipeline : IDisposable
             GlossBertDictionarySelectorService.ConsecExpectedModelVersionPrefix,
             StringComparison.Ordinal)
             ? "consec-independent"
-            : modelVersion.StartsWith(
-                GlossBertDictionarySelectorService.SandwichExpectedModelVersionPrefix,
-                StringComparison.Ordinal)
-                ? "sandwich"
-                : provider.Traits().BiEncoderPrefilter &&
-                  distinctGroupCount > 16 &&
-                  modelVersion.EndsWith(
-                      ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
-                      StringComparison.Ordinal)
-                    ? "bi+cross"
-                    : "cross";
+            : provider.Traits().BiEncoderPrefilter &&
+              distinctGroupCount > 16 &&
+              modelVersion.EndsWith(
+                  ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
+                  StringComparison.Ordinal)
+                ? "bi+cross"
+                : "cross";
 
     private string CreateDecisionKey(
         string context,

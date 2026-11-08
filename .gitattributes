@@ -18,9 +18,9 @@ tools/consec-upstream-reference-golden.json text eol=lf
 assets/**/*.json text eol=lf
 tools/*.json text eol=lf
 *.tsv text eol=lf
-# Bundle JSON (tokenizers, the SANDWiCH model-manifest.json) is size- and
-# SHA-pinned in RankerEngine.cs, scripts/verify-*.ps1 and the ranker baselines;
-# keep its exact bytes.
+# Bundle JSON (the tracked GlossBERT and GlossEmbeddings tokenizers, and the
+# local ConSeC bundle files) is size- and SHA-pinned in RankerEngine.cs,
+# ConsecArtifactBundle.cs and scripts/verify-consec.ps1; keep its exact bytes.
 src/AsteriaScale.RankerWorker/Models/**/*.json -text
 
 # Apple sources for the macOS app. Shell scripts with CRLF fail with

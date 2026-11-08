@@ -230,18 +230,16 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             throw new ArgumentException("Smart Dictionary cache dictionary version cannot be empty.", nameof(request));
         }
 
-        if (rankingPipeline is not (
-                "cross" or "bi+cross" or "sandwich" or "consec-independent"))
+        if (rankingPipeline is not ("cross" or "bi+cross" or "consec-independent"))
         {
             throw new ArgumentException(
-                "Smart Dictionary cache ranking pipeline must be cross, bi+cross, " +
-                "sandwich or consec-independent.",
+                "Smart Dictionary cache ranking pipeline must be cross, bi+cross " +
+                "or consec-independent.",
                 nameof(request));
         }
 
-        bool sandwich = rankingPipeline == "sandwich";
         bool consec = rankingPipeline == "consec-independent";
-        bool exactText = sandwich || !IsPinnedGlossBertModel(request.ModelId);
+        bool exactText = !IsPinnedGlossBertModel(request.ModelId);
         StringBuilder canonical = new();
         // Preserve the existing pinned GlossBERT key space. Earlier builds
         // applied BERT clean_text/lowercase to every model; non-BERT profiles
@@ -277,8 +275,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
                 : CreateExactMarkedContext(
                     request.Context,
                     request.Target,
-                    request.CharacterIndex,
-                    sandwich ? RankerTargetMarker.SandwichD : RankerTargetMarker.Quoted);
+                    request.CharacterIndex);
             AppendComponent(canonical, "pipeline");
             AppendComponent(canonical, rankingPipeline);
             AppendComponent(canonical, exactContext.MarkedContext);
@@ -406,8 +403,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
     private static ExactMarkedContext CreateExactMarkedContext(
         string context,
         string target,
-        int characterIndex,
-        RankerTargetMarker marker)
+        int characterIndex)
     {
         TargetCenteredContext centered = TargetCenteredContextBuilder.Build(
             context ?? string.Empty,
@@ -417,7 +413,6 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
             centered.Text,
             target ?? string.Empty,
             centered.CharacterIndex,
-            marker,
             out string markedContext);
         return new ExactMarkedContext(
             PreserveExact(markedContext),

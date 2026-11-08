@@ -10,7 +10,6 @@
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
 | TranslateGemma 4B Q4_K_M + llama.cpp CPU/Vulkan | b9632 | опционально, независимый перевод фразы второй строкой |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
-| SANDWiCH dual encoder | NAACL 2025, upstream `daca3cad…` | опционально, экспериментальный CPU semantic ranker |
 | ConSeC/WNGT | upstream `9602b5fd…`, CC BY-NC-SA 4.0 | опционально, личный научный/некоммерческий CPU ranker |
 | Python | 3.11+ (`python` в `PATH`) | для полного smoke-набора и регенерации артефактов |
 
@@ -23,9 +22,8 @@
 `Npu/glossbert-eager-vitis-context.onnx_VITISAI.bin`. В git лежат только
 `tokenizer.json` и `Npu/glossbert-eager-vitis-context.onnx.compatibility.txt`.
 Публичного источника трёх больших файлов сейчас нет: Git LFS не настроен
-(в `.gitattributes` нет `filter=lfs`), GitHub Release и тегов нет, а ONNX-экспорт в `tools/` есть только для SANDWiCH и ConSeC
-(`export-sandwich-onnx.py`, `export-consec-onnx.py`) и для дообучаемого
-DeBERTa-ранжировщика (`train-wsd-ranker.py`), но не для GlossBERT.
+(в `.gitattributes` нет `filter=lfs`), GitHub Release и тегов нет, а ONNX-экспорт в `tools/` есть только для ConSeC
+(`export-consec-onnx.py`), но не для GlossBERT.
 
 Что о закреплённых файлах записано в репозитории: CPU-граф — непроквантованный
 динамический FP32 ONNX модели [kanishka/GlossBERT](https://huggingface.co/kanishka/GlossBERT)
@@ -63,51 +61,13 @@ CPU bi-encoder bundle `Models/GlossEmbeddings` также обязателен. 
 командой из [assets/Ranker/README.md](../assets/Ranker/README.md): скрипт создаёт
 индекс и сам помещает проверенные ONNX/tokenizer в требуемый каталог.
 
-## Экспериментальный SANDWiCH CPU
+## Открытые dev-наборы ранжировщика
 
-Готовый [SANDWiCH](https://github.com/danielguzmanolivares/sandwich) не заменяет
-GlossBERT по умолчанию. Он устанавливается отдельно: два официальных энкодера
-скачиваются из upstream-архива, проверяются по размеру/SHA-256, экспортируются в
-FP32 ONNX и ещё раз проверяются вместе с tokenizer и manifest. Веса, tokenizer
-и ONNX больше 100 МБ не входят в git.
-
-```powershell
-.\scripts\install-sandwich.cmd
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\scripts\verify-sandwich.ps1
-```
-
-Неинтерактивный (скриптовый) запуск после отдельной проверки условий upstream:
-
-```powershell
-.\scripts\install-sandwich.cmd -AcceptUpstreamTerms
-```
-
-Установщик фиксирует принятие в локальном ignored-файле
-`Models/Sandwich/UPSTREAM_TERMS_ACCEPTED.json`, а архив кэширует в
-`%LOCALAPPDATA%\AsteriaScale\Downloads`. Он устанавливает только MIT-код и два
-официальных энкодера; BabelNet-derived `data/definitions` и `data/neighbours`
-не скачиваются и не входят в Asteria. Полная таблица исходных и экспортированных
-хешей приведена в [assets/Ranker/README.md](../assets/Ranker/README.md).
-
-После пересборки выберите в настройках умного словаря
-`SANDWiCH — исследовательский CPU`. Профиль CPU-only: если ранее был выбран NPU,
-UI явно переключит ускоритель на CPU. Скрытого fallback нет. Проверка через
-production benchmark:
-
-```powershell
-dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj `
-  -c Release --no-build -- --benchmark-only `
-  --ranker-benchmark assets/Ranker/ranker-benchmark.json dist/AsteriaScale cpu `
-  --ranker-cpu-model sandwich `
-  --dump artifacts/Ranker/sandwich-dev-dump.json `
-  --ranker-report artifacts/Ranker/sandwich-dev-report.json
-```
-
-Открытый dev-набор содержит `134` случая visual novel, манги, литературы и
-научных статей (`20` scientific cases). Каждый отчёт закрепляет точный SHA
-набора; frozen `ranker-holdout*.json` при A/B не открываются. Финальный same-build
-A/B и причина, по которой GlossBERT остаётся default, записаны в
+Pair-ориентированный открытый dev-набор `assets/Ranker/ranker-benchmark.json`
+содержит `134` случая visual novel, манги, литературы и научных статей (`20`
+scientific cases). Каждый отчёт закрепляет точный SHA набора; frozen
+`ranker-holdout*.json` при A/B не открываются. Same-build A/B ранжировщиков и
+причина, по которой GlossBERT остаётся default, записаны в
 [RESEARCH.md](RESEARCH.md).
 
 Для sentence-level ConSeC и downstream-проверки TranslateGemma используется
@@ -163,77 +123,21 @@ fixture.
 Встроенный независимый профиль доступен для исследования, но GlossBERT остаётся
 stable-default до feedback/joint planner и full-text A/B.
 
-## Закрытый эксперимент WSD/DeBERTa на RTX 5080
+## Удалённые профили SANDWiCH и GlossDeBERTa
 
-**Новые прогоны собственного fine-tune больше не планируются.** Ниже сохранена
-воспроизводимая инструкция исторического эксперимента для аудита уже полученных
-результатов; она не является следующим шагом разработки. Итог эксперимента и
-причина перехода к готовым SANDWiCH/ConSeC зафиксированы в
-[RESEARCH.md](RESEARCH.md).
-
-На GPU-машину переносится не рабочая копия проекта, а минимальный проверяемый
-пакет: trainer, exact requirements и канонический
-`artifacts/wsd-train-shipped.jsonl`. На исходной машине выполните:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\package-wsd-ranker-training.ps1
-```
-
-Скрипт запускает `--self-check` и `--inspect-only`, проверяет точный FP32 trainer
-hash, записывает размеры, SHA-256, 27 перечислимых profiles и четыре непересекающиеся suites в
-`package-manifest.json`, а затем атомарно создаёт новый ZIP в `artifacts`.
-Модели, checkpoints и frozen holdout в пакет не входят; существующий ZIP не
-перезаписывается. В корне ZIP лежит автономная инструкция `README.md`; её
-отслеживаемый источник — `tools/README-wsd-rtx5080.md`; полный порядок
-экспериментов копируется из `tools/WSD-EXPERIMENT-ROADMAP.md`. Распакуйте пакет на
-локальный фиксированный NTFS-диск RTX-
-машины (не в OneDrive, junction или сетевой каталог) и сначала проверьте
-целостность распакованного пакета:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -VerifyOnly
-```
-
-Этот режим сверяет manifest, размеры и SHA-256 без Python, CUDA и обучения.
-Затем создайте CPython 3.12.10 x64 venv и установите закреплённое окружение:
-
-```powershell
-py -3.12 -m venv .venv
-$python = (Resolve-Path '.\.venv\Scripts\python.exe').Path
-& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-bootstrap.txt
-& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-torch-cu130.txt
-& $python -m pip install --no-deps --only-binary=:all: --require-hashes -r .\tools\requirements-wsd-ranker.txt
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -ListProfiles
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -RunReferenceSuite
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -RunNextSuite
-```
-
-Launcher ничего не устанавливает и не делает CPU fallback: он сверяет package
-manifest, exact-версии Python-пакетов, CUDA 13.0, compute capability не ниже
-`12.0`, native BF16, полный lock зависимостей, profile-specific
-`PYTHONHASHSEED` и `CUBLAS_WORKSPACE_CONFIG=:4096:8`. Без явного выбора launcher
-fail-closed. Все профили используют полный шестиепохный schedule (`3006` шагов):
-эксперимент показал, что качество дают и более медленный спад LR, и дополнительные
-шаги. `reference` воспроизводит base7 с новым per-group отчётом; `next` сравнивает
-на одинаковых семи слоях и seed `cross-encoder/nli-deberta-v3-base` reset против
-nli-projected; `capacity` и `interaction` независимо проверяют глубину и NLI × depth.
-Confirmation seeds уже перечислены в пакете, но до CPU/dev gate запускаются только вручную.
-Произвольных model/revision/dataset/epochs аргументов нет. На Windows для CUDA
-13 нужен NVIDIA driver `580.88+`; отдельный CUDA Toolkit wheel-у PyTorch не нужен.
-Прерванный запуск продолжается только явно, с тем же каталогом:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tools\run-wsd-ranker-rtx5080.ps1 -Profile nli7-reset-s1 -Resume -OutputDirectory '<существующий-output>'
-```
-
-Вернуть нужно целиком `<output>/bundle/GlossDeberta`, а также `metrics.jsonl`,
-`run-state.json`, `experiment-profile.json`, `validation-predictions.jsonl`,
-`validation-predictions-manifest.json`, `training-*.log` и `pip-freeze-*.txt`.
-Групповой отчёт не содержит исходного текста и используется для exact McNemar и
-paired lemma-cluster bootstrap. Только после проверки
-bundle-manifest модель устанавливается в ignored runtime-каталог и проходит
-same-build dev/register CPU-бенчмарки на исходной машине. До выбора победителя
-production остаётся на GlossBERT; frozen holdout в этом цикле не открывается.
+8 ноября 2026 из кода, скриптов и `tools/` удалены готовый SANDWiCH
+(установщик, проверка, ONNX-экспорт, CPU-профиль воркера и UI-вариант),
+профиль GlossDeBERTa и инструменты закрытого эксперимента собственного
+DeBERTa fine-tune на RTX 5080 (сборка обучающего набора, trainer, переносимый
+пакет, launcher и их requirements). Последний коммит, где они есть, —
+`911510e`: инструкции установки SANDWiCH и воспроизведения эксперимента
+читайте через `git show 911510e:docs/DEVELOPMENT.md`. Измерения и причины
+удаления — в [RESEARCH.md](RESEARCH.md). Сохранённое в `settings.json`
+значение `sandwich` или `deberta` загружается как GlossBERT, а воркер
+отвергает `--cpu-model sandwich|deberta`. Локальные бандлы
+`Models/Sandwich` и `Models/GlossDeberta` остаются в `.gitignore` и в
+публикацию не копируются. Бэкбон DeBERTa-large внутри ConSeC это удаление не
+затрагивает.
 
 ## Экспериментальная TranslateGemma 4B
 
@@ -411,17 +315,17 @@ Smoke-набор — консольная программа без тестов
 
 ### Стратегия тестирования
 
-Объём на коммите `45fb776`: default-путь `tests/AsteriaScale.Tests/Program.cs`
-содержит `56` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
-`XxxTests.RunAsync`. В `tests/` `45` файлов C# — `26 179` строк вместе с harness
-gated-бенчмарков — против `36 776` строк C# в `src/`. Отдельно есть четыре
+Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026): default-путь
+`tests/AsteriaScale.Tests/Program.cs` содержит `55` блоков `await RunAsync(...)`,
+из них `31` вызывают отдельные классы `XxxTests.RunAsync`. В `tests/` `43` файла C# — `25 414` строк вместе с harness
+gated-бенчмарков — против `36 036` строк C# в `src/`. Отдельно есть четыре
 Python-набора `unittest` на `53` теста (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
 |---|---|---|---|
 | Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером | блоки `Program.cs`, `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
-| Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `WsdTrainingToolTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py`, `tools/build-wsd-training-set.py` и `tools/atomic_output.py` |
-| Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, дедлайн ответа с остановкой воркера, общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `SandwichInstallerTransactionTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
+| Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py` и `tools/atomic_output.py` |
+| Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, дедлайн ответа с остановкой воркера, общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
 | Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |
 | Gated-бенчмарки | качество, покрытие и задержку на открытых и замороженных наборах через собранную публикацию | режимы из таблицы ниже, только по явному аргументу | `workerBaseDir` с воркером и моделями; для `npu` — AMD NPU; для `--translation-suite` — установленная TranslateGemma и скачанные наборы |
 
@@ -436,10 +340,9 @@ Python-набора `unittest` на `53` теста (см. «Python-тесты �
   Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan
   `llama-server` и окружение процесса без его запуска. Живой вывод проверяют
   gated-режимы и `scripts/verify-translategemma.ps1`.
-- **Локальные бандлы SANDWiCH/ConSeC.** Сверка их tokenizer с закреплёнными
-  эталонами молча пропускается, если бандл не установлен
-  (`GlossBertDecisionCacheTests`, `ConsecRankerTests`); контракт кэша и
-  установщика проверяется без артефактов.
+- **Локальный бандл ConSeC.** Сверка его tokenizer с закреплённым
+  эталоном молча пропускается, если бандл не установлен (`ConsecRankerTests`);
+  контракт кэша и установщика проверяется без артефактов.
 
 Почему раннер — консольная программа, а не xUnit, в репозитории не записано.
 Фактически это один процесс: блоки идут последовательно, первое исключение
@@ -455,10 +358,10 @@ gated-режимы, а internal-члены открыты через `InternalsV
 | `--live` | Живой апскейл Notepad через Magpie |
 | `--ocr-image <png> <x> <y>` | Диагностика hover-OCR по изображению |
 | `--screen-ocr-image <png>` | Диагностика экранного OCR по изображению |
-| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec] [--dump <path>] [--ranker-report <path>]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
-| `--register-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|deberta\|sandwich\|consec] [--register-report <path>]` | Сохраняет ли выбранная русская поверхность регистр английского смысла (роадмап №14.2C); набор — `assets/Ranker/ranker-register-benchmark.json`, отчёт schema 3 |
-| `--ranker-sentence-benchmark <set.json> <workerBaseDir> [--ranker-cpu-model glossbert\|sandwich\|consec] [--sentence-report <report.json>]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается. `--output` — синоним `--sentence-report` |
-| `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|sandwich\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--phrase-quant q6_k] [--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on\|off] [--phrase-cache-prompt on\|off]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output. Диагностические опции: `--phrase-quant q6_k` (только `direct`) подменяет модель на альтернативный, так же строго закреплённый Q6_K из `tests/AsteriaScale.Tests/AlternativeModelPins.cs` под собственной identity; `--sense-gate-trace` (только `smart`), `--phrase-coopmat` (только с `--phrase-backend vulkan`) и `--phrase-cache-prompt` (только `direct`) описаны в [BENCHMARKING.md](BENCHMARKING.md) |
+| `--ranker-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|consec] [--dump <path>] [--ranker-report <path>]` | Бенчмарк выбранного definition-aware ranker через полный продакшн-конвейер |
+| `--register-benchmark <set.json> <workerBaseDir> [cpu\|npu] [--ranker-cpu-model glossbert\|consec] [--register-report <path>]` | Сохраняет ли выбранная русская поверхность регистр английского смысла (роадмап №14.2C); набор — `assets/Ranker/ranker-register-benchmark.json`, отчёт schema 3 |
+| `--ranker-sentence-benchmark <set.json> <workerBaseDir> [--ranker-cpu-model glossbert\|consec] [--sentence-report <report.json>]` | WSD-only sentence A/B: точность sense GroupId по целям/предложениям/научным и surface-unambiguous срезам, contrast pairs, cold/warm latency, peak RAM и точная provenance; русский/full-text не оценивается. `--output` — синоним `--sentence-report` |
+| `--translation-suite <set.jsonl> <workerBaseDir> --system-id <id> --profile direct\|smart --phrase-backend cpu\|vulkan --ranker-cpu-model glossbert\|consec --translation-output <output.jsonl> --translation-report <report.json> [--shard i/n] [--max-cases N] [--phrase-quant q6_k] [--sense-gate-trace <trace.jsonl>] [--phrase-coopmat on\|off] [--phrase-cache-prompt on\|off]` | Production A/B TranslateGemma; `direct` переводит весь segment, `smart` — предложение под focus через реальный словарный/WSD-каркас, а ошибки отдельных реплик остаются в output. Диагностические опции: `--phrase-quant q6_k` (только `direct`) подменяет модель на альтернативный, так же строго закреплённый Q6_K из `tests/AsteriaScale.Tests/AlternativeModelPins.cs` под собственной identity; `--sense-gate-trace` (только `smart`), `--phrase-coopmat` (только с `--phrase-backend vulkan`) и `--phrase-cache-prompt` (только `direct`) описаны в [BENCHMARKING.md](BENCHMARKING.md) |
 
 У `--ranker-benchmark` и `--register-benchmark` по умолчанию `cpu` и
 `glossbert`; `--ranker-sentence-benchmark` работает только на CPU, и по
@@ -492,7 +395,7 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj `
 ```
 
 Same-build итог на `46` предложениях / `138` целях: GlossBERT `91`, SANDWiCH
-`120`, ConSeC `131` верная группа; scientific `69/108`, `96/108`, `106/108`;
+(профиль удалён 8 ноября 2026) `120`, ConSeC `131` верная группа; scientific `69/108`, `96/108`, `106/108`;
 все target-смыслы верны в `20`, `31`, `41` предложениях; на
 surface-unambiguous WSD-срезе `67`, `86`, `94`. Это не оценка русского перевода.
 ConSeC: accepted precision `96,32 %`, coverage `98,55 %`, warm p50/p95
@@ -585,9 +488,6 @@ self-contained. Целостность многофайловой публика
   `Models\GlossEmbeddings\` (`eng-senses.vec`, `minilm-l6-v2.onnx`,
   `tokenizer.json`). Модели не лежат в git — см.
   [assets/Ranker/README.md](../assets/Ranker/README.md);
-- если локально установлены оба ONNX SANDWiCH, `Models\Sandwich\` копируется в
-  Ranker-публикацию условно и попадает в общий output manifest. Отсутствие этого
-  экспериментального профиля не делает обычную GlossBERT-публикацию неполной;
 - если локально установлен проверенный четырёхфайловый ConSeC bundle,
   `Models\Consec\` также копируется условно и попадает в output manifest.
   Отсутствие личного CC BY-NC-SA профиля не делает обычную публикацию неполной;
@@ -666,8 +566,7 @@ python tools/tests/test_fetch_benchmark_datasets.py  # tools/fetch-benchmark-dat
 
 C#-smoke эти наборы не запускает, но сам вызывает `python` для части `tools/`:
 `TranslationSuiteTests` прогоняет `tools/translation-benchmark.py score` на
-output C#-runner, `WsdTrainingToolTests` — `tools/build-wsd-training-set.py`,
-`AtomicOutputSafetyTests` — `tools/atomic_output.py`. Без `python` в `PATH`
+output C#-runner, `AtomicOutputSafetyTests` — `tools/atomic_output.py`. Без `python` в `PATH`
 полный smoke падает.
 
 `tools/tests/` намеренно без `__init__.py`, поэтому файл запускается напрямую, а

@@ -105,66 +105,33 @@ internal static class BuildScriptSafetyTests
                 }
             }
 
-            # SANDWiCH is optional for a clean checkout, but it becomes one
-            # indivisible publish unit as soon as all four source artifacts are
-            # installed. A two-model partial download must not advertise a
-            # usable profile or weaken the ordinary release contract.
-            $sandwichSource = Join-Path $assetsRoot 'src\AsteriaScale.RankerWorker\Models\Sandwich'
-            $sandwichCpu = Join-Path $sandwichSource 'Cpu'
-            $sandwichOutput = Join-Path $distOutput 'Ranker\Models\Sandwich'
-            if (Test-AsteriaSandwichBundleComplete -Root $assetsRoot) {
-                throw 'An absent SANDWiCH bundle was reported as complete.'
-            }
-            if (@(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
-                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }) {
-                throw 'An absent optional SANDWiCH bundle became release-required.'
-            }
-
-            New-Item -ItemType Directory -Path $sandwichCpu | Out-Null
-            Set-Content -LiteralPath (Join-Path $sandwichCpu 'encoder-nv-fp32.onnx') -Value 'nv'
-            Set-Content -LiteralPath (Join-Path $sandwichCpu 'encoder-v-fp32.onnx') -Value 'v'
-            if (Test-AsteriaSandwichBundleComplete -Root $assetsRoot) {
-                throw 'A two-ONNX partial SANDWiCH bundle was reported as complete.'
-            }
-            if (@(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
-                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }) {
-                throw 'A partial SANDWiCH bundle pretended to be publishable.'
-            }
-
-            Set-Content -LiteralPath (Join-Path $sandwichSource 'tokenizer.json') -Value '{}'
-            Set-Content -LiteralPath (Join-Path $sandwichSource 'model-manifest.json') -Value '{}'
-            if (-not (Test-AsteriaSandwichBundleComplete -Root $assetsRoot)) {
-                throw 'The complete four-file SANDWiCH bundle was not recognized.'
-            }
-            $sandwichRequired = @(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
-                Where-Object { $_.StartsWith($sandwichOutput, [StringComparison]::OrdinalIgnoreCase) }
+            # SANDWiCH is no longer a product profile, but an owner may still
+            # keep a complete legacy bundle in the ignored Models\Sandwich
+            # folder. Its presence must never make it release-required again.
+            $legacySandwich = Join-Path $assetsRoot 'src\AsteriaScale.RankerWorker\Models\Sandwich'
+            $legacySandwichOutput = Join-Path $distOutput 'Ranker\Models\Sandwich'
+            $legacyDeberta = Join-Path $assetsRoot 'src\AsteriaScale.RankerWorker\Models\GlossDeberta'
+            New-Item -ItemType Directory -Path (Join-Path $legacySandwich 'Cpu'), $legacyDeberta | Out-Null
+            Set-Content -LiteralPath (Join-Path $legacyDeberta 'tokenizer.json') -Value 'legacy'
             foreach ($relativePath in @(
                 'tokenizer.json',
                 'model-manifest.json',
                 'Cpu\encoder-nv-fp32.onnx',
                 'Cpu\encoder-v-fp32.onnx')) {
-                $expected = Join-Path $sandwichOutput $relativePath
-                if ($sandwichRequired -notcontains $expected) {
-                    throw "The enabled SANDWiCH profile does not require: $expected"
-                }
+                Set-Content -LiteralPath (Join-Path $legacySandwich $relativePath) -Value 'legacy'
             }
-
-            $explicitRoot = Join-Path $root 'explicit-sandwich'
-            $explicitOutput = Join-Path $explicitRoot 'dist\AsteriaScale'
-            $explicitRequired = @(Get-AsteriaRequiredDistFiles `
-                -Root $explicitRoot `
-                -Output $explicitOutput `
-                -IncludeExperimentalSandwichModel)
-            $explicitSandwichOutput = Join-Path $explicitOutput 'Ranker\Models\Sandwich'
-            foreach ($relativePath in @(
-                'tokenizer.json',
-                'model-manifest.json',
-                'Cpu\encoder-nv-fp32.onnx',
-                'Cpu\encoder-v-fp32.onnx')) {
-                $expected = Join-Path $explicitSandwichOutput $relativePath
-                if ($explicitRequired -notcontains $expected) {
-                    throw "An explicit SANDWiCH publish does not require: $expected"
-                }
+            if (@(Get-AsteriaRequiredDistFiles -Root $assetsRoot -Output $distOutput) |
+                Where-Object { $_.StartsWith($legacySandwichOutput, [StringComparison]::OrdinalIgnoreCase) }) {
+                throw 'A legacy local SANDWiCH bundle became release-required.'
+            }
+            # The source fingerprint is built from these inputs, so excluding
+            # the legacy folders here keeps them from marking dist as stale.
+            if (@(Get-AsteriaBuildInputFiles -Root $assetsRoot) |
+                Where-Object {
+                    $_.FullName.StartsWith($legacySandwich, [StringComparison]::OrdinalIgnoreCase) -or
+                        $_.FullName.StartsWith($legacyDeberta, [StringComparison]::OrdinalIgnoreCase)
+                }) {
+                throw 'A legacy local SANDWiCH or GlossDeBERTa bundle became a build input.'
             }
 
             # The closed output manifest covers files that cannot be derived

@@ -121,7 +121,7 @@ public sealed record RankerResponse
     /// <summary>
     /// Ranking pipeline used for a select response: "cross" (pure GlossBERT),
     /// "bi+cross" (MiniLM prefilter, then GlossBERT re-ranking), or a named
-    /// semantic-ranker adapter such as "sandwich".
+    /// semantic-ranker adapter such as "consec-independent".
     /// </summary>
     [JsonPropertyName("pipeline")]
     public string? Pipeline { get; init; }

@@ -58,7 +58,7 @@ CC BY 4.0 и лицензии EDRDG.
 |---|---|---|---|---|
 | `assets/Ranker/ranker-benchmark.json`, `assets/Ranker/ranker-sentence-benchmark.json`, `assets/Ranker/ranker-register-benchmark.json` | Оригинальные наборы, написанные для проекта | CC0-1.0 (поле `license` в файле) | не требуется | нет |
 | `assets/Ranker/ranker-holdout.json`, `assets/Ranker/ranker-holdout-v2.json`, `assets/Ranker/ranker-holdout-v3.json` | Замороженные оригинальные наборы проекта | CC0-1.0 (по [assets/Ranker/README.md](assets/Ranker/README.md)) | не требуется | нет |
-| `assets/Ranker/baselines/glossbert-cpu.json`, `assets/Ranker/baselines/sandwich-cpu.json` | Эталонные отчёты (schema 4) тестового стенда проекта по `ranker-benchmark.json` | в файлах не указана; не зафиксирована | — | нет |
+| `assets/Ranker/baselines/glossbert-cpu.json` | Эталонный отчёт (schema 4) тестового стенда проекта по `ranker-benchmark.json` | в файлах не указана; не зафиксирована | — | нет |
 | `assets/Ranker/README.md` | Документация проекта | MIT | Asteria Scale contributors | нет |
 | `assets/Translation/translation-benchmark.json`, `assets/Translation/translation-register-benchmark.json` | Оригинальные наборы, написанные для проекта | CC0-1.0 (поле `license` в файле) | не требуется | нет |
 | `assets/Translation/translation-holdout-v1.json` | Замороженный оригинальный набор проекта | CC0 (по [docs/RESEARCH.md](docs/RESEARCH.md), раздел «Метрики полного перевода») | не требуется | нет |
@@ -75,8 +75,7 @@ CC BY 4.0 и лицензии EDRDG.
 | `src/AsteriaScale.RankerWorker/Models/GlossBert/tokenizer.json` | Токенизатор [`kanishka/GlossBERT`](https://huggingface.co/kanishka/GlossBERT), ревизия `0cc3b83af5496e27ebcc95ef0cf37ea0a9281a7a`; 465 642 байт, SHA-256 `04FD39DFF4BFA1B7AE42425C484EF0173F8DA60B485F66642D2B44B251C6A014` | MIT (заявлена репозиторием модели) | kanishka/GlossBERT | да |
 | `src/AsteriaScale.RankerWorker/Models/GlossEmbeddings/tokenizer.json` | Токенизатор [`sentence-transformers/all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2), ревизия `c9745ed1`; 466 247 байт, SHA-256 `BE50C3628F2BF5BB5E3A7F17B1F74611B2561A3A27EEAB05E5AA30F411572037` | Apache-2.0 | sentence-transformers/all-MiniLM-L6-v2 | да |
 | `src/AsteriaScale.RankerWorker/Models/GlossBert/Npu/glossbert-eager-vitis-context.onnx.compatibility.txt` | Служебный сидекар совместимости AMD Vitis для NPU-сборки GlossBERT | отдельно не зафиксирована | — | да |
-| `src/AsteriaScale.RankerWorker/Models/Sandwich/model-manifest.json` | Manifest локального экспорта SANDWiCH (upstream `daca3cad63326204d4027b9ea09fb1405ab1ca0a`); в нём записана лицензия моделей upstream — MIT | отдельно не зафиксирована | — | только если локально установлен полный бандл SANDWiCH |
 
-Веса моделей (GlossBERT, all-MiniLM-L6-v2, SANDWiCH, ConSeC, TranslateGemma) в
+Веса моделей (GlossBERT, all-MiniLM-L6-v2, ConSeC, TranslateGemma) в
 git не хранятся; их лицензии и условия — в
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

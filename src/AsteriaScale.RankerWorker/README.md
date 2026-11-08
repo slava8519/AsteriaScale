@@ -42,57 +42,15 @@ The CPU path is explicitly pinned to `Microsoft.ML.OnnxRuntime` 1.27.1 and
 uses the unquantized FP32 reference graph. The previous full dynamic-INT8
 artifact was removed because it changed both top choices and score margins.
 
-## SANDWiCH CPU profile
+## Removed CPU profiles
 
-`--provider cpu --cpu-model sandwich` selects the upstream NAACL 2025
-SANDWiCH ensemble. It is deliberately CPU-only and requires this exact
-out-of-band bundle beneath `--model-directory`:
-
-```text
-Models/
-  Sandwich/
-    model-manifest.json
-    tokenizer.json
-    Cpu/
-      encoder-nv-fp32.onnx
-      encoder-v-fp32.onnx
-```
-
-The worker validates all three files by byte length and SHA-256 before either
-session is created. Both ONNX files must load; there is no single-encoder or
-GlossBERT fallback.
-
-| Artifact | Bytes | SHA-256 |
-|---|---:|---|
-| `Sandwich/tokenizer.json` | 8,656,779 | `2689db9b56b94ae9fac86daeb5fe7df0be0c5f1a9dce76a0edda7afa93dd1304` |
-| `Sandwich/Cpu/encoder-nv-fp32.onnx` | 568,094,742 | `b6a21c42c974f145a39a20e5c5b62b740cb0b63ed698499fa4c5e4b397998739` |
-| `Sandwich/Cpu/encoder-v-fp32.onnx` | 568,094,742 | `21b778dc9552f84732d1061ca1ace23f9f6c071e68fe4ab0615109f192e78f6b` |
-
-The immutable runtime identity is:
-
-```text
-SANDWiCH:naacl-2025:singleton-gloss:m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:s512:c2:p1:pipeline-sandwich
-```
-
-The `singleton-gloss` adapter is important: Asteria does not install or ship
-the upstream BabelNet-derived definition/neighbour files. Instead, every
-existing English candidate gloss is one ensemble member and the existing
-stable `candidateGroupIds` are its neighbourhood clusters. This keeps the
-dictionary-layer contract intact and lets the selected stable outcome feed
-the full-text TranslateGemma scaffold without exposing BabelNet data.
-
-SANDWiCH input uses the exact hovered target occurrence delimited by literal
-`[D]` tokens. For each gloss, both encoders produce a two-class softmax and
-the positive probabilities are averaged. Within each stable group, member
-weights are `softmax(abs(2p-1))`; the weighted member probabilities produce
-the group score. The best/second group-score margin then goes through the same
-sole `0.25` abstention threshold as the other rankers. Every selection response
-reports `pipeline: "sandwich"`.
-
-The upstream repository declares model and code MIT. Its optional data extracts
-are governed by the BabelNet non-commercial license; they are intentionally
-absent from this profile. The tracked reproducible-export provenance is in
-`Models/Sandwich/model-manifest.json`.
+`--cpu-model` accepts only `glossbert` (default) and `consec`. The SANDWiCH
+dual-encoder profile and the GlossDeBERTa candidate were removed on
+8 November 2026; `--cpu-model sandwich` or `--cpu-model deberta` now fails
+with `Unsupported CPU model '<value>'. Expected glossbert or consec.` Their
+bundle contracts, pins and the `[D]` target-marker path were last present in
+commit `911510e`. Local `Models/Sandwich` and `Models/GlossDeberta` folders
+are ignored by git and are not packaged with the worker.
 
 ## ConSeC CPU profile
 
@@ -197,7 +155,6 @@ fails initialization. The provider/device reported over the protocol is
 
 ```powershell
 dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --smoke
-dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --cpu-model sandwich --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj -c Release --no-build -- --provider npu --smoke
 ```

@@ -28,9 +28,13 @@ function Get-AsteriaBuildInputFiles {
     )
     $files = @(foreach ($inputRoot in $inputRoots) {
         if (Test-Path -LiteralPath $inputRoot -PathType Container) {
+            # Legacy SANDWiCH/GlossDeBERTa bundles may still sit in the ignored
+            # worker Models folders; nothing builds or publishes them any more,
+            # so touching them must not mark dist as stale.
             Get-ChildItem -LiteralPath $inputRoot -File -Recurse -Force |
                 Where-Object {
                     $_.FullName -notmatch '[\\/](bin|obj)[\\/]' -and
+                        $_.FullName -notmatch '[\\/]AsteriaScale\.RankerWorker[\\/]Models[\\/](Sandwich|GlossDeberta)[\\/]' -and
                         $_.Name -notlike "ranker-holdout*.json" -and
                         $_.Name -notlike "ranker-benchmark*.json"
                 }
@@ -121,28 +125,6 @@ function Get-AsteriaSourceFingerprint {
     }
 }
 
-function Get-AsteriaSandwichBundleRelativeFiles {
-    return @(
-        "tokenizer.json",
-        "model-manifest.json",
-        "Cpu\encoder-nv-fp32.onnx",
-        "Cpu\encoder-v-fp32.onnx"
-    )
-}
-
-function Test-AsteriaSandwichBundleComplete {
-    param([Parameter(Mandatory = $true)][string]$Root)
-
-    $bundle = Join-Path $Root "src\AsteriaScale.RankerWorker\Models\Sandwich"
-    foreach ($relativePath in Get-AsteriaSandwichBundleRelativeFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $bundle $relativePath) -PathType Leaf)) {
-            return $false
-        }
-    }
-
-    return $true
-}
-
 function Get-AsteriaConsecBundleRelativeFiles {
     return @(
         "tokenizer.json",
@@ -169,7 +151,6 @@ function Get-AsteriaRequiredRankerFiles {
     param(
         [Parameter(Mandatory = $true)][string]$Output,
         [string]$Root = "",
-        [switch]$IncludeExperimentalSandwichModel,
         [switch]$IncludeExperimentalConsecModel
     )
 
@@ -187,16 +168,6 @@ function Get-AsteriaRequiredRankerFiles {
         (Join-Path $models "GlossEmbeddings\tokenizer.json")
     )) {
         $required.Add($path)
-    }
-
-    $includeSandwich = $IncludeExperimentalSandwichModel -or
-        (-not [string]::IsNullOrWhiteSpace($Root) -and
-            (Test-AsteriaSandwichBundleComplete -Root $Root))
-    if ($includeSandwich) {
-        $sandwichOutput = Join-Path $models "Sandwich"
-        foreach ($relativePath in Get-AsteriaSandwichBundleRelativeFiles) {
-            $required.Add((Join-Path $sandwichOutput $relativePath))
-        }
     }
 
     $includeConsec = $IncludeExperimentalConsecModel -or
@@ -227,7 +198,6 @@ function Get-AsteriaRequiredDistFiles {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
         [Parameter(Mandatory = $true)][string]$Output,
-        [switch]$IncludeExperimentalSandwichModel,
         [switch]$IncludeExperimentalConsecModel
     )
 
@@ -241,7 +211,6 @@ function Get-AsteriaRequiredDistFiles {
     foreach ($rankerFile in Get-AsteriaRequiredRankerFiles `
         -Output $Output `
         -Root $Root `
-        -IncludeExperimentalSandwichModel:$IncludeExperimentalSandwichModel `
         -IncludeExperimentalConsecModel:$IncludeExperimentalConsecModel) {
         $required.Add($rankerFile)
     }

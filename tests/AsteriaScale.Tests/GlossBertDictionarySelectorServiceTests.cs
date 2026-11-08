@@ -12,7 +12,6 @@ internal static class GlossBertDictionarySelectorServiceTests
         VerifyNormalAbstention();
         VerifyPipelineIdentity();
         VerifySwitchableCpuModelIdentity();
-        VerifySandwichCpuModelIdentity();
         VerifyConsecCpuModelIdentity();
         VerifySwitchableCpuModelArguments();
         VerifyFailClosedIdentityChecks();
@@ -147,12 +146,6 @@ internal static class GlossBertDictionarySelectorServiceTests
         Check(SmartHoverPipeline.ExpectedRankingPipeline(
                 GlossBertRankerProvider.Cpu,
                 2,
-                GlossBertDictionarySelectorService.SandwichCpuModelCacheId +
-                ":pipeline-sandwich") == "sandwich",
-            "The cache identity did not recognize the pinned SANDWiCH pipeline.");
-        Check(SmartHoverPipeline.ExpectedRankingPipeline(
-                GlossBertRankerProvider.Cpu,
-                2,
                 GlossBertDictionarySelectorService.ConsecCpuModelCacheId +
                 ":pipeline-consec-independent") == "consec-independent",
             "The cache identity did not recognize the pinned ConSeC pipeline.");
@@ -229,162 +222,65 @@ internal static class GlossBertDictionarySelectorServiceTests
         }
     }
 
-    private static void VerifySandwichCpuModelIdentity()
-    {
-        string artifact = GlossBertDictionarySelectorService.SandwichCpuModelCacheId;
-        RankerResponse response = Success(
-            requestId: "sandwich",
-            provider: GlossBertRankerProvider.Cpu) with
-        {
-            ModelVersion = artifact + ":pipeline-sandwich",
-            Pipeline = "sandwich",
-            Index = 12,
-            Margin = 0.5,
-            Score = 0.9,
-            Confidence = 0.9
-        };
-
-        GlossBertDictionarySelection selection =
-            GlossBertDictionarySelectorService.ValidateSelectionResponseForTests(
-                response,
-                "sandwich",
-                GlossBertRankerProvider.Cpu,
-                [12, 19],
-                RankerCpuModelProfile.Sandwich);
-        Check(selection is { Index: 12, Pipeline: "sandwich" },
-            "The host rejected the exact pinned SANDWiCH CPU identity.");
-
-        ExpectProtocolViolation(
-            response with { Pipeline = "cross" },
-            "sandwich",
-            GlossBertRankerProvider.Cpu,
-            [12, 19],
-            "A SANDWiCH identity was accepted with a cross-encoder pipeline.",
-            RankerCpuModelProfile.Sandwich);
-        ExpectProtocolViolation(
-            response with
-            {
-                ModelVersion = artifact.Replace(
-                    "m-v-21b778dc9552",
-                    "m-v-aaaaaaaaaaaa",
-                    StringComparison.Ordinal) + ":pipeline-sandwich"
-            },
-            "sandwich",
-            GlossBertRankerProvider.Cpu,
-            [12, 19],
-            "A format-valid but unpinned SANDWiCH artifact identity was accepted.",
-            RankerCpuModelProfile.Sandwich);
-
-        try
-        {
-            GlossBertDictionarySelectorService.ValidateWarmResponseForTests(
-                response with
-                {
-                    RequestId = "npu-sandwich",
-                    Provider = GlossBertDictionarySelectorService.NpuExecutionProvider,
-                    Device = "NPU",
-                    Index = null,
-                    Margin = null,
-                    Score = null,
-                    Confidence = null
-                },
-                "npu-sandwich",
-                GlossBertRankerProvider.Npu,
-                RankerCpuModelProfile.Sandwich);
-            throw new InvalidOperationException(
-                "The host accepted the SANDWiCH profile on NPU.");
-        }
-        catch (GlossBertRankerException ex) when (
-            ex.ErrorCode == "unsupported_provider_model")
-        {
-            // A provider mismatch must fail before transport, never fall back.
-        }
-    }
-
     private static void VerifySwitchableCpuModelIdentity()
     {
-        const string debertaArtifact =
-            GlossBertDictionarySelectorService.DebertaCpuModelCacheId;
-        RankerResponse response = Success(
-            requestId: "deberta",
+        // A verdict is valid only for the profile that produced it; accepting
+        // it under another profile would serve a foreign answer after a switch.
+        RankerResponse consecResponse = Success(
+            requestId: "switch",
             provider: GlossBertRankerProvider.Cpu) with
         {
-            ModelVersion = debertaArtifact + ":pipeline-cross",
+            ModelVersion = GlossBertDictionarySelectorService.ConsecCpuModelCacheId +
+                ":pipeline-consec-independent",
+            Pipeline = "consec-independent",
             Index = 4,
             Margin = 0.5,
             Score = 0.9,
             Confidence = 0.9
         };
-        GlossBertDictionarySelection selection =
-            GlossBertDictionarySelectorService.ValidateSelectionResponseForTests(
-                response,
-                "deberta",
-                GlossBertRankerProvider.Cpu,
-                [4, 9],
-                RankerCpuModelProfile.Deberta);
-        Check(
-            selection.Index == 4 &&
-            selection.ModelVersion == response.ModelVersion,
-            "The host rejected a pinned DeBERTa CPU identity.");
-
         ExpectProtocolViolation(
-            response,
-            "deberta",
+            consecResponse,
+            "switch",
             GlossBertRankerProvider.Cpu,
             [4, 9],
-            "A DeBERTa response was accepted for the GlossBERT profile.");
-        ExpectProtocolViolation(
-            response with
-            {
-                ModelVersion = debertaArtifact.Replace(
-                    "m-8c85154563ac",
-                    "m-aaaaaaaaaaaa",
-                    StringComparison.Ordinal) + ":pipeline-cross"
-            },
-            "deberta",
-            GlossBertRankerProvider.Cpu,
-            [4, 9],
-            "A format-valid but unpinned DeBERTa artifact identity was accepted.",
-            RankerCpuModelProfile.Deberta);
-
-        RankerResponse onnxTagged = response with
+            "A ConSeC response was accepted for the GlossBERT profile.");
+        RankerResponse glossBertResponse = Success(
+            requestId: "switch",
+            provider: GlossBertRankerProvider.Cpu) with
         {
-            ModelVersion = debertaArtifact + ":onnx-17:pipeline-cross"
+            Index = 4,
+            Margin = 0.5,
+            Score = 0.9,
+            Confidence = 0.9
+        };
+        _ = GlossBertDictionarySelectorService.ValidateSelectionResponseForTests(
+            glossBertResponse,
+            "switch",
+            GlossBertRankerProvider.Cpu,
+            [4, 9]);
+        ExpectProtocolViolation(
+            glossBertResponse,
+            "switch",
+            GlossBertRankerProvider.Cpu,
+            [4, 9],
+            "A GlossBERT response was accepted for the ConSeC profile.",
+            RankerCpuModelProfile.Consec);
+
+        // The worker appends an ONNX metadata version when the graph declares
+        // one; the pinned identity must still be recognized behind it.
+        RankerResponse onnxTagged = glossBertResponse with
+        {
+            ModelVersion = GlossBertDictionarySelectorService.CpuModelCacheId +
+                ":onnx-17:pipeline-cross"
         };
         GlossBertDictionarySelection onnxSelection =
             GlossBertDictionarySelectorService.ValidateSelectionResponseForTests(
                 onnxTagged,
-                "deberta",
+                "switch",
                 GlossBertRankerProvider.Cpu,
-                [4, 9],
-                RankerCpuModelProfile.Deberta);
+                [4, 9]);
         Check(onnxSelection.Index == 4,
-            "The exact DeBERTa identity rejected its optional ONNX version suffix.");
-
-        try
-        {
-            GlossBertDictionarySelectorService.ValidateWarmResponseForTests(
-                response with
-                {
-                    RequestId = "npu-deberta",
-                    Provider = GlossBertDictionarySelectorService.NpuExecutionProvider,
-                    Device = "NPU",
-                    Index = null,
-                    Margin = null,
-                    Score = null,
-                    Confidence = null
-                },
-                "npu-deberta",
-                GlossBertRankerProvider.Npu,
-                RankerCpuModelProfile.Deberta);
-            throw new InvalidOperationException(
-                "The host accepted the DeBERTa profile on NPU.");
-        }
-        catch (GlossBertRankerException ex) when (
-            ex.ErrorCode == "unsupported_provider_model")
-        {
-            // The selected profile/provider pair is rejected before transport.
-        }
+            "The exact GlossBERT identity rejected its optional ONNX version suffix.");
     }
 
     private static void VerifySwitchableCpuModelArguments()
@@ -393,7 +289,7 @@ internal static class GlossBertDictionarySelectorServiceTests
         GlossBertDictionarySelectorService.AddWorkerArguments(
             startInfo,
             GlossBertRankerProvider.Cpu,
-            RankerCpuModelProfile.Deberta,
+            RankerCpuModelProfile.GlossBert,
             "C:\\models");
         Check(
             startInfo.ArgumentList.SequenceEqual(
@@ -401,31 +297,12 @@ internal static class GlossBertDictionarySelectorServiceTests
                     "--provider",
                     "cpu",
                     "--cpu-model",
-                    "deberta",
+                    "glossbert",
                     "--model-directory",
                     "C:\\models"
                 ],
                 StringComparer.Ordinal),
-            "The host did not pass the selected CPU model profile to the worker.");
-
-        ProcessStartInfo sandwichStartInfo = new("worker.exe");
-        GlossBertDictionarySelectorService.AddWorkerArguments(
-            sandwichStartInfo,
-            GlossBertRankerProvider.Cpu,
-            RankerCpuModelProfile.Sandwich,
-            "C:\\models");
-        Check(
-            sandwichStartInfo.ArgumentList.SequenceEqual(
-                [
-                    "--provider",
-                    "cpu",
-                    "--cpu-model",
-                    "sandwich",
-                    "--model-directory",
-                    "C:\\models"
-                ],
-                StringComparer.Ordinal),
-            "The host did not pass the SANDWiCH CPU profile to the worker.");
+            "The host did not pass the default GlossBERT profile to the worker.");
 
         ProcessStartInfo consecStartInfo = new("worker.exe");
         GlossBertDictionarySelectorService.AddWorkerArguments(
@@ -767,7 +644,7 @@ internal static class GlossBertDictionarySelectorServiceTests
         service.BeforeSelectionMaterializationForTests = async () =>
         {
             await service.ConfigureCpuModelProfileAsync(
-                RankerCpuModelProfile.Sandwich);
+                RankerCpuModelProfile.Consec);
             profileSwitchedAfterResponse = true;
         };
 
@@ -781,7 +658,7 @@ internal static class GlossBertDictionarySelectorServiceTests
             GlossBertRankerProvider.Cpu);
 
         Check(profileSwitchedAfterResponse &&
-              service.CpuModelProfile == RankerCpuModelProfile.Sandwich,
+              service.CpuModelProfile == RankerCpuModelProfile.Consec,
             "The deterministic fixture did not switch profiles after the response.");
         Check(selection is
         {

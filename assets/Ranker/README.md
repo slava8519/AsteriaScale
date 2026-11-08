@@ -56,7 +56,7 @@ fixed-size chunks, so inventory size cannot change individual scores, and the
 margin threshold remains the sole abstention criterion. Measured through the
 full production pipeline (`AsteriaScale.Tests --ranker-benchmark <set.json>
 <workerBaseDir> [cpu|npu]`; CPU profile selected with
-`--ranker-cpu-model glossbert|deberta|sandwich|consec`): no dev or holdout case
+`--ranker-cpu-model glossbert|consec`): no dev or holdout case
 exceeds 18 glosses after
 sense grouping, a hyper-polysemy probe (`set`, `run`, `go`, `light`) peaks at
 27, and with the rule removed CPU and NPU agree — dev set 17/17 correct
@@ -83,89 +83,26 @@ The source artifacts are staged in
 evaluated as earlier baselines and rejected for automatic sense selection.
 They are not part of the packaged 0.9 ranker.
 
-### DeBERTa CPU candidate (closed experiment, non-default)
+Pinned model, tokenizer, NPU sidecar/binary and embedding files stay open with
+read-only sharing until their native sessions are constructed, preventing
+replacement between SHA verification and load.
 
-The historical self-training candidate is staged separately under
-`Models/GlossDeberta`. It is selected only by the benchmark/runtime profile;
-GlossBERT remains the production default. Normal builds and publishes do not
-copy this experimental 293 MB bundle. A local benchmark build must opt in:
+### Removed profiles: GlossDeBERTa and SANDWiCH
 
-```powershell
-dotnet build AsteriaScale.slnx -c Release `
-  -p:IncludeExperimentalDebertaModel=true
-```
+Two further CPU profiles were evaluated and removed on 8 November 2026: the
+closed self-training GlossDeBERTa candidate (`Models/GlossDeberta`) and the
+ready-made NAACL 2025 SANDWiCH ensemble (`Models/Sandwich`, upstream commit
+`daca3cad63326204d4027b9ea09fb1405ab1ca0a`). Their worker code, installer,
+exporter, pins, cache identities and the full provenance tables of this README
+were last present in commit `911510e`
+(`git show 911510e:assets/Ranker/README.md`); the measurements and the reasons
+for removal are in [docs/RESEARCH.md](../../docs/RESEARCH.md).
 
-Alternatively, copy the complete bundle into an isolated benchmark worker
-layout. The runtime authenticates
-`model-manifest.json` before reading any path, tensor shape, class mapping or
-cache-identity field from it. Pinned model, tokenizer, NPU sidecar/binary and
-embedding files stay open with read-only sharing until their native sessions
-are constructed, preventing replacement between SHA verification and load.
-
-| Artifact | Bytes | SHA-256 |
-|---|---:|---|
-| `model-manifest.json` | 527 | `F4028FE04C8A138DFEF3D4E453907C6D2AD9E14ED8A44AF75D4410BE51149B89` |
-| `tokenizer.json` | 8,340,127 | `8E71D5C9121679076EE7582B048973119BD8F2D742B57F1D8E6A5585697A5620` |
-| `Cpu/definition-ranker-fp32.onnx` | 284,328,578 | `8C85154563AC9950F53387EEE1346209249C64F7EC9A1D7F5C5011A02FE21190` |
-
-The exact host cache identity is pinned alongside these bytes. Promoting a
-different candidate requires updating the manifest size/SHA in
-`RankerEngine.cs`, this table and the host identity in one review.
-
-### SANDWiCH CPU profile
-
-The ready-made NAACL 2025 SANDWiCH ensemble from upstream commit
-`daca3cad63326204d4027b9ea09fb1405ab1ca0a` is installed out of band under
-`Models/Sandwich` and selected explicitly as the CPU ranker. Its reproducible
-export provenance is tracked in
-`src/AsteriaScale.RankerWorker/Models/Sandwich/model-manifest.json`; the two large
-ONNX files and tokenizer are ignored by git.
-
-Pinned upstream inputs:
-
-| Artifact | Bytes | SHA-256 |
-|---|---:|---|
-| official `sandwich-models.zip` | 957,844,471 | `98B3CDA35A8599C961FC2AC36867D4687BD136E3F0CA1998D4A4754EA8C8E1DE` |
-| `models/encoder-nv/model.safetensors` | 567,598,552 | `D759C83CF13C8D367ECCBDDB33D061C1DB6E5D5082E39B86679DCD4DD21EF602` |
-| `models/encoder-v/model.safetensors` | 567,598,552 | `A63626AB5EF52CAD6360624BFDAAB91743716270E377F2BDF92FEABC512D273D` |
-| upstream `tokenizer.json` | 8,656,779 | `2689DB9B56B94AE9FAC86DAEB5FE7DF0BE0C5F1A9DCE76A0EDDA7AFA93DD1304` |
-
-Pinned local export:
-
-| Artifact | Bytes | SHA-256 |
-|---|---:|---|
-| `tokenizer.json` | 8,656,779 | `2689DB9B56B94AE9FAC86DAEB5FE7DF0BE0C5F1A9DCE76A0EDDA7AFA93DD1304` |
-| `Cpu/encoder-nv-fp32.onnx` | 568,094,742 | `B6A21C42C974F145A39A20E5C5B62B740CB0B63ED698499FA4C5E4B397998739` |
-| `Cpu/encoder-v-fp32.onnx` | 568,094,742 | `21B778DC9552F84732D1061CA1ACE23F9F6C071E68FE4AB0615109F192E78F6B` |
-| `model-manifest.json` | 1,108 | `B4D20C4F82CC876805F5D4A1C848DA88AE3E1C9D635A349CE1D34E7266DCA0A3` |
-
-The adapter marks the exact target with literal `[D]` delimiters, averages the
-two encoders' positive-class probabilities, then applies the official
-confidence-weighted cluster reducer to the existing stable outcome groups.
-`singleton-gloss` in the identity means that every Asteria gloss is submitted
-as an individual encoder pair before that reducer; it does **not** discard
-multiple glosses that share one GroupId.
-The runtime/cache identity is
-`SANDWiCH:naacl-2025:singleton-gloss:m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:s512:c2:p1:pipeline-sandwich`.
-It contains both model hashes plus the singleton-gloss adapter marker so a
-different grouping scheme cannot reuse decisions.
-
-Upstream declares the models and code MIT. Asteria does not install the
-BabelNet-derived definitions/neighbours governed by the separate
-non-commercial data license; it supplies its own layered-dictionary glosses.
-
-Install and independently verify the bundle:
-
-```powershell
-.\scripts\install-sandwich.cmd
-powershell.exe -NoProfile -ExecutionPolicy Bypass `
-  -File .\scripts\verify-sandwich.ps1
-```
-
-The exporter passed Torch/ONNX Runtime parity with observed maximum deltas on
-the order of `1e-6`. A real worker smoke loaded both CPU sessions and selected
-GroupId `20` with margin `0.802342`, selected score `0.945381`, reported
-`pipeline=sandwich`, and used no fallback.
+`--ranker-cpu-model` now accepts only `glossbert|consec`, and the worker
+rejects `--cpu-model sandwich|deberta`. A saved `sandwich` or `deberta`
+setting loads as GlossBERT. Local `Models/Sandwich` and `Models/GlossDeberta`
+folders stay ignored by git and are never copied into a build or publish.
+The GlossBERT and ConSeC cache identities did not change.
 
 The final same-build open-dev A/B used `134` cases (`20` scientific), made `113`
 ranker requests and covered the expected sense inventory in `106`. Report schema
@@ -184,9 +121,9 @@ GlossBERT scored `14/14` accepted sense decisions and `11/14` visible decisions;
 SANDWiCH scored `13/16` and `11/16`. Both reached `11/20` strict visible E2E,
 but SANDWiCH made more incorrect accepted decisions.
 
-SANDWiCH therefore fails the 90% accepted-sense precision gate and also loses
-on total quality, latency and memory. It remains available only as an explicit
-experimental research profile; GlossBERT remains the default. No frozen
+SANDWiCH therefore failed the 90% accepted-sense precision gate and also lost
+on total quality, latency and memory. It stayed only an explicit experimental
+research profile until its removal; GlossBERT remained the default. No frozen
 holdout was opened.
 
 ### ConSeC CPU profile and sentence-planner foundation
@@ -262,7 +199,7 @@ This is a development set, not a frozen holdout.
 
 Same-build results on all `46` sentences / `138` targets:
 
-| Metric | GlossBERT CPU | SANDWiCH CPU | ConSeC CPU |
+| Metric | GlossBERT CPU | SANDWiCH CPU (removed) | ConSeC CPU |
 |---|---:|---:|---:|
 | Correct target groups | 91 | 120 | **131** |
 | Scientific correct (`108`) | 69 | 96 | **106** |

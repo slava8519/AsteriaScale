@@ -334,7 +334,10 @@ same-build сравнения, а не более новым названием 
 **Решение 29 июля 2026.** Собственный fine-tune DeBERTa закрыт: новые RTX
 прогоны не выполняются. Полученная инфраструктура и отрицательный результат
 сохранены для воспроизводимости, но не являются production-планом. Первые три
-шага готового-model bake-off выполнены:
+шага готового-model bake-off выполнены. *8 ноября 2026 профили SANDWiCH и
+GlossDeBERTa и инструменты self-training удалены из репозитория (последний
+коммит с ними — `911510e`); измерения остаются в [RESEARCH.md](RESEARCH.md),
+в продукте — GlossBERT и ConSeC.*
 
 1. ~~измерить официальный SANDWiCH как явный CPU-профиль~~ — выполнено,
    baseline проигран;
@@ -372,7 +375,8 @@ same-build сравнения, а не более новым названием 
 - **Кандидаты bake-off:**
   1. текущий GlossBERT cross-encoder — обязательный baseline и rollback;
   2. уже реализованный MiniLM bi-encoder top-12 + GlossBERT cross rerank;
-  3. **SANDWiCH NAACL 2025 — интегрирован как экспериментальный CPU-профиль.**
+  3. **SANDWiCH NAACL 2025 — был интегрирован как экспериментальный CPU-профиль;
+     удалён 8 ноября 2026.**
      Официальные `encoder-nv` и `encoder-v` оценивают каждую context/gloss пару;
      Asteria усредняет positive-class probabilities и применяет официальный
      confidence-weighted reducer к стабильным GroupId. Маркеры цели —
@@ -404,8 +408,9 @@ same-build сравнения, а не более новым названием 
      эффекта (baseline перемерен на HEAD как `275 мс` против записанных
      `228 мс`), поэтому отклонение опирается только на воспроизводимые
      метрики качества. Подробности — в [RESEARCH.md](RESEARCH.md).
-- **Лицензионная граница:** SANDWiCH code/models объявлены upstream как MIT;
-  Asteria не устанавливает BabelNet-derived definitions/neighbours. ConSeC и
+- **Лицензионная граница:** SANDWiCH (удалён 8 ноября 2026) code/models
+  объявлены upstream как MIT; Asteria не устанавливала BabelNet-derived
+  definitions/neighbours. ConSeC и
   официальный WNGT checkpoint имеют CC BY-NC-SA 4.0 и допускаются здесь только
   для личного научного/некоммерческого исследования; checkpoint/ONNX не входят
   в git или обычную поставку, а отдельный installer требует явного принятия
@@ -442,8 +447,8 @@ same-build сравнения, а не более новым названием 
   выполняется controlled run только на gold, затем gold+silver с повышенным
   весом gold; прирост от silver обязан подтверждаться отдельной абляцией.
   Скрипт обучения в `tools/`, входы и teacher outputs закрепляются SHA-256.
-- **Интеграция**: путь уже проложен отдельным CPU-профилем
-  `Models/GlossDeberta`; production GlossBERT и его rollback-файлы не
+- **Интеграция**: путь был проложен отдельным CPU-профилем
+  `Models/GlossDeberta` (удалён 8 ноября 2026); production GlossBERT и его rollback-файлы не
   перезаписываются. Manifest, tokenizer, ONNX и host cache identity закрепляются
   размером и SHA-256. Порог не подгоняется под кандидата: он остаётся `0.25`.
   NPU-вариант компилируется отдельно и не обязателен в первом шаге.
@@ -477,7 +482,8 @@ payload до запуска, запрещает CPU fallback и фиксируе
 готовых SANDWiCH и ConSeC вместо продолжения собственного обучения. Созданные
 trainer, пакеты, hashes и text-free per-group формат остаются историческими
 артефактами воспроизводимости; `Resume` с другим dataset/trainer/числом эпох
-по-прежнему запрещён подписью запуска.
+по-прежнему запрещён подписью запуска. *8 ноября 2026 эти инструменты удалены
+из дерева; они доступны в истории git до коммита `911510e`.*
 
 **Результат SANDWiCH A/B.** Финальный same-build open-dev содержит `134` случая,
 включая `20` научных: `113` ranker-запросов и `106` покрытых expected sense
@@ -492,6 +498,8 @@ GlossBERT — sense `14/14`, visible `11/14`; SANDWiCH — `13/16` и `11/16`.
 SANDWiCH не прошёл минимальный `90 %` sense gate и проиграл baseline по качеству,
 задержке и памяти; frozen holdout не открывался. Поэтому профиль остаётся только
 явным исследовательским CPU-вариантом, а GlossBERT — default/rollback.
+*8 ноября 2026 профиль SANDWiCH удалён по решению владельца, см.
+[RESEARCH.md](RESEARCH.md).*
 
 **Independent ConSeC — выполнено.** Официальный WNGT checkpoint
 (`4 864 940 005` байт, SHA-256
@@ -639,7 +647,9 @@ correct coverage минимум на `8` п.п., уменьшить долю в�
   holdout не используются для выбора или приёмки обученного кандидата.
 
 **Definition of Done.** Для SANDWiCH опубликованы одинаковые с GlossBERT
-open-dev/register/runtime отчёты и точная artifact provenance. Для independent
+open-dev/register/runtime отчёты и точная artifact provenance (выполнено; эталон
+`sandwich-cpu.json` удалён вместе с профилем 8 ноября 2026, числа — в
+RESEARCH.md). Для independent
 ConSeC готовы воспроизводимое выделение inference-весов, официальный upstream
 gate, CPU runtime/installer и sentence-level отчёт; лицензии и граница
 распространения зафиксированы.

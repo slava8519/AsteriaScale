@@ -4,9 +4,13 @@ Asteria Scale is a Windows WPF app that upscales low-res game windows through
 the external Magpie engine and translates on-screen text to Russian fully
 offline: OCR (Windows AI on the NPU) or a Textractor text hook → layered
 dictionaries → definition-aware sense ranking in an isolated ONNX worker
-(GlossBERT by default; SANDWiCH and ConSeC are opt-in CPU profiles) → optional
+(GlossBERT by default; ConSeC is an opt-in CPU profile) → optional
 local TranslateGemma 4B through llama.cpp (CPU or Vulkan). The Qwen/Foundry
-Local pipeline was removed on 2026-07-30; do not reintroduce it. Read
+Local pipeline was removed on 2026-07-30; do not reintroduce it. The SANDWiCH
+and GlossDeBERTa ranker profiles and the closed DeBERTa fine-tune tooling were
+removed on 2026-11-08 (last present in commit `911510e`); a saved `sandwich` or
+`deberta` setting loads as GlossBERT. ConSeC's own DeBERTa-large backbone is
+unaffected. Read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before touching translation code;
 it lists the load-bearing invariants. Build/test/release mechanics live in
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Ready-made task prompts (in
@@ -43,11 +47,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 
 Windows 11 build 26100+, .NET 10 SDK, Magpie 0.12.1 (the "Installed effects"
 and "Engine lifecycle" smoke tests use it), Python 3.11+ on `PATH` as `python`
-(the smoke run executes `tools/translation-benchmark.py`,
-`tools/build-wsd-training-set.py` and `tools/atomic_output.py`), and the inbox
+(the smoke run executes `tools/translation-benchmark.py` and
+`tools/atomic_output.py`), and the inbox
 Windows PowerShell. Build and the default smoke run need no model artifacts
-(ranker tests use fake bytes); the ConSeC/SANDWiCH tokenizer checks are skipped
-silently when those ignored bundles are absent, so a clean-clone pass covers
+(ranker tests use fake bytes); the ConSeC tokenizer check is skipped
+silently when that ignored bundle is absent, so a clean-clone pass covers
 less than the owner's machine. `scripts/build.cmd` and every benchmark need the
 real artifacts (docs/DEVELOPMENT.md). Only Core and RankerProtocol target plain
 `net10.0`; on a non-Windows host say so instead of reporting a test run.
@@ -86,8 +90,8 @@ certificate. That is expected: report it, never weaken the checks.
 `--accept-package-agreements` and registers the MSIX identity with
 `Add-AppxPackage`), `scripts/install-*.cmd` or any `-AcceptUpstreamTerms` /
 `-AcceptGemmaTerms` switch (the switches accept third-party terms on the user's
-behalf; install-sandwich and install-translategemma also download about 1 GB
-and 2.5 GB, and install-consec installs a locally exported bundle), dataset or
+behalf; install-translategemma also downloads about 2.5 GB, and
+install-consec installs a locally exported bundle), dataset or
 dictionary-source downloads (including `tools/fetch-benchmark-datasets.py`),
 certificate creation, `Add-AppxPackage`.
 
@@ -121,9 +125,9 @@ certificate creation, `Add-AppxPackage`.
    sides + an updated `tests/AsteriaScale.Tests/RankerProviderTraitsTests.cs`;
    only worker-internal session setup (VitisAI options, NPU/CPU artifact
    leases, NPU input/output shapes) may still branch on the worker's
-   `RankerProvider` enum. `RankerEngine.cs` still tests the enum in two places
-   where `AlternativeModels` is the trait (the SANDWiCH lease and the ConSeC
-   CPU-only guard) — do not copy that pattern. TranslateGemma follows the same rule: the
+   `RankerProvider` enum. `RankerEngine.cs` still tests the enum in one place
+   where `AlternativeModels` is the trait (the ConSeC CPU-only guard) — do not
+   copy that pattern. TranslateGemma follows the same rule: the
    CPU/Vulkan backend (and Vulkan's coopmat-free path) is explicit and part of
    the model identity, and a Vulkan failure never starts CPU.
 4. **Abstention is margin-only** (threshold `0.25`, frozen on the dev set,

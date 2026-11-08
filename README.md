@@ -27,7 +27,7 @@ optional neural sentence translation all run locally, with no cloud calls.
   sentence pairs in 12 layers with a documented priority order and one canonical key
   normalization shared by the C# loader and the Python generator (a parity fixture is
   checked on both sides) → definition-aware word-sense ranker → optional local LLM.
-- **Isolated model worker.** The sense ranker (GlossBERT, SANDWiCH or ConSeC on ONNX
+- **Isolated model worker.** The sense ranker (GlossBERT or ConSeC on ONNX
   Runtime) runs in its own process behind a versioned JSONL protocol. Every request line
   gets exactly one drained response line, even on cancellation; a protocol violation
   kills the worker tree; switching modes or the optional idle unload returns the memory.
@@ -57,7 +57,7 @@ targets), same build:
 | Ranker | Correct sense group | Scientific slice | Sentences with all targets correct |
 |---|---:|---:|---:|
 | GlossBERT (default) | 91 / 138 | 69 / 108 | 20 / 46 |
-| SANDWiCH | 120 / 138 | 96 / 108 | 31 / 46 |
+| SANDWiCH (removed) | 120 / 138 | 96 / 108 | 31 / 46 |
 | ConSeC | 131 / 138 | 106 / 108 | 41 / 46 |
 
 ConSeC: accepted precision 96.32 %, coverage 98.55 %, warm p50/p95 140/205 ms on CPU.
@@ -65,13 +65,18 @@ These are WSD numbers, not translation quality. Sentence translation is evaluate
 separately with chrF2, COMET-22 and a sense-level intention-to-treat metric
 ([docs/BENCHMARKING.md](docs/BENCHMARKING.md), [docs/RESEARCH.md](docs/RESEARCH.md)).
 
+SANDWiCH was evaluated as a third ranker and removed in November 2026: it trailed
+ConSeC on every word-sense accuracy metric, used more memory and did not pass the
+90 % accepted-sense gate. The app now offers GlossBERT (default) and ConSeC (an
+opt-in CPU research profile).
+
 ## Architecture
 
 ```mermaid
 graph LR
     A[AsteriaScale.exe<br/>WPF host, tray] -->|config v4 JSON| M[Magpie<br/>external upscaler]
     A -->|Windows AI| OCR[NPU OCR]
-    A -->|JSONL over stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / SANDWiCH / ConSeC]
+    A -->|JSONL over stdin/stdout| R[RankerWorker.exe<br/>GlossBERT / ConSeC]
     A -->|HTTP loopback| T[llama-server<br/>TranslateGemma 4B, CPU or Vulkan]
     A -->|stdin/stdout| X[TextractorCLI.exe<br/>optional text hook]
     X -->|attach| G[game process]
@@ -83,7 +88,7 @@ graph LR
 | `src/AsteriaScale.Core` | Platform-neutral translation core: dictionaries, morphology, sense-ranking host, phrase translation, caches |
 | `src/AsteriaScale.RankerProtocol` | Contract shared by host and worker: JSONL protocol, provider traits, abstention threshold |
 | `src/AsteriaScale.RankerWorker` | Isolated ONNX Runtime worker for the sense rankers |
-| `tests/AsteriaScale.Tests` | Regression suite (56 smoke tests, including a real Magpie start/stop) |
+| `tests/AsteriaScale.Tests` | Regression suite (55 smoke tests, including a real Magpie start/stop) |
 
 ## Tech stack
 
@@ -91,7 +96,7 @@ C# / .NET 10 · WPF and Win32 interop · Windows AI Text Recognition (NPU) · ON
 (CPU, AMD Vitis AI NPU) · llama.cpp (CPU, Vulkan) · Python (dictionary builds, ONNX
 export, benchmarking) · PowerShell build with MSIX identity signing.
 
-About 37k lines of C# in `src/`, 26k lines of C# tests, 17k lines of Python tooling.
+About 36k lines of C# in `src/`, 25k lines of C# tests, 13k lines of Python tooling.
 
 ## How this project is built
 

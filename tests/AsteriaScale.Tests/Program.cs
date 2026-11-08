@@ -66,7 +66,7 @@ try
             const string usage =
                 "Usage: --benchmark-only --ranker-benchmark <benchmark.json> " +
                 "<workerBaseDirectory> [cpu|npu] " +
-                "[--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+                "[--ranker-cpu-model glossbert|consec] " +
                 "[--dump <path>] [--ranker-report <path>]";
             Assert(args.Length > benchmarkOnlyRankerArgument + 2, usage);
             ParsedRankerBenchmarkOptions options = ParseRankerBenchmarkOptions(
@@ -93,7 +93,7 @@ try
             const string usage =
                 "Usage: --benchmark-only --register-benchmark <register-set.json> " +
                 "<workerBaseDirectory> [cpu|npu] " +
-                "[--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+                "[--ranker-cpu-model glossbert|consec] " +
                 "[--register-report <path>]";
             Assert(args.Length > benchmarkOnlyRegisterArgument + 2, usage);
             ParsedRankerBenchmarkOptions options = ParseRankerBenchmarkOptions(
@@ -165,7 +165,7 @@ try
             HoverTranslationDelayMs = 450,
             HoverTranslationMode = HoverTranslationModes.Dictionary,
             SmartDictionaryBackend = SmartDictionaryBackends.Cpu,
-            SmartDictionaryRankerModel = SmartDictionaryRankerModels.Sandwich,
+            SmartDictionaryRankerModel = SmartDictionaryRankerModels.Consec,
             SmartDictionarySourceLanguage = SmartDictionarySourceLanguages.Japanese,
             SmartDictionaryKeepWarm = false,
             SmartPhraseTranslationMode = SmartPhraseTranslationModes.TranslateGemma,
@@ -200,7 +200,7 @@ try
         Assert(loaded.HoverTranslationMode == HoverTranslationModes.Dictionary,
             "Hover translation mode was not preserved.");
         Assert(loaded.SmartDictionaryBackend == SmartDictionaryBackends.Cpu &&
-               loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.Sandwich &&
+               loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.Consec &&
                loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.Japanese &&
                !loaded.SmartDictionaryKeepWarm &&
                loaded.SmartPhraseTranslationMode == SmartPhraseTranslationModes.TranslateGemma &&
@@ -220,9 +220,7 @@ try
                SmartDictionaryBackends.Normalize("GPU") == SmartDictionaryBackends.Cpu &&
                SmartDictionaryBackends.Normalize("unsupported") == SmartDictionaryBackends.Auto,
             "Smart dictionary backend normalization failed.");
-        Assert(SmartDictionaryRankerModels.Normalize("SANDWICH") ==
-                   SmartDictionaryRankerModels.Sandwich &&
-               SmartDictionaryRankerModels.Normalize("CONSEC") ==
+        Assert(SmartDictionaryRankerModels.Normalize("CONSEC") ==
                    SmartDictionaryRankerModels.Consec &&
                SmartDictionaryRankerModels.Normalize("unsupported") ==
                    SmartDictionaryRankerModels.GlossBert,
@@ -337,6 +335,50 @@ try
                        SearchOption.TopDirectoryOnly)
                    .Any(),
             "Invalid phrase settings were silently coerced instead of backed up and reset.");
+    });
+
+    await RunAsync("Removed ranker profiles load as GlossBERT", async () =>
+    {
+        // SANDWiCH and GlossDeBERTa are no longer product profiles. A settings
+        // file that still selects one must fall back to the default ranker in
+        // memory without being treated as broken, which would back it up and
+        // reset every unrelated choice the user made.
+        string[] removedProfiles = ["sandwich", "SANDWiCH", "deberta", "GlossDeBERTa"];
+        for (int index = 0; index < removedProfiles.Length; index++)
+        {
+            string removed = removedProfiles[index];
+            string directory = Path.Combine(tempRoot, $"removed-ranker-profile-{index}");
+            string path = Path.Combine(directory, "settings.json");
+            Directory.CreateDirectory(directory);
+            string json =
+                "{\"selectedPresetId\":\"vn-ultra\",\"smartDictionaryBackend\":\"cpu\"," +
+                $"\"smartDictionaryRankerModel\":\"{removed}\"," +
+                "\"smartDictionarySourceLanguage\":\"en\",\"smartDictionaryKeepWarm\":false}";
+            await File.WriteAllTextAsync(path, json);
+
+            AppSettings loaded = await new SettingsService(path).LoadAsync();
+            Assert(SmartDictionaryRankerModels.Normalize(removed) ==
+                       SmartDictionaryRankerModels.GlossBert &&
+                   loaded.SmartDictionaryRankerModel == SmartDictionaryRankerModels.GlossBert &&
+                   SemanticRankerProfileResolver.FromSettings(loaded) ==
+                       RankerCpuModelProfile.GlossBert,
+                $"The removed ranker profile '{removed}' did not load as GlossBERT.");
+            Assert(loaded.SelectedPresetId == "vn-ultra" &&
+                   loaded.SmartDictionaryBackend == SmartDictionaryBackends.Cpu &&
+                   loaded.SmartDictionarySourceLanguage == SmartDictionarySourceLanguages.English &&
+                   !loaded.SmartDictionaryKeepWarm,
+                $"Loading the removed ranker profile '{removed}' reset unrelated settings.");
+            Assert(!Directory.EnumerateFiles(
+                       directory,
+                       "settings.json.broken-*",
+                       SearchOption.TopDirectoryOnly).Any() &&
+                   await File.ReadAllTextAsync(path) == json,
+                $"The removed ranker profile '{removed}' made the settings file look broken.");
+        }
+
+        Assert(SmartDictionaryRankerModels.Normalize("CONSEC") ==
+                   SmartDictionaryRankerModels.Consec,
+            "The ConSeC research profile no longer survives normalization.");
     });
 
     await RunAsync("Per-app DPI compatibility", () => DpiCompatibilityServiceTests.RunAsync(tempRoot));
@@ -2028,10 +2070,6 @@ try
         () => BuildScriptSafetyTests.RunAsync(tempRoot));
 
     await RunAsync(
-        "SANDWiCH installer atomic publish",
-        () => SandwichInstallerTransactionTests.RunAsync(tempRoot));
-
-    await RunAsync(
         "ConSeC bundle install and publish contract",
         () => ConsecBundleInfrastructureTests.RunAsync(tempRoot));
 
@@ -2225,7 +2263,7 @@ try
         ParsedRankerBenchmarkOptions reorderedOptions = ParseRankerBenchmarkOptions(
             [
                 "--ranker-report", "report.json",
-                "--ranker-cpu-model", "DeBERTa",
+                "--ranker-cpu-model", "consec",
                 "--dump", "scores.json",
                 "cpu"
             ],
@@ -2235,7 +2273,7 @@ try
             usage: benchmarkUsage);
         Assert(
             reorderedOptions.Provider == GlossBertRankerProvider.Cpu &&
-            reorderedOptions.CpuModel == RankerCpuModelProfile.Deberta &&
+            reorderedOptions.CpuModel == RankerCpuModelProfile.Consec &&
             reorderedOptions.DumpPath == "scores.json" &&
             reorderedOptions.ReportPath == "report.json",
             "Benchmark provider/options were not accepted in arbitrary order.");
@@ -2261,12 +2299,14 @@ try
                  {
                      new[] { "gpu" },
                      new[] { "cpu", "cpu" },
-                     new[] { "--ranker-cpu-model", "deberta", "--ranker-cpu-model", "deberta" },
+                     new[] { "--ranker-cpu-model", "consec", "--ranker-cpu-model", "consec" },
+                     new[] { "--ranker-cpu-model", "sandwich" },
+                     new[] { "--ranker-cpu-model", "deberta" },
                      new[] { "--ranker-report" },
                      new[] { "--ranker-report", "one", "--ranker-report", "two" },
                      new[] { "cpu", "trailing" },
                      new[] { "--unknown", "value" },
-                     new[] { "--ranker-cpu-model", "deberta", "npu" }
+                     new[] { "--ranker-cpu-model", "consec", "npu" }
                  })
         {
             AssertThrows<InvalidOperationException>(
@@ -2332,62 +2372,37 @@ try
         string artifactModels = Path.Combine(artifactBase, "Ranker", "Models");
         string glossCpu = Path.Combine(artifactModels, "GlossBert", "Cpu");
         string glossNpu = Path.Combine(artifactModels, "GlossBert", "Npu");
-        string debertaCpu = Path.Combine(artifactModels, "GlossDeberta", "Cpu");
         string embeddings = Path.Combine(artifactModels, "GlossEmbeddings");
         Directory.CreateDirectory(glossCpu);
         Directory.CreateDirectory(glossNpu);
-        Directory.CreateDirectory(debertaCpu);
         Directory.CreateDirectory(embeddings);
         File.WriteAllBytes(Path.Combine(artifactModels, "GlossBert", "tokenizer.json"), [1]);
         File.WriteAllBytes(Path.Combine(glossCpu, "glossbert-fp32-dynamic.onnx"), [2]);
         File.WriteAllBytes(Path.Combine(glossCpu, "stale.onnx"), [3]);
         File.WriteAllBytes(Path.Combine(glossNpu, "glossbert-eager-vitis-context.onnx"), [4]);
-        File.WriteAllBytes(Path.Combine(artifactModels, "GlossDeberta", "tokenizer.json"), [4]);
-        string pinnedDebertaManifest = string.Join('\n',
-            [
-                "{",
-                "  \"batchSize\": 16,",
-                "  \"maximumSequenceLength\": 96,",
-                "  \"modelFile\": \"definition-ranker-fp32.onnx\",",
-                "  \"modelId\": \"DeBERTa-WSD:cross-encoder/nli-deberta-v3-xsmall@a150876415327c80daeff35ca6f68f5ed8cf5c24:8c85154563ac9950\",",
-                "  \"modelLength\": 284328578,",
-                "  \"modelSha256\": \"8c85154563ac9950f53387eee1346209249c64f7ec9a1d7f5c5011a02fe21190\",",
-                "  \"outputClassCount\": 2,",
-                "  \"positiveLabelIndex\": 1,",
-                "  \"schemaVersion\": 1,",
-                "  \"tokenizerLength\": 8340127,",
-                "  \"tokenizerSha256\": \"8e71d5c9121679076ee7582b048973119bd8f2d742b57f1d8e6a5585697a5620\"",
-                "}"
-            ]) + '\n';
-        File.WriteAllText(
-            Path.Combine(artifactModels, "GlossDeberta", "model-manifest.json"),
-            pinnedDebertaManifest,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        File.WriteAllBytes(Path.Combine(debertaCpu, "definition-ranker-fp32.onnx"), [6]);
-        File.WriteAllBytes(Path.Combine(debertaCpu, "stale-candidate.onnx"), [8]);
         File.WriteAllBytes(Path.Combine(embeddings, "eng-senses.vec"), [7]);
         File.WriteAllBytes(Path.Combine(embeddings, "minilm-l6-v2.onnx"), [8]);
         File.WriteAllBytes(Path.Combine(embeddings, "tokenizer.json"), [9]);
         File.WriteAllBytes(Path.Combine(embeddings, "stale-experiment.onnx"), [10]);
 
-        IReadOnlyList<string> debertaArtifacts =
+        IReadOnlyList<string> biEncoderArtifacts =
             RankerCalibrationBenchmark.EnumerateActiveModelArtifactPaths(
                 artifactBase,
                 GlossBertRankerProvider.Cpu,
-                RankerCpuModelProfile.Deberta,
-                GlossBertDictionarySelectorService.DebertaCpuModelCacheId + ":" +
+                RankerCpuModelProfile.GlossBert,
+                GlossBertDictionarySelectorService.CpuModelCacheId + ":" +
                 GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag);
         Assert(
-            debertaArtifacts.Any(path => path.EndsWith("definition-ranker-fp32.onnx", StringComparison.Ordinal)) &&
-            debertaArtifacts.Any(path => path.EndsWith("model-manifest.json", StringComparison.Ordinal)) &&
-            debertaArtifacts.Any(path => path.EndsWith("eng-senses.vec", StringComparison.Ordinal)) &&
-            debertaArtifacts.Any(path => path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)) &&
-            debertaArtifacts.Any(path =>
+            biEncoderArtifacts.Any(path => path.EndsWith("glossbert-fp32-dynamic.onnx", StringComparison.Ordinal)) &&
+            biEncoderArtifacts.Any(path => path.EndsWith("eng-senses.vec", StringComparison.Ordinal)) &&
+            biEncoderArtifacts.Any(path => path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)) &&
+            biEncoderArtifacts.Any(path =>
                 path.EndsWith("GlossEmbeddings\\tokenizer.json", StringComparison.Ordinal)) &&
-            debertaArtifacts.All(path => !path.EndsWith("stale-candidate.onnx", StringComparison.Ordinal)) &&
-            debertaArtifacts.All(path => !path.EndsWith("stale-experiment.onnx", StringComparison.Ordinal)) &&
-            debertaArtifacts.All(path => !path.Contains("GlossBert", StringComparison.Ordinal)),
-            "The DeBERTa report mixed inactive GlossBERT artifacts into candidate bytes.");
+            biEncoderArtifacts.All(path =>
+                !path.EndsWith("stale.onnx", StringComparison.Ordinal) &&
+                !path.EndsWith("stale-experiment.onnx", StringComparison.Ordinal) &&
+                !path.EndsWith("glossbert-eager-vitis-context.onnx", StringComparison.Ordinal)),
+            "The GlossBERT bi+cross report omitted active or counted inactive artifacts.");
 
         IReadOnlyList<string> glossArtifacts =
             RankerCalibrationBenchmark.EnumerateActiveModelArtifactPaths(
@@ -2400,7 +2415,6 @@ try
             glossArtifacts.All(path =>
                 !path.EndsWith("stale.onnx", StringComparison.Ordinal) &&
                 !path.EndsWith("glossbert-eager-vitis-context.onnx", StringComparison.Ordinal) &&
-                !path.EndsWith("definition-ranker-fp32.onnx", StringComparison.Ordinal) &&
                 !path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)),
             "The GlossBERT cross-only report counted inactive model bundles.");
 
@@ -2439,40 +2453,12 @@ try
             "src",
             "AsteriaScale.RankerWorker",
             "AsteriaScale.RankerWorker.csproj"));
+        // Owners may still keep legacy SANDWiCH or GlossDeBERTa bundles in the
+        // ignored model folders; the worker must never copy them into a build.
         Assert(
-            rankerProjectText.Contains(
-                "<IncludeExperimentalDebertaModel Condition=\"'$(IncludeExperimentalDebertaModel)' == ''\">false</IncludeExperimentalDebertaModel>",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Condition=\"'$(IncludeExperimentalDebertaModel)' == 'true'\"",
-                StringComparison.Ordinal),
-            "The experimental DeBERTa bundle is not opt-in at build time.");
-        Assert(
-            rankerProjectText.Contains(
-                "<IncludeExperimentalSandwichModel Condition=\"'$(IncludeExperimentalSandwichModel)' == ''\">false</IncludeExperimentalSandwichModel>",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Exists('$(SandwichBundleRoot)\\tokenizer.json')",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Exists('$(SandwichBundleRoot)\\model-manifest.json')",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Exists('$(SandwichBundleRoot)\\Cpu\\encoder-nv-fp32.onnx')",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Exists('$(SandwichBundleRoot)\\Cpu\\encoder-v-fp32.onnx')",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "<PublishExperimentalSandwichModel Condition=\"'$(IncludeExperimentalSandwichModel)' == 'true' Or '$(SandwichBundleComplete)' == 'true'\">true</PublishExperimentalSandwichModel>",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Condition=\"'$(PublishExperimentalSandwichModel)' == 'true'\"",
-                StringComparison.Ordinal) &&
-            rankerProjectText.Contains(
-                "Condition=\"'$(IncludeExperimentalSandwichModel)' == 'true' And '$(SandwichBundleComplete)' != 'true'\"",
-                StringComparison.Ordinal),
-            "The experimental SANDWiCH bundle is not gated as one complete four-file unit.");
+            !rankerProjectText.Contains("Models\\Sandwich", StringComparison.OrdinalIgnoreCase) &&
+            !rankerProjectText.Contains("Models\\GlossDeberta", StringComparison.OrdinalIgnoreCase),
+            "The ranker worker still packages a removed SANDWiCH or GlossDeBERTa bundle.");
         string schemaUserDirectory = Path.Combine(tempRoot, "benchmark-schema-user");
         Directory.CreateDirectory(schemaUserDirectory);
         LocalDictionaryService schemaDictionary = new(
@@ -2609,10 +2595,6 @@ try
     await RunAsync(
         "TranslateGemma isolated runtime protocol",
         () => TranslateGemmaTranslationServiceTests.RunAsync(tempRoot));
-
-    await RunAsync(
-        "WSD training-set safety and runtime parity",
-        () => WsdTrainingToolTests.RunAsync(tempRoot));
 
     await RunAsync(
         "Atomic generated-output safety",
@@ -3391,7 +3373,7 @@ try
     {
         const string rankerBenchmarkUsage =
             "Usage: --ranker-benchmark <benchmark.json> <workerBaseDirectory> " +
-            "[cpu|npu] [--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+            "[cpu|npu] [--ranker-cpu-model glossbert|consec] " +
             "[--dump <path>] [--ranker-report <path>]";
         Assert(args.Length > rankerBenchmarkArgument + 2,
             rankerBenchmarkUsage);
@@ -3435,7 +3417,7 @@ try
     {
         const string registerBenchmarkUsage =
             "Usage: --register-benchmark <register-set.json> <workerBaseDirectory> " +
-            "[cpu|npu] [--ranker-cpu-model glossbert|deberta|sandwich|consec] " +
+            "[cpu|npu] [--ranker-cpu-model glossbert|consec] " +
             "[--register-report <path>]";
         Assert(args.Length > registerBenchmarkArgument + 2,
             registerBenchmarkUsage);
@@ -3580,14 +3562,6 @@ static ParsedRankerBenchmarkOptions ParseRankerBenchmarkOptions(
             if (string.Equals(requested, "glossbert", StringComparison.OrdinalIgnoreCase))
             {
                 cpuModel = RankerCpuModelProfile.GlossBert;
-            }
-            else if (string.Equals(requested, "deberta", StringComparison.OrdinalIgnoreCase))
-            {
-                cpuModel = RankerCpuModelProfile.Deberta;
-            }
-            else if (string.Equals(requested, "sandwich", StringComparison.OrdinalIgnoreCase))
-            {
-                cpuModel = RankerCpuModelProfile.Sandwich;
             }
             else
             {

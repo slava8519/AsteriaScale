@@ -8,66 +8,14 @@ internal static class RankerWorkerRegressionTests
         VerifyNpuNeverUsesCpuPrefilter();
         VerifyMissingGlossFailsOpen();
         VerifyClosestTargetOccurrenceIsMarked();
-        VerifySandwichTargetMarkers();
+        VerifyQuotedTargetMarker();
         VerifyCpuModelOptionIsFailClosed();
         VerifyPinnedManifestIntegrityIsFailClosed();
         VerifyMultiClassPositiveProbability();
-        VerifySandwichDualEncoderAverage();
-        VerifySandwichClusterAggregation();
         return Task.CompletedTask;
     }
 
-    private static void VerifySandwichDualEncoderAverage()
-    {
-        float[] combined = RankerSelectionLogic.AverageSandwichProbabilities(
-            [0.2f, 0.8f],
-            [0.6f, 0.4f]);
-        Check(
-            combined.Length == 2 &&
-            Math.Abs(combined[0] - 0.4f) < 0.000001f &&
-            Math.Abs(combined[1] - 0.6f) < 0.000001f,
-            "SANDWiCH did not average the two positive-class probabilities lane by lane.");
-
-        try
-        {
-            _ = RankerSelectionLogic.AverageSandwichProbabilities(
-                [0.5f],
-                [0.5f, 0.6f]);
-            throw new InvalidOperationException(
-                "Mismatched SANDWiCH encoder batches were accepted.");
-        }
-        catch (ArgumentException)
-        {
-            // A partial ensemble must never be accepted as a valid score set.
-        }
-    }
-
-    private static void VerifySandwichClusterAggregation()
-    {
-        IReadOnlyList<GroupScore> groups =
-            RankerSelectionLogic.AggregateSandwichGroups(
-                [0.9f, 0.1f, 0.65f, 0.9f, 0.6f],
-                [10, 10, 20, 30, 30]);
-        Check(
-            groups.Select(group => group.GroupId).SequenceEqual([30, 20, 10]),
-            "SANDWiCH groups were not ordered by confidence-weighted cluster score.");
-        Check(
-            Math.Abs(groups.Single(group => group.GroupId == 10).Score - 0.5) < 0.000001,
-            "Equal-confidence contradictory members did not average to their cluster score.");
-        Check(
-            Math.Abs(groups.Single(group => group.GroupId == 20).Score - 0.65) < 0.000001,
-            "A singleton gloss did not retain its model probability.");
-
-        double highWeight = Math.Exp(0.8 - 0.8);
-        double lowWeight = Math.Exp(0.2 - 0.8);
-        double expected = ((0.9 * highWeight) + (0.6 * lowWeight)) /
-            (highWeight + lowWeight);
-        Check(
-            Math.Abs(groups.Single(group => group.GroupId == 30).Score - expected) < 0.000001,
-            "SANDWiCH cluster weighting diverged from softmax(abs(2p-1)).");
-    }
-
-    private static void VerifySandwichTargetMarkers()
+    private static void VerifyQuotedTargetMarker()
     {
         const string context =
             "He sat by the bank, then visited the bank for a loan.";
@@ -76,15 +24,12 @@ internal static class RankerWorkerRegressionTests
             context,
             "bank",
             second + 2,
-            RankerTargetMarker.SandwichD,
             out string marked),
-            "SANDWiCH could not resolve the exact hovered target occurrence.");
+            "The worker could not resolve the exact hovered target occurrence.");
         Check(
             marked ==
-                "He sat by the bank, then visited the [D] bank [D] for a loan.",
-            "SANDWiCH did not delimit the exact hovered occurrence with literal [D] markers.");
-        Check(!marked.Contains('"'),
-            "SANDWiCH inherited GlossBERT quotation markers.");
+                "He sat by the bank, then visited the \"bank\" for a loan.",
+            "The worker did not quote exactly the hovered target occurrence.");
     }
 
     private static void VerifyPinnedManifestIntegrityIsFailClosed()
@@ -186,45 +131,40 @@ internal static class RankerWorkerRegressionTests
     {
         Check(
             WorkerOptions.TryParse(
-                ["--provider", "cpu", "--cpu-model", "deberta"],
-                out WorkerOptions? deberta,
+                ["--cpu-model", "consec", "--provider", "cpu"],
+                out WorkerOptions? consec,
                 out string? error) &&
             error is null &&
-            deberta is
+            consec is
             {
                 Provider: RankerProvider.Cpu,
-                CpuModel: CpuRankerModel.Deberta
+                CpuModel: CpuRankerModel.Consec
             },
-            "The explicit DeBERTa CPU profile was not parsed.");
+            "The explicit ConSeC CPU profile was not parsed.");
 
         Check(
             !WorkerOptions.TryParse(
-                ["--cpu-model", "deberta", "--provider", "npu"],
+                ["--cpu-model", "consec", "--provider", "npu"],
                 out _,
                 out error) &&
             error?.Contains("CPU-only", StringComparison.Ordinal) == true,
-            "An NPU + DeBERTa combination was not rejected independent of argument order.");
+            "An NPU + ConSeC combination was not rejected independent of argument order.");
 
-        Check(
-            WorkerOptions.TryParse(
-                ["--cpu-model", "sandwich", "--provider", "cpu"],
-                out WorkerOptions? sandwich,
-                out error) &&
-            error is null &&
-            sandwich is
-            {
-                Provider: RankerProvider.Cpu,
-                CpuModel: CpuRankerModel.Sandwich
-            },
-            "The explicit SANDWiCH CPU profile was not parsed.");
-
-        Check(
-            !WorkerOptions.TryParse(
-                ["--provider", "npu", "--cpu-model", "sandwich"],
-                out _,
-                out error) &&
-            error?.Contains("CPU-only", StringComparison.Ordinal) == true,
-            "An NPU + SANDWiCH combination was not rejected.");
+        // SANDWiCH and GlossDeBERTa were removed; a stale launcher that still
+        // asks for them must fail loudly instead of running another model.
+        foreach (string removedModel in new[] { "sandwich", "deberta", "SANDWiCH" })
+        {
+            Check(
+                !WorkerOptions.TryParse(
+                    ["--provider", "cpu", "--cpu-model", removedModel],
+                    out _,
+                    out error) &&
+                error?.Contains(
+                    $"Unsupported CPU model '{removedModel}'",
+                    StringComparison.Ordinal) == true &&
+                error.Contains("glossbert or consec", StringComparison.Ordinal),
+                $"The removed CPU model '{removedModel}' was not rejected clearly.");
+        }
 
         Check(
             WorkerOptions.TryParse([], out WorkerOptions? defaults, out error) &&
@@ -239,7 +179,7 @@ internal static class RankerWorkerRegressionTests
         foreach (string[] duplicate in new[]
                  {
                      new[] { "--provider", "npu", "--provider", "cpu" },
-                     new[] { "--cpu-model", "glossbert", "--cpu-model", "deberta" },
+                     new[] { "--cpu-model", "glossbert", "--cpu-model", "consec" },
                      new[] { "--model-directory", ".", "--model-directory", "." },
                      new[] { "--smoke", "--smoke" }
                  })

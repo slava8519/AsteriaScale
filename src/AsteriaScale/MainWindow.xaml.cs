@@ -60,7 +60,6 @@ public partial class MainWindow : Window
     private static readonly IReadOnlyList<TranslationSettingOption> SmartRankerModelOptions =
     [
         new("GlossBERT — стабильный эталон", SmartDictionaryRankerModels.GlossBert),
-        new("SANDWiCH — исследовательский CPU", SmartDictionaryRankerModels.Sandwich),
         new("ConSeC — лучший для науки, CPU", SmartDictionaryRankerModels.Consec)
     ];
     private static readonly IReadOnlyList<TranslationSettingOption> SmartPhraseTranslationOptions =
@@ -671,8 +670,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (rankerModel.Id is SmartDictionaryRankerModels.Sandwich or
-                SmartDictionaryRankerModels.Consec &&
+        if (rankerModel.Id == SmartDictionaryRankerModels.Consec &&
             backend.Id == SmartDictionaryBackends.Npu)
         {
             backend = SmartBackendOptions.First(option =>
@@ -680,10 +678,7 @@ public partial class MainWindow : Window
             _initializing = true;
             SmartBackendComboBox.SelectedItem = backend;
             _initializing = false;
-            string modelName = rankerModel.Id == SmartDictionaryRankerModels.Consec
-                ? "ConSeC"
-                : "SANDWiCH";
-            SetStatus($"{modelName} работает на CPU — ускоритель явно переключён на CPU");
+            SetStatus("ConSeC работает на CPU — ускоритель явно переключён на CPU");
         }
 
         _settings.SmartDictionaryBackend = SmartDictionaryBackends.Normalize(backend.Id);
@@ -757,8 +752,6 @@ public partial class MainWindow : Window
         string ranker = SmartDictionaryRankerModels.Normalize(
             _settings.SmartDictionaryRankerModel) switch
         {
-            SmartDictionaryRankerModels.Sandwich =>
-                "модель: SANDWiCH (экспериментальный CPU-профиль)",
             SmartDictionaryRankerModels.Consec =>
                 "модель: ConSeC (научный исследовательский CPU-профиль, около 1,5 ГБ RAM)",
             _ => "модель: GlossBERT"

@@ -13,7 +13,7 @@ internal sealed record SentenceRankerBenchmarkOptions(
 {
     internal const string Usage =
         "Usage: --ranker-sentence-benchmark <benchmark.json> " +
-        "<workerBaseDirectory> [--ranker-cpu-model glossbert|sandwich|consec] " +
+        "<workerBaseDirectory> [--ranker-cpu-model glossbert|consec] " +
         "[--sentence-report <path>]";
 
     internal static SentenceRankerBenchmarkOptions Parse(
@@ -82,7 +82,6 @@ internal sealed record SentenceRankerBenchmarkOptions(
         value.ToLowerInvariant() switch
         {
             "glossbert" => RankerCpuModelProfile.GlossBert,
-            "sandwich" => RankerCpuModelProfile.Sandwich,
             "consec" => RankerCpuModelProfile.Consec,
             _ => throw new InvalidOperationException(Usage)
         };

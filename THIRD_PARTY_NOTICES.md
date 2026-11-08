@@ -47,48 +47,6 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - NPU compatibility metadata SHA-256: `A15F82D6AED5DE34EB6BD75B727E4ECBC2476FBF14C91B04E37A7F1C1FF0F777`
 - Tokenizer SHA-256: `04FD39DFF4BFA1B7AE42425C484EF0173F8DA60B485F66642D2B44B251C6A014`
 
-## SANDWiCH (optional experimental ranker)
-
-- Project: https://github.com/danielguzmanolivares/sandwich
-- Paper: https://aclanthology.org/2025.naacl-long.358/
-- Pinned upstream commit: `daca3cad63326204d4027b9ea09fb1405ab1ca0a`
-- License reported by upstream for code and published models: MIT
-- Integration: not stored in git; the separate installer downloads the pinned
-  official archive, verifies SHA-256
-  `98B3CDA35A8599C961FC2AC36867D4687BD136E3F0CA1998D4A4754EA8C8E1DE`,
-  and exports the two official encoders to FP32 ONNX
-- Changes: exact target marked with upstream `[D]` delimiters; positive-class
-  probabilities from `encoder-nv` and `encoder-v` are averaged, then reduced
-  over Asteria's stable sense groups with the upstream confidence weighting
-- Role: optional CPU-only definition-aware ranker and semantic-evidence source;
-  GlossBERT remains the default
-- `encoder-nv` source SHA-256: `D759C83CF13C8D367ECCBDDB33D061C1DB6E5D5082E39B86679DCD4DD21EF602`
-- `encoder-v` source SHA-256: `A63626AB5EF52CAD6360624BFDAAB91743716270E377F2BDF92FEABC512D273D`
-- CPU ONNX SHA-256: `B6A21C42C974F145A39A20E5C5B62B740CB0B63ED698499FA4C5E4B397998739`
-  (`encoder-nv`) and
-  `21B778DC9552F84732D1061CA1ACE23F9F6C071E68FE4AB0615109F192E78F6B`
-  (`encoder-v`)
-- Tokenizer SHA-256: `2689DB9B56B94AE9FAC86DAEB5FE7DF0BE0C5F1A9DCE76A0EDDA7AFA93DD1304`
-- Data boundary: Asteria does not download or distribute the upstream
-  BabelNet-derived definitions/neighbours; it supplies its own dictionary
-  glosses to the models
-
-## DeBERTa-v3 WSD candidates (closed experiment, not bundled)
-
-- Base model: [`microsoft/deberta-v3-base`](https://huggingface.co/microsoft/deberta-v3-base)
-- Pinned revision: `8ccc9b6f36199bec6961081d44eb72fb3f7353f3`
-- License reported by the model repository: MIT
-- NLI model: [`cross-encoder/nli-deberta-v3-base`](https://huggingface.co/cross-encoder/nli-deberta-v3-base)
-- Pinned revision: `6c749ce3425cd33b46d187e45b92bbf96ee12ec7`
-- License reported by the model repository: Apache-2.0
-- NLI training provenance reported by its model card: SNLI and MultiNLI
-- Integration: model weights are not stored in git or in the RTX transfer ZIP;
-  the training launcher downloads only the selected pinned revision and records
-  its resolved identity in run provenance
-- Role: historical controlled RTX fine-tuning candidates for the CPU
-  definition-aware WSD ranker. The custom-training track is closed; neither
-  candidate replaced production GlossBERT
-
 ## ConSeC/WNGT (optional personal research ranker, not bundled)
 
 - Project: https://github.com/SapienzaNLP/consec
@@ -123,8 +81,8 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 - Project: https://github.com/microsoft/onnxruntime
 - Package/version: `Microsoft.ML.OnnxRuntime` 1.27.1
 - License: MIT
-- Role: CPU execution of the FP32 GlossBERT reference artifact, optional
-  SANDWiCH dual-encoder graphs and optional ConSeC external-data graph
+- Role: CPU execution of the FP32 GlossBERT reference artifact and the optional
+  ConSeC external-data graph
 
 ## Tokenizers.DotNet
 

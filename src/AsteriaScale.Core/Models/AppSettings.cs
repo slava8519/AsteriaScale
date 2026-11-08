@@ -120,20 +120,15 @@ public static class SmartDictionarySourceLanguages
 public static class SmartDictionaryRankerModels
 {
     public const string GlossBert = "glossbert";
-    public const string Sandwich = "sandwich";
     public const string Consec = "consec";
 
-    public static string Normalize(string? value)
-    {
-        if (string.Equals(value, Sandwich, StringComparison.OrdinalIgnoreCase))
-        {
-            return Sandwich;
-        }
-
-        return string.Equals(value, Consec, StringComparison.OrdinalIgnoreCase)
+    // Removed profiles ("sandwich", "deberta") deliberately fall through to the
+    // default: an old settings.json must keep loading instead of being treated
+    // as broken and reset.
+    public static string Normalize(string? value) =>
+        string.Equals(value, Consec, StringComparison.OrdinalIgnoreCase)
             ? Consec
             : GlossBert;
-    }
 }
 
 public static class SmartPhraseTranslationModes

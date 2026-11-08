@@ -8,7 +8,7 @@ internal static class SemanticRankerColdStartTests
         AppSettings settings = new()
         {
             HoverTranslationMode = HoverTranslationModes.Smart,
-            SmartDictionaryRankerModel = SmartDictionaryRankerModels.Sandwich,
+            SmartDictionaryRankerModel = SmartDictionaryRankerModels.Consec,
             // An incompatible persisted provider must remain explicit. The
             // profile applicator may not silently rewrite it to CPU.
             SmartDictionaryBackend = SmartDictionaryBackends.Npu
@@ -26,17 +26,17 @@ internal static class SemanticRankerColdStartTests
             });
 
         await applicator.ApplyAsync();
-        Check(activeProfile == RankerCpuModelProfile.Sandwich &&
-              events.SequenceEqual(["configure:Sandwich"]),
-            "Cold Smart startup did not apply the persisted SANDWiCH profile.");
+        Check(activeProfile == RankerCpuModelProfile.Consec &&
+              events.SequenceEqual(["configure:Consec"]),
+            "Cold Smart startup did not apply the persisted ConSeC profile.");
         Check(settings.SmartDictionaryBackend == SmartDictionaryBackends.Npu,
             "Applying the semantic-ranker profile silently changed the requested provider.");
 
-        settings.SmartDictionaryRankerModel = SmartDictionaryRankerModels.Consec;
+        settings.SmartDictionaryRankerModel = "sandwich";
         Check(
             SemanticRankerProfileResolver.FromSettings(settings) ==
-                RankerCpuModelProfile.Consec,
-            "The persisted ConSeC profile did not resolve to the independent CPU runtime.");
+                RankerCpuModelProfile.GlossBert,
+            "A persisted removed SANDWiCH profile did not resolve to the GlossBERT default.");
 
         SemanticRankerProfileApplicator failingApplicator = new(
             settings,

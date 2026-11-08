@@ -62,10 +62,8 @@ README в каталогах `assets/` и `src/AsteriaScale.RankerWorker/` — �
 | [DATA-LICENSES.md](../DATA-LICENSES.md) | все, кто распространяет сборку | Актуальная спецификация | Таблица по файлам данных: источник и версия, лицензия файла, атрибуция, входит ли файл в сборку; MIT из `LICENSE` на эти данные не распространяется | перед распространением |
 | [assets/Dictionaries/README.md](../assets/Dictionaries/README.md) | разработчики | Актуальная спецификация | Источники, состав и регенерация словарных TSV-слоёв; копируется в сборку как `Dictionaries\README.md` | по задаче |
 | [assets/Ranker/README.md](../assets/Ranker/README.md) | разработчики, исследователи | Актуальная спецификация | Регрессионные наборы ранжировщика, поставляемый ranker, закреплённые размеры и SHA-256 артефактов | по задаче |
-| [src/AsteriaScale.RankerWorker/README.md](../src/AsteriaScale.RankerWorker/README.md) | разработчики | Актуальная спецификация | Изолированный воркер ранжировщика: JSONL-протокол v4, контракт bundle, профили SANDWiCH и ConSeC, доказательство NPU fail-closed, smoke-проверки | по задаче |
+| [src/AsteriaScale.RankerWorker/README.md](../src/AsteriaScale.RankerWorker/README.md) | разработчики | Актуальная спецификация | Изолированный воркер ранжировщика: JSONL-протокол v4, контракт bundle, профиль ConSeC, доказательство NPU fail-closed, smoke-проверки | по задаче |
 | [tools/README-consec.md](../tools/README-consec.md) | исследователи | Инструменты | Безопасный экспорт ConSeC в ONNX, official-upstream reference gate, установка, open-dev результат | по задаче |
-| [tools/README-wsd-rtx5080.md](../tools/README-wsd-rtx5080.md) | — | Архив | Инструкция переносимого ZIP закрытого эксперимента WSD/DeBERTa на RTX 5080 | не нужен для работы |
-| [tools/WSD-EXPERIMENT-ROADMAP.md](../tools/WSD-EXPERIMENT-ROADMAP.md) | — | Архив | Матрица прогонов того же закрытого эксперимента | не нужен для работы |
 
 ## Термины проекта
 
@@ -74,7 +72,7 @@ README в каталогах `assets/` и `src/AsteriaScale.RankerWorker/` — �
 
 | Термин | Значение |
 |---|---|
-| WSD | Word-sense disambiguation — выбор значения английского слова в контексте. В Asteria это задача ранжировщика (GlossBERT, SANDWiCH или ConSeC в изолированном воркере): по контексту и английским определениям он выбирает группу смыслов или воздерживается при разрыве оценок меньше `0.25`. |
+| WSD | Word-sense disambiguation — выбор значения английского слова в контексте. В Asteria это задача ранжировщика (GlossBERT или ConSeC в изолированном воркере): по контексту и английским определениям он выбирает группу смыслов или воздерживается при разрыве оценок меньше `0.25`. |
 | outcome, GroupId | В плане ранжировщика outcome — группа смыслов с одинаковым видимым русским результатом, GroupId — её номер, равный индексу в `visibleTranslations` (инвариант 2 в [ARCHITECTURE.md](ARCHITECTURE.md)). В бенчмарках «исход смысла» — итог проверки перевода: `correct`, `wrong`, `mixed` или `unresolved`. |
 | MWE | Multi-word expression — устойчивое многословное выражение, которое словарь хранит одним ключом (например `if you wish`); каркас находит доверенные MWE в предложении. |
 | каркас, scaffold | `TranslationScaffoldBuilder`: детерминированные термины, имена, доверенные MWE и принятые ранжировщиком смыслы всего предложения, которые TranslateGemma получает как опоры для второй строки; в карточку «Умного словаря» они не попадают. Слой `*-scaffold.*` — отдельная карта проверенных терминов только для этих опор. |

@@ -27,8 +27,6 @@ internal static class GlossBertRankerProviderExtensions
 public enum RankerCpuModelProfile
 {
     GlossBert,
-    Deberta,
-    Sandwich,
     Consec
 }
 
@@ -84,24 +82,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ExpectedModelVersionPrefix + ":fp32-dynamic";
     public const string NpuModelCacheId =
         ExpectedModelVersionPrefix + ":vitis-epcontext-b4-s64";
-    public const string DebertaExpectedModelVersionPrefix = "GlossDeBERTa:";
-    public const string SandwichExpectedModelVersionPrefix = "SANDWiCH:";
     public const string ConsecExpectedModelVersionPrefix = "ConSeC:";
-    // Exact identity of the current v2 pilot. Replace this in lockstep with the
-    // worker manifest pins when a final candidate is promoted.
-    public const string DebertaCpuModelCacheId =
-        "GlossDeBERTa:DeBERTa-WSD:" +
-        "cross-encoder/nli-deberta-v3-xsmall@" +
-        "a150876415327c80daeff35ca6f68f5ed8cf5c24:" +
-        "8c85154563ac9950:m-8c85154563ac:t-8e71d5c91216:" +
-        "s96:b16:c2:p1:fp32-dynamic";
-    public const long DebertaManifestLength = 527;
-    public const string DebertaManifestSha256 =
-        "f4028fe04c8a138dfef3d4e453907c6d2ad9e14ed8a44af75d4410be51149b89";
-    public const string SandwichCpuModelCacheId =
-        "SANDWiCH:naacl-2025:singleton-gloss:" +
-        "m-nv-b6a21c42c974:m-v-21b778dc9552:t-2689db9b56b9:" +
-        "s512:c2:p1";
     public const string ConsecCpuModelCacheId =
         "ConSeC:WNGT:9602b5fd:" +
         "adapter-consec-wngt-positional-extractor-v1:" +
@@ -329,8 +310,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ValidateProviderModel(provider, cpuModelProfile);
         return cpuModelProfile switch
         {
-            RankerCpuModelProfile.Deberta => DebertaCpuModelCacheId,
-            RankerCpuModelProfile.Sandwich => SandwichCpuModelCacheId,
             RankerCpuModelProfile.Consec => ConsecCpuModelCacheId,
             _ => GetModelCacheId(provider)
         };
@@ -343,8 +322,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ValidateProviderModel(provider, cpuModelProfile);
         return cpuModelProfile switch
         {
-            RankerCpuModelProfile.Deberta => DebertaExpectedModelVersionPrefix,
-            RankerCpuModelProfile.Sandwich => SandwichExpectedModelVersionPrefix,
             RankerCpuModelProfile.Consec => ConsecExpectedModelVersionPrefix,
             _ => ExpectedModelVersionPrefix
         };
@@ -364,8 +341,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         startInfo.ArgumentList.Add("--cpu-model");
         startInfo.ArgumentList.Add(cpuModelProfile switch
         {
-            RankerCpuModelProfile.Deberta => "deberta",
-            RankerCpuModelProfile.Sandwich => "sandwich",
             RankerCpuModelProfile.Consec => "consec",
             _ => "glossbert"
         });
@@ -860,27 +835,16 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 "A selection response must include margin, score and confidence diagnostics.");
         }
 
-        if (response.Pipeline is not (
-                "cross" or "bi+cross" or "sandwich" or "consec-independent"))
+        if (response.Pipeline is not ("cross" or "bi+cross" or "consec-independent"))
         {
             throw ProtocolError(
                 $"A selection response must declare its ranking pipeline; " +
                 $"received '{response.Pipeline ?? "<null>"}'.");
         }
 
-        string? requiredDedicatedPipeline = cpuModelProfile switch
-        {
-            RankerCpuModelProfile.Sandwich => "sandwich",
-            RankerCpuModelProfile.Consec => "consec-independent",
-            _ => null
-        };
-        bool dedicatedPipeline = response.Pipeline is "sandwich" or "consec-independent";
-        if (requiredDedicatedPipeline is not null
-                ? !string.Equals(
-                    response.Pipeline,
-                    requiredDedicatedPipeline,
-                    StringComparison.Ordinal)
-                : dedicatedPipeline)
+        bool requiresDedicatedPipeline = cpuModelProfile == RankerCpuModelProfile.Consec;
+        bool dedicatedPipeline = response.Pipeline is "consec-independent";
+        if (requiresDedicatedPipeline != dedicatedPipeline)
         {
             throw ProtocolError(
                 $"Worker pipeline '{response.Pipeline}' does not match CPU model profile " +
@@ -1244,24 +1208,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 StringComparison.Ordinal);
         }
 
-        if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
-        {
-            return provider.Traits().AlternativeModels &&
-                   modelVersion.StartsWith(
-                       SandwichCpuModelCacheId,
-                       StringComparison.Ordinal);
-        }
-
-        if (cpuModelProfile == RankerCpuModelProfile.Consec)
-        {
-            return provider.Traits().AlternativeModels &&
-                   modelVersion.StartsWith(
-                       ConsecCpuModelCacheId,
-                       StringComparison.Ordinal);
-        }
-
-        return provider.Traits().AlternativeModels &&
-               TrySplitDebertaArtifactIdentity(modelVersion, out _);
+        return cpuModelProfile == RankerCpuModelProfile.Consec &&
+               provider.Traits().AlternativeModels &&
+               modelVersion.StartsWith(
+                   ConsecCpuModelCacheId,
+                   StringComparison.Ordinal);
     }
 
     private static bool HasPinnedPipelineIdentity(
@@ -1280,18 +1231,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
             suffix = modelVersion[artifactIdentity.Length..];
         }
-        else if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
-        {
-            if (!provider.Traits().AlternativeModels ||
-                !modelVersion.StartsWith(
-                    SandwichCpuModelCacheId,
-                    StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            suffix = modelVersion[SandwichCpuModelCacheId.Length..];
-        }
         else if (cpuModelProfile == RankerCpuModelProfile.Consec)
         {
             if (!provider.Traits().AlternativeModels ||
@@ -1304,8 +1243,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
             suffix = modelVersion[ConsecCpuModelCacheId.Length..];
         }
-        else if (!provider.Traits().AlternativeModels ||
-                 !TrySplitDebertaArtifactIdentity(modelVersion, out suffix))
+        else
         {
             return false;
         }
@@ -1332,12 +1270,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             return true;
         }
 
-        if (cpuModelProfile == RankerCpuModelProfile.Sandwich &&
-            string.Equals(suffix, ":pipeline-sandwich", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         if (cpuModelProfile == RankerCpuModelProfile.Consec &&
             string.Equals(
                 suffix,
@@ -1352,22 +1284,6 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                    suffix,
                    ":" + CpuEmbeddingBundleCacheTag,
                    StringComparison.Ordinal);
-    }
-
-    private static bool TrySplitDebertaArtifactIdentity(
-        string modelVersion,
-        out string suffix)
-    {
-        suffix = string.Empty;
-        if (!modelVersion.StartsWith(
-                DebertaCpuModelCacheId,
-                StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        suffix = modelVersion[DebertaCpuModelCacheId.Length..];
-        return true;
     }
 
     private static void ValidateProviderModel(
