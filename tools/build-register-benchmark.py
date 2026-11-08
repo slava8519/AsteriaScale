@@ -249,9 +249,11 @@ def main() -> None:
     target = ROOT / "assets/Ranker/ranker-register-benchmark.json"
     document = json.loads(target.read_text(encoding="utf-8"))
     document["cases"] = good
+    # Provenance hashes the raw bytes; keep LF even when run on Windows.
     target.write_text(
         json.dumps(document, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
     print(f"wrote {target.relative_to(ROOT)}")
 

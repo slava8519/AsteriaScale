@@ -1,9 +1,24 @@
+using AsteriaScale.RankerProtocol;
+
 namespace AsteriaScale.RankerWorker;
 
 internal enum RankerProvider
 {
     Npu,
     Cpu
+}
+
+internal static class RankerProviderExtensions
+{
+    // The host resolves the same table, so both sides agree on gloss
+    // rendering, the bi-encoder pipeline and the reported identity.
+    internal static RankerProviderTraits Traits(this RankerProvider provider) =>
+        provider switch
+        {
+            RankerProvider.Npu => RankerProviderTraits.Npu,
+            RankerProvider.Cpu => RankerProviderTraits.Cpu,
+            _ => throw new ArgumentOutOfRangeException(nameof(provider))
+        };
 }
 
 internal enum CpuRankerModel
@@ -112,11 +127,17 @@ internal sealed record WorkerOptions(
                     return false;
                 }
 
-                if (string.Equals(args[i], "npu", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(
+                        args[i],
+                        RankerProviderTraits.Npu.WireName,
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     provider = RankerProvider.Npu;
                 }
-                else if (string.Equals(args[i], "cpu", StringComparison.OrdinalIgnoreCase))
+                else if (string.Equals(
+                             args[i],
+                             RankerProviderTraits.Cpu.WireName,
+                             StringComparison.OrdinalIgnoreCase))
                 {
                     provider = RankerProvider.Cpu;
                 }
@@ -170,7 +191,7 @@ internal sealed record WorkerOptions(
             return false;
         }
 
-        if (provider == RankerProvider.Npu && cpuModel != CpuRankerModel.GlossBert)
+        if (!provider.Traits().AlternativeModels && cpuModel != CpuRankerModel.GlossBert)
         {
             options = null;
             error =

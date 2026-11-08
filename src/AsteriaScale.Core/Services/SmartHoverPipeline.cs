@@ -127,7 +127,7 @@ internal sealed class SmartHoverPipeline : IDisposable
     private void ReportStatus(string status) => _reportStatus(status);
 
     private static void LogError(Exception exception) =>
-        HoverTranslationService.LogError(exception);
+        HoverDiagnostics.LogError(exception);
 
     public void Dispose() => _smartBackendLock.Dispose();
 
@@ -411,7 +411,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             // Enrichment is spent only where the sequence budget allows it:
             // measured, an NPU pair already truncates above the median gloss.
             IReadOnlyList<string> rankerGlosses =
-                plan.GlossesFor(provider == GlossBertRankerProvider.Cpu);
+                plan.GlossesFor(provider.Traits().EnrichedGlosses);
             string decisionKey = CreateDecisionKey(
                 rankerContext.Text,
                 lookup.Source,
@@ -783,7 +783,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             SmartPhraseTranslationGuard.ValidateRequest(request);
         if (requestRejection != SmartPhraseRejectionReason.None)
         {
-            HoverTranslationService.LogDiagnostic(FormatPhraseRejectionDiagnostic(
+            HoverDiagnostics.LogDiagnostic(FormatPhraseRejectionDiagnostic(
                 "request",
                 requestRejection,
                 request,
@@ -850,7 +850,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 translated);
             if (!guarded.Accepted)
             {
-                HoverTranslationService.LogDiagnostic(FormatPhraseRejectionDiagnostic(
+                HoverDiagnostics.LogDiagnostic(FormatPhraseRejectionDiagnostic(
                     "display",
                     guarded.Reason,
                     request,
@@ -1273,7 +1273,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 GlossBertDictionarySelectorService.SandwichExpectedModelVersionPrefix,
                 StringComparison.Ordinal)
                 ? "sandwich"
-                : provider == GlossBertRankerProvider.Cpu &&
+                : provider.Traits().BiEncoderPrefilter &&
                   distinctGroupCount > 16 &&
                   modelVersion.EndsWith(
                       ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,

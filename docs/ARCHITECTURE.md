@@ -6,7 +6,8 @@
 
 | Проект | Назначение |
 |---|---|
-| `src/AsteriaScale` | WPF-приложение: UI, трей, управление Magpie, OCR, перевод, словари |
+| `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
+| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: путь `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Основа будущей macOS-версии |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT, SANDWiCH или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI |

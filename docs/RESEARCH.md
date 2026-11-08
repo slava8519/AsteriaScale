@@ -3668,3 +3668,27 @@ coopmat.
 правило задержки A при structural-нарушениях (только они дают `19` из `37`
 задержек), а не
 coopmat.
+
+## Хеши наборов данных и переводы строк — 8 ноября 2026
+
+Provenance бенчмарков и translation-suite хеширует сырые байты файла набора.
+`.gitattributes` помечал `*.json` только как `text`, поэтому Windows-клон с
+`core.autocrlf=true` мог выписать набор в CRLF и записать в отчёт хеш, которого
+нет ни в git, ни на macOS. С этого дня `assets/**/*.json`, `tools/*.json` и
+`*.tsv` выписываются в LF на любой платформе; содержимое в git не менялось.
+
+Ранее записанный в этом файле SHA-256 dev-набора полного перевода
+`7E1C20F47362328FABCCBC2125E1499FA5D92DBF620640C3FB252C2931C82B4A` — это CRLF-байты
+того же `assets/Translation/translation-benchmark.json`. Его LF-хеш (как в git
+и в новых прогонах):
+`D02AA5B200161EDAB2F5EC29A28D27E992626D3DB60AB9061EF5F1992EC825C3`. Наборы
+идентичны; разница только в переводах строк. Pin `ranker-benchmark.json` в
+`assets/Ranker/baselines/*.json` уже был по LF-байтам и не меняется.
+
+Та же ошибка была в `assets/Dictionaries/vn-build-manifest.json`: pin генератора
+(`83261` байт, `A83BA069…`) снят с CRLF-копии `scripts/build-dictionaries.py`,
+хотя `*.py` и так выписывается в LF. На любом свежем клоне
+`test_committed_manifest_tracks_repository_inputs` падал (`83261 != 81191`).
+Pin переписан на LF-байты того же неизменённого blob: `81191` байт,
+`89FB907E113D27C6433805AC2F8B75F264F06E327C097882118F09F8104BD509`. Генераторы
+register-наборов теперь пишут JSON с `newline="\n"`.

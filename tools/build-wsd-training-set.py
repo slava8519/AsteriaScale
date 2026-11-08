@@ -40,12 +40,12 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BUILDER_PATH = REPOSITORY_ROOT / "scripts" / "build-dictionaries.py"
 TARGET_CONTEXT_PATH = (
-    REPOSITORY_ROOT / "src" / "AsteriaScale" / "Services" / "TargetCenteredContext.cs"
+    REPOSITORY_ROOT / "src" / "AsteriaScale.Core" / "Services" / "TargetCenteredContext.cs"
 )
 SENSE_RESOLVER_PATH = (
     REPOSITORY_ROOT
     / "src"
-    / "AsteriaScale"
+    / "AsteriaScale.Core"
     / "Services"
     / "SmartDictionarySenseResolver.cs"
 )

@@ -1277,38 +1277,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
         StatusChanged?.Invoke(this, status);
     }
 
-    internal static void LogError(Exception exception)
-    {
-        AppendDiagnostic(exception.ToString());
-    }
+    // Kept so existing call sites read the same; the log itself lives in the
+    // core so platform-neutral pipeline code can write to it.
+    internal static void LogError(Exception exception) => HoverDiagnostics.LogError(exception);
 
-    internal static void LogDiagnostic(string message)
-    {
-        AppendDiagnostic((message ?? string.Empty).Replace('\r', ' ').Replace('\n', ' '));
-    }
-
-    private static void AppendDiagnostic(string message)
-    {
-        try
-        {
-            string directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AsteriaScale");
-            Directory.CreateDirectory(directory);
-            string path = Path.Combine(directory, "hover-translation.log");
-            FileInfo log = new(path);
-            if (log.Exists && log.Length > 512 * 1024)
-            {
-                File.Move(path, path + ".1", overwrite: true);
-            }
-
-            File.AppendAllText(path, $"[{DateTimeOffset.Now:O}] {message}\n\n");
-        }
-        catch
-        {
-            // Diagnostics must never interfere with hover translation.
-        }
-    }
+    internal static void LogDiagnostic(string message) => HoverDiagnostics.LogDiagnostic(message);
 
     public async ValueTask DisposeAsync()
     {

@@ -2623,6 +2623,10 @@ try
         RankerWorkerRegressionTests.RunAsync);
 
     await RunAsync(
+        "Ranker provider traits",
+        RankerProviderTraitsTests.RunAsync);
+
+    await RunAsync(
         "ConSeC official-reference input and scoring parity",
         () => ConsecRankerTests.RunAsync(tempRoot));
 

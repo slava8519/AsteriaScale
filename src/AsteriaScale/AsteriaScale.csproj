@@ -26,6 +26,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
+    <ProjectReference Include="..\AsteriaScale.Core\AsteriaScale.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\assets\Dictionaries\*.tsv.gz"

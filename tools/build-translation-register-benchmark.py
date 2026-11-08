@@ -212,8 +212,11 @@ def main() -> None:
             for case_id, bucket, source, reference, register, faithful, softened, strengthened in CASES
         ],
     }
+    # Provenance hashes the raw bytes; keep LF even when run on Windows.
     TARGET.write_text(
-        json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(document, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     print(f"verified {len(CASES)} cases")
     for bucket, count in sorted(counts.items()):

@@ -38,9 +38,9 @@
     }
   },
   "generator": {
-    "bytes": 83261,
+    "bytes": 81191,
     "fileName": "build-dictionaries.py",
-    "sha256": "A83BA069F86D97FE8AF1C2C5F39932ECD5762C03E19DD77F1B83F8E3CB2E359F"
+    "sha256": "89FB907E113D27C6433805AC2F8B75F264F06E327C097882118F09F8104BD509"
   },
   "inputs": {
     "curatedVn": {

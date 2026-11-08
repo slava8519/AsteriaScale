@@ -11,6 +11,19 @@ public enum GlossBertRankerProvider
     Npu
 }
 
+internal static class GlossBertRankerProviderExtensions
+{
+    // Exhaustive on purpose: a provider without declared traits must fail
+    // loudly instead of borrowing the CPU's gloss rendering and cache identity.
+    internal static RankerProviderTraits Traits(this GlossBertRankerProvider provider) =>
+        provider switch
+        {
+            GlossBertRankerProvider.Cpu => RankerProviderTraits.Cpu,
+            GlossBertRankerProvider.Npu => RankerProviderTraits.Npu,
+            _ => throw new ArgumentOutOfRangeException(nameof(provider))
+        };
+}
+
 public enum RankerCpuModelProfile
 {
     GlossBert,
@@ -96,8 +109,8 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         "pretokenizer-v3:context-full-v1:s512";
     public const string CpuEmbeddingBundleCacheTag =
         "bi-c9745ed1-13c0fb6d-6fd5d72f-be50c362";
-    public const string CpuExecutionProvider = "CPUExecutionProvider";
-    public const string NpuExecutionProvider = "VitisAIExecutionProvider";
+    public static readonly string CpuExecutionProvider = RankerProviderTraits.Cpu.ExecutionProvider;
+    public static readonly string NpuExecutionProvider = RankerProviderTraits.Npu.ExecutionProvider;
     public const string CpuEngineLabel = "NPU OCR  •  CPU-СМЫСЛ";
     public const string NpuEngineLabel = "NPU OCR  •  NPU-СМЫСЛ";
 
@@ -292,10 +305,22 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     }
 
     public static string GetEngineLabel(GlossBertRankerProvider provider) =>
-        provider == GlossBertRankerProvider.Npu ? NpuEngineLabel : CpuEngineLabel;
+        provider switch
+        {
+            GlossBertRankerProvider.Cpu => CpuEngineLabel,
+            GlossBertRankerProvider.Npu => NpuEngineLabel,
+            _ => throw new ArgumentOutOfRangeException(nameof(provider))
+        };
 
+    // A new provider must name its own artifact identity; inheriting the CPU's
+    // would let its verdicts collide with CPU verdicts in the decision cache.
     public static string GetModelCacheId(GlossBertRankerProvider provider) =>
-        provider == GlossBertRankerProvider.Npu ? NpuModelCacheId : CpuModelCacheId;
+        provider switch
+        {
+            GlossBertRankerProvider.Cpu => CpuModelCacheId,
+            GlossBertRankerProvider.Npu => NpuModelCacheId,
+            _ => throw new ArgumentOutOfRangeException(nameof(provider))
+        };
 
     public static string GetModelCacheId(
         GlossBertRankerProvider provider,
@@ -335,8 +360,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(modelDirectory);
         ValidateProviderModel(provider, cpuModelProfile);
         startInfo.ArgumentList.Add("--provider");
-        startInfo.ArgumentList.Add(
-            provider == GlossBertRankerProvider.Npu ? "npu" : "cpu");
+        startInfo.ArgumentList.Add(provider.Traits().WireName);
         startInfo.ArgumentList.Add("--cpu-model");
         startInfo.ArgumentList.Add(cpuModelProfile switch
         {
@@ -740,9 +764,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw ProtocolError("Worker response requestId does not match the request.");
         }
 
-        string expectedExecutionProvider = requestedProvider == GlossBertRankerProvider.Npu
-            ? NpuExecutionProvider
-            : CpuExecutionProvider;
+        string expectedExecutionProvider = requestedProvider.Traits().ExecutionProvider;
         if (!string.Equals(
                 response.Provider,
                 expectedExecutionProvider,
@@ -753,9 +775,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 $"'{response.Provider ?? "<null>"}'. Provider fallback is forbidden.");
         }
 
-        string expectedDevice = requestedProvider == GlossBertRankerProvider.Npu
-            ? "NPU"
-            : "CPU";
+        string expectedDevice = requestedProvider.Traits().Device;
         if (!string.Equals(response.Device, expectedDevice, StringComparison.Ordinal))
         {
             throw ProtocolError(
@@ -868,7 +888,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
 
         bool allowsBiEncoderPipeline =
-            requestedProvider == GlossBertRankerProvider.Cpu &&
+            requestedProvider.Traits().BiEncoderPrefilter &&
             response.ModelVersion.EndsWith(
                 ":" + CpuEmbeddingBundleCacheTag,
                 StringComparison.Ordinal) &&
@@ -1226,7 +1246,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
         if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
         {
-            return provider == GlossBertRankerProvider.Cpu &&
+            return provider.Traits().AlternativeModels &&
                    modelVersion.StartsWith(
                        SandwichCpuModelCacheId,
                        StringComparison.Ordinal);
@@ -1234,13 +1254,13 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
         if (cpuModelProfile == RankerCpuModelProfile.Consec)
         {
-            return provider == GlossBertRankerProvider.Cpu &&
+            return provider.Traits().AlternativeModels &&
                    modelVersion.StartsWith(
                        ConsecCpuModelCacheId,
                        StringComparison.Ordinal);
         }
 
-        return provider == GlossBertRankerProvider.Cpu &&
+        return provider.Traits().AlternativeModels &&
                TrySplitDebertaArtifactIdentity(modelVersion, out _);
     }
 
@@ -1262,7 +1282,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
         else if (cpuModelProfile == RankerCpuModelProfile.Sandwich)
         {
-            if (provider != GlossBertRankerProvider.Cpu ||
+            if (!provider.Traits().AlternativeModels ||
                 !modelVersion.StartsWith(
                     SandwichCpuModelCacheId,
                     StringComparison.Ordinal))
@@ -1274,7 +1294,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
         else if (cpuModelProfile == RankerCpuModelProfile.Consec)
         {
-            if (provider != GlossBertRankerProvider.Cpu ||
+            if (!provider.Traits().AlternativeModels ||
                 !modelVersion.StartsWith(
                     ConsecCpuModelCacheId,
                     StringComparison.Ordinal))
@@ -1284,7 +1304,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
 
             suffix = modelVersion[ConsecCpuModelCacheId.Length..];
         }
-        else if (provider != GlossBertRankerProvider.Cpu ||
+        else if (!provider.Traits().AlternativeModels ||
                  !TrySplitDebertaArtifactIdentity(modelVersion, out suffix))
         {
             return false;
@@ -1327,7 +1347,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             return true;
         }
 
-        return provider == GlossBertRankerProvider.Cpu &&
+        return provider.Traits().BiEncoderPrefilter &&
                string.Equals(
                    suffix,
                    ":" + CpuEmbeddingBundleCacheTag,
@@ -1364,7 +1384,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(cpuModelProfile));
         }
 
-        if (provider == GlossBertRankerProvider.Npu &&
+        if (!provider.Traits().AlternativeModels &&
             cpuModelProfile != RankerCpuModelProfile.GlossBert)
         {
             throw new GlossBertRankerException(

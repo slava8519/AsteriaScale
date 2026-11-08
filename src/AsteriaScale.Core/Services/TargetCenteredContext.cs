@@ -54,7 +54,7 @@ internal static partial class TargetCenteredContextBuilder
         int characterIndex,
         GlossBertRankerProvider provider,
         RankerCpuModelProfile cpuModelProfile) =>
-        provider == GlossBertRankerProvider.Cpu &&
+        provider.Traits().AlternativeModels &&
         cpuModelProfile == RankerCpuModelProfile.Consec
             ? PreserveFull(context, target, characterIndex)
             : Build(context, target, characterIndex);

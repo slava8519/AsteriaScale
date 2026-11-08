@@ -236,9 +236,9 @@ internal static partial class SmartPhraseTranslationGuard
             request.SenseHints is null ||
             request.SourcePhrase.Length > SmartPhraseContextBuilder.MaximumCharacters ||
             request.ModelInputPhrase.Length > SmartPhraseContextBuilder.MaximumCharacters ||
-            request.PreviousContext.Count > TextHookService.MaximumContextSentences ||
+            request.PreviousContext.Count > PreviousContextLimits.MaximumSentences ||
             request.PreviousContext.Sum(value => value?.Length ?? 0) >
-                TextHookService.MaximumContextCharacters ||
+                PreviousContextLimits.MaximumCharacters ||
             request.PreviousContext.Any(value => !IsSafeContext(value)) ||
             request.SemanticTerms.Count > TranslationScaffoldBuilder.MaximumTermCount ||
             request.SemanticTerms.Any(term =>

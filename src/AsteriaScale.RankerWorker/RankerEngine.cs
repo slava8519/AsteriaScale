@@ -129,7 +129,7 @@ internal sealed class RankerEngine : IDisposable
 
     public RankerEngine(WorkerOptions options)
     {
-        if (options.Provider == RankerProvider.Npu &&
+        if (!options.Provider.Traits().AlternativeModels &&
             options.CpuModel != CpuRankerModel.GlossBert)
         {
             throw new RankerException(
@@ -139,10 +139,8 @@ internal sealed class RankerEngine : IDisposable
         }
 
         _options = options;
-        Provider = options.Provider == RankerProvider.Npu
-            ? "VitisAIExecutionProvider"
-            : "CPUExecutionProvider";
-        Device = options.Provider == RankerProvider.Npu ? "NPU" : "CPU";
+        Provider = options.Provider.Traits().ExecutionProvider;
+        Device = options.Provider.Traits().Device;
         _crossModelVersion = options.CpuModel switch
         {
             CpuRankerModel.Deberta => "GlossDeBERTa:manifest-pending",
@@ -168,7 +166,7 @@ internal sealed class RankerEngine : IDisposable
     public async Task WarmAsync()
     {
         await EnsureLoadedAsync();
-        if (_options.Provider == RankerProvider.Cpu &&
+        if (_options.Provider.Traits().BiEncoderPrefilter &&
             _options.CpuModel is not (CpuRankerModel.Sandwich or CpuRankerModel.Consec))
         {
             EnsureEmbeddingPipelineLoaded();
@@ -300,7 +298,7 @@ internal sealed class RankerEngine : IDisposable
         {
             int distinctGroupCount = groupIds.Distinct().Count();
             if (!RankerSelectionLogic.ShouldApplyBiEncoder(
-                    _options.Provider == RankerProvider.Cpu,
+                    _options.Provider.Traits().BiEncoderPrefilter,
                     distinctGroupCount))
             {
                 return fallback;

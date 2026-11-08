@@ -11,6 +11,34 @@ tools/consec-upstream-reference-golden.json text eol=lf
 *.md text
 *.json text
 
+# Benchmark and translation-suite provenance hashes the raw file bytes, so a
+# dataset must have the same bytes in every checkout. With plain "text" a
+# Windows clone wrote CRLF and recorded a different SHA-256 than macOS or the
+# git blob for identical content.
+assets/**/*.json text eol=lf
+tools/*.json text eol=lf
+*.tsv text eol=lf
+# Bundle JSON (tokenizers, the SANDWiCH model-manifest.json) is size- and
+# SHA-pinned in RankerEngine.cs, scripts/verify-*.ps1 and the ranker baselines;
+# keep its exact bytes.
+src/AsteriaScale.RankerWorker/Models/**/*.json -text
+
+# Apple sources for the macOS app. Shell scripts with CRLF fail with
+# "bad interpreter"; Xcode and Metal tooling expect LF.
+*.swift text eol=lf
+*.metal text eol=lf
+*.sh text eol=lf
+*.entitlements text eol=lf
+*.xcstrings text eol=lf
+*.pbxproj text eol=lf
+*.icns binary
+*.car binary
+*.dylib binary
+*.a binary
+*.metallib binary
+*.mlmodel binary
+**/*.mlpackage/** binary
+
 *.tsv.gz binary
 tools/dictionary-source/vn-lexicon.tsv text eol=lf
 tools/dictionary-source/vn-sources.lock.json text eol=lf

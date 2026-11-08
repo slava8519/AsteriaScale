@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Platform-neutral translation core: dictionaries, sense ranking, phrase
+       translation and their caches. Plain net10.0 with no RuntimeIdentifier so
+       the same sources serve the Windows app today and a macOS host later.
+       Anything that needs a Windows API belongs in src/AsteriaScale instead. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AsteriaScale.Core</AssemblyName>
+    <RootNamespace>AsteriaScale</RootNamespace>
+    <Version>0.9.3</Version>
+    <!-- A Windows-only API reaching the core must fail the Windows build too,
+         not surface later as a macOS runtime crash. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
+  </ItemGroup>
+</Project>

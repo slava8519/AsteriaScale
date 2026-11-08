@@ -100,7 +100,7 @@ internal sealed class TranslationScaffoldGlossBertRanker
             rankerContext.Text,
             request.Target,
             rankerContext.CharacterIndex,
-            request.Plan.GlossesFor(provider == GlossBertRankerProvider.Cpu),
+            request.Plan.GlossesFor(provider.Traits().EnrichedGlosses),
             request.Plan.CandidateGroupIds,
             "English",
             provider,

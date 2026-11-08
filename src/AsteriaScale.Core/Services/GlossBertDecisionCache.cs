@@ -222,7 +222,7 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         // where the sequence budget allows), so keying the unrendered glosses
         // would serve a verdict computed from different input.
         IReadOnlyList<string> glosses = plan.GlossesFor(
-            provider == GlossBertRankerProvider.Cpu,
+            provider.Traits().EnrichedGlosses,
             enrichmentEnabled);
         for (int index = 0; index < glosses.Count; index++)
         {

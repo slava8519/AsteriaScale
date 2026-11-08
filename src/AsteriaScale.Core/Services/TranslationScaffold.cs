@@ -794,7 +794,7 @@ internal sealed class TranslationScaffoldBuilder
             // selected deterministic constraints must survive. A shared session
             // also prevents a systemic failure from repeating per screen block.
             neuralSession.DisableNeural();
-            HoverTranslationService.LogError(exception);
+            HoverDiagnostics.LogError(exception);
             return new NeuralSelectionAttempt(
                 SenseHints: Array.Empty<ScaffoldSenseHint>(),
                 Diagnostic: new TranslationScaffoldNeuralDiagnostic(

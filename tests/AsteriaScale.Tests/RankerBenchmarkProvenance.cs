@@ -260,7 +260,7 @@ internal static class RankerBenchmarkProvenance
         }
 
         bool usesBiEncoder =
-            provider == GlossBertRankerProvider.Cpu &&
+            provider.Traits().BiEncoderPrefilter &&
             modelVersion.EndsWith(
                 ":" + GlossBertDictionarySelectorService.CpuEmbeddingBundleCacheTag,
                 StringComparison.Ordinal);

@@ -117,7 +117,7 @@ sense-инвентарём (`expected-not-covered` в `--ranker-benchmark`) — 
   время/вид)» только для нужных категорий (глагол, сущ., прил., нареч., межд.).
   Выход: `assets/Morphology/ru-morph.dawg` (~8–15 МБ) + лицензия в
   THIRD_PARTY_NOTICES.md.
-- Новый сервис `src/AsteriaScale/Services/RussianMorphologyLexicon.cs`:
+- Новый сервис `src/AsteriaScale.Core/Services/RussianMorphologyLexicon.cs`:
   ленивая загрузка DAWG, lookup по словоформе. `RussianMorphology` становится
   фасадом: сначала лексикон, при отсутствии слова — текущие суффиксные правила
   (fallback обязателен: словарь не полон).

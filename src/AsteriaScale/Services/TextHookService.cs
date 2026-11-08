@@ -17,8 +17,8 @@ namespace AsteriaScale.Services;
 public sealed partial class TextHookService : IAsyncDisposable
 {
     private const int MaximumSentences = 32;
-    internal const int MaximumContextSentences = 3;
-    internal const int MaximumContextCharacters = 1_200;
+    internal const int MaximumContextSentences = PreviousContextLimits.MaximumSentences;
+    internal const int MaximumContextCharacters = PreviousContextLimits.MaximumCharacters;
     private static readonly TimeSpan SentenceLifetime = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan ContextLifetime = TimeSpan.FromMinutes(2);
 
