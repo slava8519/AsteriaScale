@@ -142,20 +142,13 @@ internal static class SmartHoverPhraseIntegrationTests
               final.Translation == translator.Final &&
               translator.Events.IndexOf("shown") < translator.Events.IndexOf("refined"),
             "The gate's final line did not replace the provisional candidate A.");
-#if WINDOWS
-        Check(!HoverTranslationService.IsPhraseHistoryEntry(provisional[0]) &&
-              HoverTranslationService.IsPhraseHistoryEntry(final),
+        Check(!HoverPolicy.IsPhraseHistoryEntry(provisional[0]) &&
+              HoverPolicy.IsPhraseHistoryEntry(final),
             "A provisional hypothesis would be recorded in the translation history.");
-        Check(HoverTranslationOverlay.PhraseEngineLabel(provisional[0]) ==
+        Check(HoverEngineLabelClassifier.PhraseEngineLabel(provisional[0]) ==
               "Фраза · TG4B · CPU · уточняется…" &&
-              HoverTranslationOverlay.PhraseEngineLabel(final!) == "Фраза · TG4B · CPU",
+              HoverEngineLabelClassifier.PhraseEngineLabel(final!) == "Фраза · TG4B · CPU",
             "The card did not mark the provisional line as still being refined.");
-#else
-        MacSmoke.Part(
-            "hover-wpf-helpers",
-            "Smart phrase translation hover integration",
-            "IsPhraseHistoryEntry and PhraseEngineLabel live in the WPF assembly");
-#endif
     }
 
     private static async Task VerifyContradictedDraftIsNotShownAsync(string root)

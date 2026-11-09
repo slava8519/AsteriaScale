@@ -5,6 +5,10 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using AsteriaScale.Interop;
 using AsteriaScale.Services;
+// The card-kind predicates over engine strings live in Core, so every host and
+// the shared tests classify a card the same way; importing them statically
+// keeps the call sites below as they were.
+using static AsteriaScale.Services.HoverEngineLabelClassifier;
 using MediaColor = System.Windows.Media.Color;
 
 namespace AsteriaScale;
@@ -45,7 +49,7 @@ public partial class HoverTranslationOverlay : Window
         CurrentSpeakerContext? currentSpeaker = null,
         bool speakerEditorAvailable = true)
     {
-        bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
+        bool dictionaryMode = IsDictionaryEngine(engine);
         string? smartAccelerator = SmartAccelerator(engine);
         bool smartMode = !dictionaryMode;
         string normalizedSource = source.Trim();
@@ -96,14 +100,11 @@ public partial class HoverTranslationOverlay : Window
         CurrentSpeakerContext? currentSpeaker = null,
         bool speakerEditorAvailable = true)
     {
-        bool dictionaryMode = engine == LocalDictionaryService.EngineLabel;
+        bool dictionaryMode = IsDictionaryEngine(engine);
         string? smartAccelerator = SmartAccelerator(engine);
-        bool smartUsesTatoeba =
-            engine == SmartDictionaryHeuristicRanker.TatoebaEngineLabel;
-        bool smartUsesFastPath =
-            engine == SmartDictionaryHeuristicRanker.EngineLabel ||
-            smartUsesTatoeba;
-        bool smartUsesCache = engine == SmartDictionaryResultCache.EngineLabel;
+        bool smartUsesTatoeba = IsTatoebaEngine(engine);
+        bool smartUsesFastPath = IsFastPathEngine(engine);
+        bool smartUsesCache = IsResultCacheEngine(engine);
         bool smartAbstained =
             smartAccelerator is not null &&
             IsSmartAbstentionEngine(engine);
@@ -267,16 +268,6 @@ public partial class HoverTranslationOverlay : Window
         return displayText;
     }
 
-    // The provisional marker tells the reader that candidate A may still be
-    // replaced by the sense gate, so a changed line is expected, not a glitch.
-    internal static string PhraseEngineLabel(SmartHoverPhraseLine phraseLine)
-    {
-        string label = phraseLine.Engine.Contains("VULKAN", StringComparison.Ordinal)
-            ? "Фраза · TG4B · GPU"
-            : "Фраза · TG4B · CPU";
-        return phraseLine.IsProvisional ? label + " · уточняется…" : label;
-    }
-
     private void ConfigureSpeaker(
         CurrentSpeakerContext? speaker,
         bool speakerEditorAvailable)
@@ -332,9 +323,7 @@ public partial class HoverTranslationOverlay : Window
             HeaderMeasurementSafety +
             modeWidth +
             metaWidth);
-        bool longSmartStatus =
-            metaLabel.Contains("НЕ УВЕРЕН", StringComparison.Ordinal) ||
-            metaLabel.Contains("НЕДОСТУПЕН", StringComparison.Ordinal);
+        bool longSmartStatus = IsLongSmartStatus(metaLabel);
         return longSmartStatus
             ? Math.Max(LongSmartStatusMinimumWidth, measuredWidth)
             : measuredWidth;
@@ -402,31 +391,6 @@ public partial class HoverTranslationOverlay : Window
             : textHookStatus?.CardBadge ?? "OCR";
         return metaText + "  ·  " + badge;
     }
-
-    internal static string? SmartAccelerator(string engine)
-    {
-        if (engine.StartsWith(
-                GlossBertDictionarySelectorService.CpuEngineLabel,
-                StringComparison.Ordinal))
-        {
-            return "CPU";
-        }
-
-        if (engine.StartsWith(
-                GlossBertDictionarySelectorService.NpuEngineLabel,
-                StringComparison.Ordinal))
-        {
-            return "NPU";
-        }
-
-        return null;
-    }
-
-    internal static bool IsSmartAbstentionEngine(string engine) =>
-        engine.Contains("НЕ УВЕРЕН", StringComparison.OrdinalIgnoreCase);
-
-    internal static bool IsSmartUnavailableEngine(string engine) =>
-        engine.Contains("НЕДОСТУПЕН", StringComparison.OrdinalIgnoreCase);
 
     private static double SourceFontSize(string source) => source.Length switch
     {

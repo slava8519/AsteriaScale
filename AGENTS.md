@@ -34,17 +34,20 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   `net10.0`, no RID): dictionaries, morphology, sense-ranking host, phrase
   translation, caches, settings, the hover orchestration
   (`HoverCoordinator`: lifecycle, warm-up and unload, card order,
-  cancellation, history, statuses) and the unit-free OCR text rules
+  cancellation, history, statuses), the unit-free OCR text rules
   (`OcrTextRules`: clean-up, sentence extraction, the two-observation
   agreement, frame reuse; `WindowsAiOcrService` imports them and keeps capture
-  and pixel geometry until 20.3). CA1416 is a build error. Add no Windows
-  binary names or paths; the existing ones listed in docs/ARCHITECTURE.md are
-  known seams. Most types are `internal` (a few, such as `AppSettings`,
-  `LocalDictionaryService` and `GlossBertDictionarySelectorService`, are
-  `public`), and `InternalsVisibleTo` covers only `AsteriaScale`,
-  `AsteriaScale.Tests` and `AsteriaScale.CoreHost` (the macOS Core host), so a
-  new consumer of an internal type needs its own line. Core never derives a
-  data path on its own: bundled data (dictionaries, morphology) and user state
+  and pixel geometry until 20.3) and the card-kind predicates over engine
+  strings (`HoverEngineLabelClassifier`; the WPF `HoverTranslationOverlay`
+  imports them and keeps the card's texts and layout). CA1416 is a build
+  error. Add no Windows binary names or paths; the existing ones listed in
+  docs/ARCHITECTURE.md are known seams. Most types are `internal` (a few,
+  such as `AppSettings`, `LocalDictionaryService` and
+  `GlossBertDictionarySelectorService`, are `public`), and
+  `InternalsVisibleTo` covers only `AsteriaScale`, `AsteriaScale.Tests` and
+  `AsteriaScale.CoreHost` (the macOS Core host), so a new consumer of an
+  internal type needs its own line. Core never derives a data path on its own:
+  bundled data (dictionaries, morphology) and user state
   (settings, user dictionaries, history, caches, hover log, TranslateGemma
   models) come from `CoreDataLayout`, the ranker worker and its model folder
   from `RankerWorkerLocation`; their Windows defaults are the old paths.

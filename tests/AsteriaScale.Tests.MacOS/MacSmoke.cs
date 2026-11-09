@@ -31,10 +31,8 @@ internal static class MacSmoke
     // unknown key is a typo that would otherwise hide a missing declaration.
     private static readonly string[] ExpectedParts =
     [
-        "overlay-labels",
         "managed-memory-budget",
         "overlay-width",
-        "hover-wpf-helpers",
         "lease-exclusion"
     ];
 

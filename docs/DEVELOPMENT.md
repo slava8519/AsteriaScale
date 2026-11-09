@@ -382,11 +382,11 @@ apphost или не Apple Silicon; любой другой — код самог
 Из `57` общих регистраций выполняются `43`. Остальные `14` Windows-only
 объявлены на месте через `MacSmoke.Skip` с названием API, которое их требует
 (WPF-сборка, Magpie, Windows AI OCR, Windows PowerShell, `cmd.exe`), и
-печатаются строками `skip`. Пять Windows-only проверок внутри выполняемых
+печатаются строками `skip`. Три Windows-only проверки внутри выполняемых
 тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
 них — бюджет управляемой памяти, который один тест, «Local dictionary
 lookup», печатает дважды (замеры `Layered dictionaries` и `Aligned sense
-metadata`), поэтому строк `note` шесть. Затем идут три проверки только для
+metadata`), поэтому строк `note` четыре. Затем идут три проверки только для
 macOS (префикс `macOS: `):
 
 - паритет с Windows-проектами: пакеты и их версии, общие файлы воркера,
@@ -400,18 +400,18 @@ macOS (префикс `macOS: `):
   `src/AsteriaScale.RankerWorker/Models`, проверяет выбор, провайдер, pipeline
   и точную identity модели.
 
-Эталонный прогон: `46` строк `ok`, `14` — `skip`, `6` — `note`, последняя
+Эталонный прогон: `46` строк `ok`, `14` — `skip`, `4` — `note`, последняя
 строка:
 
 ```text
-PASS (macOS subset): 43/57 shared smoke tests + 3 macOS checks; SKIPPED: 14 Windows-only; 5 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
+PASS (macOS subset): 43/57 shared smoke tests + 3 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
 ```
 
 Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
 именно так. `MacSmoke.Summarize` печатает строку `PASS`, только если
 выполненные и объявленные регистрации вместе дают ровно `57` с
-неповторяющимися именами, прошли все три macOS-проверки, достигнуты все пять
-объявленных частей и записаны оба статуса ConSeC. `checked in place` значит,
+неповторяющимися именами, прошли все три macOS-проверки, достигнуты все три
+объявленные части и записаны оба статуса ConSeC. `checked in place` значит,
 что токенизатор сверен с закреплёнными длиной и SHA-256 и двумя
 tensor-эталонами, а воркер ответил на `--smoke`. Без бандла оба статуса
 начинаются с `absent: ` и называют отсутствующий путь; прогон остаётся
@@ -656,19 +656,20 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 
 Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1,
 регистрации «Smart hover engine strings», швов ядра этапа 20.2, переноса
-оркестрации наведения и текстовых правил OCR в ядро (9 ноября 2026):
+в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки
+(9 ноября 2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
 (`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
-и три собственные проверки. В `tests/` `49` файлов C# — `28 758` строк вместе с
+и три собственные проверки. В `tests/` `49` файлов C# — `28 814` строк вместе с
 harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
-против `36 733` строк C# в `src/`. Отдельно есть пять
+против `36 760` строк C# в `src/`. Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
 |---|---|---|---|
-| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером, каталоги данных ядра (прежние пути Windows, отказ при пустом или относительном LocalAppData, однократная настройка, журнал наведения вне текущего каталога) | блоки `Program.cs`, `CoreDataLayoutTests` (внутри «Settings round trip»), `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
+| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером, признаки вида карточки по строке движка и побайтные эталоны Windows-строк движка, каталоги данных ядра (прежние пути Windows, отказ при пустом или относительном LocalAppData, однократная настройка, журнал наведения вне текущего каталога) | блоки `Program.cs`, `CoreDataLayoutTests` (внутри «Settings round trip»), `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
 | Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py` и `tools/atomic_output.py` |
 | Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, путь воркера и каталог моделей по умолчанию и от хоста, дедлайн ответа с остановкой воркера, строку движка каждого результата hover-конвейера (словарь, эвристики, Tatoeba, оба кэша, выбор и воздержание ранжировщика CPU и NPU, его недоступность, строки фразы) с поддельным воркером, оркестрацию наведения в ядре с подставным хостом (порядок карточек, основная карточка до записи в кэш результатов, отмена и скрытие, история показанного, жизненный цикл, освобождение в две фазы, строки движка карточки загрузки, тексты статусов прогрева и готовности), общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `SmartHoverEngineStringTests`, `HoverCoordinatorTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
 | Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |

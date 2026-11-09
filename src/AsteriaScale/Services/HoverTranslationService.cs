@@ -284,11 +284,6 @@ public sealed class HoverTranslationService :
             DispatcherPriority.Normal);
     }
 
-    // Kept so existing tests read the same; the rule lives in the core.
-    internal static bool IsPhraseHistoryEntry(
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] SmartHoverPhraseLine? phraseLine) =>
-        HoverPolicy.IsPhraseHistoryEntry(phraseLine);
-
     /// <summary>History of shown translations, for the review panel and export.</summary>
     public TranslationHistoryService History => _core.History;
 

@@ -231,23 +231,88 @@ try
                SmartDictionaryRankerModels.Normalize("unsupported") ==
                    SmartDictionaryRankerModels.GlossBert,
             "Smart dictionary ranker-model normalization failed.");
-#if WINDOWS
-        Assert(HoverTranslationOverlay.SmartAccelerator(
+        Assert(HoverEngineLabelClassifier.SmartAccelerator(
                    GlossBertDictionarySelectorService.CpuEngineLabel + " • НЕ УВЕРЕН") == "CPU" &&
-               HoverTranslationOverlay.SmartAccelerator(
+               HoverEngineLabelClassifier.SmartAccelerator(
                    GlossBertDictionarySelectorService.NpuEngineLabel + " • НЕ УВЕРЕН") == "NPU" &&
-               HoverTranslationOverlay.IsSmartAbstentionEngine(
+               HoverEngineLabelClassifier.IsSmartAbstentionEngine(
                    GlossBertDictionarySelectorService.NpuEngineLabel + " • НЕ УВЕРЕН"),
             "GlossBERT overlay accelerator/status recognition failed.");
-        Assert(HoverTranslationOverlay.IsSmartUnavailableEngine(
+        Assert(HoverEngineLabelClassifier.IsSmartUnavailableEngine(
                    GlossBertDictionarySelectorService.CpuEngineLabel + " • НЕДОСТУПЕН"),
             "GlossBERT unavailable status recognition failed.");
-#else
-        MacSmoke.Part(
-            "overlay-labels",
-            "Settings round trip",
-            "HoverTranslationOverlay accelerator/engine predicates live in the WPF assembly");
-#endif
+        // Every Windows engine label, byte for byte. History files and
+        // benchmark reports store these strings and the hover card tells card
+        // kinds apart by them, so a label for another text source has to sit
+        // beside them instead of replacing them.
+        Assert(LocalDictionaryService.EngineLabel == "NPU OCR  •  СЛОВАРЬ" &&
+               SmartDictionaryHeuristicRanker.EngineLabel == "NPU OCR  •  SMART-FAST" &&
+               SmartDictionaryHeuristicRanker.TatoebaEngineLabel ==
+                   "NPU OCR  •  SMART-FAST  •  TATOEBA" &&
+               SmartDictionaryResultCache.EngineLabel == "NPU OCR  •  SMART-CACHE" &&
+               GlossBertDictionarySelectorService.CpuEngineLabel == "NPU OCR  •  CPU-СМЫСЛ" &&
+               GlossBertDictionarySelectorService.NpuEngineLabel == "NPU OCR  •  NPU-СМЫСЛ" &&
+               TranslateGemmaTranslationService.EngineLabel == "TRANSLATEGEMMA 4B" &&
+               TranslateGemmaTranslationService.GetEngineLabel(
+                   TranslateGemmaExecutionBackend.Cpu) == "TRANSLATEGEMMA 4B  •  CPU" &&
+               TranslateGemmaTranslationService.GetEngineLabel(
+                   TranslateGemmaExecutionBackend.Vulkan) == "TRANSLATEGEMMA 4B  •  VULKAN",
+            "A Windows engine label changed.");
+        // The card kind read from each literal label the pipeline produces,
+        // the two ranker suffixes written as SmartHoverPipeline appends them.
+        static string CardKind(string engine) => string.Join(
+            "+",
+            new[]
+            {
+                HoverEngineLabelClassifier.IsDictionaryEngine(engine) ? "dictionary" : null,
+                HoverEngineLabelClassifier.IsFastPathEngine(engine) ? "fast" : null,
+                HoverEngineLabelClassifier.IsTatoebaEngine(engine) ? "tatoeba" : null,
+                HoverEngineLabelClassifier.IsResultCacheEngine(engine) ? "cache" : null,
+                HoverEngineLabelClassifier.SmartAccelerator(engine),
+                HoverEngineLabelClassifier.IsSmartAbstentionEngine(engine) ? "abstained" : null,
+                HoverEngineLabelClassifier.IsSmartUnavailableEngine(engine) ? "unavailable" : null
+            }.Where(part => part is not null));
+        (string Engine, string Kind)[] cardKinds =
+        [
+            ("NPU OCR  •  СЛОВАРЬ", "dictionary"),
+            ("NPU OCR  •  SMART-FAST", "fast"),
+            ("NPU OCR  •  SMART-FAST  •  TATOEBA", "fast+tatoeba"),
+            ("NPU OCR  •  SMART-CACHE", "cache"),
+            ("NPU OCR  •  CPU-СМЫСЛ", "CPU"),
+            ("NPU OCR  •  NPU-СМЫСЛ", "NPU"),
+            ("NPU OCR  •  CPU-СМЫСЛ  •  НЕ УВЕРЕН", "CPU+abstained"),
+            ("NPU OCR  •  NPU-СМЫСЛ  •  НЕ УВЕРЕН", "NPU+abstained"),
+            ("NPU OCR  •  CPU-СМЫСЛ  •  НЕДОСТУПЕН", "CPU+unavailable"),
+            ("NPU OCR  •  NPU-СМЫСЛ  •  НЕДОСТУПЕН", "NPU+unavailable")
+        ];
+        foreach ((string engine, string kind) in cardKinds)
+        {
+            Assert(CardKind(engine) == kind,
+                $"The card reads '{engine}' as '{CardKind(engine)}' instead of '{kind}'.");
+        }
+
+        // The wide-header rule reads the header text the card composes, not
+        // the engine string.
+        Assert(HoverEngineLabelClassifier.IsLongSmartStatus("EN → RU  ·  NPU · НЕ УВЕРЕН  ·  OCR") &&
+               HoverEngineLabelClassifier.IsLongSmartStatus("EN → RU  ·  CPU · НЕДОСТУПЕН  ·  HOOK") &&
+               !HoverEngineLabelClassifier.IsLongSmartStatus("EN → RU  ·  CPU КОНТЕКСТ  ·  OCR") &&
+               !HoverEngineLabelClassifier.IsLongSmartStatus("EN → RU  ·  TATOEBA  ·  OCR"),
+            "The card header no longer reserves width for the long smart statuses.");
+        SmartHoverPhraseLine vulkanPhrase = new(
+            "We rested on the bank.",
+            "Мы отдыхали на берегу.",
+            "TRANSLATEGEMMA 4B  •  VULKAN",
+            SmartPhraseLineStatus.Translated,
+            FromCache: false);
+        Assert(HoverEngineLabelClassifier.PhraseEngineLabel(vulkanPhrase) ==
+                   "Фраза · TG4B · GPU" &&
+               HoverEngineLabelClassifier.PhraseEngineLabel(
+                   vulkanPhrase with { IsProvisional = true }) ==
+                   "Фраза · TG4B · GPU · уточняется…" &&
+               HoverEngineLabelClassifier.PhraseEngineLabel(
+                   vulkanPhrase with { Engine = "TRANSLATEGEMMA 4B  •  CPU" }) ==
+                   "Фраза · TG4B · CPU",
+            "The phrase-line caption does not name the TranslateGemma backend.");
         Assert(SmartDictionarySourceLanguages.Normalize("EN") == SmartDictionarySourceLanguages.English &&
                SmartDictionarySourceLanguages.Normalize("unsupported") == SmartDictionarySourceLanguages.Auto,
             "Smart dictionary source-language normalization failed.");
