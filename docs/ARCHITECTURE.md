@@ -7,7 +7,7 @@
 | Проект | Назначение |
 |---|---|
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor и Windows-хост наведения (`HoverTranslationService`: распознавание, трекер курсора и показ карточек для `HoverCoordinator`) |
-| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки и оркестрация наведения (`HoverCoordinator`). Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
+| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки, оркестрация наведения (`HoverCoordinator`) и текстовые правила OCR без пиксельных единиц (`OcrTextRules`). Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime. `win-x64`: CPU и NPU (Windows ML/VitisAI); `osx-arm64`: только CPU — эти же исходники компилирует по ссылке `src/AsteriaScale.RankerWorker.MacOS` (без `Content`, не входит в `AsteriaScale.slnx`) |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI. `tests/AsteriaScale.Tests.MacOS` — macOS-подмножество того же набора с общим `Program.cs` (Windows-only части под `#if WINDOWS`), не входит в `AsteriaScale.slnx` |
@@ -211,7 +211,8 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 | Курсор: таймер 90 мс, радиус 15 px, задержка | `HoverTracking` | `AsteriaScale` (хост) |
 | Оркестрация: режим, прогрев и выгрузка, порядок карточек, отмена, история, статусы, род говорящего | `HoverCoordinator` (`HoverHostContracts.cs`: `IHoverHost`, записи карточек, `HoverPolicy`; `HoverCoreServices`) | ядро |
 | Хост наведения: OCR или hook, трекер, показ карточек, редактор рода, ресурсы хоста | `HoverTranslationService` (`IHoverHost<CursorHover>`) | хост |
-| OCR под курсором | `WindowsAiOcrService` → записи из `OcrResults.cs` | хост → `AsteriaScale.Core` |
+| OCR под курсором: захват, распознавание Windows AI, пиксельная геометрия строк и границ захвата | `WindowsAiOcrService` → записи из `OcrResults.cs` | хост → `AsteriaScale.Core` |
+| Текстовые правила OCR: очистка и починка mixed-script, извлечение предложения и проверка его полноты, согласие двух наблюдений, повторное использование неизменившегося кадра | `OcrTextRules` (Windows-хост подключает их через `using static`) | ядро |
 | Строка и история игры | `TextHookService` (TextractorCLI), лимиты `PreviousContextLimits` | хост; лимиты — ядро |
 | Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |
 | Режим `Smart`, шаги 1–11 ниже | `SmartHoverPipeline.ResolveSmartHoverAsync` → `LocalDictionaryService`, `SmartDictionaryHeuristicRanker`, `SmartDictionarySenseResolver`, `SmartDictionaryResultCache`, `GlossBertDecisionCache` | ядро |
@@ -326,7 +327,7 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
     же PID/потока и ближайшей свежей строки. Кэш распознавания кадра этого
     правила не ослабляет: он переиспользует **согласие кадра**, а полнота
     предложения и подтверждённость подписи — свойства выбора, поэтому
-    пересчитываются на каждом наведении (`ApplyConfirmedFrameGates`).
+    пересчитываются на каждом наведении (`OcrTextRules.ApplyConfirmedFrameGates`).
     Подтверждённое имя хранится в записи кэша, иначе попадание заново вывело бы
     из геометрии ту подпись, которую два наблюдения забраковали. Затем `SmartPhraseIdiomRewriter` может
     заменить только узко доказанный английский оборот на однозначную английскую

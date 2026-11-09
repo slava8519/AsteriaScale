@@ -32,9 +32,12 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 
 - `src/AsteriaScale.Core` — platform-neutral translation core (plain
   `net10.0`, no RID): dictionaries, morphology, sense-ranking host, phrase
-  translation, caches, settings, and the hover orchestration
+  translation, caches, settings, the hover orchestration
   (`HoverCoordinator`: lifecycle, warm-up and unload, card order,
-  cancellation, history, statuses). CA1416 is a build error. Add no Windows
+  cancellation, history, statuses) and the unit-free OCR text rules
+  (`OcrTextRules`: clean-up, sentence extraction, the two-observation
+  agreement, frame reuse; `WindowsAiOcrService` imports them and keeps capture
+  and pixel geometry until 20.3). CA1416 is a build error. Add no Windows
   binary names or paths; the existing ones listed in docs/ARCHITECTURE.md are
   known seams. Most types are `internal` (a few, such as `AppSettings`,
   `LocalDictionaryService` and `GlossBertDictionarySelectorService`, are

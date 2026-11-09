@@ -379,14 +379,14 @@ apphost или не Apple Silicon; любой другой — код самог
 платформу. Их код при этом компилируется; под `#if WINDOWS` вынесены только
 `--live` и режимы OCR-изображений.
 
-Из `57` общих регистраций выполняются `40`. Остальные `17` Windows-only
+Из `57` общих регистраций выполняются `43`. Остальные `14` Windows-only
 объявлены на месте через `MacSmoke.Skip` с названием API, которое их требует
 (WPF-сборка, Magpie, Windows AI OCR, Windows PowerShell, `cmd.exe`), и
-печатаются строками `skip`. Шесть Windows-only проверок внутри выполняемых
+печатаются строками `skip`. Пять Windows-only проверок внутри выполняемых
 тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
 них — бюджет управляемой памяти, который один тест, «Local dictionary
 lookup», печатает дважды (замеры `Layered dictionaries` и `Aligned sense
-metadata`), поэтому строк `note` семь. Затем идут три проверки только для
+metadata`), поэтому строк `note` шесть. Затем идут три проверки только для
 macOS (префикс `macOS: `):
 
 - паритет с Windows-проектами: пакеты и их версии, общие файлы воркера,
@@ -400,17 +400,17 @@ macOS (префикс `macOS: `):
   `src/AsteriaScale.RankerWorker/Models`, проверяет выбор, провайдер, pipeline
   и точную identity модели.
 
-Эталонный прогон: `43` строки `ok`, `17` — `skip`, `7` — `note`, последняя
+Эталонный прогон: `46` строк `ok`, `14` — `skip`, `6` — `note`, последняя
 строка:
 
 ```text
-PASS (macOS subset): 40/57 shared smoke tests + 3 macOS checks; SKIPPED: 17 Windows-only; 6 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
+PASS (macOS subset): 43/57 shared smoke tests + 3 macOS checks; SKIPPED: 14 Windows-only; 5 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
 ```
 
 Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
 именно так. `MacSmoke.Summarize` печатает строку `PASS`, только если
 выполненные и объявленные регистрации вместе дают ровно `57` с
-неповторяющимися именами, прошли все три macOS-проверки, достигнуты все шесть
+неповторяющимися именами, прошли все три macOS-проверки, достигнуты все пять
 объявленных частей и записаны оба статуса ConSeC. `checked in place` значит,
 что токенизатор сверен с закреплёнными длиной и SHA-256 и двумя
 tensor-эталонами, а воркер ответил на `--smoke`. Без бандла оба статуса
@@ -617,8 +617,8 @@ python3 tools/macos/audit-verbatim-move.py regex --base <rev> [--paths <ката
 строки, поэтому `)` внутри шаблона не обрывает атрибут, а закомментированный
 атрибут не считается; пробелы и комментарии вне литералов не учитываются,
 литералы сравниваются как написаны. Успех — `GeneratedRegex attributes:
-identical (<n>)` и код `0` (сейчас `n` = `22`: `20` в ядре и по одному в
-`TextHookService` и `WindowsAiOcrService`); различие — список удалённых и
+identical (<n>)` и код `0` (сейчас `n` = `22`: `21` в ядре, из них один в
+`OcrTextRules`, и один в `TextHookService`); различие — список удалённых и
 добавленных атрибутов с местами и код `1`. Код `2` в обоих режимах — ошибка
 аргументов: неизвестная ревизия, нечитаемый файл, каталог `--paths` без
 единого `.cs`, исходник, который сканер не может разобрать.
@@ -655,15 +655,15 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 ### Стратегия тестирования
 
 Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1,
-регистрации «Smart hover engine strings», швов ядра этапа 20.2 и переноса
-оркестрации наведения в ядро (9 ноября 2026):
+регистрации «Smart hover engine strings», швов ядра этапа 20.2, переноса
+оркестрации наведения и текстовых правил OCR в ядро (9 ноября 2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
-(`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `40` из них
-и три собственные проверки. В `tests/` `49` файлов C# — `28 769` строк вместе с
+(`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
+и три собственные проверки. В `tests/` `49` файлов C# — `28 758` строк вместе с
 harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
-против `36 711` строк C# в `src/`. Отдельно есть пять
+против `36 733` строк C# в `src/`. Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
@@ -684,8 +684,11 @@ macOS не выполняются (`skip` или не компилируются
 
 - **WPF UI.** Окна и оверлеи не создаются; `App.xaml` и `AsteriaScale.csproj`
   проверяются только как XML.
-- **Живой NPU OCR.** Проверяются статические помощники `WindowsAiOcrService`
-  (сборка предложения, границы захвата, починка mixed-script); распознавание
+- **Живой NPU OCR.** Проверяются текстовые правила OCR в ядре
+  (`OcrTextRules`: извлечение предложения, починка mixed-script, согласие двух
+  наблюдений, повторное использование неизменившегося кадра; выполняются и на
+  macOS) и пиксельные помощники `WindowsAiOcrService` (сборка предложения из
+  строк, границы захвата, группировка блоков; только Windows); распознавание
   Windows AI запускают только `--ocr-image` и `--screen-ocr-image`.
 - **Инференс моделей и качество вывода GPU.** Ни один тест-проект не ссылается
   на ONNX Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan

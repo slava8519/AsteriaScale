@@ -609,24 +609,17 @@ try
                slangContraction.Translation.Contains("что", StringComparison.OrdinalIgnoreCase),
             $"The slang contraction layer must cover 'whaddya': {slangContraction.Translation}");
 
-#if WINDOWS
         // OCR homoglyph repair: a Cyrillic "а" inside Latin text must not
         // break phrase lookup, and genuine Russian must stay untouched.
-        string repairedMixed = WindowsAiOcrService.RepairMixedScriptText(
+        string repairedMixed = OcrTextRules.RepairMixedScriptText(
             "She said that happily, almost prancing аrоund.");
         Assert(repairedMixed == "She said that happily, almost prancing around.",
             $"Cyrillic homoglyphs inside Latin tokens were not repaired: {repairedMixed}");
-        Assert(WindowsAiOcrService.RepairMixedScriptText("Привет, мир! Hello world") ==
+        Assert(OcrTextRules.RepairMixedScriptText("Привет, мир! Hello world") ==
                "Привет, мир! Hello world",
             "Pure-script tokens must never be rewritten.");
-        Assert(WindowsAiOcrService.RepairMixedScriptText("Привeт") == "Привет",
+        Assert(OcrTextRules.RepairMixedScriptText("Привeт") == "Привет",
             "A Latin homoglyph inside a Russian token must be repaired toward Cyrillic.");
-#else
-        MacSmoke.Part(
-            "ocr-homoglyph-repair",
-            "Local dictionary lookup",
-            "WindowsAiOcrService.RepairMixedScriptText lives in the WPF assembly");
-#endif
 
         DictionaryLookupResult beaming = await dictionary.LookupAsync(
             "A beaming, innocent smile appeared on her shining face.", "beaming", 4);
@@ -2846,10 +2839,18 @@ try
             "An unrelated UI control was mistaken for an OCR speaker nameplate.");
         return Task.CompletedTask;
     });
+#else
+    MacSmoke.Skip(
+        "Magpie visible cursor mapping",
+        "VisibleCursorService and Interop.NativeMethods live in the WPF assembly");
+    MacSmoke.Skip(
+        "Neural OCR wrapped sentence",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+#endif
 
     await RunAsync("Sentence boundaries", () =>
     {
-        SentenceContext english = WindowsAiOcrService.ExtractSentence(
+        SentenceContext english = OcrTextRules.ExtractSentence(
             "First sentence. This is the complete second sentence! Last one?",
             28);
         Assert(english.Text == "This is the complete second sentence!",
@@ -2862,7 +2863,7 @@ try
             "Kotarou put in a lot of effort to prepare this for you, Mr. Giraffe.";
         foreach (string titledTarget in new[] { "effort", "Giraffe" })
         {
-            SentenceContext titled = WindowsAiOcrService.ExtractSentence(
+            SentenceContext titled = OcrTextRules.ExtractSentence(
                 titledAddressee,
                 titledAddressee.IndexOf(titledTarget, StringComparison.Ordinal));
             Assert(titled.Text == expectedTitledSentence,
@@ -2871,7 +2872,7 @@ try
 
         const string scientificAbbreviations =
             "Dr. Rivera reviewed Fig. 2 carefully. The result was conclusive.";
-        SentenceContext scientific = WindowsAiOcrService.ExtractSentence(
+        SentenceContext scientific = OcrTextRules.ExtractSentence(
             scientificAbbreviations,
             scientificAbbreviations.IndexOf("reviewed", StringComparison.Ordinal));
         Assert(scientific.Text == "Dr. Rivera reviewed Fig. 2 carefully.",
@@ -2886,14 +2887,14 @@ try
                      ("He only said \"Dr.\" I left.", "Dr", "He only said \"Dr.\"")
                  })
         {
-            SentenceContext separate = WindowsAiOcrService.ExtractSentence(
+            SentenceContext separate = OcrTextRules.ExtractSentence(
                 source,
                 source.IndexOf(target, StringComparison.Ordinal));
             Assert(separate.Text == expected,
                 $"An ambiguous abbreviation merged separate sentences: '{separate.Text}'");
         }
 
-        SentenceContext japanese = WindowsAiOcrService.ExtractSentence(
+        SentenceContext japanese = OcrTextRules.ExtractSentence(
             "彼は来た。私はここで待っている！次は？",
             10);
         Assert(japanese.Text == "私はここで待っている！",
@@ -2903,14 +2904,14 @@ try
         // Visual novels use it constantly, and splitting on its first dot hands
         // the translator a fragment - which no model can recover from.
         const string hesitation = "I... don't really know what to say.";
-        SentenceContext middle = WindowsAiOcrService.ExtractSentence(
+        SentenceContext middle = OcrTextRules.ExtractSentence(
             hesitation,
             hesitation.IndexOf("know", StringComparison.Ordinal));
         Assert(middle.Text == hesitation,
             $"A mid-utterance ellipsis truncated the reply: '{middle.Text}'");
 
         const string leadingAnchor = "I... don't really know what to say.";
-        SentenceContext beforeEllipsis = WindowsAiOcrService.ExtractSentence(
+        SentenceContext beforeEllipsis = OcrTextRules.ExtractSentence(
             leadingAnchor,
             0);
         Assert(beforeEllipsis.Text == leadingAnchor,
@@ -2919,31 +2920,31 @@ try
         // A trailing ellipsis does close the utterance: the next capitalised
         // clause is a separate reply, exactly like a full stop.
         const string trailing = "I don't know... Maybe we should just go.";
-        SentenceContext firstHalf = WindowsAiOcrService.ExtractSentence(
+        SentenceContext firstHalf = OcrTextRules.ExtractSentence(
             trailing,
             trailing.IndexOf("know", StringComparison.Ordinal));
         Assert(firstHalf.Text == "I don't know...",
             $"A trailing ellipsis did not close the utterance: '{firstHalf.Text}'");
-        SentenceContext secondHalf = WindowsAiOcrService.ExtractSentence(
+        SentenceContext secondHalf = OcrTextRules.ExtractSentence(
             trailing,
             trailing.IndexOf("Maybe", StringComparison.Ordinal));
         Assert(secondHalf.Text == "Maybe we should just go.",
             $"The clause after an ellipsis was not a separate reply: '{secondHalf.Text}'");
 
-        SentenceContext unicodeEllipsis = WindowsAiOcrService.ExtractSentence(
+        SentenceContext unicodeEllipsis = OcrTextRules.ExtractSentence(
             "That's… not what I meant at all.",
             "That's… not what I meant at all.".IndexOf("meant", StringComparison.Ordinal));
         Assert(unicodeEllipsis.Text == "That's… not what I meant at all.",
             $"A unicode ellipsis truncated the reply: '{unicodeEllipsis.Text}'");
 
-        SentenceContext quoted = WindowsAiOcrService.ExtractSentence(
+        SentenceContext quoted = OcrTextRules.ExtractSentence(
             "\"Wait...\" she said. Then she left.",
             5);
         Assert(quoted.Text == "\"Wait...\"",
             $"A quoted ellipsis lost its closing quote: '{quoted.Text}'");
 
         const string damagedFuture = "\"You'11 go to the afterlife after you grow old and die!";
-        SentenceContext repairedFuture = WindowsAiOcrService.ExtractSentence(
+        SentenceContext repairedFuture = OcrTextRules.ExtractSentence(
             damagedFuture,
             damagedFuture.IndexOf("afterlife", StringComparison.Ordinal));
         Assert(repairedFuture.Text == "You'll go to the afterlife after you grow old and die!",
@@ -2953,12 +2954,13 @@ try
             "OCR edge repair displaced the hovered word index.");
 
         string longSentence = string.Join(" ", Enumerable.Repeat("word", 100)) + ".";
-        SentenceContext preservedLong = WindowsAiOcrService.ExtractSentence(longSentence, 250);
+        SentenceContext preservedLong = OcrTextRules.ExtractSentence(longSentence, 250);
         Assert(preservedLong.Text == longSentence && preservedLong.Text.Length > 420,
             "OCR silently sliced a long sentence instead of preserving or rejecting it as a whole.");
         return Task.CompletedTask;
     });
 
+#if WINDOWS
     await RunAsync("Smart OCR capture geometry", () =>
     {
         System.Drawing.Rectangle monitor = new(0, 0, 3200, 2000);
@@ -2997,6 +2999,11 @@ try
             "Smart OCR geometry must support monitors with negative desktop coordinates.");
         return Task.CompletedTask;
     });
+#else
+    MacSmoke.Skip(
+        "Smart OCR capture geometry",
+        "WindowsAiOcrService and Interop.NativeMethods live in the WPF assembly");
+#endif
 
     await RunAsync("Smart OCR unchanged-frame cache guard", () =>
     {
@@ -3004,15 +3011,15 @@ try
         byte[] sameFrame = frame.ToArray();
         byte[] changedFrame = frame.ToArray();
         changedFrame[2047] ^= 0x40;
-        ulong fingerprint = WindowsAiOcrService.ComputeFrameFingerprint(frame);
-        Assert(WindowsAiOcrService.ComputeFrameFingerprint(sameFrame) == fingerprint,
+        ulong fingerprint = OcrTextRules.ComputeFrameFingerprint(frame);
+        Assert(OcrTextRules.ComputeFrameFingerprint(sameFrame) == fingerprint,
             "Identical captured pixels must have the same OCR cache fingerprint.");
-        Assert(WindowsAiOcrService.ComputeFrameFingerprint(changedFrame) != fingerprint,
+        Assert(OcrTextRules.ComputeFrameFingerprint(changedFrame) != fingerprint,
             "Any changed captured pixel must invalidate the OCR cache fingerprint.");
 
         System.Drawing.Rectangle bounds = new(400, 500, 1600, 720);
         DateTimeOffset cachedAt = DateTimeOffset.UtcNow;
-        Assert(WindowsAiOcrService.CanReuseCachedRecognition(
+        Assert(OcrTextRules.CanReuseCachedRecognition(
                 bounds,
                 fingerprint,
                 cachedAt,
@@ -3020,15 +3027,15 @@ try
                 fingerprint,
                 cachedAt.AddSeconds(5)),
             "An unchanged recent frame should reuse OCR word geometry.");
-        Assert(!WindowsAiOcrService.CanReuseCachedRecognition(
+        Assert(!OcrTextRules.CanReuseCachedRecognition(
                 bounds,
                 fingerprint,
                 cachedAt,
                 bounds,
-                WindowsAiOcrService.ComputeFrameFingerprint(changedFrame),
+                OcrTextRules.ComputeFrameFingerprint(changedFrame),
                 cachedAt.AddSeconds(5)),
             "Changed pixels must never reuse stale OCR word geometry.");
-        Assert(!WindowsAiOcrService.CanReuseCachedRecognition(
+        Assert(!OcrTextRules.CanReuseCachedRecognition(
                 bounds,
                 fingerprint,
                 cachedAt,
@@ -3036,7 +3043,7 @@ try
                 fingerprint,
                 cachedAt.AddSeconds(5)),
             "A different capture region must never reuse cached OCR coordinates.");
-        Assert(!WindowsAiOcrService.CanReuseCachedRecognition(
+        Assert(!OcrTextRules.CanReuseCachedRecognition(
                 bounds,
                 fingerprint,
                 cachedAt,
@@ -3057,7 +3064,7 @@ try
         {
             CurrentSpeaker = new CurrentSpeakerContext("Kotori")
         };
-        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(clipped, "Kotori") is
+        Assert(OcrTextRules.ApplyConfirmedFrameGates(clipped, "Kotori") is
                {
                    IsSentenceContextStable: false
                },
@@ -3066,19 +3073,19 @@ try
         {
             Text = "He opened the gate and walked in."
         };
-        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, "Kotori") is
+        Assert(OcrTextRules.ApplyConfirmedFrameGates(wholeSentence, "Kotori") is
                {
                    IsSentenceContextStable: true,
                    CurrentSpeaker.Name: "Kotori"
                },
             "A complete sentence from a confirmed frame lost its stability or speaker.");
-        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, null)
+        Assert(OcrTextRules.ApplyConfirmedFrameGates(wholeSentence, null)
                    ?.CurrentSpeaker is null,
             "A cached frame resurrected a nameplate that two observations rejected.");
-        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(wholeSentence, "Sakuya")
+        Assert(OcrTextRules.ApplyConfirmedFrameGates(wholeSentence, "Sakuya")
                    ?.CurrentSpeaker is null,
             "A cached frame accepted a nameplate that was never confirmed twice.");
-        Assert(WindowsAiOcrService.ApplyConfirmedFrameGates(null, "Kotori") is null,
+        Assert(OcrTextRules.ApplyConfirmedFrameGates(null, "Kotori") is null,
             "A missing cached selection must stay missing.");
 
         // The proportional estimate assumes uniform character width, so on a
@@ -3087,7 +3094,7 @@ try
         // same letters inside a neighbouring word: "in" lives in "waiting"
         // twice over, and anchoring there hands the dictionary that token.
         const string hoveredLine = "I am waiting in line";
-        int resolvedIndex = WindowsAiOcrService.ResolveLineCharacterIndex(
+        int resolvedIndex = OcrTextRules.ResolveLineCharacterIndex(
             hoveredLine,
             "in",
             cursorX: 210,
@@ -3100,7 +3107,7 @@ try
             $"on its own occurrence: index {resolvedIndex} in '{hoveredLine}'.");
 
         // A word the line text cannot spell keeps the geometric estimate.
-        Assert(WindowsAiOcrService.ResolveLineCharacterIndex(
+        Assert(OcrTextRules.ResolveLineCharacterIndex(
                 hoveredLine,
                 "queue",
                 cursorX: 200,
@@ -3127,7 +3134,7 @@ try
             1,
             bounds);
 
-        HoverOcrResult? richer = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? richer = OcrTextRules.StabilizeSentenceContext(
             incomplete,
             complete,
             out bool usedSecond);
@@ -3137,7 +3144,7 @@ try
                } && usedSecond,
             "A compatible richer OCR observation did not replace the incomplete sentence.");
 
-        HoverOcrResult? richerFirst = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? richerFirst = OcrTextRules.StabilizeSentenceContext(
             complete,
             incomplete,
             out usedSecond);
@@ -3147,7 +3154,7 @@ try
                } && !usedSecond,
             "A later compatible truncation displaced the richer OCR sentence.");
 
-        HoverOcrResult? identical = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? identical = OcrTextRules.StabilizeSentenceContext(
             complete,
             complete with { CharacterIndex = 2 },
             out usedSecond);
@@ -3162,14 +3169,14 @@ try
         {
             CurrentSpeaker = new CurrentSpeakerContext("Sakuya")
         };
-        HoverOcrResult? stableNamed = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? stableNamed = OcrTextRules.StabilizeSentenceContext(
             namedComplete,
             namedComplete,
             out usedSecond);
         Assert(stableNamed?.CurrentSpeaker is { Name: "Sakuya" },
             "Two matching OCR nameplates did not preserve current speaker metadata.");
         HoverOcrResult? conflictingNameplates =
-            WindowsAiOcrService.StabilizeSentenceContext(
+            OcrTextRules.StabilizeSentenceContext(
                 namedComplete,
                 namedComplete with
                 {
@@ -3185,7 +3192,7 @@ try
             HoveredWord = "lead",
             CharacterIndex = 9
         };
-        HoverOcrResult? danglingStable = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? danglingStable = OcrTextRules.StabilizeSentenceContext(
             dangling,
             dangling,
             out usedSecond);
@@ -3198,7 +3205,7 @@ try
             HoveredWord = "files",
             CharacterIndex = 8
         };
-        HoverOcrResult? missingStartStable = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? missingStartStable = OcrTextRules.StabilizeSentenceContext(
             missingStart,
             missingStart,
             out usedSecond);
@@ -3211,7 +3218,7 @@ try
             CharacterIndex = 21
         };
         HoverOcrResult? speakerPrefixedMissingStartStable =
-            WindowsAiOcrService.StabilizeSentenceContext(
+            OcrTextRules.StabilizeSentenceContext(
                 speakerPrefixedMissingStart,
                 speakerPrefixedMissingStart,
                 out usedSecond);
@@ -3223,7 +3230,7 @@ try
             Text = "Wait until the train arrives.",
             CharacterIndex = 1
         };
-        HoverOcrResult? guarded = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? guarded = OcrTextRules.StabilizeSentenceContext(
             incomplete,
             incompatible,
             out usedSecond);
@@ -3243,14 +3250,14 @@ try
             Text = "Wait here for 10 minutes.",
             CharacterIndex = 1
         };
-        HoverOcrResult? numericGuarded = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? numericGuarded = OcrTextRules.StabilizeSentenceContext(
             incomplete with { Text = "Wait here for 5 minutes." },
             numericConflict,
             out usedSecond);
         Assert(numericGuarded is { IsSentenceContextStable: false },
             "Different OCR numbers were erased while checking sentence compatibility.");
 
-        HoverOcrResult? single = WindowsAiOcrService.StabilizeSentenceContext(
+        HoverOcrResult? single = OcrTextRules.StabilizeSentenceContext(
             incomplete,
             null,
             out usedSecond);
@@ -3259,6 +3266,7 @@ try
         return Task.CompletedTask;
     });
 
+#if WINDOWS
     await RunAsync("Screen OCR block grouping", () =>
     {
         OcrLineGeometry[] lines =
@@ -3285,24 +3293,6 @@ try
         return Task.CompletedTask;
     });
 #else
-    MacSmoke.Skip(
-        "Magpie visible cursor mapping",
-        "VisibleCursorService and Interop.NativeMethods live in the WPF assembly");
-    MacSmoke.Skip(
-        "Neural OCR wrapped sentence",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
-    MacSmoke.Skip(
-        "Sentence boundaries",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
-    MacSmoke.Skip(
-        "Smart OCR capture geometry",
-        "WindowsAiOcrService and Interop.NativeMethods live in the WPF assembly");
-    MacSmoke.Skip(
-        "Smart OCR unchanged-frame cache guard",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
-    MacSmoke.Skip(
-        "Smart OCR sentence stabilization",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
     MacSmoke.Skip(
         "Screen OCR block grouping",
         "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");

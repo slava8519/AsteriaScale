@@ -32,7 +32,6 @@ internal static class MacSmoke
     private static readonly string[] ExpectedParts =
     [
         "overlay-labels",
-        "ocr-homoglyph-repair",
         "managed-memory-budget",
         "overlay-width",
         "hover-wpf-helpers",
