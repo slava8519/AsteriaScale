@@ -2695,16 +2695,9 @@ internal sealed class TranslateGemmaTranslationService :
         }
     }
 
-    private static string ResolveDefaultModelRoot()
-    {
-        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (string.IsNullOrWhiteSpace(localAppData))
-        {
-            throw new InvalidOperationException("Windows не сообщил каталог LocalAppData.");
-        }
-
-        return Path.Combine(localAppData, "AsteriaScale", "Models", "TranslateGemma");
-    }
+    // An unresolved user root throws here, as an empty LocalAppData always did.
+    private static string ResolveDefaultModelRoot() =>
+        CoreDataLayout.Current.PhraseModelRoot;
 
     private static string ResolveDefaultOllamaModelsRoot()
     {

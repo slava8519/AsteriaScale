@@ -1,3 +1,5 @@
+using AsteriaScale.Services;
+
 // Bookkeeping for the macOS subset of the smoke suite. Program.cs is shared
 // with the Windows suite: a registration that cannot run on macOS is declared
 // next to its code with Skip, a Windows-only sub-check inside a registration
@@ -51,6 +53,19 @@ internal static class MacSmoke
 
     internal static void Begin(string[] args)
     {
+        // The first Core-touching statement of the run. The bundled half stays
+        // beside the apphost, as on Windows; the user half is deliberately left
+        // unresolved, so a shared test that reaches a default user path
+        // (settings, user dictionaries, history, caches, TranslateGemma models)
+        // throws instead of writing into the real or temporary home, and the
+        // hover log is dropped. A test that needs user state passes its own
+        // folder under tempRoot. This file is never compiled into the Windows
+        // suite, whose default layout stays LocalApplicationData\AsteriaScale.
+        CoreDataLayout.Configure(CoreDataLayout.Resolve(
+            Environment.ProcessPath,
+            AppContext.BaseDirectory,
+            localApplicationData: ""));
+
         // Core resolves Morphology and the dictionaries next to the process
         // (RussianMorphologyLexicon, LocalDictionaryService). Under the dotnet
         // muxer that is the SDK folder, where the lexicon silently loads empty.

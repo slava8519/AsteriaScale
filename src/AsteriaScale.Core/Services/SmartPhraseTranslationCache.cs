@@ -30,10 +30,7 @@ internal sealed class SmartPhraseTranslationCache : IAsyncDisposable
         long maximumFileBytes = DefaultMaximumFileBytes)
     {
         _store = new PersistentLruStore<PersistedEntry>(
-            cachePath ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AsteriaScale",
-                "smart-phrase-translations.v7.json"),
+            cachePath ?? CoreDataLayout.Current.PhraseCacheFile,
             SchemaVersion,
             capacity,
             maximumFileBytes,

@@ -50,10 +50,7 @@ public sealed class SmartDictionaryResultCache : IAsyncDisposable
         long maximumFileBytes = DefaultMaximumFileBytes)
     {
         _store = new PersistentLruStore<PersistedEntry>(
-            cachePath ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AsteriaScale",
-                "smart-dictionary-cache.v2.json"),
+            cachePath ?? CoreDataLayout.Current.SmartResultCacheFile,
             SchemaVersion,
             capacity,
             maximumFileBytes,

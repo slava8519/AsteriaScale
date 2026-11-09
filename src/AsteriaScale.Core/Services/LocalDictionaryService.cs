@@ -120,14 +120,12 @@ public sealed partial class LocalDictionaryService
 
     private (string BundledDirectory, string UserDirectory) ResolveDictionaryDirectories()
     {
-        string executableDirectory = Path.GetDirectoryName(Environment.ProcessPath)
-            ?? AppContext.BaseDirectory;
+        // An override is used as given and leaves the process-wide layout
+        // unread, so the tests' (bundled, user) constructor never needs it.
         string bundledDirectory = _bundledDirectoryOverride
-            ?? Path.Combine(executableDirectory, "Dictionaries");
-        string userDirectory = _userDirectoryOverride ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "Dictionaries");
+            ?? CoreDataLayout.Current.BundledDictionaryDirectory;
+        string userDirectory = _userDirectoryOverride
+            ?? CoreDataLayout.Current.UserDictionaryDirectory;
         return (bundledDirectory, userDirectory);
     }
 

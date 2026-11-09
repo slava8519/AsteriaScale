@@ -28,7 +28,8 @@ internal readonly record struct RussianVerbFormInfo(
 /// <summary>
 /// OpenCorpora-backed verb lexicon (infinitives and past-tense forms only —
 /// the categories the runtime morphology consults). Loaded lazily from
-/// Morphology/ru-morph.tsv.gz next to the executable. A missing or damaged
+/// <see cref="CoreDataLayout.MorphologyFile"/> (Morphology/ru-morph.tsv.gz
+/// beside the executable on Windows). A missing or damaged
 /// data file, or an unknown word, must leave the suffix fallback in
 /// <see cref="RussianMorphology"/> fully in charge.
 /// </summary>
@@ -47,9 +48,9 @@ internal static class RussianMorphologyLexicon
         Dictionary<string, RussianVerbFormInfo> entries = new(StringComparer.Ordinal);
         try
         {
-            string executableDirectory = Path.GetDirectoryName(Environment.ProcessPath)
-                ?? AppContext.BaseDirectory;
-            string path = Path.Combine(executableDirectory, "Morphology", "ru-morph.tsv.gz");
+            // Only the bundled half is read, which resolves even when the
+            // user half does not, so this Lazy never caches a user-root error.
+            string path = CoreDataLayout.Current.MorphologyFile;
             if (!File.Exists(path))
             {
                 return entries;

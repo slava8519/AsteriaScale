@@ -266,6 +266,9 @@ try
             "Managed DPI override backup was not preserved.");
         string json = await File.ReadAllTextAsync(path);
         Assert(!json.Contains("\"Details\"", StringComparison.Ordinal), "Computed UI details must not be stored.");
+
+        // Where SettingsService and every other Core default path point.
+        await CoreDataLayoutTests.RunAsync(tempRoot);
     });
 
     await RunAsync(

@@ -23,10 +23,13 @@
 > собирай только macOS-проекты: `dotnet build
 > tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release`
 > (собирает и `src/AsteriaScale.RankerWorker.MacOS`) и прогони macOS-подмножество
-> во временном домашнем каталоге: `bash tools/macos/run-macos-subset.sh --allow
-> 'home/Library/Application Support/AsteriaScale/hover-translation.log'` (код `9`
+> во временном домашнем каталоге: `bash tools/macos/run-macos-subset.sh` (код `9`
 > — прогон оставил лишнее в своих временных каталогах, `10` — появился новый
-> отчёт о сбое; прямой запуск или `dotnet run` пишут в настоящую `~/Library`).
+> отчёт о сбое; прямой запуск или `dotnet run` идут с настоящим домашним
+> каталогом без этих проверок). Пользовательские пути ядра в подмножестве —
+> явная ошибка (`MacSmoke.Begin` настраивает `CoreDataLayout`): тест, которому
+> нужны настройки, кэш или словарь пользователя, передаёт свой каталог во
+> временном корне.
 > Приведи его итоговую строку `PASS (macOS subset): …`
 > и не выдавай её за полный smoke. `AsteriaScale.slnx`, Windows-воркер и
 > Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`

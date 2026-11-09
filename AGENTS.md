@@ -36,8 +36,13 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   names or paths; the existing ones listed in docs/ARCHITECTURE.md are known
   seams. Most types are `internal` (a few, such as `AppSettings`,
   `LocalDictionaryService` and `GlossBertDictionarySelectorService`, are
-  `public`), and `InternalsVisibleTo` covers only `AsteriaScale` and
-  `AsteriaScale.Tests`, so a new consumer of an internal type needs its own line.
+  `public`), and `InternalsVisibleTo` covers only `AsteriaScale`,
+  `AsteriaScale.Tests` and `AsteriaScale.CoreHost` (the macOS Core host), so a
+  new consumer of an internal type needs its own line. Core never derives a
+  data path on its own: bundled data (dictionaries, morphology) and user state
+  (settings, user dictionaries, history, caches, hover log, TranslateGemma
+  models) come from `CoreDataLayout`, the ranker worker and its model folder
+  from `RankerWorkerLocation`; their Windows defaults are the old paths.
 - `src/AsteriaScale` — the WPF host and every Windows facility (UI, overlays,
   tray, hotkeys, Magpie, DPI, Windows AI OCR, Textractor,
   `HoverTranslationService`).
@@ -138,7 +143,7 @@ place:
 ```bash
 dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
 dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
-bash tools/macos/run-macos-subset.sh --allow 'home/Library/Application Support/AsteriaScale/hover-translation.log'
+bash tools/macos/run-macos-subset.sh
 src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
   --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 ```
@@ -148,8 +153,8 @@ The runner builds nothing. Each run starts the built apphost in a fresh
 `HOME`/`CFFIXED_USER_HOME` at `W/home` (an empty `Library/Application
 Support`; none with `--empty-home`), so it never writes into the real
 `~/Library`. It then lists every entry left in cwd, home and tmp and exits 9
-on one that `--allow <path relative to W>` does not name (the subset still
-writes `hover-translation.log`, hence the `--allow` above). `--repeat N` runs
+on one that `--allow <path relative to W>` does not name; a clean run leaves
+nothing there, so the command above passes no `--allow`. `--repeat N` runs
 it N times and stops at the first failure, keeping that folder. It also
 counts the owner's crash reports (`~/Library/Logs/DiagnosticReports`, names
 matching `^(AsteriaScale|dotnet|Python|python3|swift)`; read only) and exits
@@ -315,9 +320,11 @@ certificate creation, `Add-AppxPackage`.
   constructor (`(bundled, user, sense)` for sense metadata) with a temp user
   directory — never the real `%LOCALAPPDATA%\AsteriaScale\Dictionaries`: every
   load creates the user directory and reads any `eng-rus*`/`jpn-rus*` layers
-  in it. On macOS LocalApplicationData is `~/Library/Application Support`;
-  `tools/macos/run-macos-subset.sh` points it at a temporary home, where a
-  run may still write `AsteriaScale/hover-translation.log`.
+  in it. On macOS `MacSmoke.Begin` (macOS-only, the first statement of the
+  run) configures a `CoreDataLayout` whose user half is an explicit error: a
+  shared test that reaches a default user path (settings, user dictionaries,
+  history, caches, TranslateGemma models) fails instead of writing, and the
+  hover log is dropped. Such a test passes its own folder under `tempRoot`.
 - A behavior fix ships with a test that fails before the fix.
 - The macOS subset shares `Program.cs`. A registration that cannot run on
   macOS is wrapped as `#if WINDOWS … #else MacSmoke.Skip("<exact name>",

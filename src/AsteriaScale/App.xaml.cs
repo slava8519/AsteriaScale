@@ -184,10 +184,8 @@ public partial class App : System.Windows.Application
                 GlossBertDictionarySelectorService.ResolveCompanionBaseDirectory(
                     Environment.ProcessPath,
                     AppContext.BaseDirectory);
-            string workerPath = Path.Combine(
-                companionBaseDirectory,
-                "Ranker",
-                "AsteriaScale.RankerWorker.exe");
+            // The path the selector really starts, not a re-derived copy of it.
+            string workerPath = selector.WorkerLocation.WorkerExecutable;
             bool success = selector.IsWorkerRunning && File.Exists(workerPath);
             var result = new
             {

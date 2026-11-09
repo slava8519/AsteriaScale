@@ -1737,8 +1737,10 @@ Silicon)».
   пробная сверка при подготовке 20.1 дала max |Δ| `1,57e-5` при допуске эталона
   `1e-4` (`tools/consec-upstream-reference-golden.json`); это не бенчмарк, и в
   RESEARCH.md она не записана.
-- **Путь воркера в ядре.** `Ranker/AsteriaScale.RankerWorker.exe` остаётся
-  швом ядра; путь передаёт хост в 20.2, после выбора Q1.
+- **Путь воркера в ядре.** Закрыт в 20.2: путь воркера и каталог моделей
+  передаёт хост (`RankerWorkerLocation`), а
+  `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe — только значение по
+  умолчанию для Windows. Каталоги данных ядра задаёт `CoreDataLayout`.
 - **Швы TranslateGemma/llama.cpp.** Имена Windows-архивов runner и
   `llama-server.exe` в `TranslateGemmaTranslationService` — в 20.5 и №21.
 - **`.gitattributes` для NPU-sidecar.** Закреплённый

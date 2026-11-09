@@ -1,8 +1,9 @@
 namespace AsteriaScale.Services;
 
 // The hover-translation log. It sits in the core because the pipeline and
-// scaffold report failures from platform-neutral code; on macOS the same
-// LocalApplicationData call resolves to ~/Library/Application Support.
+// scaffold report failures from platform-neutral code. The file is
+// CoreDataLayout.HoverLogFile: LocalApplicationData\AsteriaScale on Windows,
+// the log folder the host configured elsewhere.
 internal static class HoverDiagnostics
 {
     internal static void LogError(Exception exception)
@@ -15,15 +16,19 @@ internal static class HoverDiagnostics
         AppendDiagnostic((message ?? string.Empty).Replace('\r', ' ').Replace('\n', ' '));
     }
 
-    private static void AppendDiagnostic(string message)
+    private static void AppendDiagnostic(string message) =>
+        AppendDiagnostic(message, layout: null);
+
+    // Null reads the process-wide layout; a test passes its own. Either way the
+    // layout is read inside the try, so not even resolving it can disturb a hover.
+    internal static void AppendDiagnostic(string message, CoreDataLayout? layout)
     {
         try
         {
-            string directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AsteriaScale");
-            Directory.CreateDirectory(directory);
-            string path = Path.Combine(directory, "hover-translation.log");
+            // An unresolved user root throws here and the message is dropped:
+            // the log is never written relative to the working directory.
+            string path = (layout ?? CoreDataLayout.Current).HoverLogFile;
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             FileInfo log = new(path);
             if (log.Exists && log.Length > 512 * 1024)
             {

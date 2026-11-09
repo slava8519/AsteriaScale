@@ -17,6 +17,9 @@ internal static class GlossBertDictionarySelectorServiceTests
         VerifyFailClosedIdentityChecks();
         VerifySingleFileCompanionDirectoryResolution(tempRoot);
         VerifyCompanionDirectoryFallback(tempRoot);
+        await VerifyDefaultWorkerLocationAsync(tempRoot);
+        await VerifyHostSuppliedWorkerLocationAsync(tempRoot);
+        VerifyRelativeWorkerLocationRejected(tempRoot);
         await VerifyParallelCandidateValidationAsync(tempRoot);
         await VerifyProfileSwitchAfterResponseDoesNotInvalidateSelectionAsync(tempRoot);
         await VerifyResponseDeadlineKillsWorkerAsync(tempRoot);
@@ -557,6 +560,163 @@ internal static class GlossBertDictionarySelectorServiceTests
             Path.GetFullPath(appContextDirectory),
             "Companion resolution did not fall back to AppContext.BaseDirectory " +
             "when the physical process path was unavailable.");
+    }
+
+    // The Windows host passes no location; it must keep starting exactly the
+    // worker and model folder the selector derived before RankerWorkerLocation.
+    private static async Task VerifyDefaultWorkerLocationAsync(string tempRoot)
+    {
+        // The pre-seam expression from the selector constructor, verbatim.
+        static (string Worker, string Models) OldCompanionPaths(string baseDirectory)
+        {
+            string rankerDirectory = Path.Combine(Path.GetFullPath(baseDirectory), "Ranker");
+            return (
+                Path.Combine(rankerDirectory, "AsteriaScale.RankerWorker.exe"),
+                Path.Combine(rankerDirectory, "Models"));
+        }
+
+        string installed = Path.Combine(tempRoot, "worker-location", "installed");
+        RankerWorkerLocation beside = RankerWorkerLocation.BesideBaseDirectory(installed);
+        Check(
+            (beside.WorkerExecutable, beside.ModelDirectory) == OldCompanionPaths(installed),
+            "BesideBaseDirectory moved the Windows worker or its model folder.");
+
+        // Benchmarks pass a user-supplied workerBaseDir, which may be relative;
+        // it is still resolved against the working directory, as before.
+        string relativeBase = Path.Combine("worker-location", "relative-base");
+        RankerWorkerLocation relative = RankerWorkerLocation.BesideBaseDirectory(relativeBase);
+        Check(
+            (relative.WorkerExecutable, relative.ModelDirectory) == OldCompanionPaths(relativeBase) &&
+            Path.IsPathFullyQualified(relative.WorkerExecutable),
+            "BesideBaseDirectory stopped resolving a relative base directory to a full path.");
+
+        await using GlossBertDictionarySelectorService internalBase = new(
+            installed,
+            TimeSpan.FromMinutes(1));
+        Check(
+            (internalBase.WorkerLocation.WorkerExecutable, internalBase.WorkerLocation.ModelDirectory) ==
+            OldCompanionPaths(installed),
+            "The internal base-directory constructor no longer derives the companion layout.");
+
+        string companionBase = GlossBertDictionarySelectorService.ResolveCompanionBaseDirectory(
+            Environment.ProcessPath,
+            AppContext.BaseDirectory);
+        RankerWorkerLocation current = RankerWorkerLocation.ForCurrentProcess();
+        Check(
+            (current.WorkerExecutable, current.ModelDirectory) == OldCompanionPaths(companionBase),
+            "ForCurrentProcess no longer uses the companion folder of the physical executable.");
+
+        // Constructing a selector starts nothing; only the paths are compared.
+        await using GlossBertDictionarySelectorService defaultSelector = new();
+        await using GlossBertDictionarySelectorService profileSelector = new(RankerCpuModelProfile.Consec);
+        Check(
+            (defaultSelector.WorkerLocation.WorkerExecutable, defaultSelector.WorkerLocation.ModelDirectory) ==
+                OldCompanionPaths(companionBase) &&
+            (profileSelector.WorkerLocation.WorkerExecutable, profileSelector.WorkerLocation.ModelDirectory) ==
+                OldCompanionPaths(companionBase) &&
+            defaultSelector.CpuModelProfile == RankerCpuModelProfile.GlossBert &&
+            profileSelector.CpuModelProfile == RankerCpuModelProfile.Consec,
+            "The public selector constructors changed the Windows worker location or profile.");
+    }
+
+    // The macOS layout: a worker without .exe inside an app bundle and a model
+    // folder elsewhere. Both must reach validation and the command line.
+    private static async Task VerifyHostSuppliedWorkerLocationAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "host-supplied-worker-location");
+        string worker = Path.Combine(root, "Helpers", "Ranker", "AsteriaScale.RankerWorker");
+        string models = Path.Combine(root, "UserModels", "Ranker");
+        RankerWorkerLocation location = new(worker, models);
+        await using GlossBertDictionarySelectorService service = new(
+            location,
+            RankerCpuModelProfile.Consec);
+        Check(ReferenceEquals(service.WorkerLocation, location),
+            "The selector did not keep the host-supplied worker location.");
+
+        ProcessStartInfo startInfo = service.CreateWorkerStartInfo(
+            GlossBertRankerProvider.Cpu,
+            RankerCpuModelProfile.Consec);
+        Check(
+            startInfo.FileName == worker &&
+            startInfo.WorkingDirectory == Path.GetDirectoryName(worker) &&
+            startInfo.ArgumentList.SequenceEqual(
+                [
+                    "--provider",
+                    "cpu",
+                    "--cpu-model",
+                    "consec",
+                    "--model-directory",
+                    models
+                ],
+                StringComparer.Ordinal),
+            "A host-supplied worker location did not reach FileName, the working " +
+            "directory and --model-directory.");
+
+        // Validation checks the same two paths before anything is started.
+        await ExpectWarmUpFailureAsync(
+            service,
+            "worker_missing",
+            worker,
+            "A missing host-supplied worker was not reported by its own path.");
+        Directory.CreateDirectory(Path.GetDirectoryName(worker)!);
+        File.WriteAllBytes(worker, []);
+        await ExpectWarmUpFailureAsync(
+            service,
+            "model_directory_missing",
+            models,
+            "A missing host-supplied model folder was not reported by its own path.");
+        Check(!service.IsWorkerRunning && !Directory.Exists(models),
+            "Validating a host-supplied location started a worker or created its model folder.");
+    }
+
+    private static async Task ExpectWarmUpFailureAsync(
+        GlossBertDictionarySelectorService service,
+        string errorCode,
+        string path,
+        string message)
+    {
+        try
+        {
+            await service.WarmUpAsync(GlossBertRankerProvider.Cpu);
+        }
+        catch (GlossBertRankerException ex) when (
+            ex.ErrorCode == errorCode &&
+            ex.Message.Contains(path, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(message);
+    }
+
+    // A relative path would be resolved against whatever the working directory
+    // is when the worker starts; the location refuses it up front.
+    private static void VerifyRelativeWorkerLocationRejected(string tempRoot)
+    {
+        string worker = Path.Combine(tempRoot, "relative-worker-location", "AsteriaScale.RankerWorker");
+        string models = Path.Combine(tempRoot, "relative-worker-location", "Models");
+        string relative = Path.Combine("Ranker", "Models");
+        (string Worker, string Models, string Parameter)[] cases =
+        [
+            (relative, models, "workerExecutable"),
+            (worker, relative, "modelDirectory"),
+            ("  ", models, "workerExecutable"),
+            (worker, "", "modelDirectory")
+        ];
+        foreach ((string caseWorker, string caseModels, string parameter) in cases)
+        {
+            try
+            {
+                _ = new RankerWorkerLocation(caseWorker, caseModels);
+            }
+            catch (ArgumentException ex) when (ex.ParamName == parameter)
+            {
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                $"RankerWorkerLocation accepted '{caseWorker}' / '{caseModels}'.");
+        }
     }
 
     private static async Task VerifyParallelCandidateValidationAsync(string tempRoot)

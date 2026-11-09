@@ -23,10 +23,7 @@ public sealed class UserDictionaryService
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public UserDictionaryService()
-        : this(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "Dictionaries"))
+        : this(CoreDataLayout.Current.UserDictionaryDirectory)
     {
     }
 

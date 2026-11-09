@@ -343,7 +343,7 @@ macOS-подмножество smoke-набора (роадмап №20.1, ре�
 
 ```bash
 dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
-bash tools/macos/run-macos-subset.sh --allow 'home/Library/Application Support/AsteriaScale/hover-translation.log'
+bash tools/macos/run-macos-subset.sh
 ```
 
 `tools/macos/run-macos-subset.sh` ничего не собирает. Каждый прогон он
@@ -364,14 +364,16 @@ bash tools/macos/run-macos-subset.sh --allow 'home/Library/Application Support/A
 каталог чистого прогона удаляется. `--empty-home` создаёт домашний каталог
 без `Library`. Остальные коды: `2` — ошибка аргументов, нет собранного
 apphost или не Apple Silicon; любой другой — код самого подмножества (`1`
-при `FAIL`). Прямой запуск apphost или `dotnet run` работают с настоящим
-домашним каталогом, и о таком прогоне не сообщают.
+при `FAIL`). Прямой запуск apphost или `dotnet run` идут с настоящими
+домашним каталогом и `TMPDIR` и без этих проверок, и о таком прогоне не
+сообщают.
 
 Подмножество запускается только через apphost
-(`bin/Release/net10.0/osx-arm64/AsteriaScale.Tests`). Ядро ищет словари и
-морфологию рядом с процессом, а под `dotnet AsteriaScale.Tests.dll` это каталог
-установки `dotnet`, где морфологический лексикон молча оказался бы пустым,
-поэтому такой запуск завершается ошибкой. Любой аргумент тоже ошибка:
+(`bin/Release/net10.0/osx-arm64/AsteriaScale.Tests`). Ядро по умолчанию ищет
+словари и морфологию рядом с процессом (`CoreDataLayout`, поставляемая
+половина), а под `dotnet AsteriaScale.Tests.dll` это каталог установки
+`dotnet`, где морфологический лексикон молча оказался бы пустым, поэтому такой
+запуск завершается ошибкой. Любой аргумент тоже ошибка:
 `MacSmoke.Begin` отвергает его до первого теста, поэтому gated-режимы и
 бенчмарки на macOS недостижимы, пока provenance бенчмарка не различает
 платформу. Их код при этом компилируется; под `#if WINDOWS` вынесены только
@@ -432,16 +434,21 @@ projects»: она читает `tests/AsteriaScale.Tests/Program.cs` так, к
 при переименовании Windows-only регистрации меняется только имя в её
 `MacSmoke.Skip`. Иначе прогон падает с сообщением о первом расхождении.
 
-В домашнем каталоге прогона подмножество пока пишет журнал
-`Library/Application Support/AsteriaScale/hover-translation.log`, поэтому
-команда выше разрешает ровно его. С `--empty-home` тот же журнал оказывается
-в текущем каталоге (`cwd/AsteriaScale/hover-translation.log`): без папки
-`Library/Application Support` .NET возвращает пустой путь LocalApplicationData,
-и путь журнала становится относительным; такой прогон завершается кодом `9`.
-Папку `Dictionaries` прогон не создаёт и пользовательские слои
-`eng-rus*`/`jpn-rus*` оттуда не читает: тесты словарей, включая «Aligned
-dictionary sense metadata», берут пользовательский каталог из временного корня
-прогона. `TMPDIR` после прогона пуст.
+Первым оператором прогона `MacSmoke.Begin` (только macOS, в Windows-сборку не
+компилируется) задаёт `CoreDataLayout.Configure(CoreDataLayout.Resolve(
+Environment.ProcessPath, AppContext.BaseDirectory, ""))`: словари и морфология
+по-прежнему берутся рядом с apphost, а пользовательская половина (настройки,
+«Мой словарь», история, кэши, журнал наведения, модели TranslateGemma) — явная
+ошибка. Общий тест, который дойдёт до пути по умолчанию, падает с русским
+`InvalidOperationException`, а не пишет в домашний каталог; журнал
+`hover-translation.log` не пишется вовсе; тесты передают свои каталоги во
+временном корне прогона. Поэтому прогон, в том числе с `--empty-home`, не
+оставляет ни одной записи в `cwd`, `home` и `tmp`, и команда выше обходится без
+`--allow`. Раньше без папки `Library/Application Support` .NET возвращал пустой
+LocalApplicationData, и журнал оказывался в текущем каталоге
+(`cwd/AsteriaScale/hover-translation.log`); теперь пустой или относительный
+LocalApplicationData — явная ошибка и на Windows. Папку `Dictionaries` прогон
+не создаёт и пользовательские слои `eng-rus*`/`jpn-rus*` оттуда не читает.
 
 Что подмножество печатает, а не проверяет:
 
@@ -647,22 +654,23 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 
 ### Стратегия тестирования
 
-Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1
-и регистрации «Smart hover engine strings» этапа 20.2 (9 ноября 2026):
+Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1,
+регистрации «Smart hover engine strings» и швов ядра этапа 20.2 (9 ноября
+2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `56` блоков `await RunAsync(...)`, из них `32` вызывают отдельные классы
 `XxxTests.RunAsync`. `56` — число регистраций Windows-прогона
 (`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `39` из них
-и три собственные проверки. В `tests/` `47` файлов C# — `27 317` строк вместе с
+и три собственные проверки. В `tests/` `48` файлов C# — `27 862` строки вместе с
 harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
-против `36 069` строк C# в `src/`. Отдельно есть пять
+против `36 354` строк C# в `src/`. Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
 |---|---|---|---|
-| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером | блоки `Program.cs`, `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
+| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером, каталоги данных ядра (прежние пути Windows, отказ при пустом или относительном LocalAppData, однократная настройка, журнал наведения вне текущего каталога) | блоки `Program.cs`, `CoreDataLayoutTests` (внутри «Settings round trip»), `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
 | Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py` и `tools/atomic_output.py` |
-| Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, дедлайн ответа с остановкой воркера, строку движка каждого результата hover-конвейера (словарь, эвристики, Tatoeba, оба кэша, выбор и воздержание ранжировщика CPU и NPU, его недоступность, строки фразы) с поддельным воркером, общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `SmartHoverEngineStringTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
+| Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, путь воркера и каталог моделей по умолчанию и от хоста, дедлайн ответа с остановкой воркера, строку движка каждого результата hover-конвейера (словарь, эвристики, Tatoeba, оба кэша, выбор и воздержание ранжировщика CPU и NPU, его недоступность, строки фразы) с поддельным воркером, общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `SmartHoverEngineStringTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
 | Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |
 | Gated-бенчмарки | качество, покрытие и задержку на открытых и замороженных наборах через собранную публикацию | режимы из таблицы ниже, только по явному аргументу | `workerBaseDir` с воркером и моделями; для `npu` — AMD NPU; для `--translation-suite` — установленная TranslateGemma и скачанные наборы |
 

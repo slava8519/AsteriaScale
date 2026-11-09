@@ -16,10 +16,7 @@ public sealed class SettingsService
 
     public SettingsService(string? settingsPath = null)
     {
-        _settingsPath = settingsPath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "settings.json");
+        _settingsPath = settingsPath ?? CoreDataLayout.Current.SettingsFile;
     }
 
     public string SettingsPath => _settingsPath;

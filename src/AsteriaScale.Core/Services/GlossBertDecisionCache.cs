@@ -64,10 +64,7 @@ public sealed class GlossBertDecisionCache : IAsyncDisposable
         long maximumFileBytes = DefaultMaximumFileBytes)
     {
         _store = new PersistentLruStore<PersistedEntry>(
-            cachePath ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "AsteriaScale",
-                "glossbert-decisions.v1.json"),
+            cachePath ?? CoreDataLayout.Current.DecisionCacheFile,
             SchemaVersion,
             capacity,
             maximumFileBytes,

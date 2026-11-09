@@ -46,10 +46,7 @@ public sealed class TranslationHistoryService : IDisposable
     private long _changeVersion;
 
     public TranslationHistoryService()
-        : this(Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "AsteriaScale",
-            "translation-history.v1.json"))
+        : this(CoreDataLayout.Current.HistoryFile)
     {
     }
 

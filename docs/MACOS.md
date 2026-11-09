@@ -67,10 +67,13 @@
   версии; на macOS они уже собираются без изменений. Swift-приложение — новый
   хост поверх них, а не замена ядра. Как Swift вызывает C#-ядро — открытый
   вопрос Q1.
-- **Windows-имена бинарников приходят от хоста.** Путь
-  `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp
-  `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` сейчас зашиты в ядро
-  (ARCHITECTURE.md, состав решения); для macOS хост передаёт свои.
+- **Windows-имена бинарников и каталоги данных приходят от хоста.** Путь
+  ranker-воркера и каталог его моделей хост передаёт ядру через
+  `RankerWorkerLocation`, а каталоги словарей, морфологии и данных пользователя —
+  через `CoreDataLayout` (этап 20.2); по умолчанию остаются прежние
+  Windows-пути. Архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с
+  `llama-server.exe` пока зашиты в ядро (ARCHITECTURE.md, состав решения); для
+  macOS хост передаст свои в 20.5.
 - **Без тихого fallback (жёсткое правило 3).** Запрос NPU-провайдера ранжировщика
   на macOS завершается явной ошибкой, а не переходом на CPU. Вариант
   TranslateGemma (4B/12B/27B) и backend (Metal/CPU) — часть идентичности модели:
@@ -156,3 +159,4 @@ graph LR
 |---|---|---|
 | `test: make the phrase-cache draft check order-independent and isolate sense-metadata user layers` | Только общие тесты: «Smart phrase translation hover integration» при попадании в кэш фраз принимает и черновик, который не успел стартовать (снимок `DraftCalls` перед вторым наведением; поздно стартовавший черновик обязан быть отменён), и отдельно проверяет, что `Task.Run` с уже отменённым токеном не запускает делегат; «Aligned dictionary sense metadata» берёт пользовательские слои из временного каталога. Код приложения не менялся. | Полный smoke: оба теста зелёные. Изоляция от `%LOCALAPPDATA%\AsteriaScale\Dictionaries` доказана на macOS прогоном во временном пустом домашнем каталоге (папка `Dictionaries` в нём не появляется); отдельной проверки на Windows не нужно. |
 | `test: pin the engine strings of every smart-hover result` | Только общие тесты: новая регистрация «Smart hover engine strings» побайтно фиксирует строку движка каждого результата `SmartHoverPipeline` (словарь, SMART-FAST, TATOEBA, SMART-CACHE, CPU/NPU-СМЫСЛ, «НЕ УВЕРЕН», «НЕДОСТУПЕН») и строки фразы TranslateGemma. Код приложения не менялся. | Полный smoke: новая регистрация зелёная. Поддельный воркер ранжировщика в ней на Windows — встроенный Windows PowerShell, на macOS — `python3`; PowerShell-вариант на macOS не выполнялся, поэтому при падении регистрации на Windows сначала проверить его. |
+| `feat(core): host-supplied worker location and data layout` | Ядро: путь ranker-воркера и каталог моделей задаёт `RankerWorkerLocation` (по умолчанию прежние `Ranker\AsteriaScale.RankerWorker.exe` и `Ranker\Models` рядом с exe); все каталоги данных берутся из `CoreDataLayout` — словари и морфология рядом с exe, настройки, «Мой словарь», история, три кэша, журнал наведения и модели TranslateGemma в `%LOCALAPPDATA%\AsteriaScale`, имена файлов прежние; пустой или относительный LocalAppData — явная ошибка вместо записи относительно текущего каталога; `--ranker-diagnostic` берёт путь воркера у селектора; `InternalsVisibleTo("AsteriaScale.CoreHost")`. Тесты: регистрации «Settings round trip» и «GlossBERT ranker protocol and host validation» проверяют прежние пути и новые отказы, число регистраций не изменилось. | Запуск из `dist/`: прежние настройки, «Мой словарь», история и кэши читаются из прежних файлов (нет «чистого» первого запуска), `hover-translation.log` пишется туда же; морфология загружена; `AsteriaScale.exe --ranker-diagnostic <out.json> cpu` и `npu` — прежние `workerPath` и `workerExists`, `success: true`; прогрев ConSeC CPU и GlossBERT NPU в приложении; TranslateGemma находит установленную модель; полный smoke (в «Settings round trip» на Windows пути сверяются с настоящим `%LOCALAPPDATA%`). |

@@ -7,7 +7,7 @@
 | Проект | Назначение |
 |---|---|
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
-| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: путь `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
+| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime. `win-x64`: CPU и NPU (Windows ML/VitisAI); `osx-arm64`: только CPU — эти же исходники компилирует по ссылке `src/AsteriaScale.RankerWorker.MacOS` (без `Content`, не входит в `AsteriaScale.slnx`) |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI. `tests/AsteriaScale.Tests.MacOS` — macOS-подмножество того же набора с общим `Program.cs` (Windows-only части под `#if WINDOWS`), не входит в `AsteriaScale.slnx` |
@@ -111,8 +111,9 @@ smoke-фикстур (`GlossBertDictionarySelectorServiceTests`); числа о�
 помеченный как Windows-only, ломает уже Windows-сборку. Типы ядра сохранили прежнюю видимость: большинство `internal`, но часть публична
 (например, `AppSettings`, `LocalDictionaryService`,
 `GlossBertDictionarySelectorService`). `InternalsVisibleTo` выдан только
-`AsteriaScale` и `AsteriaScale.Tests` (`Properties/AssemblyInfo.cs`): новому
-потребителю internal-членов нужна своя строка. `RootNamespace` ядра — `AsteriaScale`, и перенесённые файлы
+`AsteriaScale`, `AsteriaScale.Tests` и `AsteriaScale.CoreHost` — будущему
+macOS-хосту ядра (`Properties/AssemblyInfo.cs`): новому потребителю
+internal-членов нужна своя строка. `RootNamespace` ядра — `AsteriaScale`, и перенесённые файлы
 сохранили пространства имён (`AsteriaScale.Services`, `AsteriaScale.Models`),
 поэтому сборку типа показывает путь файла, а не namespace.
 
@@ -124,15 +125,18 @@ Textractor, трей и хоткеи остаются в `src/AsteriaScale`.
 
 CA1416 не ловит строковые имена Windows-бинарников. В ядре их три:
 
-- путь `Ranker\AsteriaScale.RankerWorker.exe` в конструкторе
-  `GlossBertDictionarySelectorService`;
+- путь `Ranker\AsteriaScale.RankerWorker.exe` — теперь только значение по
+  умолчанию `RankerWorkerLocation.BesideBaseDirectory`: хост может передать
+  `GlossBertDictionarySelectorService` свой путь воркера и каталог моделей
+  (`RankerWorkerLocation`, оба абсолютные), а `selector.WorkerLocation`
+  показывает, что именно будет запущено;
 - архивы `llama-b9632-bin-win-cpu-x64.zip` и `llama-b9632-bin-win-vulkan-x64.zip`
   (`RunnerArchiveFileName`, `VulkanRunnerArchiveFileName` в
   `TranslateGemmaTranslationService`);
 - `llama-server.exe`, который `TranslateGemmaTranslationService` ищет в
   распакованном runner.
 
-Для другой платформы эти имена должен передавать хост.
+Для другой платформы оставшиеся два имени тоже должен передавать хост (20.5).
 
 Разделение потребовало трёх швов, все в `src/AsteriaScale.Core/Services`:
 
@@ -142,9 +146,27 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 - `PreviousContextLimits` — `3` предыдущие реплики и `1 200` символов. По этим
   числам `TextHookService` в хосте собирает контекст, а
   `SmartPhraseTranslationGuard` в ядре отвергает больший.
-- `HoverDiagnostics` — журнал `%LOCALAPPDATA%\AsteriaScale\hover-translation.log`
-  (ротация при 512 КБ); `HoverTranslationService.LogError`/`LogDiagnostic`
-  перенаправляют в него.
+- `HoverDiagnostics` — журнал `CoreDataLayout.HoverLogFile`
+  (`%LOCALAPPDATA%\AsteriaScale\hover-translation.log` на Windows, ротация при
+  512 КБ); `HoverTranslationService.LogError`/`LogDiagnostic` перенаправляют в
+  него. Если каталог пользователя не определён, сообщение отбрасывается, а не
+  пишется относительно текущего каталога.
+
+**`CoreDataLayout`** (`src/AsteriaScale.Core/Services/CoreDataLayout.cs`) —
+единственный источник каталогов данных ядра. Две половины определяются
+независимо: поставляемые данные (`BundledDataRoot`: `Dictionaries/`,
+`Morphology/ru-morph.tsv.gz`) и данные пользователя (`UserDataRoot`, а также
+`CacheRoot`, `LogRoot` и `PhraseModelRoot`, по умолчанию внутри
+`UserDataRoot`). Имена файлов прежние (таблица «Данные на машине
+пользователя»). Windows-хост ничего не задаёт: при первом чтении
+`CoreDataLayout.Current` берёт каталог физического exe (то же правило, что у
+воркера) и `%LOCALAPPDATA%\AsteriaScale`. Пустой или относительный
+LocalApplicationData оставляет пользовательскую половину неопределённой: её
+свойства бросают `InvalidOperationException` с русским текстом, а словари и
+морфология по-прежнему читаются. Другой хост вызывает
+`CoreDataLayout.Configure(new CoreDataLayout(…))` один раз, до первого чтения
+(повторный вызов и вызов после чтения — ошибка); каждый корень обязан быть
+абсолютным. `TextHook/` остаётся заботой WPF-хоста.
 
 **`RankerProviderTraits`** (`src/AsteriaScale.RankerProtocol`) — общая таблица
 признаков execution provider: хост и воркер читают их отсюда, а не решают каждый
@@ -192,13 +214,14 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 | Строка и история игры | `TextHookService` (TextractorCLI), лимиты `PreviousContextLimits` | хост; лимиты — ядро |
 | Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |
 | Режим `Smart`, шаги 1–11 ниже | `SmartHoverPipeline.ResolveSmartHoverAsync` → `LocalDictionaryService`, `SmartDictionaryHeuristicRanker`, `SmartDictionarySenseResolver`, `SmartDictionaryResultCache`, `GlossBertDecisionCache` | ядро |
-| IPC с ranker-воркером | `GlossBertDictionarySelectorService` | ядро |
+| IPC с ranker-воркером | `GlossBertDictionarySelectorService`; путь воркера и каталог моделей — `RankerWorkerLocation` | ядро |
 | Выбор смысла GlossBERT / ConSeC | `RankerEngine` | `AsteriaScale.RankerWorker`, отдельный процесс |
 | Вторая строка, шаг 12 ниже | `SmartHoverPipeline.TranslatePhraseLineAsync` → `SmartPhraseContextBuilder`, `SmartPhraseIdiomRewriter`, `TranslationScaffoldBuilder`, `SemanticSenseEvidenceFactory`, `SensePreservationGate`, `SmartPhraseTranslationGuard`, `SmartPhraseTranslationCache` | ядро |
 | Генерация через `llama-server` | `TranslateGemmaTranslationService` | ядро |
 | Карточка | `HoverTranslationOverlay` | хост |
 | История показанных переводов | `TranslationHistoryService` | ядро |
 | Журнал ошибок, выгрузка моделей | `HoverDiagnostics`, `ModelActivityGate` | ядро |
+| Каталоги словарей, морфологии и данных пользователя | `CoreDataLayout` | ядро |
 
 ### Режим «Умный словарь» (порядок этапов)
 
@@ -439,7 +462,7 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 
 ## Структура словарей
 
-`LocalDictionaryService` загружает слои из двух каталогов: `<exe>/Dictionaries` (bundled) и `%LOCALAPPDATA%\AsteriaScale\Dictionaries` (пользовательские, высший приоритет).
+`LocalDictionaryService` загружает слои из двух каталогов `CoreDataLayout`: `<exe>/Dictionaries` (bundled, `BundledDictionaryDirectory`) и `%LOCALAPPDATA%\AsteriaScale\Dictionaries` (пользовательские, `UserDictionaryDirectory`, высший приоритет); значения — для Windows-хоста.
 
 Приоритет слоёв (первый выигрывает; broad-слои объединяются):
 
@@ -489,6 +512,11 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 `EnglishContextLexicon` (служебные слова, неправильные глаголы с леммами, `IsLikelyPastForm`, токенизация) и `RussianMorphology` (прошедшие формы, инфинитив, семельфактив). POS-инференс **сознательно раздельный**: `SmartDictionaryHeuristicRanker` выбирает финальный ответ и должен быть узким; `SmartDictionarySenseResolver` только фильтрует кандидатов для модели и может быть шире. Не объединяйте их «для чистоты».
 
 ## Данные на машине пользователя
+
+Пути Windows-хоста. Все строки, кроме журнала автозапуска масштабирования,
+конфига Magpie и DPI override, — данные ядра: их пути ядро берёт из
+`CoreDataLayout`, с этими же именами файлов; другой хост задаёт свои корни
+(для macOS — решение T8 в [MACOS.md](MACOS.md)).
 
 | Что | Где |
 |---|---|

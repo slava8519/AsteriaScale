@@ -124,20 +124,27 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     internal Func<Task>? BeforeSelectionMaterializationForTests { get; set; }
 
     public GlossBertDictionarySelectorService()
-        : this(
-            ResolveCompanionBaseDirectory(
-                Environment.ProcessPath,
-                AppContext.BaseDirectory),
-            DefaultIdleTimeout)
+        : this(RankerWorkerLocation.ForCurrentProcess(), RankerCpuModelProfile.GlossBert)
     {
     }
 
     public GlossBertDictionarySelectorService(RankerCpuModelProfile cpuModelProfile)
+        : this(RankerWorkerLocation.ForCurrentProcess(), cpuModelProfile)
+    {
+    }
+
+    /// <summary>
+    /// For a host that does not keep the worker beside its own executable (the
+    /// macOS CoreHost): it names the worker and the model directory itself.
+    /// </summary>
+    public GlossBertDictionarySelectorService(
+        RankerWorkerLocation workerLocation,
+        RankerCpuModelProfile cpuModelProfile)
         : this(
-            ResolveCompanionBaseDirectory(
-                Environment.ProcessPath,
-                AppContext.BaseDirectory),
+            workerLocation,
             DefaultIdleTimeout,
+            DefaultResponseTimeout,
+            workerStartInfoFactory: null,
             cpuModelProfile)
     {
     }
@@ -203,8 +210,23 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         TimeSpan responseTimeout,
         Func<GlossBertRankerProvider, ProcessStartInfo>? workerStartInfoFactory,
         RankerCpuModelProfile cpuModelProfile)
+        : this(
+            RankerWorkerLocation.BesideBaseDirectory(baseDirectory),
+            idleTimeout,
+            responseTimeout,
+            workerStartInfoFactory,
+            cpuModelProfile)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(baseDirectory);
+    }
+
+    internal GlossBertDictionarySelectorService(
+        RankerWorkerLocation workerLocation,
+        TimeSpan idleTimeout,
+        TimeSpan responseTimeout,
+        Func<GlossBertRankerProvider, ProcessStartInfo>? workerStartInfoFactory,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        ArgumentNullException.ThrowIfNull(workerLocation);
         if (idleTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(idleTimeout));
@@ -220,11 +242,9 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(cpuModelProfile));
         }
 
-        string rankerDirectory = Path.Combine(Path.GetFullPath(baseDirectory), "Ranker");
-        _workerExecutable = Path.Combine(
-            rankerDirectory,
-            "AsteriaScale.RankerWorker.exe");
-        _modelDirectory = Path.Combine(rankerDirectory, "Models");
+        WorkerLocation = workerLocation;
+        _workerExecutable = workerLocation.WorkerExecutable;
+        _modelDirectory = workerLocation.ModelDirectory;
         _idleTimeout = idleTimeout;
         _responseTimeout = responseTimeout;
         _workerStartInfoFactory = workerStartInfoFactory;
@@ -268,6 +288,10 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         IsWorkerRunning ? _activeModelVersion : null;
 
     public RankerCpuModelProfile CpuModelProfile => _cpuModelProfile;
+
+    // The worker and model folder this selector starts; diagnostics read them
+    // here instead of deriving the companion layout a second time.
+    public RankerWorkerLocation WorkerLocation { get; }
 
     internal int? WorkerProcessId
     {
@@ -555,29 +579,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
 
         ValidateArtifactPaths();
-        ProcessStartInfo startInfo = _workerStartInfoFactory?.Invoke(provider) ??
-            new ProcessStartInfo(_workerExecutable);
-        startInfo.UseShellExecute = false;
-        startInfo.CreateNoWindow = true;
-        startInfo.RedirectStandardInput = true;
-        startInfo.RedirectStandardOutput = true;
-        startInfo.RedirectStandardError = true;
-        startInfo.StandardInputEncoding = new UTF8Encoding(false);
-        startInfo.StandardOutputEncoding = new UTF8Encoding(false);
-        startInfo.StandardErrorEncoding = new UTF8Encoding(false);
-        if (string.IsNullOrWhiteSpace(startInfo.WorkingDirectory))
-        {
-            startInfo.WorkingDirectory = Path.GetDirectoryName(_workerExecutable)!;
-        }
-
-        if (_workerStartInfoFactory is null)
-        {
-            AddWorkerArguments(
-                startInfo,
-                provider,
-                cpuModelProfile,
-                _modelDirectory);
-        }
+        ProcessStartInfo startInfo = CreateWorkerStartInfo(provider, cpuModelProfile);
 
         Process worker;
         try
@@ -959,6 +961,40 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 "Candidate group ids must be non-negative stable outcome ids.",
                 nameof(candidateGroupIds));
         }
+    }
+
+    // The only place the worker location becomes a process command line, kept
+    // apart from Process.Start so a test can check FileName and
+    // --model-directory for a host-supplied location without starting anything.
+    internal ProcessStartInfo CreateWorkerStartInfo(
+        GlossBertRankerProvider provider,
+        RankerCpuModelProfile cpuModelProfile)
+    {
+        ProcessStartInfo startInfo = _workerStartInfoFactory?.Invoke(provider) ??
+            new ProcessStartInfo(_workerExecutable);
+        startInfo.UseShellExecute = false;
+        startInfo.CreateNoWindow = true;
+        startInfo.RedirectStandardInput = true;
+        startInfo.RedirectStandardOutput = true;
+        startInfo.RedirectStandardError = true;
+        startInfo.StandardInputEncoding = new UTF8Encoding(false);
+        startInfo.StandardOutputEncoding = new UTF8Encoding(false);
+        startInfo.StandardErrorEncoding = new UTF8Encoding(false);
+        if (string.IsNullOrWhiteSpace(startInfo.WorkingDirectory))
+        {
+            startInfo.WorkingDirectory = Path.GetDirectoryName(_workerExecutable)!;
+        }
+
+        if (_workerStartInfoFactory is null)
+        {
+            AddWorkerArguments(
+                startInfo,
+                provider,
+                cpuModelProfile,
+                _modelDirectory);
+        }
+
+        return startInfo;
     }
 
     private void ValidateArtifactPaths()
