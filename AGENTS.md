@@ -60,13 +60,21 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
 `#else` branch by default (the SDK defines `WINDOWS` only for the
 `net10.0-windows…` targets), so the Windows-visible tokens stay unchanged;
-prove it with the identity tool. An edit that changes Windows-visible tokens
-outside `#if` is allowed only when the identity tool proves the Windows outputs
-identical (roadmap 20.1 has five: a dead `using` removed, and four constants
-read from `PreviousContextLimits` in Core instead of their equal
-`TextHookService` aliases). A shared-source change the tool cannot prove
-identical needs the Windows build and smoke run on the owner's Windows
-machine.
+prove it with the identity tool (exit 0, `IDENTICAL`). Roadmap 20.1 also has
+five IL-neutral token edits outside `#if` that the tool proved identical (a
+dead `using` removed, and four constants read from `PreviousContextLimits` in
+Core instead of their equal `TextHookService` aliases).
+
+Owner decision M12 (docs/MACOS.md) additionally lets Track III change
+Windows-visible code now — Core, RankerProtocol, the ranker worker, the WPF
+host and the shared tests — while the owner's Windows build and smoke run wait
+until the macOS build is complete (M10). Every such change must, in the same
+commit: (1) cross-build — the identity tool must finish all Windows builds and
+then exit 1 with `DIFFERENT` (exit 4, a failed Windows build, is never
+acceptable); (2) keep the macOS subset green; (3) add a row to «Windows-изменения
+до прогона на Windows» in docs/MACOS.md saying what changed and what the
+owner's Windows run must check. A change the tool proves `IDENTICAL` needs no
+row.
 
 ## Prerequisites
 
@@ -124,12 +132,16 @@ src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.R
   --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 ```
 
-After editing a shared source or anything else the Windows build reads, prove
-that the Windows outputs did not change; it must print
-`IDENTICAL: <n> Windows output files` and exit 0 (`TMPDIR` must lie outside
-the clone). The one expected exception is an edit to `THIRD_PARTY_NOTICES.md`,
-which the WPF project copies: then exactly one manifest line,
-`./Tests/THIRD_PARTY_NOTICES.md`, differs and the tool exits 1.
+After editing a shared source or anything else the Windows build reads, run
+the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
+Windows-neutral must print `IDENTICAL: <n> Windows output files` and exit 0;
+the one expected exception is an edit to `THIRD_PARTY_NOTICES.md`, which the
+WPF project copies, where exactly one manifest line,
+`./Tests/THIRD_PARTY_NOTICES.md`, differs. A deliberate Windows change under
+M12 ends with exit 1 `DIFFERENT` after successful builds; put the changed
+manifest lines in the commit message. Exit codes: 0 identical, 1 different,
+2 usage error or refused export, 3 licensed ConSeC payload in the working tree,
+4 a Windows build failed.
 
 ```bash
 bash tools/macos/check-windows-identity.sh <base-rev> [--worktree | <candidate-rev>]

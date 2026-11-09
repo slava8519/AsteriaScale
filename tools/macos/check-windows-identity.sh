@@ -10,9 +10,17 @@
 # ranker worker publish that scripts/build.ps1 performs (-r win-x64,
 # self-contained, no symbols) and the Windows smoke-suite build (WPF, Core,
 # RankerProtocol, Tests and their data). It then compares SHA-256 manifests of
-# every produced file and of every source-generator output (see below). Exit 0
-# prints "IDENTICAL: <n> Windows output files"; exit 1 prints the manifest
-# diff and keeps the work folder for inspection.
+# every produced file and of every source-generator output (see below).
+#
+# Exit codes (owner decision M12 in docs/MACOS.md lets Track III change
+# Windows code before the Windows run, so "outputs differ" and "a Windows build
+# failed" must never share a code):
+#   0  IDENTICAL: <n> Windows output files
+#   1  DIFFERENT: every build succeeded; the manifest diff is printed and the
+#      work folder is kept for inspection
+#   2  usage error, or the export was refused (symlink or licensed payload)
+#   3  the working tree lists licensed ConSeC payload or a link on its path
+#   4  a Windows build failed, or produced no or partial output
 #
 # Why exports instead of the live tree: with EnableWindowsTargeting the
 # Windows worker project schedules the local CC BY-NC-SA ConSeC bundle
@@ -125,9 +133,9 @@ run_logged() {
     local log=$1
     shift
     if ! "$@" >"$log" 2>&1; then
-        echo "check-windows-identity: command failed, last lines of $log:" >&2
+        echo "check-windows-identity: BUILD FAILED, last lines of $log:" >&2
         tail -n 40 "$log" >&2
-        return 1
+        exit 4
     fi
 }
 
@@ -284,7 +292,7 @@ build_side() {
     done < <(find "$work/tree" -path '*/obj/*/generated/*' -type f -print0)
     if [[ ! -d $work/$label-generated ]]; then
         echo "check-windows-identity: [$label] no source generator output was recorded" >&2
-        exit 1
+        exit 4
     fi
     (cd "$work/$label-generated" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256) \
         >"$work/$label-generated.sha256"
@@ -305,7 +313,7 @@ build_side() {
     for required in ./Ranker/AsteriaScale.RankerWorker.dll ./Ranker/onnxruntime.dll ./Tests/AsteriaScale.Tests.dll; do
         if ! awk -v want="$required" '$2 == want { found = 1 } END { exit !found }' "$work/$label.sha256"; then
             echo "check-windows-identity: [$label] output lacks $required" >&2
-            exit 1
+            exit 4
         fi
     done
     echo "[$label] $(wc -l <"$work/$label.sha256" | tr -d ' ') files," \
