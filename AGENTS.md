@@ -56,6 +56,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   themselves through `MacSmoke.cs`. Never added to `AsteriaScale.slnx`.
 - `tools/macos/check-windows-identity.sh` — proves on a Mac that a change
   leaves every Windows build output byte-identical.
+- `tools/macos/run-macos-subset.sh` — runs the built macOS subset in a
+  temporary home, cwd and `TMPDIR` and fails on anything a run leaves there.
+- `tools/macos/audit-verbatim-move.py` — audits a move or an edit of shared
+  code line by line (`move`: multiset and order-aware) and compares the
+  `[GeneratedRegex]` attributes with a base revision (`regex`).
 
 A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
 `#else` branch by default (the SDK defines `WINDOWS` only for the
@@ -69,12 +74,16 @@ Owner decision M12 (docs/MACOS.md) additionally lets Track III change
 Windows-visible code now — Core, RankerProtocol, the ranker worker, the WPF
 host and the shared tests — while the owner's Windows build and smoke run wait
 until the macOS build is complete (M10). Every such change must, in the same
-commit: (1) cross-build — the identity tool must finish all Windows builds and
+commit: (1) cross-build — run after the commit with a clean working tree,
+`check-windows-identity.sh HEAD~1 HEAD` must finish all Windows builds and
 then exit 1 with `DIFFERENT` (exit 4, a failed Windows build, is never
 acceptable); (2) keep the macOS subset green; (3) add a row to «Windows-изменения
 до прогона на Windows» in docs/MACOS.md saying what changed and what the
-owner's Windows run must check. A change the tool proves `IDENTICAL` needs no
-row.
+owner's Windows run must check; (4) carry in its message the changed manifest
+lines, the `audit-verbatim-move.py regex --base HEAD~1` line and, for a move
+or edit of shared code, both `audit-verbatim-move.py move` sections
+(multiset and order-aware) with a substitution class for every residual
+hunk. A change the tool proves `IDENTICAL` needs no row.
 
 ## Prerequisites
 
@@ -119,18 +128,34 @@ On macOS run each command below as `python3 …`:
 | `tools/translation-benchmark.py` | `python tools/test-translation-benchmark.py` and `python tools/test-sense-gate-early-exit.py` (it loads `tools/sense-gate-early-exit.py`, which imports `translation-benchmark.py`) |
 | `tools/sense-gate-early-exit.py` | `python tools/test-sense-gate-early-exit.py` |
 | `tools/fetch-benchmark-datasets.py` | `python tools/tests/test_fetch_benchmark_datasets.py` |
+| `tools/macos/audit-verbatim-move.py` | `python3 tools/macos/test-audit-verbatim-move.py` (needs `git`) |
 
 **Safe on a macOS clone (Apple Silicon).** Build the worker and the macOS
-subset (the test build also builds the worker first), run the subset, and
-check the ConSeC worker with the bundle read in place:
+subset (the test build also builds the worker first), run the subset through
+the hermetic runner, and check the ConSeC worker with the bundle read in
+place:
 
 ```bash
 dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
 dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
-dotnet run --project tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release --no-build
+bash tools/macos/run-macos-subset.sh --allow 'home/Library/Application Support/AsteriaScale/hover-translation.log'
 src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
   --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 ```
+
+The runner builds nothing. Each run starts the built apphost in a fresh
+`mktemp -d` folder W outside the clone, with cwd `W/cwd`, `TMPDIR=W/tmp` and
+`HOME`/`CFFIXED_USER_HOME` at `W/home` (an empty `Library/Application
+Support`; none with `--empty-home`), so it never writes into the real
+`~/Library`. It then lists every entry left in cwd, home and tmp and exits 9
+on one that `--allow <path relative to W>` does not name (the subset still
+writes `hover-translation.log`, hence the `--allow` above). `--repeat N` runs
+it N times and stops at the first failure, keeping that folder. It also
+counts the owner's crash reports (`~/Library/Logs/DiagnosticReports`, names
+matching `^(AsteriaScale|dotnet|Python|python3|swift)`; read only) and exits
+10 when the count grows; exit 2 is a usage error or a missing build, any other
+code is the subset's own. Launching the apphost directly or with `dotnet run`
+uses the real home: do not report such a run.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
@@ -141,10 +166,31 @@ WPF project copies, where exactly one manifest line,
 M12 ends with exit 1 `DIFFERENT` after successful builds; put the changed
 manifest lines in the commit message. Exit codes: 0 identical, 1 different,
 2 usage error or refused export, 3 licensed ConSeC payload in the working tree,
-4 a Windows build failed.
+4 a Windows build failed. `--worktree` (the default) is only a pre-check: it
+also builds untracked files, so a file never `git add`ed passes it. The
+result that goes with a commit is the revision-mode run after it, with
+`git status --porcelain` printing nothing:
 
 ```bash
 bash tools/macos/check-windows-identity.sh <base-rev> [--worktree | <candidate-rev>]
+bash tools/macos/check-windows-identity.sh HEAD~1 HEAD   # after committing
+```
+
+The identity tool compares source-generator outputs only as hashes of sorted
+tokens, so it cannot tell a moved `[GeneratedRegex]` from a changed one. A
+commit that changes Windows-visible code therefore also runs the regex guard,
+which must print `GeneratedRegex attributes: identical (<n>)` and exit 0
+unless the commit means to change a regex (exit 1 lists what was added and
+removed). A commit that moves or edits shared code runs the move audit and
+quotes both sections: `verbatim: K/N` (multiset, blind to order) and
+`base residual R` / `destination-only D` (order-aware, file:line hunks; a
+swapped or inserted statement always shows there). Both read the base
+revision and the working tree; run them from the clone root (docs/DEVELOPMENT.md,
+«Аудит переноса и `[GeneratedRegex]`»):
+
+```bash
+python3 tools/macos/audit-verbatim-move.py regex --base HEAD~1
+python3 tools/macos/audit-verbatim-move.py move --base <rev> --from <file>... --to <file>...
 ```
 
 Never build `AsteriaScale.slnx`,
@@ -269,8 +315,9 @@ certificate creation, `Add-AppxPackage`.
   constructor (`(bundled, user, sense)` for sense metadata) with a temp user
   directory — never the real `%LOCALAPPDATA%\AsteriaScale\Dictionaries`: every
   load creates the user directory and reads any `eng-rus*`/`jpn-rus*` layers
-  in it. On macOS LocalApplicationData is `~/Library/Application Support`; a
-  run may still write `AsteriaScale/hover-translation.log` there.
+  in it. On macOS LocalApplicationData is `~/Library/Application Support`;
+  `tools/macos/run-macos-subset.sh` points it at a temporary home, where a
+  run may still write `AsteriaScale/hover-translation.log`.
 - A behavior fix ships with a test that fails before the fix.
 - The macOS subset shares `Program.cs`. A registration that cannot run on
   macOS is wrapped as `#if WINDOWS … #else MacSmoke.Skip("<exact name>",

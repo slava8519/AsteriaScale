@@ -23,22 +23,35 @@
 > собирай только macOS-проекты: `dotnet build
 > tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release`
 > (собирает и `src/AsteriaScale.RankerWorker.MacOS`) и прогони macOS-подмножество
-> `dotnet run --project tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj
-> -c Release --no-build`. Приведи его итоговую строку `PASS (macOS subset): …`
+> во временном домашнем каталоге: `bash tools/macos/run-macos-subset.sh --allow
+> 'home/Library/Application Support/AsteriaScale/hover-translation.log'` (код `9`
+> — прогон оставил лишнее в своих временных каталогах, `10` — появился новый
+> отчёт о сбое; прямой запуск или `dotnet run` пишут в настоящую `~/Library`).
+> Приведи его итоговую строку `PASS (macOS subset): …`
 > и не выдавай её за полный smoke. `AsteriaScale.slnx`, Windows-воркер и
 > Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`
 > они останавливаются на NETSDK1100, а с ним Windows-воркер (в том числе в
 > составе `AsteriaScale.slnx`) копирует бандл ConSeC в `bin/`. Код для macOS
 > в общих исходниках по умолчанию ставь под `#if !WINDOWS` / `#else` и докажи,
 > что выходы Windows-сборки не изменились:
-> `bash tools/macos/check-windows-identity.sh <base> --worktree` должен
-> напечатать `IDENTICAL` (единственное допустимое отличие — строка
+> `bash tools/macos/check-windows-identity.sh <base> --worktree` до коммита
+> (предварительно: он собирает и неотслеживаемые файлы) и
+> `bash tools/macos/check-windows-identity.sh HEAD~1 HEAD` после коммита при
+> пустом `git status --porcelain` должны напечатать `IDENTICAL` (единственное
+> допустимое отличие — строка
 > `./Tests/THIRD_PARTY_NOTICES.md` после правки этого файла). Если задача Трека
 > III по решению M12 намеренно меняет Windows-код (ядро, RankerProtocol,
 > воркер, WPF-хост, общие тесты), скрипт должен пройти все Windows-сборки и
 > завершиться кодом `1` с `DIFFERENT` (код `4` — упавшая сборка — недопустим),
-> macOS-подмножество должно остаться зелёным, а в том же коммите добавь строку
-> в таблицу «Windows-изменения до прогона на Windows» в `docs/MACOS.md`. Полный
+> `python3 tools/macos/audit-verbatim-move.py regex --base HEAD~1` должен
+> напечатать `GeneratedRegex attributes: identical (…)`, если задача не меняет
+> regex, macOS-подмножество должно остаться зелёным, а в том же коммите добавь строку
+> в таблицу «Windows-изменения до прогона на Windows» в `docs/MACOS.md`. В
+> сообщение такого коммита помести изменённые строки манифеста, строку
+> `regex` и, если коммит переносит или правит общий код, оба раздела
+> `python3 tools/macos/audit-verbatim-move.py move --base <rev> --from … --to …`
+> (множественный `verbatim: K/N` и учитывающий порядок `base residual` /
+> `destination-only`) с классом замены для каждого остаточного фрагмента. Полный
 > Windows smoke прогоняет владелец на Windows (по M10 — в конце Трека III). Python вызывай как `python3`. Не запускай
 > `--live`-режимы, `scripts/install-*.cmd` и флаги `-Accept*Terms`.
 > Поведенческий фикс — только вместе с тестом, который падает до фикса.
