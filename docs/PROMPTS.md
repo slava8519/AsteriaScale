@@ -54,7 +54,10 @@
 > `regex` и, если коммит переносит или правит общий код, оба раздела
 > `python3 tools/macos/audit-verbatim-move.py move --base <rev> --from … --to …`
 > (множественный `verbatim: K/N` и учитывающий порядок `base residual` /
-> `destination-only`) с классом замены для каждого остаточного фрагмента. Полный
+> `destination-only`) с классом замены для каждого остаточного фрагмента. В
+> общих тестах держи обобщённый `Task<T>` в его собственном типе: приведение к
+> `Task` или `object` добавляет в diff строку `WinRTGlobalVtableLookup.g.cs`
+> Windows-тестов. Полный
 > Windows smoke прогоняет владелец на Windows (по M10 — в конце Трека III). Python вызывай как `python3`. Не запускай
 > `--live`-режимы, `scripts/install-*.cmd` и флаги `-Accept*Terms`.
 > Поведенческий фикс — только вместе с тестом, который падает до фикса.

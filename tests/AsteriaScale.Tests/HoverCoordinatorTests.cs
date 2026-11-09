@@ -135,7 +135,9 @@ internal static class HoverCoordinatorTests
         int statusCount = fixture.Statuses.Count;
         using CancellationTokenSource moved = new();
         Check(fixture.Coordinator.TryBeginProcessing(), "Gate unavailable.");
-        Task hover = fixture.Coordinator.StartHover("cancel", moved.Token);
+        // Kept at the type StartHover returns: declaring a Task<T> as Task makes
+        // CsWinRT's AOT generator add a vtable entry to the Windows test build.
+        Task<HoverOutcome> hover = fixture.Coordinator.StartHover("cancel", moved.Token);
         await fixture.Host.RecognitionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         moved.Cancel();
         await hover.WaitAsync(TimeSpan.FromSeconds(5));
@@ -288,7 +290,7 @@ internal static class HoverCoordinatorTests
         Fixture fixture = new(root, HoverTranslationModes.Dictionary, phrase);
         fixture.Host.BlockRecognition = true;
         Check(fixture.Coordinator.TryBeginProcessing(), "Gate unavailable.");
-        Task hover = fixture.Coordinator.StartHover("d1", CancellationToken.None);
+        Task<HoverOutcome> hover = fixture.Coordinator.StartHover("d1", CancellationToken.None);
         await fixture.Host.RecognitionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         await fixture.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));

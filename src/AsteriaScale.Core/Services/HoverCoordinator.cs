@@ -25,7 +25,8 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
     private readonly SmartDictionaryResultCache _smartResultCache;
     private readonly SmartPhraseTranslationCache _smartPhraseCache;
-    private readonly IHoverPhraseModel _translateGemma;
+    // Null on a host without a phrase model (macOS until 20.5).
+    private readonly IHoverPhraseModel? _translateGemma;
     // Shared by the hover pipeline and the full-text scaffold: both ask the
     // worker the same question, so neither may pay for the other's inference.
     private readonly GlossBertDecisionCache _decisionCache;
@@ -220,6 +221,30 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Queues an unload on the host's behalf (CoreHost's models.unload) and
+    /// returns the task that completes once a pass covering this request has
+    /// run. It is the coalesced unload a settings change queues: the pass waits
+    /// for the hover in flight and holds the maintenance lease while it runs,
+    /// so no hover starts meanwhile, and requests made while a pass waits or
+    /// runs share one task and add at most one more pass. Like every pass it
+    /// unloads what the current settings do not need (everything while hover
+    /// translation is off, the ranker of another mode or backend, the phrase
+    /// model in memory-saving mode); a model the settings keep warm stays.
+    /// </summary>
+    internal Task RequestUnload()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        QueueUnload(HoverUnloadReason.HostRequested);
+        lock (_lifecycleLock)
+        {
+            // Whichever loop this is (the one QueueUnload joined or started, or
+            // a later one), it completes only after a pass that read the
+            // revision this request bumped.
+            return _pendingUnload;
+        }
+    }
+
     private async Task RunUnloadUntilStableAsync(TaskCompletionSource completion)
     {
         try
@@ -346,7 +371,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             await CaptureUnloadFailureAsync(_smartPipeline.UnloadRankerAsync, failures);
         }
 
-        if (unloadPhraseTranslator)
+        if (unloadPhraseTranslator && _translateGemma is not null)
         {
             await CaptureUnloadFailureAsync(_translateGemma.UnloadAsync, failures);
         }
@@ -456,7 +481,9 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     {
         try
         {
-            await _translateGemma.WarmUpAsync(cancellationToken);
+            // Reached only while SmartPhraseTranslationEnabled, which requires
+            // a phrase model.
+            await _translateGemma!.WarmUpAsync(cancellationToken);
             _translateGemmaReady = true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -477,6 +504,14 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             : _settings.SmartDictionaryKeepWarm
                 ? $"модель значений прогрета на {ResolveSmartBackend().ToUpperInvariant()}"
                 : $"модель значений загрузится по требованию на {ResolveSmartBackend().ToUpperInvariant()}";
+        // The settings ask for a phrase line this host cannot produce: say so,
+        // rather than leave it out silently or promise a model that never loads.
+        if (SmartRankerApplicable && SmartPhraseTranslationRequested && _translateGemma is null)
+        {
+            return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}; " +
+                   HoverPhraseStatus.UnavailableOnPlatform;
+        }
+
         if (!SmartRankerApplicable || !SmartPhraseTranslationEnabled)
         {
             return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}";
@@ -502,15 +537,18 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     /// Starts one hover and tracks it until disposal. The caller must have won
     /// <see cref="TryBeginProcessing"/>; the hover releases that gate when it
     /// ends, whatever happens.
+    /// The task ends with how the hover ended, which a host answering hover
+    /// requests (CoreHost) reports and the Windows host ignores; an exception
+    /// or a cancellation becomes an outcome, not a fault.
     /// </summary>
-    internal Task StartHover(TAnchor anchor, CancellationToken cancellationToken)
+    internal Task<HoverOutcome> StartHover(TAnchor anchor, CancellationToken cancellationToken)
     {
-        Task hover = ProcessHoverAsync(anchor, cancellationToken);
+        Task<HoverOutcome> hover = ProcessHoverAsync(anchor, cancellationToken);
         TrackTask(hover);
         return hover;
     }
 
-    private async Task ProcessHoverAsync(TAnchor anchor, CancellationToken cancellationToken)
+    private async Task<HoverOutcome> ProcessHoverAsync(TAnchor anchor, CancellationToken cancellationToken)
     {
         try
         {
@@ -528,7 +566,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             if (recognized is null || !_enabled || !_host.IsAnchorCurrent(anchor))
             {
                 HideOverlay();
-                return;
+                return recognized is null ? HoverOutcome.Empty : HoverOutcome.AnchorLost;
             }
 
             recognized = _host.UpgradeRecognized(anchor, recognized);
@@ -595,7 +633,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             if (!_enabled || !_host.IsAnchorCurrent(anchor))
             {
                 HideOverlay();
-                return;
+                return HoverOutcome.AnchorLost;
             }
 
             // The three posts of this hover (primary, provisional and final
@@ -659,18 +697,22 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             else if (!primaryDisplayable)
             {
                 HideOverlay();
+                return HoverOutcome.Empty;
             }
 
+            return HoverOutcome.Completed;
         }
         catch (OperationCanceledException)
         {
             HideOverlay();
+            return HoverOutcome.Cancelled;
         }
         catch (Exception ex)
         {
             HideOverlay();
             LogError(ex);
             ReportStatus("Перевод под курсором: " + ex.Message);
+            return HoverOutcome.Failed;
         }
         finally
         {
@@ -746,7 +788,13 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     private bool IsSmartMode =>
         HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
 
+    // A host without a phrase model never warms, unloads or waits for one,
+    // whatever the settings ask for; the Windows host always has one.
+    [System.Diagnostics.CodeAnalysis.MemberNotNullWhen(true, nameof(_translateGemma))]
     private bool SmartPhraseTranslationEnabled =>
+        _translateGemma is not null && SmartPhraseTranslationRequested;
+
+    private bool SmartPhraseTranslationRequested =>
         SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
         SmartPhraseTranslationModes.TranslateGemma;
 
@@ -793,6 +841,35 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
 
     /// <summary>History of shown translations, for the review panel and export.</summary>
     internal TranslationHistoryService History => _history;
+
+    /// <summary>
+    /// What the model owners are doing now, for a host's status line
+    /// (CoreHost's models.status). It reads fields only: it waits for no hover,
+    /// warm-up or unload and loads nothing.
+    /// </summary>
+    internal HoverModelStatus GetModelStatus() =>
+        new(
+            new HoverDictionaryStatus(
+                _dictionary.IsLoaded,
+                _dictionary.EntryCount,
+                _dictionary.SourceCount,
+                _dictionary.VersionToken,
+                _dictionary.SenseMetadataKeyCount),
+            new HoverSenseStatus(
+                _enabled && ActiveModeUsesGlossBert,
+                ResolveGlossBertProvider(),
+                _glossBertSelector.CpuModelProfile,
+                _settings.SmartDictionaryKeepWarm,
+                _glossBertSelector.IsWorkerRunning,
+                _glossBertSelector.WorkerProcessId,
+                _glossBertSelector.ActiveProvider,
+                _glossBertSelector.ActiveModelVersion,
+                _glossBertSelector.LastErrorCode),
+            new HoverPhraseStatus(
+                _translateGemma is not null,
+                SmartPhraseTranslationRequested,
+                _translateGemmaReady,
+                _translateGemma is null ? HoverPhraseStatus.UnavailableOnPlatform : null));
 
     /// <summary>
     /// Stores the user's gender choice for <paramref name="target"/> (the
@@ -1044,7 +1121,11 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
         await _host.ReleaseHostResourcesAsync();
         _history.Dispose();
         await _host.ReleaseHostResourcesAfterHistoryAsync();
-        await _translateGemma.DisposeAsync();
+        if (_translateGemma is not null)
+        {
+            await _translateGemma.DisposeAsync();
+        }
+
         await _glossBertSelector.DisposeAsync();
         await _smartResultCache.DisposeAsync();
         await _smartPhraseCache.DisposeAsync();

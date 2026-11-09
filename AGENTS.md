@@ -34,7 +34,9 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   `net10.0`, no RID): dictionaries, morphology, sense-ranking host, phrase
   translation, caches, settings, the hover orchestration
   (`HoverCoordinator`: lifecycle, warm-up and unload, card order,
-  cancellation, history, statuses), the unit-free OCR text rules
+  cancellation, history, statuses, and for a host that answers requests each
+  hover's `HoverOutcome`, a `HoverModelStatus` snapshot and host-requested
+  unloads; the phrase model is optional), the unit-free OCR text rules
   (`OcrTextRules`: clean-up, sentence extraction, the two-observation
   agreement, frame reuse; `WindowsAiOcrService` imports them and keeps capture
   and pixel geometry until 20.3) and the card-kind predicates over engine
@@ -343,6 +345,12 @@ certificate creation, `Add-AppxPackage`.
   history, caches, TranslateGemma models) fails instead of writing, and the
   hover log is dropped. Such a test passes its own folder under `tempRoot`.
 - A behavior fix ships with a test that fails before the fix.
+- Keep a generic class such as `Task<T>` at its own type in shared tests:
+  declaring it as `Task` or `object`, assigning it to a property or field of
+  that type, passing it to a test-assembly method that takes that type, or
+  returning a `Task<T>` expression from a lambda makes CsWinRT's AOT
+  generator add a vtable entry to the Windows test build, an extra
+  `WinRTGlobalVtableLookup.g.cs` line in the identity diff.
 - The macOS subset shares `Program.cs`. A registration that cannot run on
   macOS is wrapped as `#if WINDOWS … #else MacSmoke.Skip("<exact name>",
   "<the Windows-only API that forces it>"); #endif`; a Windows-only sub-check

@@ -480,6 +480,9 @@ try
             // Typed provenance and host-supplied labels, through the same
             // coordinator and pipeline under the Windows and the macOS labels.
             await HoverProvenanceTests.RunAsync(tempRoot);
+            // What a request-answering host (CoreHost) adds: hover outcomes,
+            // the model-status snapshot, host unloads, no phrase model.
+            await HoverCoordinatorHostApiTests.RunAsync(tempRoot);
         });
 
 #if WINDOWS

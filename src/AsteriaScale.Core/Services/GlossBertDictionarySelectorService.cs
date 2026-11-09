@@ -115,6 +115,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     private Task? _errorDrain;
     private GlossBertRankerProvider? _activeProvider;
     private string? _activeModelVersion;
+    private volatile string? _lastErrorCode;
     private volatile bool _keepWarm = true;
     private volatile bool _disposed;
 
@@ -288,6 +289,15 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         IsWorkerRunning ? _activeModelVersion : null;
 
     public RankerCpuModelProfile CpuModelProfile => _cpuModelProfile;
+
+    /// <summary>
+    /// The <see cref="GlossBertRankerException.ErrorCode"/> of the last worker
+    /// transaction that failed with one (worker_missing, consec_bundle_missing,
+    /// worker_error…), or null once a later transaction succeeded. Read-only, for
+    /// a host's status line: the request that failed still throws as before,
+    /// and a cancelled caller's abandoned transaction counts too.
+    /// </summary>
+    internal string? LastErrorCode => _lastErrorCode;
 
     // The worker and model folder this selector starts; diagnostics read them
     // here instead of deriving the companion layout a second time.
@@ -541,6 +551,7 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
                 expectedCommand: request.Command,
                 transactionCpuModelProfile);
             _activeModelVersion = response.ModelVersion;
+            _lastErrorCode = null;
             return new RankerTransactionResult(
                 response,
                 transactionCpuModelProfile);
@@ -550,8 +561,17 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             // No application request has entered the stream in this path.
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            // Every failed attempt ends here, including one whose caller
+            // cancelled after the write and left it to drain, so the status
+            // follows the last real attempt; a start cancelled before anything
+            // was written (above) is no attempt. Only coded failures are kept.
+            if (exception is GlossBertRankerException rankerException)
+            {
+                _lastErrorCode = rankerException.ErrorCode;
+            }
+
             await StopWorkerLockedAsync(attemptGracefulShutdown: false);
             throw;
         }

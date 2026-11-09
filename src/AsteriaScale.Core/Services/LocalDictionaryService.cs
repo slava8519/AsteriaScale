@@ -244,6 +244,20 @@ public sealed partial class LocalDictionaryService
         ? _versionToken
         : _versionToken + "." + _senseMetadataVersionToken;
 
+    // For a host's model-status snapshot: true once a load finished and until
+    // the next unload. The lock guards only field swaps and the synchronous
+    // start of a load, so reading this never waits for the load itself.
+    internal bool IsLoaded
+    {
+        get
+        {
+            lock (_loadLock)
+            {
+                return _loadTask is { IsCompletedSuccessfully: true };
+            }
+        }
+    }
+
     public Task LoadAsync(CancellationToken cancellationToken = default)
     {
         Task task;

@@ -23,6 +23,7 @@ internal static class GlossBertDictionarySelectorServiceTests
         await VerifyParallelCandidateValidationAsync(tempRoot);
         await VerifyProfileSwitchAfterResponseDoesNotInvalidateSelectionAsync(tempRoot);
         await VerifyResponseDeadlineKillsWorkerAsync(tempRoot);
+        await VerifyLastErrorCodeAsync(tempRoot);
     }
 
     private static void VerifyProtocolV2Shape()
@@ -928,6 +929,116 @@ internal static class GlossBertDictionarySelectorServiceTests
             "The ranker response deadline did not bound the hung transaction.");
         Check(!service.IsWorkerRunning && service.WorkerProcessId is null,
             "The timed-out ranker worker was left running after transport recovery.");
+    }
+
+    // A host's status line (CoreHost's models.status) names the code of the
+    // last failed worker transaction until a later one succeeds. The first
+    // fake worker rejects warm without a code, which the selector reports as
+    // worker_error; the restarted one answers.
+    private static async Task VerifyLastErrorCodeAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "ranker-last-error-code");
+        string rankerDirectory = Path.Combine(root, "Ranker");
+        Directory.CreateDirectory(Path.Combine(rankerDirectory, "Models"));
+        File.WriteAllBytes(
+            Path.Combine(rankerDirectory, "AsteriaScale.RankerWorker.exe"),
+            []);
+        string model = GlossBertDictionarySelectorService.CpuModelCacheId + ":pipeline-cross";
+
+#if WINDOWS
+        string powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        Check(File.Exists(powershell),
+            "The last-error fixture requires the inbox Windows PowerShell executable.");
+#else
+        // The same contract in python3, as the profile-race fake above.
+        const string workerScript = """
+            import json, sys
+            model, version, provider, warm, fail = sys.argv[1:6]
+            for line in sys.stdin:
+                request = json.loads(line)
+                response = {"version": version, "requestId": str(request.get("requestId")), "ok": True,
+                            "index": None, "abstained": False, "margin": None, "score": None,
+                            "confidence": None, "provider": provider, "device": "CPU",
+                            "modelVersion": model, "pipeline": "cross", "errorCode": None, "error": None}
+                if fail == "fail" and request.get("command") == warm:
+                    response.update(ok=False, error="fixture failure")
+                sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+                sys.stdout.flush()
+                if request.get("command") == "shutdown":
+                    break
+            """;
+#endif
+
+        int starts = 0;
+        await using GlossBertDictionarySelectorService service = new(
+            root,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromSeconds(30),
+            _ =>
+            {
+                bool fail = Interlocked.Increment(ref starts) == 1;
+#if WINDOWS
+                ProcessStartInfo startInfo = new(powershell);
+                startInfo.ArgumentList.Add("-NoLogo");
+                startInfo.ArgumentList.Add("-NoProfile");
+                startInfo.ArgumentList.Add("-NonInteractive");
+                startInfo.ArgumentList.Add("-Command");
+                startInfo.ArgumentList.Add(
+                    "$fail = $" + (fail ? "true" : "false") + "; " +
+                    "while (($line = [Console]::In.ReadLine()) -ne $null) { " +
+                    "$request = $line | ConvertFrom-Json; " +
+                    "$response = [ordered]@{ " +
+                    "version = '" + RankerProtocolV2.Version + "'; " +
+                    "requestId = [string]$request.requestId; ok = $true; " +
+                    "index = $null; abstained = $false; margin = $null; " +
+                    "score = $null; confidence = $null; " +
+                    "provider = '" +
+                    GlossBertDictionarySelectorService.CpuExecutionProvider +
+                    "'; device = 'CPU'; modelVersion = '" + model + "'; pipeline = 'cross'; " +
+                    "errorCode = $null; error = $null }; " +
+                    "if ($fail -and $request.command -eq '" + RankerProtocolV2.Warm + "') { " +
+                    "$response.ok = $false; $response.error = 'fixture failure' }; " +
+                    "[Console]::Out.WriteLine(($response | ConvertTo-Json -Compress)); " +
+                    "[Console]::Out.Flush(); " +
+                    "if ($request.command -eq 'shutdown') { break } }");
+#else
+                ProcessStartInfo startInfo = new("python3");
+                startInfo.ArgumentList.Add("-I");
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add(workerScript);
+                startInfo.ArgumentList.Add(model);
+                startInfo.ArgumentList.Add(RankerProtocolV2.Version);
+                startInfo.ArgumentList.Add(GlossBertDictionarySelectorService.CpuExecutionProvider);
+                startInfo.ArgumentList.Add(RankerProtocolV2.Warm);
+                startInfo.ArgumentList.Add(fail ? "fail" : "answer");
+#endif
+                return startInfo;
+            });
+
+        Check(service.LastErrorCode is null,
+            "The selector reported an error before any worker transaction.");
+        try
+        {
+            await service.WarmUpAsync(GlossBertRankerProvider.Cpu);
+            throw new InvalidOperationException("A worker that rejected warm was accepted.");
+        }
+        catch (GlossBertRankerException ex) when (ex.ErrorCode == "worker_error")
+        {
+            // Expected: the failure still reaches the caller unchanged.
+        }
+
+        Check(service.LastErrorCode == "worker_error" && !service.IsWorkerRunning,
+            $"After a worker_error the selector reports '{service.LastErrorCode}' " +
+            $"with the worker running: {service.IsWorkerRunning}.");
+
+        await service.WarmUpAsync(GlossBertRankerProvider.Cpu);
+        Check(service.LastErrorCode is null && service.IsWorkerRunning && Volatile.Read(ref starts) == 2,
+            $"A successful transaction after the failure left '{service.LastErrorCode}' " +
+            $"after {Volatile.Read(ref starts)} worker starts.");
     }
 
     private static RankerResponse Success(

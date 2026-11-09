@@ -6,7 +6,10 @@ internal enum HoverUnloadReason
     ExplicitDisable,
     ModeChanged,
     SmartSettingsChanged,
-    PhraseMemorySaving
+    PhraseMemorySaving,
+    // A host asked for the pass itself (CoreHost's models.unload). Routine:
+    // it never asks for the compacting dictionary GC on its own.
+    HostRequested
 }
 
 /// <summary>

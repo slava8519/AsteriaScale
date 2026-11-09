@@ -20,7 +20,12 @@ internal sealed class HoverCoreServices
 
     public required TranslationHistoryService History { get; init; }
 
-    public required IHoverPhraseModel PhraseModel { get; init; }
+    /// <summary>
+    /// The optional phrase model. A host without one (macOS until 20.5) passes
+    /// null explicitly: the coordinator then never warms, unloads or waits for
+    /// a phrase model and reports <see cref="HoverPhraseStatus.UnavailableOnPlatform"/>.
+    /// </summary>
+    public required IHoverPhraseModel? PhraseModel { get; init; }
 
     public required GlossBertDictionarySelectorService Selector { get; init; }
 

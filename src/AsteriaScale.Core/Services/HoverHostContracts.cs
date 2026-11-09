@@ -145,6 +145,7 @@ internal sealed record HoverSpeakerTarget<TAnchor>(
 /// <summary>
 /// The optional phrase model as the hover lifecycle sees it. TranslateGemma
 /// implements it; tests substitute a fake without starting llama-server.
+/// A host without one passes null in <see cref="HoverCoreServices.PhraseModel"/>.
 /// </summary>
 internal interface IHoverPhraseModel : ISmartPhraseTranslator, IAsyncDisposable
 {
