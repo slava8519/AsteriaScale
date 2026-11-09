@@ -19,6 +19,11 @@ in [docs/ROADMAP.md](docs/ROADMAP.md); closed audit findings are archived in
 [docs/AUDIT-ROADMAP.md](docs/AUDIT-ROADMAP.md), and the one open audit pass —
 translation quality and measurement methodology — is
 [docs/audit/pass-e-translation-quality.md](docs/audit/pass-e-translation-quality.md).
+A macOS version is planned as a native Swift app written from scratch (not a
+port of the WPF host) on top of Core, RankerProtocol and the ranker worker; the
+owner's decisions and open questions are in [docs/MACOS.md](docs/MACOS.md), and
+its status is roadmap Track III (card 20). Do not reintroduce a text hook there:
+Apple Vision is the only text source on macOS.
 
 ## Where code goes
 

@@ -118,7 +118,8 @@ Version 0.9.3, a personal project.
 - Third-party model weights are not stored in the repository, and the required GlossBERT files
   have no public download yet, so a clean clone builds and passes the tests but cannot
   publish the app (details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
-- A macOS port is planned: the core is split out; the worker and a Mac host are not.
+- A macOS version is planned as a native Swift app written from scratch on top of the
+  platform-neutral core (decisions and open questions: [docs/MACOS.md](docs/MACOS.md)).
 
 ## Build and test
 
@@ -146,6 +147,7 @@ The project documentation is in Russian; [docs/README.md](docs/README.md) is the
 | [docs/BENCHMARKING.md](docs/BENCHMARKING.md) | Translation benchmark protocol and tracks |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Dated research and measurement log; the source of the numbers cited by the roadmap and audit |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned work and its design |
+| [docs/MACOS.md](docs/MACOS.md) | macOS version: owner's decisions, consequences of the project rules, open questions |
 | [AGENTS.md](AGENTS.md) | Rules for AI coding agents (in English) |
 
 ## License
