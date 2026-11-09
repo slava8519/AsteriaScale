@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Core host process of the macOS app (docs/MACOS.md M11): AsteriaScale.Core
+    behind a strict JSONL protocol on stdin/stdout, started by the Swift app in
+    its own process group. Platform-neutral net10.0 with no RuntimeIdentifier,
+    like Core; the RID is chosen at publish. Main refuses every platform but
+    macOS, because the stdio isolation and the process-group cleanup are POSIX
+    and libproc code.
+
+    Never add this project to AsteriaScale.slnx and never reference it from a
+    Windows project: the solution is the Windows build, and
+    MacProjectParityTests checks both. The macOS subset references it for
+    build order only and starts its apphost from bin/<Configuration>/net10.0.
+
+    Its own code must stay NativeAOT-clean (M11 plans a NativeAOT build of the
+    same project): every JSON call goes through the source-generated WireJson
+    context, and the trim, AOT and single-file analyzers fail the build.
+    IsAotCompatible changes only this project's output, not Core's.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AsteriaScale.CoreHost</AssemblyName>
+    <RootNamespace>AsteriaScale.CoreHost</RootNamespace>
+    <Version>0.9.3</Version>
+    <!-- LibraryImport generates unsafe marshalling stubs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Statuses are formatted with ru-RU (rule 9), which needs ICU. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <IsAotCompatible>true</IsAotCompatible>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416;IL2026;IL2046;IL2057;IL2067;IL2070;IL2072;IL2075;IL2087;IL2091;IL3000;IL3050;IL3051</WarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AsteriaScale.Core\AsteriaScale.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      The bundled data Core reads from the folder given as data-root. The
+      Include and Link strings are the WPF project's (src/AsteriaScale/AsteriaScale.csproj),
+      so MacProjectParityTests can compare them. assets/ is never read in place:
+      it holds eng-rus-phrasal.tsv beside eng-rus-phrasal.tsv.gz, and Core's
+      discovery accepts both, so that layer would load twice.
+    -->
+    <Content Include="..\..\assets\Dictionaries\*.tsv.gz"
+             Link="Dictionaries\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\Morphology\*.tsv.gz"
+             Link="Morphology\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -5,7 +5,7 @@
 | Компонент | Версия | Обязательно |
 |---|---|---|
 | Windows 11 | build 26100+ (для NPU OCR) | да |
-| macOS (Apple Silicon) | 14.0+ (`libonnxruntime.dylib` ORT 1.27.1) | только CPU-воркер (ConSeC) и macOS-подмножество smoke |
+| macOS (Apple Silicon) | 14.0+ (`libonnxruntime.dylib` ORT 1.27.1) | только CPU-воркер (ConSeC), CoreHost и macOS-подмножество smoke |
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
@@ -327,10 +327,11 @@ Smoke-набор — консольная программа без тестов
 
 ### macOS (Apple Silicon)
 
-На macOS собираются и запускаются только CPU-воркер (ConSeC) и
-macOS-подмножество smoke-набора (роадмап №20.1, решение M7 в
-[MACOS.md](MACOS.md)). Оба проекта — `net10.0`/`osx-arm64`, не входят в
-`AsteriaScale.slnx` и компилируют те же исходники по ссылке, а не копией:
+На macOS собираются и запускаются только CPU-воркер (ConSeC), CoreHost и
+macOS-подмножество smoke-набора (роадмап №20.1 и 20.2, решения M7 и M11 в
+[MACOS.md](MACOS.md)). Воркер и подмножество — `net10.0`/`osx-arm64`, не
+входят в `AsteriaScale.slnx` и компилируют те же исходники по ссылке, а не
+копией:
 
 - `src/AsteriaScale.RankerWorker.MacOS` — воркер без Windows ML и без единого
   `Content`: модели читаются на месте через `--model-directory`, поэтому его
@@ -338,10 +339,16 @@ macOS-подмножество smoke-набора (роадмап №20.1, ре�
 - `tests/AsteriaScale.Tests.MacOS` — подмножество того же набора с общим
   `Program.cs`. Windows-only части стоят под `#if WINDOWS`, а ветки `#else`
   объявляют, что не выполнено (`MacSmoke.cs`). Сборка тест-проекта сначала
-  собирает macOS-воркер (ссылка только задаёт порядок сборки); как и Windows
-  тест-проект, он не ссылается на ONNX Runtime.
+  собирает macOS-воркер и CoreHost (ссылки только задают порядок сборки); как
+  и Windows тест-проект, он не ссылается на ONNX Runtime.
+
+Третий проект, `src/AsteriaScale.CoreHost`, — процесс ядра для
+macOS-приложения (решение M11, раздел «CoreHost» ниже). Он платформенно
+нейтральный (`net10.0` без RID, как ядро), ссылается только на ядро, тоже не
+входит в `AsteriaScale.slnx` и собирается без единого предупреждения.
 
 ```bash
+dotnet build src/AsteriaScale.CoreHost/AsteriaScale.CoreHost.csproj -c Release   # 0 предупреждений
 dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
 bash tools/macos/run-macos-subset.sh
 ```
@@ -386,32 +393,42 @@ apphost или не Apple Silicon; любой другой — код самог
 тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
 них — бюджет управляемой памяти, который один тест, «Local dictionary
 lookup», печатает дважды (замеры `Layered dictionaries` и `Aligned sense
-metadata`), поэтому строк `note` четыре. Затем идут три проверки только для
-macOS (префикс `macOS: `):
+metadata`), поэтому строк `note` четыре. Затем идут шесть проверок только
+для macOS (префикс `macOS: `):
 
 - паритет с Windows-проектами: пакеты и их версии, общие файлы воркера,
   данные тест-проекта, отсутствие `Content`/`None`/`EmbeddedResource` у
-  macOS-воркера, отсутствие ONNX Runtime в выходе тестов и регистрации общего
-  `Program.cs` (см. ниже);
+  macOS-воркера, отсутствие ONNX Runtime, воркера и CoreHost в выходе тестов,
+  регистрации общего `Program.cs` (см. ниже), а также проект CoreHost
+  (`net10.0` без RID, `IsAotCompatible` и анализаторы как ошибки, ссылка
+  только на ядро, данные `Dictionaries`/`Morphology` — те же строки, что у
+  WPF-проекта, нет в `AsteriaScale.slnx` и ни в одном Windows-проекте) и
+  единственный помощник, создающий symlink в `tests/`
+  (`CoreHostFixtures.CreateLinkToEmptyDirectory`; в его файле нет имён
+  каталогов моделей);
 - отказ воркера от NPU без перехода на CPU: `--provider npu --smoke` и
   `--smoke` с провайдером по умолчанию дают `npu_provider_unavailable` и код
   выхода `1`;
 - ответ воркера на запрос ConSeC: `--smoke` с бандлом, прочитанным на месте из
   `src/AsteriaScale.RankerWorker/Models`, проверяет выбор, провайдер, pipeline
-  и точную identity модели.
+  и точную identity модели;
+- «CoreHost protocol conformance», «CoreHost lifecycle and stdio isolation» и
+  «CoreHost fault containment» — CoreHost снаружи, как его видит
+  приложение (раздел «CoreHost» ниже); вместе они занимают около 5 с.
 
-Эталонный прогон: `46` строк `ok`, `14` — `skip`, `4` — `note`, последняя
+Эталонный прогон: `49` строк `ok`, `14` — `skip`, `4` — `note`, последняя
 строка:
 
 ```text
-PASS (macOS subset): 43/57 shared smoke tests + 3 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
+PASS (macOS subset): 43/57 shared smoke tests + 6 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
 ```
 
 Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
 именно так. `MacSmoke.Summarize` печатает строку `PASS`, только если
 выполненные и объявленные регистрации вместе дают ровно `57` с
-неповторяющимися именами, прошли все три macOS-проверки, достигнуты все три
-объявленные части и записаны оба статуса ConSeC. `checked in place` значит,
+неповторяющимися именами, прошли все шесть macOS-проверок
+(`MacSmoke.MacOnlyRegistrationCount`), достигнуты все три объявленные части и
+записаны оба статуса ConSeC. `checked in place` значит,
 что токенизатор сверен с закреплёнными длиной и SHA-256 и двумя
 tensor-эталонами, а воркер ответил на `--smoke`. Без бандла оба статуса
 начинаются с `absent: ` и называют отсутствующий путь; прогон остаётся
@@ -497,6 +514,151 @@ JSONL-сессию с теми же аргументами. Запрос NPU (`-
 `EnableWindowsTargeting` они останавливаются на NETSDK1100, а с ним csproj
 Windows-воркера ставит локальный бандл ConSeC (`1,6 ГБ`, CC BY-NC-SA 4.0) в
 `bin/`.
+
+#### CoreHost
+
+`src/AsteriaScale.CoreHost` — ядро отдельным процессом (решение M11):
+Swift-приложение запускает его в собственной группе процессов и говорит с ним
+по протоколу JSONL v1 через stdin/stdout. Разработческая сборка —
+framework-dependent apphost
+`src/AsteriaScale.CoreHost/bin/Release/net10.0/AsteriaScale.CoreHost`; рядом с
+ним сборка кладёт `Dictionaries/` и `Morphology/` (те же элементы данных, что
+у WPF-проекта), это его каталог данных. Собственный код CoreHost
+NativeAOT-совместим: весь JSON — через source generation, а анализаторы trim,
+AOT и single-file — ошибки сборки. Запускают CoreHost проверки подмножества и
+приложение; запуск с настоящим домашним каталогом — только владелец.
+
+**Аргументы запуска.** Единственный источник —
+`tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`: его читает
+проверка C#, а Swift-тест приложения будет читать тот же файл. Все пути —
+абсолютные, иначе код `2`.
+
+| Аргумент | Вид | Значение |
+|---|---|---|
+| `--data-root` | обязательный | каталог с `Dictionaries/` и `Morphology/` |
+| `--user-data` | обязательный | настройки, «Мой словарь», история, по умолчанию и кэши; блокировка `Runtime/corehost.lock` |
+| `--log-dir` | обязательный | журнал наведения ядра `hover-translation.log` |
+| `--cache-dir` | необязательный | три кэша; без него — `--user-data` |
+| `--ranker-worker`, `--ranker-models` | необязательные | воркер ранжировщика и каталог его моделей; пока только записываются и возвращаются в `core.hello` |
+| `--enable-test-commands` | тестовый | включает команды `test.*`; `core.hello` сообщает `testCommands: true`, и приложение такой процесс не принимает |
+| `--drain-timeout-ms` | тестовый | срок упорядоченного завершения вместо 10 с; только вместе с `--enable-test-commands` |
+| `--phrase-models`, `--phrase-runtime` | зарезервированы | код `2` с «зарезервировано для 20.5» |
+
+Любое другое имя (в том числе `--no-rehome`, `--log-file` и `--protocol` из
+прототипов), повтор аргумента и аргумент без значения — тоже код `2`;
+сообщение в stderr перечисляет допустимые имена. С ошибкой в аргументах
+CoreHost ничего не создаёт.
+
+**Запуск.** После разбора аргументов протокол переходит на дубликаты fd 0 и 1
+с close-on-exec, fd 0 становится `/dev/null`, а fd 1 — копией stderr
+(только `dup`, `dup2` и `ioctl(FIOCLEX)`: у вариадического `fcntl` на Apple
+arm64 третий аргумент передаётся через стек, и фиксированная сигнатура
+P/Invoke его портит). Поэтому дочерний процесс, запущенный без
+перенаправления stdin (llama-server), получает `/dev/null`, а протокольные
+дескрипторы не наследуются. Первая операция с ядром — `CoreDataLayout.Configure`
+с корнями из аргументов; культура — `ru-RU`. Затем CoreHost берёт блокировку
+`<user-data>/Runtime/corehost.lock` (advisory `flock`, её снимает ядро ОС,
+когда процесс умирает): второй CoreHost на тех же данных, в том числе через
+symlink, завершается кодом `7`, ничего там не прочитав и не записав.
+`core.hello` сообщает `blockedSignals` — какие из SIGHUP, SIGINT, SIGTERM и
+SIGCHLD заблокированы в унаследованной маске сигналов: запускающий обязан
+передавать пустую маску.
+
+**Протокол v1, кратко.** Запрос — `{"version":1,"id":N,"command":"…","payload":{…}}`,
+ответ — `{"version":1,"id":N,"ok":true,"result":{…}}` или
+`{"version":1,"id":N,"ok":false,"error":{"code":"…","message":"…","detail":"…"}}`,
+событие — `{"version":1,"event":"…","ref":N,"payload":{…}}`. Номера запросов
+строго растут; на каждый принятый запрос — ровно один ответ, события запроса —
+только до него; stdout — только протокол, stderr — только строки
+`[corehost] …`. Нарушение кадра (не JSON, не UTF-8, пустая строка, кадр
+больше 1 МиБ, неверный номер или версия) — событие `core.fault` и код `3`.
+`message` — русский текст для пользователя без слова «ядро» (M15), `detail` —
+английский текст для журнала. Байты протокола закреплены эталоном
+`tests/AsteriaScale.Tests.MacOS/CoreHost/protocol-v1.golden.jsonl` (pid, пути,
+версии и тайминги при сверке подменяются). Сейчас CoreHost обслуживает
+`core.hello`, `core.ping`, `request.cancel`, `core.shutdown` и линию
+наведения `hover.resolve` (одно наведение за раз, новое заменяет текущее;
+пока движок наведения не готов — `not_ready`), а `ocr.select` (20.3),
+`models.install`, `models.verify` и `phrase.variants` (20.5) отвечают
+`not_implemented`.
+
+**Завершение и коды выхода.**
+
+| Код | Когда |
+|---|---|
+| `0` | `core.shutdown` или SIGTERM, работа завершилась в срок |
+| `2` | ошибка аргументов или не macOS |
+| `3` | приложение нарушило протокол (перед выходом — `core.fault`) |
+| `4` | приложения больше нет: EOF stdin без `core.shutdown` или EPIPE на stdout |
+| `5` | приложение перестало читать: очередь ответов превысила 16 МиБ |
+| `6` | упорядоченное завершение не уложилось в срок (`core.fault shutdown_timeout`) |
+| `7` | другой CoreHost уже работает с этим `--user-data` |
+| `70` | внутренняя ошибка |
+
+`core.shutdown` и SIGTERM запускают одно и то же упорядоченное завершение,
+открыт stdin или нет: новые запросы получают `shutting_down`, запросы с
+немедленной отменой (наведение, чтение) сразу получают ответ, кооперативные —
+сигнал отмены, а работа, которую прерывать нельзя, дожидается до 10 с;
+затем освобождаются службы, `core.shutdown` получает ответ, код `0`. Если
+работа за срок не закончилась — ответ `shutdown_timeout` на `core.shutdown`,
+`core.fault shutdown_timeout` и код `6`. EOF stdin после `core.shutdown` или
+во время такого завершения его исхода не меняет. EOF stdin без
+`core.shutdown` значит, что приложения больше нет: все запросы отменяются, и
+не позже чем через 500 мс CoreHost выходит с кодом `4`. Перед любым выходом
+CoreHost посылает SIGKILL остальным процессам своей группы, если он её лидер
+(`proc_listpgrppids`), а иначе — своим потомкам (`proc_listchildpids`):
+группа пустеет не позже чем через 1 с после EOF.
+
+**Окружение.** Проверки подмножества (и приложение) запускают CoreHost через
+`posix_spawn` в собственной группе, с `CLOEXEC_DEFAULT`, пустой маской
+сигналов, `HOME`/`CFFIXED_USER_HOME` в своём каталоге с пустой
+`Library/Application Support`, собственным `TMPDIR`,
+`DOTNET_EnableDiagnostics=0` (иначе убитый .NET-процесс оставляет в `TMPDIR`
+FIFO отладчика `clr-debug-pipe-*`) и пустым текущим каталогом. Ни одна
+автоматическая проверка не роняет процесс через abort или сигнал ошибки
+(`Environment.FailFast`, необработанное исключение, SIGABRT, SIGSEGV):
+ReportCrash пишет отчёт в настоящую `~/Library/Logs/DiagnosticReports` при
+любом `HOME`. Внезапная смерть имитируется `_exit` (`test.exit`, код `70`) или
+SIGKILL, отчётов они не оставляют.
+
+**Что проверяет подмножество.**
+
+- «CoreHost protocol conformance»: аргументы против `launch-args-v1.txt`
+  (отсутствующий обязательный, относительный путь, неизвестное или
+  зарезервированное имя — код `2`, и ничего не создано; список допустимых имён
+  в сообщении совпадает с файлом; со всеми именами сразу `core.hello`
+  возвращает пути), сначала `core.hello`, несовпадение версии, неизвестные и
+  зарезервированные команды, лишние, недостающие, `null` и не того типа поля
+  (`bad_request`), четыре исхода `request.cancel`, порядок G1–G4 (события до
+  ответа; основная карточка до строки фразы, черновик до окончательной; ответ
+  заменённого наведения до событий нового; ответ отменённого запроса до ответа
+  отмены), одно наведение в движке за раз, неудачное наведение — исход
+  `failed` и русский статус, `busy` при 32 незавершённых запросах, число
+  отправленных запросов равно числу ответов и эталон
+  `protocol-v1.golden.jsonl`. Наведения идут через тестовый движок
+  `test.fakeCore`, данные ядра не читаются.
+- «CoreHost lifecycle and stdio isolation»: лидер группы; `blockedSignals`
+  пуст, а при запуске с заблокированным SIGTERM — `["SIGTERM"]`; EOF без
+  `core.shutdown` в простое — код `4` быстрее 1 с; единственный ответ на
+  `core.shutdown`, после которого завершён и дочерний процесс; SIGTERM при
+  открытом stdin — код `0` в пределах срока; `--drain-timeout-ms 300` при
+  неотменяемой работе — `core.fault shutdown_timeout` и код `6`; EOF при
+  работающих запросе и дочернем процессе — группа пуста и код `4` быстрее 1 с;
+  у дочернего процесса ровно `0:/dev/null`, `1` и `2`, и он в той же группе;
+  второй CoreHost на тех же данных (через symlink) — код `7`, а
+  `settings.json` первого не изменился ни в байтах, ни во времени изменения.
+- «CoreHost fault containment»: `test.exit` (код `70`) и SIGKILL клиент
+  видит как EOF; дочерний процесс, осиротевший после SIGKILL, живёт в группе
+  до `killpg`; зависший запрос упирается в срок клиента; 16 МиБ в stderr не
+  задерживают читающего клиента; шесть нарушений кадра — `core.fault` и код
+  `3`; строку не-JSON в stdout ловит клиент; клиент, переставший читать, —
+  код `5`; закрытый stdout — EPIPE и код `4`.
+
+После каждого запуска проверки требуют пустую группу процессов, пустые
+текущий каталог, `TMPDIR` и каталог журнала, домашний каталог только с пустой
+`Library/Application Support`, а в `--user-data` — только блокировку и то, что
+положил сам тест. Каждое сообщение об ошибке, `core.fault` и статус обязаны
+быть русскими и без слова «ядро».
 
 #### Проверка, что Windows-сборка не изменилась
 
@@ -663,15 +825,15 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1,
 регистрации «Smart hover engine strings», швов ядра этапа 20.2, переноса
 в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки,
-типизированного происхождения результата и меток хоста (9 ноября 2026) и API
-координатора для CoreHost (10 ноября 2026):
+типизированного происхождения результата и меток хоста (9 ноября 2026), API
+координатора для CoreHost и самого CoreHost (10 ноября 2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
 (`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
-и три собственные проверки. В `tests/` `51` файл C# — `30 433` строки вместе с
-harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
-против `37 290` строк C# в `src/`. Отдельно есть пять
+и шесть собственных проверок. В `tests/` `57` файлов C# — `32 646` строк вместе с
+harness gated-бенчмарков и девятью файлами `tests/AsteriaScale.Tests.MacOS` —
+против `40 031` строки C# в `src/` (вместе с CoreHost). Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
@@ -684,7 +846,9 @@ Python-наборов `unittest` на `71` тест (см. «Python-тесты �
 
 На macOS из этих слоёв выполняются чистая логика (без WPF-помощников),
 контракты данных — с `python3` — и процессы/IPC: поддельные воркеры там
-написаны на `python3` и `/bin/sh` вместо Windows PowerShell. Установщики,
+написаны на `python3` и `/bin/sh` вместо Windows PowerShell. Кроме того, только на
+macOS три проверки запускают CoreHost отдельным процессом (раздел «CoreHost»
+выше). Установщики,
 `build`-скрипты, Magpie, text-hook, DPI, реальный движок и gated-бенчмарки на
 macOS не выполняются (`skip` или не компилируются).
 

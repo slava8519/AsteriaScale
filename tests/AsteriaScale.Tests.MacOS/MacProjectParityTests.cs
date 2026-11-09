@@ -8,7 +8,9 @@ using System.Xml.Linq;
 // shared Program.cs: the default-path registrations the Windows build compiles
 // must match, name for name and in order, what the macOS build runs or
 // declares with MacSmoke.Skip, and their number must be
-// MacSmoke.SharedRegistrationCount.
+// MacSmoke.SharedRegistrationCount. CoreHost has no Windows twin, but its
+// data items must be the WPF project's, it may reference only Core, and it
+// must stay out of the solution and of every Windows project.
 internal static class MacProjectParityTests
 {
     private const string WindowsWorkerProject = "src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj";
@@ -16,6 +18,10 @@ internal static class MacProjectParityTests
     private const string WindowsTestProject = "tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj";
     private const string MacTestProject = "tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj";
     private const string WpfProject = "src/AsteriaScale/AsteriaScale.csproj";
+    private const string CoreHostProject = "src/AsteriaScale.CoreHost/AsteriaScale.CoreHost.csproj";
+    private const string CoreHostName = "AsteriaScale.CoreHost";
+    private const string LinkHelperFile = "tests/AsteriaScale.Tests.MacOS/CoreHost/CoreHostFixtures.cs";
+    private const string LinkHelperMethod = "CreateLinkToEmptyDirectory";
     private const string SharedWorkerPrefix = @"..\..\src\AsteriaScale.RankerWorker\";
     private const string SharedTestDirectoryToken = "$(SharedTestDirectory)";
 
@@ -36,6 +42,7 @@ internal static class MacProjectParityTests
         XDocument windowsTests = Load(root, WindowsTestProject);
         XDocument macTests = Load(root, MacTestProject);
         XDocument wpf = Load(root, WpfProject);
+        XDocument coreHost = Load(root, CoreHostProject);
 
         VerifyWorkerPackages(windowsWorker, macWorker);
         VerifyWorkerLicenceGuard(macWorker);
@@ -43,9 +50,111 @@ internal static class MacProjectParityTests
         VerifyFlatWorkerFolder(root);
         VerifyTestProjects(root, windowsTests, macTests, wpf);
         VerifySharedRegistrations(root);
+        VerifyCoreHostProject(root, coreHost, wpf, macTests);
         VerifyOutsideTheSolution(root);
-        VerifyNoOnnxRuntimeInTestOutput();
+        VerifySymbolicLinkHelper(root);
+        VerifyNoHelperFilesInTestOutput();
         return Task.CompletedTask;
+    }
+
+    private static void VerifyCoreHostProject(string root, XDocument coreHost, XDocument wpf, XDocument macTests)
+    {
+        // Platform-neutral like Core: the RID is chosen at publish, and the
+        // CoreHost checks start bin/<Configuration>/net10.0.
+        Check(string.Equals(Property(coreHost, "TargetFramework"), CoreHostFixtures.TargetFramework, StringComparison.Ordinal) &&
+              Property(coreHost, "RuntimeIdentifier") is null &&
+              Property(coreHost, "RuntimeIdentifiers") is null &&
+              string.Equals(Property(coreHost, "OutputType"), "Exe", StringComparison.Ordinal) &&
+              string.Equals(Property(coreHost, "AssemblyName"), CoreHostName, StringComparison.Ordinal),
+            $"{CoreHostProject} must be a net10.0 Exe named {CoreHostName} without a RuntimeIdentifier.");
+
+        // Its own code stays NativeAOT-clean (M11): the analyzers fail the build.
+        string warningsAsErrors = Property(coreHost, "WarningsAsErrors") ?? string.Empty;
+        Check(string.Equals(Property(coreHost, "IsAotCompatible"), "true", StringComparison.Ordinal) &&
+              string.Equals(Property(coreHost, "TreatWarningsAsErrors"), "true", StringComparison.Ordinal) &&
+              new[] { "CA1416", "IL2026", "IL3050" }.All(code => warningsAsErrors.Split(';').Contains(code)),
+            $"{CoreHostProject} must keep IsAotCompatible, TreatWarningsAsErrors and CA1416/IL2026/IL3050 as errors.");
+
+        Check(ProjectReferences(coreHost).SequenceEqual([@"..\AsteriaScale.Core\AsteriaScale.Core.csproj"], StringComparer.Ordinal) &&
+              !coreHost.Descendants("PackageReference").Any(),
+            $"{CoreHostProject} may reference AsteriaScale.Core and nothing else.");
+
+        // In development CoreHost's data root is its own output folder,
+        // filled from these items; they must be the WPF project's, so both
+        // hosts read the same dictionaries and morphology.
+        (string Include, string Link)[] expected = ContentPairs(wpf)
+            .Where(pair => pair.Include.EndsWith(".tsv.gz", StringComparison.Ordinal) &&
+                           (pair.Link.StartsWith(@"Dictionaries\", StringComparison.Ordinal) ||
+                            pair.Link.StartsWith(@"Morphology\", StringComparison.Ordinal)))
+            .ToArray();
+        (string Include, string Link)[] declared = ContentPairs(coreHost).ToArray();
+        Check(expected.Length == 2 && declared.SequenceEqual(expected) &&
+              !coreHost.Descendants().Any(element =>
+                  element.Name.LocalName is "None" or "EmbeddedResource" &&
+                  (element.Attribute("Include") is not null || element.Attribute("Update") is not null)),
+            $"The CoreHost data items diverged from the WPF project: expected [{string.Join("; ", expected)}], " +
+            $"found [{string.Join("; ", declared)}].");
+
+        XElement? reference = macTests.Descendants("ProjectReference").SingleOrDefault(element =>
+            ((string?)element.Attribute("Include"))?.EndsWith(CoreHostName + ".csproj", StringComparison.Ordinal) == true);
+        Check(reference is not null &&
+              string.Equals((string?)reference.Attribute("ReferenceOutputAssembly"), "false", StringComparison.Ordinal),
+            "The macOS test project must reference CoreHost for build order only (ReferenceOutputAssembly=false).");
+
+        // No Windows project may build or ship it.
+        string[] windowsReferences = new[] { WindowsWorkerProject, WindowsTestProject, WpfProject }
+            .Concat(Directory.EnumerateFiles(Path.Combine(root, "src"), "*.csproj", SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/')))
+            .Where(path => path != CoreHostProject && path != MacTestProject)
+            .Distinct(StringComparer.Ordinal)
+            .Where(path => File.ReadAllText(Path.Combine(root, path)).Contains(CoreHostName, StringComparison.Ordinal))
+            .ToArray();
+        Check(windowsReferences.Length == 0,
+            "Only the macOS test project may reference CoreHost: " + string.Join(", ", windowsReferences));
+    }
+
+    // Symbolic links are dangerous next to the licensed ConSeC bundle: the
+    // worker refuses one at its model folder, and the identity tool refuses
+    // one in an export. The only helper that creates a link makes a fresh
+    // empty target of its own under the run's temporary root, and nothing
+    // else under tests/ may create one.
+    private static void VerifySymbolicLinkHelper(string root)
+    {
+        // Split so this file does not count itself.
+        string[] tokens = ["CreateSymbolic" + "Link", "CreateAsSymbolic" + "Link"];
+        List<(string File, int Line)> calls = [];
+        foreach (string path in Directory.EnumerateFiles(Path.Combine(root, "tests"), "*.cs", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+            if (relative.Split('/').Any(part => part is "bin" or "obj"))
+            {
+                continue;
+            }
+
+            string[] lines = File.ReadAllLines(path);
+            for (int index = 0; index < lines.Length; index++)
+            {
+                if (tokens.Any(token => lines[index].Contains(token, StringComparison.Ordinal)))
+                {
+                    calls.Add((relative, index));
+                }
+            }
+        }
+
+        Check(calls.Count == 1 && calls[0].File == LinkHelperFile,
+            $"Exactly one symbolic-link call may exist under tests/, in {LinkHelperFile}; found " +
+            (calls.Count == 0 ? "none." : string.Join(", ", calls.Select(call => $"{call.File}:{call.Line + 1}"))));
+        string[] helper = File.ReadAllLines(Path.Combine(root, LinkHelperFile.Replace('/', Path.DirectorySeparatorChar)));
+        int declaration = Array.FindLastIndex(helper, calls[0].Line, line =>
+            line.TrimStart().StartsWith("public static", StringComparison.Ordinal) ||
+            line.TrimStart().StartsWith("private static", StringComparison.Ordinal) ||
+            line.TrimStart().StartsWith("internal static", StringComparison.Ordinal));
+        Check(declaration >= 0 && helper[declaration].Contains(" " + LinkHelperMethod + "(", StringComparison.Ordinal),
+            $"The symbolic-link call in {LinkHelperFile} must sit inside {LinkHelperMethod}.");
+        string text = string.Join('\n', helper);
+        string[] forbidden = ["Consec", "ConSeC_WNGT", "Models"];
+        Check(!forbidden.Any(word => text.Contains(word, StringComparison.OrdinalIgnoreCase)),
+            $"{LinkHelperFile} must not name the model folders ({string.Join(", ", forbidden)}).");
     }
 
     // MacSmoke.Summarize can only count what the macOS build compiled, so a
@@ -365,23 +474,25 @@ internal static class MacProjectParityTests
     private static void VerifyOutsideTheSolution(string root)
     {
         string solution = File.ReadAllText(Path.Combine(root, "AsteriaScale.slnx"));
-        Check(!solution.Contains(".MacOS", StringComparison.Ordinal),
+        Check(!solution.Contains(".MacOS", StringComparison.Ordinal) &&
+              !solution.Contains(CoreHostName, StringComparison.Ordinal),
             "A macOS project was added to AsteriaScale.slnx; the solution is the Windows build.");
     }
 
-    private static void VerifyNoOnnxRuntimeInTestOutput()
+    private static void VerifyNoHelperFilesInTestOutput()
     {
-        // The worker reference is for build order only; its ONNX Runtime and
-        // its assembly must not reach the test output.
+        // The worker and CoreHost references are for build order only; their
+        // assemblies and ONNX Runtime must not reach the test output.
         string[] leaked = Directory.EnumerateFiles(AppContext.BaseDirectory, "*", SearchOption.AllDirectories)
             .Select(Path.GetFileName)
             .Where(name => name is not null &&
                 (name.Contains("onnxruntime", StringComparison.OrdinalIgnoreCase) ||
-                 name.StartsWith("AsteriaScale.RankerWorker", StringComparison.Ordinal)))
+                 name.StartsWith("AsteriaScale.RankerWorker", StringComparison.Ordinal) ||
+                 name.StartsWith(CoreHostName, StringComparison.Ordinal)))
             .Select(name => name!)
             .ToArray();
         Check(leaked.Length == 0,
-            "The macOS test output contains worker or ONNX Runtime files: " + string.Join(", ", leaked));
+            "The macOS test output contains worker, CoreHost or ONNX Runtime files: " + string.Join(", ", leaked));
     }
 
     private static XDocument Load(string root, string relativePath) =>

@@ -39,6 +39,12 @@ src/AsteriaScale.RankerWorker/Models/**/*.json -text
 *.mlmodel binary
 **/*.mlpackage/** binary
 
+# CoreHost protocol goldens (the launch arguments and the v1 transcript) are
+# read line by line by the macOS subset and the Swift tests; a CRLF checkout
+# would turn every frame into a different line.
+tests/AsteriaScale.Tests.MacOS/CoreHost/*.jsonl text eol=lf
+tests/AsteriaScale.Tests.MacOS/CoreHost/*.txt text eol=lf
+
 *.tsv.gz binary
 tools/dictionary-source/vn-lexicon.tsv text eol=lf
 tools/dictionary-source/vn-sources.lock.json text eol=lf

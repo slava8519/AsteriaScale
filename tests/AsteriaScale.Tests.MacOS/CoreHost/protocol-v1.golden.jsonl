@@ -1,0 +1,48 @@
+{"version":1,"id":1,"command":"core.ping"}
+{"version":1,"id":1,"ok":false,"error":{"code":"hello_required","message":"Служба перевода ещё не начала сеанс.","detail":"core.hello must be the first request"}}
+{"version":1,"id":2,"command":"core.hello","payload":{"client":"golden","protocolMin":1,"protocolMax":1}}
+{"version":1,"id":2,"ok":true,"result":{"protocol":1,"coreHostVersion":"0.0.0","coreVersion":"0.0.0","build":"golden","runtime":".NET","aot":false,"pid":4242,"pgid":4242,"processGroupLeader":true,"platform":"macos","testCommands":true,"blockedSignals":[],"paths":{"dataRoot":"/golden/data-root","userData":"/golden/user-data","logDir":"/golden/logs"},"capabilities":{"hoverModes":["dictionary","smart"],"hoverSources":["selection"],"senseProviders":["cpu"],"senseModels":["glossbert","consec"],"phraseBackends":[],"phraseVariants":[]}}}
+{"version":1,"id":3,"command":"core.ping"}
+{"version":1,"id":3,"ok":true,"result":{"uptimeMs":0,"outstanding":0,"gcHeapBytes":0,"workingSetBytes":0}}
+{"version":1,"id":4,"command":"no.such"}
+{"version":1,"id":4,"ok":false,"error":{"code":"unknown_command","message":"Служба перевода не знает такой команды.","detail":"no.such"}}
+{"version":1,"id":5,"command":"ocr.select"}
+{"version":1,"id":5,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"ocr.select is reserved for 20.3"}}
+{"version":1,"id":6,"command":"models.install"}
+{"version":1,"id":6,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"models.install is reserved for 20.5"}}
+{"version":1,"id":7,"command":"models.verify"}
+{"version":1,"id":7,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"models.verify is reserved for 20.5"}}
+{"version":1,"id":8,"command":"phrase.variants"}
+{"version":1,"id":8,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"phrase.variants is reserved for 20.5"}}
+{"version":1,"id":9,"command":"hover.resolve","payload":{"source":{"kind":"observations"}}}
+{"version":1,"id":9,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"hover.resolve source.kind observations is reserved for 20.3"}}
+{"version":1,"id":10,"command":"hover.resolve","payload":{"source":{"kind":"selection","text":"He sat on the bank of the river.","hoveredWord":"bank","characterIndex":14}}}
+{"version":1,"id":10,"ok":false,"error":{"code":"not_ready","message":"Служба перевода ещё не готова.","detail":"the hover engine is not ready"}}
+{"version":1,"id":11,"command":"request.cancel","payload":{"target":3,"reason":"x"}}
+{"version":1,"id":11,"ok":false,"error":{"code":"bad_request","message":"Некорректный запрос к службе перевода.","detail":"the payload of request.cancel does not match its schema (unknown, missing, null or mistyped member)"}}
+{"version":1,"id":12,"command":"request.cancel","payload":{"target":12}}
+{"version":1,"id":12,"ok":false,"error":{"code":"bad_request","message":"Некорректный запрос к службе перевода.","detail":"request.cancel must target an earlier id"}}
+{"version":1,"id":13,"command":"request.cancel","payload":{"target":3}}
+{"version":1,"id":13,"ok":true,"result":{"cancelled":false,"reason":"not_in_flight"}}
+{"version":1,"id":14,"command":"test.sleep","payload":{"ms":10000}}
+{"version":1,"id":15,"command":"request.cancel","payload":{"target":14}}
+{"version":1,"id":14,"ok":false,"error":{"code":"cancelled","message":"Запрос отменён."}}
+{"version":1,"id":15,"ok":true,"result":{"cancelled":true}}
+{"version":1,"id":16,"command":"test.fakeCore","payload":{"primaryDelaysMs":{"bank":10000},"phrase":"provisional"}}
+{"version":1,"id":16,"ok":true,"result":{}}
+{"version":1,"id":17,"command":"hover.resolve","payload":{"source":{"kind":"selection","text":"He sat on the bank of the river.","hoveredWord":"bank","characterIndex":14}}}
+{"version":1,"id":18,"command":"hover.resolve","payload":{"source":{"kind":"selection","text":"He sat on the bank of the river.","hoveredWord":"river","characterIndex":26}}}
+{"version":1,"id":17,"ok":false,"error":{"code":"superseded","message":"Запрос заменён новым наведением.","supersededBy":18}}
+{"version":1,"event":"hover.primary","ref":18,"payload":{"source":"river","translation":"проверка: river","language":"en","isPhrase":false,"found":true,"provenance":"dictionary","engineLabel":"ПРОВЕРКА"}}
+{"version":1,"event":"hover.phrase","ref":18,"payload":{"source":"He sat on the bank of the river.","translation":"черновик фразы","status":"translated","provisional":true,"fromCache":false,"model":{"family":"test","variant":"fake","backend":"cpu","identity":"test-fake"}}}
+{"version":1,"event":"hover.phrase","ref":18,"payload":{"source":"He sat on the bank of the river.","translation":"проверочная фраза","status":"translated","provisional":false,"fromCache":false,"model":{"family":"test","variant":"fake","backend":"cpu","identity":"test-fake"}}}
+{"version":1,"id":18,"ok":true,"result":{"outcome":"completed","timings":{"queuedMs":0,"primaryMs":0,"phraseFirstMs":0,"phraseFinalMs":0}}}
+{"version":1,"id":19,"command":"test.fakeCore","payload":{"fail":true}}
+{"version":1,"id":19,"ok":true,"result":{}}
+{"version":1,"id":20,"command":"hover.resolve","payload":{"source":{"kind":"selection","text":"He sat on the bank of the river.","hoveredWord":"bank","characterIndex":14}}}
+{"version":1,"event":"status","payload":{"area":"hover","state":"error","code":"hover_failed","text":"Не удалось перевести текст под курсором."}}
+{"version":1,"id":20,"ok":true,"result":{"outcome":"failed","timings":{"queuedMs":0}}}
+{"version":1,"id":21,"command":"core.hello","payload":{"client":"golden","protocolMin":1,"protocolMax":1}}
+{"version":1,"id":21,"ok":false,"error":{"code":"bad_request","message":"Некорректный запрос к службе перевода.","detail":"core.hello was already answered"}}
+{"version":1,"id":22,"command":"core.shutdown"}
+{"version":1,"id":22,"ok":true,"result":{}}

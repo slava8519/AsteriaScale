@@ -1,0 +1,19 @@
+# CoreHost launch arguments, protocol v1: the single source of truth for the
+# arguments the app passes. The C# conformance check ("macOS: CoreHost
+# protocol conformance") and the Swift launcher test both read this file.
+# One argument per line: <name> <kind> <value>.
+#   kind:  required | optional | test (only for the subset's own checks;
+#          --drain-timeout-ms needs --enable-test-commands) | reserved (exit 2
+#          with «зарезервировано для 20.5»)
+#   value: path (absolute, otherwise exit 2) | ms (whole milliseconds) | none (a flag)
+# Any other name exits 2.
+--data-root required path
+--user-data required path
+--log-dir required path
+--cache-dir optional path
+--ranker-worker optional path
+--ranker-models optional path
+--enable-test-commands test none
+--drain-timeout-ms test ms
+--phrase-models reserved path
+--phrase-runtime reserved path

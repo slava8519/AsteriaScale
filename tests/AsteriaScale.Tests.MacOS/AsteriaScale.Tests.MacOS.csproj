@@ -50,6 +50,15 @@
     <ProjectReference Include="..\..\src\AsteriaScale.RankerWorker.MacOS\AsteriaScale.RankerWorker.MacOS.csproj"
                       ReferenceOutputAssembly="false"
                       Private="false" />
+    <!--
+      Build order only, like the worker: the CoreHost checks start its apphost
+      from src/AsteriaScale.CoreHost/bin/<Configuration>/net10.0, whose
+      Dictionaries/ and Morphology/ are their data root. MacProjectParityTests
+      checks that no CoreHost file reaches this project's output.
+    -->
+    <ProjectReference Include="..\..\src\AsteriaScale.CoreHost\AsteriaScale.CoreHost.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
     <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
     <PackageReference Include="Tokenizers.DotNet.runtime.osx-arm64" Version="1.4.1" />
   </ItemGroup>

@@ -74,10 +74,22 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   worker sources (roadmap 20.1). It links them, declares no Content (models are
   read in place through `--model-directory`, so no build copies a bundle) and
   is never added to `AsteriaScale.slnx`.
+- `src/AsteriaScale.CoreHost` — the macOS app's Core host (owner decision M11):
+  Core as a separate process speaking JSONL protocol v1 on stdin/stdout.
+  Platform-neutral `net10.0` without a RID, but `Main` refuses every platform
+  except macOS; it references only Core, declares the WPF project's
+  `Dictionaries`/`Morphology` data items, keeps its own code NativeAOT-clean
+  (source-generated JSON only; the trim and AOT analyzers fail the build) and
+  is never added to `AsteriaScale.slnx` or referenced by a Windows project.
+  Its launch arguments are exactly
+  `tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`, its wire bytes
+  are pinned by `protocol-v1.golden.jsonl` next to it, and its `test.*`
+  commands exist only with `--enable-test-commands`.
 - `tests/AsteriaScale.Tests` — the smoke suite.
 - `tests/AsteriaScale.Tests.MacOS` — the macOS subset of the same suite. It
   shares `Program.cs`; Windows-only parts sit under `#if WINDOWS` and declare
-  themselves through `MacSmoke.cs`. Never added to `AsteriaScale.slnx`.
+  themselves through `MacSmoke.cs`. The CoreHost checks live in its
+  `CoreHost/` folder. Never added to `AsteriaScale.slnx`.
 - `tools/macos/check-windows-identity.sh` — proves on a Mac that a change
   leaves every Windows build output byte-identical.
 - `tools/macos/run-macos-subset.sh` — runs the built macOS subset in a
@@ -123,8 +135,8 @@ real artifacts (docs/DEVELOPMENT.md).
 
 On macOS: Apple Silicon, macOS 14.0+ (the minimum of the ONNX Runtime 1.27.1
 osx-arm64 library), the arm64 .NET 10 SDK and Python 3.11+ as `python3`; no
-PowerShell or Magpie. There only the CPU worker (ConSeC) and the macOS subset
-of the smoke suite build and run. Report that run as the "macOS subset" with
+PowerShell or Magpie. There only the CPU worker (ConSeC), CoreHost and the
+macOS subset of the smoke suite build and run. Report that run as the "macOS subset" with
 its final `PASS (macOS subset): …` line, never as the smoke suite; the line
 also states whether the ConSeC real-bundle checks ran. Keep a macOS clone
 outside iCloud Drive-synced folders, or in a folder whose name ends in
@@ -154,13 +166,14 @@ On macOS run each command below as `python3 …`:
 | `tools/fetch-benchmark-datasets.py` | `python tools/tests/test_fetch_benchmark_datasets.py` |
 | `tools/macos/audit-verbatim-move.py` | `python3 tools/macos/test-audit-verbatim-move.py` (needs `git`) |
 
-**Safe on a macOS clone (Apple Silicon).** Build the worker and the macOS
-subset (the test build also builds the worker first), run the subset through
-the hermetic runner, and check the ConSeC worker with the bundle read in
-place:
+**Safe on a macOS clone (Apple Silicon).** Build the worker, CoreHost and the
+macOS subset (the test build also builds the worker and CoreHost first; the
+CoreHost build must report 0 warnings), run the subset through the hermetic
+runner, and check the ConSeC worker with the bundle read in place:
 
 ```bash
 dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
+dotnet build src/AsteriaScale.CoreHost/AsteriaScale.CoreHost.csproj -c Release
 dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
 bash tools/macos/run-macos-subset.sh
 src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
@@ -180,6 +193,17 @@ matching `^(AsteriaScale|dotnet|Python|python3|swift)`; read only) and exits
 10 when the count grows; exit 2 is a usage error or a missing build, any other
 code is the subset's own. Launching the apphost directly or with `dotnet run`
 uses the real home: do not report such a run.
+
+Never start CoreHost (or any helper a test spawns) with the real home: the
+subset's CoreHost checks spawn it with `HOME`/`CFFIXED_USER_HOME` at a
+private home, a private `TMPDIR`, `DOTNET_EnableDiagnostics=0` (a killed .NET
+process otherwise leaves debugger FIFOs in `TMPDIR`) and an empty cwd, and
+fail if anything is left there. No automated check may crash a process by
+abort or a fault signal (`Environment.FailFast`, an unhandled exception,
+SIGABRT, SIGSEGV): ReportCrash then writes into the owner's real
+`~/Library/Logs/DiagnosticReports` whatever `HOME` was. A sudden death is
+simulated with `_exit` (CoreHost's `test.exit`) or SIGKILL, which leave no
+report.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
@@ -345,6 +369,19 @@ certificate creation, `Add-AppxPackage`.
   history, caches, TranslateGemma models) fails instead of writing, and the
   hover log is dropped. Such a test passes its own folder under `tempRoot`.
 - A behavior fix ships with a test that fails before the fix.
+- The CoreHost checks ("macOS: CoreHost protocol conformance", "… lifecycle
+  and stdio isolation", "… fault containment") are macOS-only registrations
+  in the `#else` branch at the end of `Program.cs` (`MacSmoke.MacOnlyRegistrationCount`).
+  They start the real apphost through `posix_spawn` (own process group,
+  `CLOEXEC_DEFAULT`, an empty signal mask) and talk to it with a strict
+  client that enforces one terminal per request and a Russian message
+  without «ядро» (M15) in every error, fault and status. A change to the
+  launch arguments changes `launch-args-v1.txt` in the same commit; a change
+  to the wire bytes changes `protocol-v1.golden.jsonl`. The only helper in
+  `tests/` that may create a symbolic link is
+  `CoreHostFixtures.CreateLinkToEmptyDirectory` (its target is a fresh empty
+  folder under the run's temporary root); the project parity check enforces
+  it.
 - Keep a generic class such as `Task<T>` at its own type in shared tests:
   declaring it as `Task` or `object`, assigning it to a property or field of
   that type, passing it to a test-assembly method that takes that type, or

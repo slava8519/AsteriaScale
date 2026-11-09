@@ -21,7 +21,7 @@ internal static class MacSmoke
 
     // Registrations that exist only in the macOS branch at the end of
     // Program.cs; change together.
-    internal const int MacOnlyRegistrationCount = 3;
+    internal const int MacOnlyRegistrationCount = 6;
 
     internal const string MacOnlyPrefix = "macOS: ";
 

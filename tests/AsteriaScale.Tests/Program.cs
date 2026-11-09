@@ -3703,6 +3703,17 @@ try
     await RunAsync(
         MacSmoke.MacOnlyPrefix + "worker answers a ConSeC request on the real bundle",
         MacWorkerTests.VerifyConsecSmokeOnRealBundleAsync);
+    // CoreHost (docs/MACOS.md M11), started as the app's supervisor starts it,
+    // in its own process group with a private home, TMPDIR and cwd.
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "CoreHost protocol conformance",
+        () => CoreHostProtocolTests.RunAsync(tempRoot));
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "CoreHost lifecycle and stdio isolation",
+        () => CoreHostLifecycleTests.RunAsync(tempRoot));
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "CoreHost fault containment",
+        () => CoreHostFaultTests.RunAsync(tempRoot));
     Console.WriteLine(MacSmoke.Summarize(sharedPassed, passed - sharedPassed));
 #endif
     return 0;

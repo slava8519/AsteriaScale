@@ -22,7 +22,9 @@
 > Прочитай AGENTS.md и docs/ARCHITECTURE.md перед изменениями. На macOS
 > собирай только macOS-проекты: `dotnet build
 > tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release`
-> (собирает и `src/AsteriaScale.RankerWorker.MacOS`) и прогони macOS-подмножество
+> (собирает и `src/AsteriaScale.RankerWorker.MacOS`, и
+> `src/AsteriaScale.CoreHost`; сборка CoreHost — без единого предупреждения)
+> и прогони macOS-подмножество
 > во временном домашнем каталоге: `bash tools/macos/run-macos-subset.sh` (код `9`
 > — прогон оставил лишнее в своих временных каталогах, `10` — появился новый
 > отчёт о сбое; прямой запуск или `dotnet run` идут с настоящим домашним
@@ -30,8 +32,14 @@
 > явная ошибка (`MacSmoke.Begin` настраивает `CoreDataLayout`): тест, которому
 > нужны настройки, кэш или словарь пользователя, передаёт свой каталог во
 > временном корне.
-> Приведи его итоговую строку `PASS (macOS subset): …`
-> и не выдавай её за полный smoke. `AsteriaScale.slnx`, Windows-воркер и
+> Приведи его итоговую строку `PASS (macOS subset): 43/57 shared smoke tests +
+> 6 macOS checks; …` и не выдавай её за полный smoke. CoreHost запускай только
+> так, как это делают проверки подмножества: во временном домашнем каталоге, с
+> собственным `TMPDIR` и `DOTNET_EnableDiagnostics=0`; проверки не роняют
+> процессы через abort или сигнал ошибки (отчёт о сбое попадёт в настоящую
+> `~/Library/Logs/DiagnosticReports`), только `_exit` или SIGKILL. Аргументы
+> CoreHost меняются вместе с `tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`,
+> байты протокола — вместе с `protocol-v1.golden.jsonl`. `AsteriaScale.slnx`, Windows-воркер и
 > Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`
 > они останавливаются на NETSDK1100, а с ним Windows-воркер (в том числе в
 > составе `AsteriaScale.slnx`) копирует бандл ConSeC в `bin/`. Код для macOS
