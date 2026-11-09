@@ -32,9 +32,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 
 - `src/AsteriaScale.Core` — platform-neutral translation core (plain
   `net10.0`, no RID): dictionaries, morphology, sense-ranking host, phrase
-  translation, caches, settings. CA1416 is a build error. Add no Windows binary
-  names or paths; the existing ones listed in docs/ARCHITECTURE.md are known
-  seams. Most types are `internal` (a few, such as `AppSettings`,
+  translation, caches, settings, and the hover orchestration
+  (`HoverCoordinator`: lifecycle, warm-up and unload, card order,
+  cancellation, history, statuses). CA1416 is a build error. Add no Windows
+  binary names or paths; the existing ones listed in docs/ARCHITECTURE.md are
+  known seams. Most types are `internal` (a few, such as `AppSettings`,
   `LocalDictionaryService` and `GlossBertDictionarySelectorService`, are
   `public`), and `InternalsVisibleTo` covers only `AsteriaScale`,
   `AsteriaScale.Tests` and `AsteriaScale.CoreHost` (the macOS Core host), so a
@@ -44,8 +46,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   models) come from `CoreDataLayout`, the ranker worker and its model folder
   from `RankerWorkerLocation`; their Windows defaults are the old paths.
 - `src/AsteriaScale` — the WPF host and every Windows facility (UI, overlays,
-  tray, hotkeys, Magpie, DPI, Windows AI OCR, Textractor,
-  `HoverTranslationService`).
+  tray, hotkeys, Magpie, DPI, Windows AI OCR, Textractor).
+  `HoverTranslationService` is only the Windows host of `HoverCoordinator`: it
+  implements `IHoverHost<TAnchor>` (OCR and Textractor, cursor tracking, WPF
+  cards, the speaker editor) and keeps its old public API. A change to hover
+  lifecycle, ordering or history goes into the coordinator, not the adapter.
 - `src/AsteriaScale.RankerProtocol` — the shared host/worker contract: JSONL
   protocol, `RankerProviderTraits`, `RankerAbstention`.
 - `src/AsteriaScale.RankerWorker` — the ONNX worker. Some of its files are

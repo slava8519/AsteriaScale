@@ -407,6 +407,10 @@ try
 
     await RunAsync("Model activity lifecycle gate", ModelActivityGateTests.RunAsync);
 
+    await RunAsync(
+        "Hover coordinator ordering and lifecycle",
+        () => HoverCoordinatorTests.RunAsync(tempRoot));
+
 #if WINDOWS
     await RunAsync(
         "Magpie config and backup safety",

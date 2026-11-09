@@ -31,6 +31,7 @@ internal sealed record SensePromptPlan(
 /// </summary>
 internal sealed class TranslateGemmaTranslationService :
     ISmartPhraseTranslator,
+    IHoverPhraseModel,
     IAsyncDisposable
 {
     public const string EngineLabel = "TRANSLATEGEMMA 4B";

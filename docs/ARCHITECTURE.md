@@ -6,8 +6,8 @@
 
 | Проект | Назначение |
 |---|---|
-| `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
-| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
+| `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor и Windows-хост наведения (`HoverTranslationService`: распознавание, трекер курсора и показ карточек для `HoverCoordinator`) |
+| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки и оркестрация наведения (`HoverCoordinator`). Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime. `win-x64`: CPU и NPU (Windows ML/VitisAI); `osx-arm64`: только CPU — эти же исходники компилирует по ссылке `src/AsteriaScale.RankerWorker.MacOS` (без `Content`, не входит в `AsteriaScale.slnx`) |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI. `tests/AsteriaScale.Tests.MacOS` — macOS-подмножество того же набора с общим `Program.cs` (Windows-only части под `#if WINDOWS`), не входит в `AsteriaScale.slnx` |
@@ -148,9 +148,9 @@ CA1416 не ловит строковые имена Windows-бинарнико�
   `SmartPhraseTranslationGuard` в ядре отвергает больший.
 - `HoverDiagnostics` — журнал `CoreDataLayout.HoverLogFile`
   (`%LOCALAPPDATA%\AsteriaScale\hover-translation.log` на Windows, ротация при
-  512 КБ); `HoverTranslationService.LogError`/`LogDiagnostic` перенаправляют в
-  него. Если каталог пользователя не определён, сообщение отбрасывается, а не
-  пишется относительно текущего каталога.
+  512 КБ); в него пишут конвейер, `HoverCoordinator` и Windows-хост наведения
+  (`HoverDiagnostics.LogError`). Если каталог пользователя не определён,
+  сообщение отбрасывается, а не пишется относительно текущего каталога.
 
 **`CoreDataLayout`** (`src/AsteriaScale.Core/Services/CoreDataLayout.cs`) —
 единственный источник каталогов данных ядра. Две половины определяются
@@ -202,14 +202,15 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 
 ## Конвейер hover-перевода
 
-`HoverTranslationService` в Windows-хосте — фасад: владеет сервисами и оверлеями, вызывает OCR или text-hook и показывает результат; сам конвейер «Умного словаря» — `SmartHoverPipeline` в ядре. Таймер 90 мс (`HoverTracking`) следит за курсором; при стабильности позиции (радиус 15 px, задержка 350–1500 мс) запускается распознавание и перевод. Пользовательский UI и runtime поддерживают только `Smart` и `Dictionary`; сохранённые старые настройки `Neural`/`Screen` при загрузке мигрируют в `Smart`, но соответствующих маршрутов больше нет.
+Оркестрация наведения живёт в ядре: `HoverCoordinator<TAnchor>` владеет сервисами моделей (`HoverCoreServices`), режимом, прогревом и выгрузкой, отменой устаревшей работы, порядком «карточка загрузки → основная карточка → запись в кэш результатов → строка фразы», историей показанного, статусами и сохранением рода говорящего; сам конвейер «Умного словаря» — `SmartHoverPipeline`. Всё платформенное он получает через `IHoverHost<TAnchor>` (`HoverHostContracts.cs`): распознавание текста, трекер курсора, показ и скрытие карточек, вспомогательные окна и освобождение ресурсов хоста в две фазы — до и после закрытия истории. `HoverTranslationService` в Windows-хосте — такой хост с прежним публичным API: Windows AI OCR и text-hook, WPF-оверлеи, редактор рода и его горячая клавиша. Сервисы ядра создаются раньше окон WPF, а при выходе освобождаются окна, трекер и OCR → история → Textractor → модели, как до переноса. Таймер 90 мс (`HoverTracking`) следит за курсором; при стабильности позиции (радиус 15 px, задержка 350–1500 мс) запускается распознавание и перевод. Пользовательский UI и runtime поддерживают только `Smart` и `Dictionary`; сохранённые старые настройки `Neural`/`Screen` при загрузке мигрируют в `Smart`, но соответствующих маршрутов больше нет.
 
 ### Карта кода
 
 | Этап | Классы | Сборка |
 |---|---|---|
 | Курсор: таймер 90 мс, радиус 15 px, задержка | `HoverTracking` | `AsteriaScale` (хост) |
-| Фасад: подготовка режима, выбор OCR/hook, показ, выгрузка | `HoverTranslationService` | хост |
+| Оркестрация: режим, прогрев и выгрузка, порядок карточек, отмена, история, статусы, род говорящего | `HoverCoordinator` (`HoverHostContracts.cs`: `IHoverHost`, записи карточек, `HoverPolicy`; `HoverCoreServices`) | ядро |
+| Хост наведения: OCR или hook, трекер, показ карточек, редактор рода, ресурсы хоста | `HoverTranslationService` (`IHoverHost<CursorHover>`) | хост |
 | OCR под курсором | `WindowsAiOcrService` → записи из `OcrResults.cs` | хост → `AsteriaScale.Core` |
 | Строка и история игры | `TextHookService` (TextractorCLI), лимиты `PreviousContextLimits` | хост; лимиты — ядро |
 | Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |

@@ -17,7 +17,7 @@ internal static class MacSmoke
     // registration added or renamed inside an #if WINDOWS block, so
     // MacProjectParityTests also reads Program.cs as each build compiles it and
     // requires the same names in the same order, and this many of them.
-    internal const int SharedRegistrationCount = 56;
+    internal const int SharedRegistrationCount = 57;
 
     // Registrations that exist only in the macOS branch at the end of
     // Program.cs; change together.

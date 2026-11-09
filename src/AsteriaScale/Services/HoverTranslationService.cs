@@ -4,49 +4,29 @@ using AsteriaScale.Models;
 
 namespace AsteriaScale.Services;
 
-public sealed class HoverTranslationService : IAsyncDisposable
+/// <summary>
+/// The Windows host of hover translation: Windows AI OCR, the Textractor
+/// upgrade, the cursor tracker, the WPF overlays, the speaker editor and its
+/// hotkey. Lifecycle, ordering, cancellation and history live in the core
+/// (<see cref="HoverCoordinator{TAnchor}"/>, owner decision M12), which calls
+/// back through <see cref="IHoverHost{TAnchor}"/>. The public API is the one
+/// the service had before the move.
+/// </summary>
+public sealed class HoverTranslationService :
+    IAsyncDisposable,
+    IHoverHost<HoverTranslationService.CursorHover>
 {
-    private readonly AppSettings _settings;
-    private readonly Func<Task> _saveSettingsAsync;
     private readonly WindowsAiOcrService _ocr = new();
-    private readonly LocalDictionaryService _dictionary;
-    private readonly GlossBertDictionarySelectorService _glossBertSelector;
-    private readonly SemanticRankerProfileApplicator _semanticRankerProfile;
-    private readonly TranslationScaffoldGlossBertRanker _scaffoldGlossBertRanker;
-    private readonly SmartDictionaryResultCache _smartResultCache = new();
-    private readonly SmartPhraseTranslationCache _smartPhraseCache = new();
-    private readonly TranslateGemmaTranslationService _translateGemma;
-    // Shared by the hover pipeline and the full-text scaffold: both ask the
-    // worker the same question, so neither may pay for the other's inference.
-    private readonly GlossBertDecisionCache _decisionCache = new();
+    private readonly HoverCoordinator<CursorHover> _core;
     private readonly HoverTranslationOverlay _overlay;
     private readonly SpeakerGenderOverlay _speakerEditor;
     private readonly SpeakerGenderHotkeyService _speakerHotkey;
     private readonly Dispatcher _dispatcher;
-    private readonly object _lifecycleLock = new();
-    private readonly ModelActivityGate _modelActivity = new();
-    private readonly object _taskLock = new();
-    private readonly HashSet<Task> _activeTasks = [];
-    private readonly List<CancellationTokenSource> _retiredModeCancellations = [];
-    private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private readonly SmartHoverPipeline _smartPipeline;
     private readonly HoverTracking _tracking;
     private readonly TextHookService _textHook;
-    private readonly TranslationHistoryService _history = new();
-    private readonly HoverUnloadIntentState _unloadIntent = new();
-    private Task _pendingUnload = Task.CompletedTask;
-    private long _unloadRevision;
-    private bool _unloadWorkerRunning;
-    private CancellationTokenSource? _modeCancellation;
-    private bool _enabled;
-    private bool _disposed;
-    private long _overlayGeneration;
-    private string? _lastReportedStatus;
     private int _textHookDiagnosticProcessId;
     private bool _textHookMatchReported;
-    private bool? _translateGemmaReady;
-    private SpeakerEditTarget? _visibleSpeakerTarget;
-    private SpeakerEditTarget? _speakerEditorTarget;
+    private HoverSpeakerTarget<CursorHover>? _speakerEditorTarget;
     private bool _speakerEditorOpen;
     private bool _suppressSpeakerEditorResume;
 
@@ -54,23 +34,11 @@ public sealed class HoverTranslationService : IAsyncDisposable
         AppSettings settings,
         Func<Task>? saveSettingsAsync = null)
     {
-        _settings = settings;
-        _saveSettingsAsync = saveSettingsAsync ?? (() => Task.CompletedTask);
-        _translateGemma = new TranslateGemmaTranslationService(
-            backendResolver: () => TranslateGemmaTranslationService.ResolveBackend(
-                _settings.SmartPhraseTranslationBackend));
-        RankerCpuModelProfile initialRankerProfile =
-            SemanticRankerProfileResolver.FromSettings(settings);
-        _glossBertSelector = new GlossBertDictionarySelectorService(initialRankerProfile);
-        _semanticRankerProfile = new SemanticRankerProfileApplicator(
-            settings,
-            _glossBertSelector);
-        _dictionary = new LocalDictionaryService();
-        _scaffoldGlossBertRanker = new(
-            _glossBertSelector,
-            _decisionCache,
-            ResolveGlossBertProvider,
-            () => _dictionary.VersionToken);
+        // The core services and the pipeline come first, then the WPF windows,
+        // the tracker and Textractor, as before the move. The coordinator
+        // constructor never calls back into this half-built host.
+        _core = new HoverCoordinator<CursorHover>(settings, saveSettingsAsync, this);
+        _core.StatusChanged += (_, status) => StatusChanged?.Invoke(this, status);
         _dispatcher = System.Windows.Application.Current.Dispatcher;
         _overlay = new HoverTranslationOverlay();
         _speakerEditor = new SpeakerGenderOverlay();
@@ -78,26 +46,13 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _speakerEditor.Hidden += OnSpeakerEditorHidden;
         _speakerHotkey = new SpeakerGenderHotkeyService();
         _speakerHotkey.HotkeyPressed += OnSpeakerGenderHotkeyPressed;
-        _enabled = settings.HoverTranslationEnabled;
-        _glossBertSelector.ConfigureKeepWarm(settings.SmartDictionaryKeepWarm);
-        _smartPipeline = new SmartHoverPipeline(
-            settings,
-            _dictionary,
-            _glossBertSelector,
-            _smartResultCache,
-            _decisionCache,
-            ReportStatus,
-            _translateGemma,
-            _smartPhraseCache,
-            _scaffoldGlossBertRanker.RankAsync);
         _tracking = new HoverTracking(
-            () => _enabled && !_speakerEditorOpen,
-            EffectiveDelayMs,
-            HideOverlay,
-            TryBeginProcessing,
-            (point, token) => TrackTask(ProcessCursorAsync(point, token)));
+            () => _core.Enabled && !_speakerEditorOpen,
+            _core.EffectiveDelayMs,
+            _core.HideOverlay,
+            _core.TryBeginProcessing,
+            (point, token) => _core.StartHover(new CursorHover(point), token));
         _textHook = new TextHookService(settings);
-        RestartModeCancellation();
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -115,589 +70,46 @@ public sealed class HoverTranslationService : IAsyncDisposable
                 $"Быстрый выбор рода недоступен: {SpeakerGenderHotkeyService.DisplayGesture} занято");
         }
 
-        QueueUnload(HoverUnloadReason.Startup);
-
-        if (_enabled)
-        {
-            ConfigureActiveMode();
-            QueueWarmUpAfterPendingUnload();
-        }
+        _core.Start();
     }
 
-    public void SetEnabled(bool enabled)
-    {
-        _enabled = enabled;
-        _settings.HoverTranslationEnabled = enabled;
-        RestartModeCancellation();
-        ResetTracking();
-        if (enabled)
-        {
-            ConfigureActiveMode();
-            QueueWarmUpAfterPendingUnload();
-        }
-        else
-        {
-            StopTimer();
-            HideAllOverlays();
-            QueueUnload(HoverUnloadReason.ExplicitDisable);
-            ReportStatus("Перевод текста выключен");
-        }
-    }
+    public void SetEnabled(bool enabled) => _core.SetEnabled(enabled);
 
-    private void ConfigureActiveMode()
-    {
-        if (!_enabled)
-        {
-            StopTimer();
-            return;
-        }
-
-        StartTimer();
-    }
-
-    public void ApplySmartDictionarySettings()
-    {
-        RestartModeCancellation();
-        _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
-        _translateGemmaReady = null;
-        ResetTracking();
-        ConfigureActiveMode();
-        if (_enabled && !IsDictionaryMode)
-        {
-            QueueUnload(HoverUnloadReason.SmartSettingsChanged);
-            QueueWarmUpAfterPendingUnload();
-        }
-    }
+    public void ApplySmartDictionarySettings() => _core.ApplySmartDictionarySettings();
 
     private void StartTimer() => _tracking.Start();
 
     private void StopTimer() => _tracking.Stop();
 
-    public void SetMode(string mode)
+    void IHoverHost<CursorHover>.StartTracking() => StartTimer();
+
+    void IHoverHost<CursorHover>.StopTracking() => StopTimer();
+
+    public void SetMode(string mode) => _core.SetMode(mode);
+
+    Task IHoverHost<CursorHover>.EnsureTextSourceReadyAsync() => _ocr.EnsureReadyAsync();
+
+    Task<HoverOcrResult?> IHoverHost<CursorHover>.RecognizeAsync(
+        CursorHover anchor,
+        bool sentenceContext,
+        CancellationToken cancellationToken) =>
+        _ocr.RecognizeNearCursorAsync(anchor.Cursor, sentenceContext, cancellationToken);
+
+    bool IHoverHost<CursorHover>.IsAnchorCurrent(CursorHover anchor) => CursorIsNear(anchor.Cursor);
+
+    HoverOcrResult IHoverHost<CursorHover>.UpgradeRecognized(
+        CursorHover anchor,
+        HoverOcrResult recognized) =>
+        UpgradeWithTextHook(recognized, anchor.Cursor);
+
+    void IHoverHost<CursorHover>.OnRecognized(CursorHover anchor, HoverOcrResult recognized)
     {
-        string normalized = HoverTranslationModes.NormalizeUserMode(mode);
-        if (string.Equals(_settings.HoverTranslationMode, normalized, StringComparison.Ordinal))
-        {
-            ConfigureActiveMode();
-            if (_enabled)
-            {
-                QueueWarmUpAfterPendingUnload();
-            }
-            return;
-        }
-
-        _settings.HoverTranslationMode = normalized;
-        RestartModeCancellation();
-        ResetTracking();
-        HideAllOverlays();
-        ConfigureActiveMode();
-        if (_enabled)
-        {
-            QueueUnload(HoverUnloadReason.ModeChanged);
-            QueueWarmUpAfterPendingUnload();
-        }
-    }
-
-    private void QueueUnload(HoverUnloadReason reason)
-    {
-        TaskCompletionSource? completion = null;
-        Task pendingUnload;
-        lock (_lifecycleLock)
-        {
-            _unloadRevision++;
-            _unloadIntent.Request(reason);
-            if (!_unloadWorkerRunning)
-            {
-                _unloadWorkerRunning = true;
-                completion = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                _pendingUnload = completion.Task;
-            }
-
-            pendingUnload = _pendingUnload;
-        }
-
-        if (completion is not null)
-        {
-            TrackTask(pendingUnload);
-            _ = RunUnloadUntilStableAsync(completion);
-        }
-    }
-
-    private async Task RunUnloadUntilStableAsync(TaskCompletionSource completion)
-    {
-        try
-        {
-            while (true)
-            {
-                long revision;
-                bool releaseDictionaryMemoryRequested;
-                lock (_lifecycleLock)
-                {
-                    revision = _unloadRevision;
-                    releaseDictionaryMemoryRequested =
-                        _unloadIntent.ConsumeReleaseRequest();
-                }
-
-                await UnloadWhenIdleSafeAsync(releaseDictionaryMemoryRequested);
-
-                lock (_lifecycleLock)
-                {
-                    if (revision != _unloadRevision)
-                    {
-                        continue;
-                    }
-
-                    _unloadWorkerRunning = false;
-                    completion.TrySetResult();
-                    return;
-                }
-            }
-        }
-        catch (Exception exception)
-        {
-            LogError(exception);
-            lock (_lifecycleLock)
-            {
-                _unloadWorkerRunning = false;
-                completion.TrySetResult();
-            }
-        }
-    }
-
-    private void QueueWarmUpAfterPendingUnload()
-    {
-        Task pendingUnload;
-        lock (_lifecycleLock)
-        {
-            pendingUnload = _pendingUnload;
-        }
-
-        CancellationToken cancellationToken = CurrentModeToken;
-        TrackTask(WarmUpAfterUnloadSafeAsync(pendingUnload, cancellationToken));
-    }
-
-    private async Task WarmUpAfterUnloadSafeAsync(
-        Task pendingUnload,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            await pendingUnload.WaitAsync(cancellationToken);
-            await WarmUpSafeAsync(cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-    }
-
-    private async Task UnloadWhenIdleSafeAsync(bool releaseDictionaryMemoryRequested)
-    {
-        try
-        {
-            await UnloadWhenIdleAsync(releaseDictionaryMemoryRequested);
-        }
-        catch (Exception ex)
-        {
-            LogError(ex);
-        }
-    }
-
-    private async Task UnloadWhenIdleAsync(bool releaseDictionaryMemoryRequested)
-    {
-        using IDisposable maintenance =
-            await _modelActivity.BeginMaintenanceWhenIdleAsync();
-
-        bool backendChanged =
-            _enabled &&
-            _glossBertSelector.ActiveProvider is { } activeProvider &&
-            activeProvider != ResolveGlossBertProvider();
-        bool unloadDictionary = !_enabled || (!IsDictionaryMode && !IsSmartMode);
-        await UnloadModelOwnersAsync(
-            unloadDictionary: unloadDictionary,
-            unloadRanker: !_enabled || !ActiveModeUsesGlossBert || backendChanged,
-            unloadPhraseTranslator: !_enabled ||
-                                      !IsSmartMode ||
-                                      !SmartPhraseTranslationEnabled ||
-                                      !_settings.SmartDictionaryKeepWarm,
-            forgetSmartBackend: !_enabled || !IsSmartMode,
-            releaseDictionaryMemory:
-                HoverUnloadIntentState.ShouldReleaseDictionaryMemory(
-                    releaseDictionaryMemoryRequested,
-                    unloadDictionary));
-    }
-
-    private async Task UnloadModelOwnersAsync(
-        bool unloadDictionary,
-        bool unloadRanker,
-        bool unloadPhraseTranslator,
-        bool forgetSmartBackend,
-        bool releaseDictionaryMemory = false)
-    {
-        List<Exception> failures = [];
-        if (unloadDictionary)
-        {
-            Func<Task> unload = releaseDictionaryMemory
-                ? _dictionary.UnloadAndReleaseMemoryAsync
-                : _dictionary.UnloadAsync;
-            await CaptureUnloadFailureAsync(
-                unload,
-                failures);
-        }
-
-        if (unloadRanker)
-        {
-            await CaptureUnloadFailureAsync(_smartPipeline.UnloadRankerAsync, failures);
-        }
-
-        if (unloadPhraseTranslator)
-        {
-            await CaptureUnloadFailureAsync(_translateGemma.UnloadAsync, failures);
-        }
-
-        if (forgetSmartBackend)
-        {
-            _smartPipeline.ForgetBackend();
-        }
-
-        if (failures.Count > 0)
-        {
-            throw new AggregateException("One or more translation model owners failed to unload.", failures);
-        }
-    }
-
-    private static async Task CaptureUnloadFailureAsync(
-        Func<Task> unload,
-        ICollection<Exception> failures)
-    {
-        try
-        {
-            await unload();
-        }
-        catch (Exception exception)
-        {
-            failures.Add(exception);
-        }
-    }
-
-    private async Task WarmUpSafeAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            string requestedMode = HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode);
-            ReportStatus(requestedMode switch
-            {
-                HoverTranslationModes.Smart =>
-                    $"Подготовка NPU OCR, словарей и контекстной модели на {ResolveSmartBackend().ToUpperInvariant()}…",
-                HoverTranslationModes.Dictionary => "Подготовка NPU OCR и локального словаря…",
-                _ => "Подготовка NPU OCR и локального словаря…"
-            });
-            await _ocr.EnsureReadyAsync();
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!_enabled || requestedMode != HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode))
-            {
-                return;
-            }
-
-            if (requestedMode == HoverTranslationModes.Smart)
-            {
-                await _semanticRankerProfile.ApplyAsync(cancellationToken);
-            }
-
-            if (requestedMode == HoverTranslationModes.Smart)
-            {
-                if (SmartRankerApplicable)
-                {
-                    await _dictionary.LoadSenseMetadataAsync(cancellationToken);
-                }
-                else
-                {
-                    await _dictionary.LoadAsync(cancellationToken);
-                }
-
-                _glossBertSelector.ConfigureKeepWarm(_settings.SmartDictionaryKeepWarm);
-                if (SmartRankerApplicable && _settings.SmartDictionaryKeepWarm)
-                {
-                    await _smartPipeline.PrepareSmartBackendAsync(
-                        ResolveSmartBackend(),
-                        cancellationToken);
-                }
-
-                if (SmartRankerApplicable &&
-                    SmartPhraseTranslationEnabled &&
-                    _settings.SmartDictionaryKeepWarm)
-                {
-                    await WarmTranslateGemmaSafeAsync(cancellationToken);
-                }
-            }
-            else if (requestedMode == HoverTranslationModes.Dictionary)
-            {
-                await _dictionary.LoadAsync(cancellationToken);
-            }
-            if (_enabled &&
-                requestedMode == HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode))
-            {
-                ReportStatus(requestedMode switch
-                {
-                    HoverTranslationModes.Smart => BuildSmartReadyStatus(),
-                    HoverTranslationModes.Dictionary =>
-                        $"Быстрый перевод готов: {_dictionary.EntryCount:N0} записей из {_dictionary.SourceCount} словарей",
-                    _ => BuildSmartReadyStatus()
-                });
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            LogError(ex);
-            ReportStatus("Перевод текста: " + ex.Message);
-        }
-    }
-
-    private async Task WarmTranslateGemmaSafeAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            await _translateGemma.WarmUpAsync(cancellationToken);
-            _translateGemmaReady = true;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            _translateGemmaReady = false;
-            LogError(exception);
-        }
-    }
-
-    private string BuildSmartReadyStatus()
-    {
-        string ranking = !SmartRankerApplicable
-            ? "японское направление работает напрямую по словарям"
-            : _settings.SmartDictionaryKeepWarm
-                ? $"модель значений прогрета на {ResolveSmartBackend().ToUpperInvariant()}"
-                : $"модель значений загрузится по требованию на {ResolveSmartBackend().ToUpperInvariant()}";
-        if (!SmartRankerApplicable || !SmartPhraseTranslationEnabled)
-        {
-            return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}";
-        }
-
-        string phraseBackend = TranslateGemmaTranslationService.ResolveBackend(
-                _settings.SmartPhraseTranslationBackend) ==
-            TranslateGemmaExecutionBackend.Vulkan
-                ? "Vulkan GPU"
-                : "CPU";
-        string phrase = _settings.SmartDictionaryKeepWarm switch
-        {
-            true when _translateGemmaReady == true =>
-                $"TranslateGemma 4B прогрета на {phraseBackend}",
-            true when _translateGemmaReady == false =>
-                $"TranslateGemma 4B ({phraseBackend}) недоступна; словарный результат остаётся рабочим",
-            _ => $"TranslateGemma 4B загрузится по требованию на {phraseBackend}"
-        };
-        return $"Умный словарь готов: {_dictionary.EntryCount:N0} записей; {ranking}; {phrase}";
-    }
-
-    private async Task ProcessCursorAsync(NativeMethods.Point cursor, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using CancellationTokenSource linkedCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    cancellationToken,
-                    _lifetimeCancellation.Token,
-                    CurrentModeToken);
-            cancellationToken = linkedCancellation.Token;
-            long displayGeneration = BeginOverlayOperation();
-            HoverOcrResult? recognized = await _ocr.RecognizeNearCursorAsync(
-                cursor,
-                sentenceContext: !IsDictionaryMode,
-                cancellationToken);
-            if (recognized is null || !_enabled || !CursorIsNear(cursor))
-            {
-                HideOverlay();
-                return;
-            }
-
-            recognized = UpgradeWithTextHook(recognized, cursor);
-            recognized = ApplySpeakerPreference(recognized, cursor);
-            TextHookStatusSnapshot textHookStatus = _textHook.GetStatusSnapshot(
-                _textHook.AttachedProcessId,
-                recognized.TextSource == HoverTextSource.TextHook);
-            ReportStatus("Text-hook: " + textHookStatus.Details);
-
-            string smartBackend = ResolveSmartBackend();
-            string currentEngine = IsSmartMode
-                ? SmartHoverPipeline.SmartEngineLabel(smartBackend)
-                : LocalDictionaryService.EngineLabel;
-            ShowLoading(
-                IsSmartMode ? recognized.HoveredWord : recognized.Text,
-                currentEngine,
-                cursor,
-                displayGeneration,
-                recognized.TextSource,
-                textHookStatus,
-                recognized.CurrentSpeaker,
-                SpeakerEditorAvailable);
-            string source;
-            string translation;
-            string engine;
-            bool dictionaryFound = true;
-            bool isPhrase = false;
-            string? language = null;
-            double? confidence = null;
-            SmartDictionaryCacheRequest? resultCacheRequest = null;
-            SmartDictionarySelection? resultCacheSelection = null;
-            SmartHoverResult? resolvedSmartResult = null;
-            if (IsSmartMode)
-            {
-                resolvedSmartResult = await _smartPipeline.ResolveSmartHoverAsync(
-                    recognized,
-                    smartBackend,
-                    cancellationToken);
-                source = resolvedSmartResult.Source;
-                translation = resolvedSmartResult.Translation;
-                engine = resolvedSmartResult.Engine;
-                dictionaryFound = resolvedSmartResult.DictionaryFound;
-                isPhrase = resolvedSmartResult.IsPhrase;
-                language = resolvedSmartResult.Language;
-                confidence = resolvedSmartResult.Confidence;
-                resultCacheRequest = resolvedSmartResult.CacheRequest;
-                resultCacheSelection = resolvedSmartResult.CacheSelection;
-            }
-            else
-            {
-                DictionaryLookupResult lookup = await _dictionary.LookupAsync(
-                    recognized.Text,
-                    recognized.HoveredWord,
-                    recognized.CharacterIndex,
-                    cancellationToken);
-                source = lookup.Source;
-                translation = lookup.Translation;
-                engine = LocalDictionaryService.EngineLabel;
-                dictionaryFound = lookup.Found;
-                isPhrase = lookup.IsPhrase;
-                language = lookup.Language;
-            }
-
-            if (!_enabled || !CursorIsNear(cursor))
-            {
-                HideOverlay();
-                return;
-            }
-
-            bool primaryDisplayable =
-                resolvedSmartResult is not null ||
-                !string.IsNullOrWhiteSpace(translation) &&
-                !string.Equals(
-                    source,
-                    translation,
-                    StringComparison.CurrentCultureIgnoreCase);
-            if (primaryDisplayable)
-            {
-                // Keep the dictionary fast: render its result before the
-                // optional 4B phrase model starts or reads its own cache.
-                ShowTranslation(
-                    source,
-                    translation,
-                    engine,
-                    cursor,
-                    dictionaryFound,
-                    isPhrase,
-                    language,
-                    confidence,
-                    recognized.Text,
-                    displayGeneration,
-                    requireCursorNear: true,
-                    textSource: recognized.TextSource,
-                    textHookStatus: textHookStatus,
-                    currentSpeaker: recognized.CurrentSpeaker,
-                    speakerEditorAvailable: SpeakerEditorAvailable);
-            }
-
-            if (resultCacheRequest is not null && resultCacheSelection is not null)
-            {
-                await _smartPipeline.StoreSmartSelectionSafeAsync(resultCacheRequest, resultCacheSelection);
-            }
-
-            // Candidate A may stand in while the sense gate runs (card E18);
-            // the final line below replaces it on the same card.
-            void ShowProvisionalPhrase(SmartHoverPhraseLine provisional) =>
-                ShowTranslation(
-                    source,
-                    translation,
-                    engine,
-                    cursor,
-                    dictionaryFound,
-                    isPhrase,
-                    language,
-                    confidence,
-                    recognized.Text,
-                    displayGeneration,
-                    requireCursorNear: true,
-                    textSource: recognized.TextSource,
-                    phraseLine: provisional,
-                    textHookStatus: textHookStatus,
-                    currentSpeaker: recognized.CurrentSpeaker,
-                    speakerEditorAvailable: SpeakerEditorAvailable);
-            SmartHoverPhraseLine? phraseLine = resolvedSmartResult is null
-                ? null
-                : await _smartPipeline.TranslatePhraseLineAsync(
-                    recognized,
-                    resolvedSmartResult,
-                    cancellationToken,
-                    ShowProvisionalPhrase);
-            if (phraseLine is not null)
-            {
-                ShowTranslation(
-                    source,
-                    translation,
-                    engine,
-                    cursor,
-                    dictionaryFound,
-                    isPhrase,
-                    language,
-                    confidence,
-                    recognized.Text,
-                    displayGeneration,
-                    requireCursorNear: true,
-                    textSource: recognized.TextSource,
-                    phraseLine: phraseLine,
-                    textHookStatus: textHookStatus,
-                    currentSpeaker: recognized.CurrentSpeaker,
-                    speakerEditorAvailable: SpeakerEditorAvailable);
-            }
-            else if (!primaryDisplayable)
-            {
-                HideOverlay();
-            }
-
-        }
-        catch (OperationCanceledException)
-        {
-            HideOverlay();
-        }
-        catch (Exception ex)
-        {
-            HideOverlay();
-            LogError(ex);
-            ReportStatus("Перевод под курсором: " + ex.Message);
-        }
-        finally
-        {
-            EndProcessing();
-            // A rejected or cancelled generation still loaded the optional
-            // phrase model. In memory-saving mode every Smart hover therefore
-            // schedules an idempotent unload, including fail-open results.
-            if (SmartPhraseTranslationEnabled && !_settings.SmartDictionaryKeepWarm)
-            {
-                QueueUnload(HoverUnloadReason.PhraseMemorySaving);
-            }
-        }
+        TextHookStatusSnapshot textHookStatus = _textHook.GetStatusSnapshot(
+            _textHook.AttachedProcessId,
+            recognized.TextSource == HoverTextSource.TextHook);
+        // Every card of this hover shows the Textractor state captured here.
+        anchor.TextHookStatus = textHookStatus;
+        ReportStatus("Text-hook: " + textHookStatus.Details);
     }
 
     /// <summary>
@@ -775,36 +187,8 @@ public sealed class HoverTranslationService : IAsyncDisposable
         return recognized;
     }
 
-    private HoverOcrResult ApplySpeakerPreference(
-        HoverOcrResult recognized,
-        NativeMethods.Point cursor)
-    {
-        CurrentSpeakerContext? extracted = recognized.CurrentSpeaker;
-        if (extracted is null || string.IsNullOrWhiteSpace(extracted.Name))
-        {
-            _visibleSpeakerTarget = null;
-            return recognized;
-        }
-
-        SpeakerGameIdentity? game = ResolveSpeakerGameIdentity(cursor);
-        CurrentSpeakerContext resolved = SpeakerGenderPreferences.Resolve(
-            _settings,
-            game,
-            extracted.Name);
-        if (game is not null)
-        {
-            _visibleSpeakerTarget = new SpeakerEditTarget(
-                game,
-                resolved,
-                cursor);
-        }
-        else
-        {
-            _visibleSpeakerTarget = null;
-        }
-
-        return recognized with { CurrentSpeaker = resolved };
-    }
+    SpeakerGameIdentity? IHoverHost<CursorHover>.ResolveSpeakerGame(CursorHover anchor) =>
+        ResolveSpeakerGameIdentity(anchor.Cursor);
 
     private static SpeakerGameIdentity? ResolveSpeakerGameIdentity(
         NativeMethods.Point cursor)
@@ -840,161 +224,73 @@ public sealed class HoverTranslationService : IAsyncDisposable
         VisibleCursorService.TryGetPosition(out NativeMethods.Point current) &&
         HoverTracking.DistanceSquared(current, expected) <= HoverTracking.RadiusSquared;
 
-    private int EffectiveDelayMs() => Math.Clamp(_settings.HoverTranslationDelayMs, 350, 1500);
-
-    private string ResolveSmartBackend()
-    {
-        string configured = SmartDictionaryBackends.Normalize(_settings.SmartDictionaryBackend);
-        if (configured != SmartDictionaryBackends.Auto)
-        {
-            return configured;
-        }
-
-        // CPU uses the unquantized reference artifact. The compiled Vitis
-        // model is faster and closely tracks it, but remains an explicit
-        // choice so Auto never changes lexical decisions with the accelerator.
-        return SmartDictionaryBackends.Cpu;
-    }
-
-    private GlossBertRankerProvider ResolveGlossBertProvider() =>
-        string.Equals(
-            ResolveSmartBackend(),
-            SmartDictionaryBackends.Npu,
-            StringComparison.Ordinal)
-            ? GlossBertRankerProvider.Npu
-            : GlossBertRankerProvider.Cpu;
-
-    private bool IsDictionaryMode =>
-        HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Dictionary;
-
-    private bool IsSmartMode =>
-        HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Smart;
-
-    private bool SmartPhraseTranslationEnabled =>
-        SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode) ==
-        SmartPhraseTranslationModes.TranslateGemma;
-
-    private bool ActiveModeUsesGlossBert =>
-        IsSmartMode && SmartRankerApplicable;
-
-    private bool SmartRankerApplicable =>
-        SmartDictionarySourceLanguages.Normalize(
-            _settings.SmartDictionarySourceLanguage) !=
-            SmartDictionarySourceLanguages.Japanese;
-
-    private bool SpeakerEditorAvailable =>
-        _speakerHotkey.IsRegistered && _visibleSpeakerTarget is not null;
+    bool IHoverHost<CursorHover>.SpeakerEditorSupported => _speakerHotkey.IsRegistered;
 
     private void ResetTracking() => _tracking.Reset();
 
-    private void ShowLoading(
-        string source,
-        string engine,
-        NativeMethods.Point cursor,
-        long displayGeneration,
-        HoverTextSource textSource = HoverTextSource.Ocr,
-        TextHookStatusSnapshot? textHookStatus = null,
-        CurrentSpeakerContext? currentSpeaker = null,
-        bool speakerEditorAvailable = false) =>
+    void IHoverHost<CursorHover>.ResetTracking() => ResetTracking();
+
+    void IHoverHost<CursorHover>.ShowLoading(HoverLoadingCard<CursorHover> card) =>
         _dispatcher.BeginInvoke(
             () =>
             {
-                if (!_disposed &&
-                    _enabled &&
+                if (!_core.IsDisposed &&
+                    _core.Enabled &&
                     !_speakerEditorOpen &&
-                    displayGeneration == Volatile.Read(ref _overlayGeneration))
+                    _core.IsCurrentDisplay(card.DisplayGeneration))
                 {
                     _overlay.ShowLoading(
-                        source,
-                        cursor,
-                        engine,
-                        textSource,
-                        textHookStatus,
-                        currentSpeaker,
-                        speakerEditorAvailable);
+                        card.Source,
+                        card.Anchor.Cursor,
+                        card.Engine,
+                        card.TextSource,
+                        card.Anchor.TextHookStatus,
+                        card.CurrentSpeaker,
+                        card.SpeakerEditorAvailable);
                 }
             },
             DispatcherPriority.Normal);
 
-    private void ShowTranslation(
-        string source,
-        string translation,
-        string engine,
-        NativeMethods.Point cursor,
-        bool dictionaryFound,
-        bool isPhrase,
-        string? language,
-        double? confidence,
-        string context,
-        long displayGeneration,
-        bool requireCursorNear,
-        HoverTextSource textSource = HoverTextSource.Ocr,
-        SmartHoverPhraseLine? phraseLine = null,
-        TextHookStatusSnapshot? textHookStatus = null,
-        CurrentSpeakerContext? currentSpeaker = null,
-        bool speakerEditorAvailable = false)
+    void IHoverHost<CursorHover>.ShowTranslation(HoverCard<CursorHover> card)
     {
         _dispatcher.BeginInvoke(
             () =>
             {
-                if (_disposed ||
-                    !_enabled ||
+                if (_core.IsDisposed ||
+                    !_core.Enabled ||
                     _speakerEditorOpen ||
-                    displayGeneration != Volatile.Read(ref _overlayGeneration) ||
-                    requireCursorNear && !CursorIsNear(cursor))
+                    !_core.IsCurrentDisplay(card.DisplayGeneration) ||
+                    card.RequireAnchorCurrent && !CursorIsNear(card.Anchor.Cursor))
                 {
                     return;
                 }
 
                 _overlay.ShowTranslation(
-                    source,
-                    translation,
-                    cursor,
-                    engine,
-                    dictionaryFound,
-                    isPhrase,
-                    language,
-                    confidence,
-                    textSource,
-                    phraseLine,
-                    textHookStatus,
-                    currentSpeaker,
-                    speakerEditorAvailable);
-                // The progressive phrase update redraws the same primary card.
-                // Record that answer only on its first render; otherwise every
-                // successful TranslateGemma call would duplicate history.
-                if (dictionaryFound && phraseLine is null)
-                {
-                    _history.Record(source, translation, engine, context);
-                }
-
-                if (IsPhraseHistoryEntry(phraseLine))
-                {
-                    _history.Record(
-                        phraseLine.Source,
-                        phraseLine.Translation,
-                        phraseLine.Engine,
-                        context,
-                        "EN");
-                }
+                    card.Source,
+                    card.Translation,
+                    card.Anchor.Cursor,
+                    card.Engine,
+                    card.DictionaryFound,
+                    card.IsPhrase,
+                    card.Language,
+                    card.Confidence,
+                    card.TextSource,
+                    card.PhraseLine,
+                    card.Anchor.TextHookStatus,
+                    card.CurrentSpeaker,
+                    card.SpeakerEditorAvailable);
+                _core.RecordShown(card);
             },
             DispatcherPriority.Normal);
     }
 
-    // A provisional line is followed by the final one on the same card, so
-    // recording both would duplicate history with a hypothesis the sense gate
-    // may have rejected.
+    // Kept so existing tests read the same; the rule lives in the core.
     internal static bool IsPhraseHistoryEntry(
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] SmartHoverPhraseLine? phraseLine) =>
-        phraseLine is
-        {
-            Status: SmartPhraseLineStatus.Translated,
-            Translation.Length: > 0,
-            IsProvisional: false
-        };
+        HoverPolicy.IsPhraseHistoryEntry(phraseLine);
 
     /// <summary>History of shown translations, for the review panel and export.</summary>
-    public TranslationHistoryService History => _history;
+    public TranslationHistoryService History => _core.History;
 
     private void OnSpeakerGenderHotkeyPressed(object? sender, EventArgs e)
     {
@@ -1005,7 +301,7 @@ public sealed class HoverTranslationService : IAsyncDisposable
 
     private void OpenSpeakerEditor()
     {
-        if (_disposed || !_enabled)
+        if (_core.IsDisposed || !_core.Enabled)
         {
             ReportStatus("Включите перевод под курсором, чтобы выбрать род говорящего");
             return;
@@ -1017,10 +313,10 @@ public sealed class HoverTranslationService : IAsyncDisposable
             return;
         }
 
-        SpeakerEditTarget? target = _visibleSpeakerTarget;
+        HoverSpeakerTarget<CursorHover>? target = _core.VisibleSpeakerTarget;
         if (target is null ||
             !_overlay.IsVisible ||
-            !CursorIsNear(target.Anchor))
+            !CursorIsNear(target.Anchor.Cursor))
         {
             ReportStatus(
                 "Говорящий не распознан — наведите курсор на реплику с подписью имени");
@@ -1030,114 +326,53 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _speakerEditorTarget = target;
         _speakerEditorOpen = true;
         StopTimer();
-        RestartModeCancellation();
-        HideOverlay();
+        _core.RestartModeCancellation();
+        _core.HideOverlay();
         _speakerEditor.ShowFor(
             target.Speaker,
             target.Game.DisplayName,
-            target.Anchor);
+            target.Anchor.Cursor);
     }
 
     private void OnSpeakerGenderSaved(
         object? sender,
         SpeakerGenderSavedEventArgs e)
     {
-        SpeakerEditTarget? target = _speakerEditorTarget;
+        HoverSpeakerTarget<CursorHover>? target = _speakerEditorTarget;
         if (target is null)
         {
             return;
         }
 
-        bool changed = SpeakerGenderPreferences.Set(
-            _settings,
-            target.Game,
-            target.Speaker.Name,
-            e.Gender,
-            e.Name);
-        if (!string.Equals(
-                target.Speaker.Name,
-                e.Name,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            // Keep the observed OCR spelling as an alias while also accepting
-            // the user's correction if a later frame recognizes it cleanly.
-            changed |= SpeakerGenderPreferences.Set(
-                _settings,
-                target.Game,
-                e.Name,
-                e.Gender,
-                e.Name);
-        }
-
-        _speakerEditorTarget = target with
-        {
-            Speaker = SpeakerGenderPreferences.Resolve(
-                _settings,
-                target.Game,
-                target.Speaker.Name)
-        };
-        if (changed)
-        {
-            TrackTask(SaveSpeakerSettingsSafeAsync());
-        }
-
-        string gender = e.Gender switch
-        {
-            SpeakerGender.Masculine => "мужской",
-            SpeakerGender.Feminine => "женский",
-            _ => "не учитывать"
-        };
-        ReportStatus($"{e.Name}: сохранён {gender} род для {target.Game.DisplayName}");
-    }
-
-    private async Task SaveSpeakerSettingsSafeAsync()
-    {
-        try
-        {
-            await _saveSettingsAsync();
-        }
-        catch (Exception exception)
-        {
-            LogError(exception);
-            ReportStatus("Не удалось сохранить род говорящего: " + exception.Message);
-        }
+        // The core saves the choice, starts persisting the settings and
+        // reports the status; the editor then keeps the re-resolved target.
+        _speakerEditorTarget = _core.SaveSpeakerGender(target, e.Gender, e.Name);
     }
 
     private void OnSpeakerEditorHidden(object? sender, EventArgs e)
     {
         _speakerEditorOpen = false;
         _speakerEditorTarget = null;
-        if (_suppressSpeakerEditorResume || _disposed || !_enabled)
+        if (_suppressSpeakerEditorResume || _core.IsDisposed || !_core.Enabled)
         {
             return;
         }
 
         ResetTracking();
-        ConfigureActiveMode();
+        _core.ConfigureActiveMode();
     }
 
     /// <summary>
     /// Re-reads dictionaries after the user edited their own layer, then warms
     /// them in the background so the next hover is not slowed down.
     /// </summary>
-    public async Task ReloadDictionariesAsync()
-    {
-        using IDisposable maintenance =
-            await _modelActivity.BeginMaintenanceWhenIdleAsync(_lifetimeCancellation.Token);
-        await _dictionary.UnloadAsync();
-        await _dictionary.LoadAsync(_lifetimeCancellation.Token);
-    }
+    public Task ReloadDictionariesAsync() => _core.ReloadDictionariesAsync();
 
-    private void HideOverlay()
-    {
-        _visibleSpeakerTarget = null;
-        Interlocked.Increment(ref _overlayGeneration);
+    void IHoverHost<CursorHover>.HideCard() =>
         _dispatcher.BeginInvoke(_overlay.HideOverlay, DispatcherPriority.Normal);
-    }
 
-    private void HideAllOverlays()
+    void IHoverHost<CursorHover>.CloseAuxiliaryWindows()
     {
-        HideOverlay();
         if (!_speakerEditor.IsVisible)
         {
             return;
@@ -1163,149 +398,15 @@ public sealed class HoverTranslationService : IAsyncDisposable
         _textHook.ApplySettings();
     }
 
-    private long BeginOverlayOperation() => Interlocked.Increment(ref _overlayGeneration);
+    // Host statuses share the core's de-duplication state.
+    private void ReportStatus(string status) => _core.ReportStatus(status);
 
-    private bool TryBeginProcessing()
+    private static void LogError(Exception exception) => HoverDiagnostics.LogError(exception);
+
+    public ValueTask DisposeAsync() => _core.DisposeAsync();
+
+    async ValueTask IHoverHost<CursorHover>.ReleaseHostResourcesAsync()
     {
-        if (_disposed || !_modelActivity.TryBeginProcessing())
-        {
-            return false;
-        }
-
-        if (!_disposed)
-        {
-            return true;
-        }
-
-        _modelActivity.EndProcessing();
-        return false;
-    }
-
-    private void EndProcessing() => _modelActivity.EndProcessing();
-
-    private Task WaitForProcessingIdleAsync() => _modelActivity.WaitForIdleAsync();
-
-    private CancellationToken CurrentModeToken
-    {
-        get
-        {
-            lock (_lifecycleLock)
-            {
-                return _modeCancellation?.Token ?? _lifetimeCancellation.Token;
-            }
-        }
-    }
-
-    private void RestartModeCancellation()
-    {
-        CancellationTokenSource replacement = CancellationTokenSource.CreateLinkedTokenSource(
-            _lifetimeCancellation.Token);
-        CancellationTokenSource? previous;
-        lock (_lifecycleLock)
-        {
-            previous = _modeCancellation;
-            _modeCancellation = replacement;
-        }
-
-        previous?.Cancel();
-        if (previous is not null)
-        {
-            lock (_lifecycleLock)
-            {
-                _retiredModeCancellations.Add(previous);
-            }
-        }
-    }
-
-    private void TrackTask(Task task)
-    {
-        lock (_taskLock)
-        {
-            _activeTasks.Add(task);
-        }
-
-        _ = task.ContinueWith(
-            completed =>
-            {
-                lock (_taskLock)
-                {
-                    _activeTasks.Remove(completed);
-                }
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    private async Task AwaitActiveTasksAsync()
-    {
-        while (true)
-        {
-            Task[] tasks;
-            lock (_taskLock)
-            {
-                tasks = _activeTasks.ToArray();
-            }
-
-            if (tasks.Length == 0)
-            {
-                return;
-            }
-
-            try
-            {
-                await Task.WhenAll(tasks);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-            catch (Exception exception)
-            {
-                LogError(exception);
-            }
-        }
-    }
-
-    private void ReportStatus(string status)
-    {
-        if (string.Equals(_lastReportedStatus, status, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        _lastReportedStatus = status;
-        StatusChanged?.Invoke(this, status);
-    }
-
-    // Kept so existing call sites read the same; the log itself lives in the
-    // core so platform-neutral pipeline code can write to it.
-    internal static void LogError(Exception exception) => HoverDiagnostics.LogError(exception);
-
-    internal static void LogDiagnostic(string message) => HoverDiagnostics.LogDiagnostic(message);
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _disposed = true;
-        _enabled = false;
-        _lifetimeCancellation.Cancel();
-        CancellationTokenSource? modeCancellation;
-        lock (_lifecycleLock)
-        {
-            modeCancellation = _modeCancellation;
-            _modeCancellation = null;
-        }
-
-        modeCancellation?.Cancel();
-        StopTimer();
-        ResetTracking();
-        HideAllOverlays();
-        await WaitForProcessingIdleAsync();
-        await AwaitActiveTasksAsync();
         await _dispatcher.InvokeAsync(() =>
         {
             _speakerHotkey.HotkeyPressed -= OnSpeakerGenderHotkeyPressed;
@@ -1324,30 +425,21 @@ public sealed class HoverTranslationService : IAsyncDisposable
         });
         _tracking.Dispose();
         _ocr.Dispose();
-        _history.Dispose();
-        await _textHook.DisposeAsync();
-        await _translateGemma.DisposeAsync();
-        await _glossBertSelector.DisposeAsync();
-        await _smartResultCache.DisposeAsync();
-        await _smartPhraseCache.DisposeAsync();
-        await _decisionCache.DisposeAsync();
-        _smartPipeline.Dispose();
-        modeCancellation?.Dispose();
-        lock (_lifecycleLock)
-        {
-            foreach (CancellationTokenSource cancellation in _retiredModeCancellations)
-            {
-                cancellation.Dispose();
-            }
-
-            _retiredModeCancellations.Clear();
-        }
-
-        _lifetimeCancellation.Dispose();
     }
 
-    private sealed record SpeakerEditTarget(
-        SpeakerGameIdentity Game,
-        CurrentSpeakerContext Speaker,
-        NativeMethods.Point Anchor);
+    async ValueTask IHoverHost<CursorHover>.ReleaseHostResourcesAfterHistoryAsync()
+    {
+        await _textHook.DisposeAsync();
+    }
+
+    /// <summary>
+    /// One hover as the Windows host sees it: the visible cursor point, plus the
+    /// Textractor state captured once the text was final.
+    /// </summary>
+    internal sealed class CursorHover(NativeMethods.Point cursor)
+    {
+        public NativeMethods.Point Cursor { get; } = cursor;
+
+        public TextHookStatusSnapshot? TextHookStatus { get; set; }
+    }
 }
