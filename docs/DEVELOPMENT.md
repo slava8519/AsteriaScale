@@ -412,12 +412,10 @@ projects»: она читает `tests/AsteriaScale.Tests/Program.cs` так, к
 `MacSmoke.Skip`. Иначе прогон падает с сообщением о первом расхождении.
 
 Прогон может записать в `~/Library/Application Support/AsteriaScale` журнал
-`hover-translation.log` и создаёт там папку `Dictionaries`: общий тест
-«Aligned dictionary sense metadata» создаёт `LocalDictionaryService(sensePath)`
-с пользовательским каталогом по умолчанию, поэтому загрузка создаёт эту папку
-и читает лежащие в ней пользовательские слои `eng-rus*`/`jpn-rus*`. Это
-прежнее поведение общего набора; на Windows то же происходит в
-`%LOCALAPPDATA%`.
+`hover-translation.log`. Папку `Dictionaries` там он не создаёт и
+пользовательские слои `eng-rus*`/`jpn-rus*` оттуда не читает: тесты словарей,
+включая «Aligned dictionary sense metadata», берут пользовательский каталог из
+временного корня прогона.
 
 Что подмножество печатает, а не проверяет:
 

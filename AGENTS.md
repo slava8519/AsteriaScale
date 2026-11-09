@@ -266,15 +266,11 @@ certificate creation, `Add-AppxPackage`.
 - `InternalsVisibleTo("AsteriaScale.Tests")` is already in place. The macOS
   test assembly keeps the name `AsteriaScale.Tests`, so it applies there too.
 - Dictionary tests must use the internal `LocalDictionaryService(bundled, user)`
-  constructor with temp directories — never write into the real
-  `%LOCALAPPDATA%\AsteriaScale\Dictionaries`. On macOS LocalApplicationData is
-  `~/Library/Application Support`; a run may write
-  `AsteriaScale/hover-translation.log` there, and it creates
-  `AsteriaScale/Dictionaries` there: the shared test "Aligned dictionary sense
-  metadata" constructs `LocalDictionaryService(sensePath)`, which keeps the
-  default user directory, so its load creates that folder and reads any
-  `eng-rus*`/`jpn-rus*` user layers in it. This pre-existing behaviour is
-  shared with the Windows suite, where the folder is under `%LOCALAPPDATA%`.
+  constructor (`(bundled, user, sense)` for sense metadata) with a temp user
+  directory — never the real `%LOCALAPPDATA%\AsteriaScale\Dictionaries`: every
+  load creates the user directory and reads any `eng-rus*`/`jpn-rus*` layers
+  in it. On macOS LocalApplicationData is `~/Library/Application Support`; a
+  run may still write `AsteriaScale/hover-translation.log` there.
 - A behavior fix ships with a test that fails before the fix.
 - The macOS subset shares `Program.cs`. A registration that cannot run on
   macOS is wrapped as `#if WINDOWS … #else MacSmoke.Skip("<exact name>",

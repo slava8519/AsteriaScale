@@ -154,4 +154,4 @@ graph LR
 
 | Коммит | Что изменено в Windows-коде | Что проверить на Windows |
 |---|---|---|
-| — | пока нет: все правки этапа 20.1 доказаны идентичными | — |
+| `test: make the phrase-cache draft check order-independent and isolate sense-metadata user layers` | Только общие тесты: «Smart phrase translation hover integration» при попадании в кэш фраз принимает и черновик, который не успел стартовать (снимок `DraftCalls` перед вторым наведением; поздно стартовавший черновик обязан быть отменён), и отдельно проверяет, что `Task.Run` с уже отменённым токеном не запускает делегат; «Aligned dictionary sense metadata» берёт пользовательские слои из временного каталога. Код приложения не менялся. | Полный smoke: оба теста зелёные. Изоляция от `%LOCALAPPDATA%\AsteriaScale\Dictionaries` доказана на macOS прогоном во временном пустом домашнем каталоге (папка `Dictionaries` в нём не появляется); отдельной проверки на Windows не нужно. |

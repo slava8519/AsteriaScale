@@ -929,7 +929,18 @@ try
             await writer.WriteLineAsync("malformed\trow");
         }
 
-        LocalDictionaryService dictionary = new(sensePath);
+        // The bundled folder stays the one the default constructor resolves
+        // (next to the executable): the curated "sideways" check below needs
+        // the shipped VN layers. Only the user layers move to the temp root,
+        // so a load neither creates %LOCALAPPDATA%\AsteriaScale\Dictionaries
+        // (~/Library/Application Support on macOS) nor reads whatever user
+        // layers the machine running the suite happens to have there.
+        LocalDictionaryService dictionary = new(
+            Path.Combine(
+                Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory,
+                "Dictionaries"),
+            Path.Combine(tempRoot, "sense-user-dictionaries"),
+            sensePath);
         await dictionary.LoadAsync();
         int ordinaryEntryCount = dictionary.EntryCount;
         int ordinarySourceCount = dictionary.SourceCount;

@@ -243,6 +243,13 @@ internal static class SmartHoverPhraseIntegrationTests
             "The first progressive hover did not store its final line.");
 
         translator.HoldDraftUntilCancelled = true;
+        // DraftCalls is cumulative, and the first hover above already drafted
+        // once. SmartHoverPipeline.StartDirectDraft hops to the thread pool
+        // with Task.Run(..., cancellationToken), so a cache hit that cancels
+        // the token before the pool dequeues the draft never calls the
+        // translator at all. Both orders are correct; the regression is a
+        // draft that starts and is never cancelled, which blocks forever.
+        int draftsBefore = translator.DraftCalls;
         List<SmartHoverPhraseLine> provisional = [];
         SmartHoverPhraseLine? cached = await fixture.Pipeline.TranslatePhraseLineAsync(
                 Recognized(Context, Target),
@@ -255,8 +262,48 @@ internal static class SmartHoverPhraseIntegrationTests
               cached.Translation == translator.Final &&
               provisional.Count == 0 &&
               translator.TranslateCalls == 1 &&
-              translator.DraftCancelled,
+              (translator.DraftCancelled || translator.DraftCalls == draftsBefore),
             "A phrase-cache hit left the overlapped draft generating or showed it.");
+
+        // A pipeline that stopped cancelling or awaiting the draft could still
+        // have it queued, so "not started yet" is only accepted once a late
+        // start has had time to happen (about 1 s, polled every 20 ms).
+        for (int poll = 0; poll < 50 && !translator.DraftCancelled; poll++)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(20));
+        }
+
+        Check(translator.DraftCalls == draftsBefore || translator.DraftCancelled,
+            "A draft started after the phrase-cache hit and was never cancelled.");
+
+        // The premise of the order-independent check above, pinned with the
+        // same Task.Run overload StartDirectDraft uses: an already-cancelled
+        // token completes the task as Canceled without invoking the delegate,
+        // so a draft the cache hit cancelled in time never reaches the model.
+        // The delegate is an async lambda rather than one returning
+        // Task.FromResult(...): a lambda returning a Task<T> expression makes
+        // CsWinRT's AOT generator in the Windows test build register a COM
+        // vtable entry for that Task<T>, an output change this check needs not.
+        bool delegateRan = false;
+        Task<SmartPhraseDirectDraft?> skipped = Task.Run(
+            async () =>
+            {
+                delegateRan = true;
+                await Task.Yield();
+                return (SmartPhraseDirectDraft?)null;
+            },
+            new CancellationToken(canceled: true));
+        try
+        {
+            await skipped;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected; the task state is asserted below.
+        }
+
+        Check(skipped.IsCanceled && !delegateRan,
+            "Task.Run with an already-cancelled token ran its delegate or did not end Canceled.");
     }
 
     private static async Task VerifyRejectedRequestNeverDraftsAsync(string root)
