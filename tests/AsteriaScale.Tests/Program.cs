@@ -2665,6 +2665,10 @@ try
         () => SmartHoverPhraseIntegrationTests.RunAsync(tempRoot));
 
     await RunAsync(
+        "Smart hover engine strings",
+        () => SmartHoverEngineStringTests.RunAsync(tempRoot));
+
+    await RunAsync(
         "Provider-neutral semantic sense evidence",
         SemanticSenseEvidenceFactoryTests.RunAsync);
 
