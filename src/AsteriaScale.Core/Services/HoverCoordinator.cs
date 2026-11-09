@@ -36,6 +36,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     private readonly List<CancellationTokenSource> _retiredModeCancellations = [];
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SmartHoverPipeline _smartPipeline;
+    private readonly HoverEngineLabels _labels;
     private readonly TranslationHistoryService _history;
     private readonly HoverUnloadIntentState _unloadIntent = new();
     private Task _pendingUnload = Task.CompletedTask;
@@ -53,13 +54,15 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
     /// Builds every core service and the pipeline. It never calls
     /// <paramref name="host"/>, so the Windows host passes itself before it
     /// creates its windows, as the core services came first before the move.
-    /// A null <paramref name="services"/> creates the Windows defaults.
+    /// A null <paramref name="services"/> creates the Windows defaults, and
+    /// null <paramref name="engineLabels"/> keeps the Windows labels.
     /// </summary>
     internal HoverCoordinator(
         AppSettings settings,
         Func<Task>? saveSettingsAsync,
         IHoverHost<TAnchor> host,
-        HoverCoreServices? services = null)
+        HoverCoreServices? services = null,
+        HoverEngineLabels? engineLabels = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(host);
@@ -84,6 +87,8 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             () => _dictionary.VersionToken);
         _enabled = settings.HoverTranslationEnabled;
         _glossBertSelector.ConfigureKeepWarm(settings.SmartDictionaryKeepWarm);
+        // The host names its text source in every label and warm-up status.
+        _labels = engineLabels ?? HoverEngineLabels.WindowsAiNpuOcr;
         _smartPipeline = new SmartHoverPipeline(
             settings,
             _dictionary,
@@ -93,7 +98,8 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             ReportStatus,
             _translateGemma,
             _smartPhraseCache,
-            _scaffoldGlossBertRanker.RankAsync);
+            _scaffoldGlossBertRanker.RankAsync,
+            _labels);
         RestartModeCancellation();
     }
 
@@ -378,9 +384,9 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             ReportStatus(requestedMode switch
             {
                 HoverTranslationModes.Smart =>
-                    $"Подготовка NPU OCR, словарей и контекстной модели на {ResolveSmartBackend().ToUpperInvariant()}…",
-                HoverTranslationModes.Dictionary => "Подготовка NPU OCR и локального словаря…",
-                _ => "Подготовка NPU OCR и локального словаря…"
+                    $"Подготовка {_labels.TextSourceName}, словарей и контекстной модели на {ResolveSmartBackend().ToUpperInvariant()}…",
+                HoverTranslationModes.Dictionary => $"Подготовка {_labels.TextSourceName} и локального словаря…",
+                _ => $"Подготовка {_labels.TextSourceName} и локального словаря…"
             });
             await _host.EnsureTextSourceReadyAsync();
             cancellationToken.ThrowIfCancellationRequested();
@@ -531,8 +537,8 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
 
             string smartBackend = ResolveSmartBackend();
             string currentEngine = IsSmartMode
-                ? SmartHoverPipeline.SmartEngineLabel(smartBackend)
-                : LocalDictionaryService.EngineLabel;
+                ? _labels.For(HoverProvenance.Ranker(SmartHoverPipeline.ResolveRankerProvider(smartBackend)))
+                : _labels.For(HoverProvenance.Dictionary);
             _host.ShowLoading(new HoverLoadingCard<TAnchor>(
                 displayGeneration,
                 anchor,
@@ -544,6 +550,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
             string source;
             string translation;
             string engine;
+            HoverProvenance? provenance;
             bool dictionaryFound = true;
             bool isPhrase = false;
             string? language = null;
@@ -560,6 +567,7 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
                 source = resolvedSmartResult.Source;
                 translation = resolvedSmartResult.Translation;
                 engine = resolvedSmartResult.Engine;
+                provenance = resolvedSmartResult.Provenance;
                 dictionaryFound = resolvedSmartResult.DictionaryFound;
                 isPhrase = resolvedSmartResult.IsPhrase;
                 language = resolvedSmartResult.Language;
@@ -576,7 +584,9 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
                     cancellationToken);
                 source = lookup.Source;
                 translation = lookup.Translation;
-                engine = LocalDictionaryService.EngineLabel;
+                LabelledProvenance dictionaryLabel = _labels.Labelled(HoverProvenance.Dictionary);
+                engine = dictionaryLabel.Engine;
+                provenance = dictionaryLabel.Provenance;
                 dictionaryFound = lookup.Found;
                 isPhrase = lookup.IsPhrase;
                 language = lookup.Language;
@@ -607,7 +617,10 @@ internal sealed class HoverCoordinator<TAnchor> : IAsyncDisposable
                     recognized.TextSource,
                     phraseLine,
                     recognized.CurrentSpeaker,
-                    SpeakerEditorAvailable);
+                    SpeakerEditorAvailable)
+                {
+                    Provenance = provenance
+                };
 
             bool primaryDisplayable =
                 resolvedSmartResult is not null ||

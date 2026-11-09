@@ -35,6 +35,11 @@ internal sealed record SmartHoverPhraseLine(
     // A provisional line is never cached and never recorded in history: only
     // the final line that follows it is an answer.
     public bool IsProvisional { get; init; }
+
+    // Typed backend of the line, so a host captions it without searching
+    // Engine for "VULKAN". Null only on a line built from a bare engine
+    // string (tests); every pipeline line sets it.
+    public TranslateGemmaExecutionBackend? Backend { get; init; }
 }
 
 internal sealed record SmartHoverResult(
@@ -48,8 +53,39 @@ internal sealed record SmartHoverResult(
         SmartDictionaryCacheRequest? CacheRequest = null,
         SmartDictionarySelection? CacheSelection = null)
 {
+    // The pipeline's constructor: engine string and provenance come from one
+    // labelled value, so they cannot disagree.
+    public SmartHoverResult(
+        string Source,
+        string Translation,
+        LabelledProvenance Labelled,
+        bool DictionaryFound,
+        bool IsPhrase,
+        string? Language,
+        double? Confidence,
+        SmartDictionaryCacheRequest? CacheRequest = null,
+        SmartDictionarySelection? CacheSelection = null)
+        : this(
+            Source,
+            Translation,
+            Labelled.Engine,
+            DictionaryFound,
+            IsPhrase,
+            Language,
+            Confidence,
+            CacheRequest,
+            CacheSelection)
+    {
+        Provenance = Labelled.Provenance;
+    }
+
     public IReadOnlyList<ScaffoldSenseHint> SelectedSenseHints { get; init; } =
         Array.Empty<ScaffoldSenseHint>();
+
+    // What produced the card; Engine is the host's label for it and is kept
+    // for history, reports and logs. Null only on a result built from a bare
+    // engine string (tests); every pipeline result sets it.
+    public HoverProvenance? Provenance { get; init; }
 }
 
 /// <summary>
@@ -75,6 +111,7 @@ internal sealed class SmartHoverPipeline : IDisposable
     private readonly TranslationScaffoldBuilder _phraseSemanticScaffoldBuilder;
     private readonly TranslationScaffoldBuilder _phraseDeterministicScaffoldBuilder;
     private readonly Action<string> _reportStatus;
+    private readonly HoverEngineLabels _labels;
     private readonly SemaphoreSlim _smartBackendLock = new(1, 1);
     private string? _activeSmartBackend;
     private bool _phraseSetupFailureReported;
@@ -88,7 +125,8 @@ internal sealed class SmartHoverPipeline : IDisposable
         Action<string> reportStatus,
         ISmartPhraseTranslator? smartPhraseTranslator = null,
         SmartPhraseTranslationCache? smartPhraseCache = null,
-        TranslationScaffoldNeuralRanker? phraseNeuralRanker = null)
+        TranslationScaffoldNeuralRanker? phraseNeuralRanker = null,
+        HoverEngineLabels? engineLabels = null)
     {
         _settings = settings;
         _dictionary = dictionary;
@@ -104,6 +142,9 @@ internal sealed class SmartHoverPipeline : IDisposable
         // belong to the model input, while WSD must see the original sentence.
         _phraseDeterministicScaffoldBuilder = new TranslationScaffoldBuilder(dictionary);
         _reportStatus = reportStatus;
+        // The host names its text source in every label; null keeps the
+        // Windows labels that history files and reports already hold.
+        _labels = engineLabels ?? HoverEngineLabels.WindowsAiNpuOcr;
     }
 
     public string? ActiveBackend => _activeSmartBackend;
@@ -146,7 +187,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             return new SmartHoverResult(
                 lookup.Source,
                 lookup.Translation,
-                LocalDictionaryService.EngineLabel,
+                _labels.Labelled(HoverProvenance.Dictionary),
                 DictionaryFound: false,
                 lookup.IsPhrase,
                 lookup.Language,
@@ -191,7 +232,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     tatoebaSelection.Translation,
-                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    _labels.Labelled(HoverProvenance.Tatoeba),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -210,7 +251,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     flatSelection.Translation,
-                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    _labels.Labelled(HoverProvenance.Heuristic),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -264,7 +305,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     tatoebaSelection.Translation,
-                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    _labels.Labelled(HoverProvenance.Tatoeba),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -284,7 +325,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     visibleTranslations[0],
-                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    _labels.Labelled(HoverProvenance.Heuristic),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -314,7 +355,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     fastSelection.Translation,
-                    SmartDictionaryHeuristicRanker.EngineLabel,
+                    _labels.Labelled(HoverProvenance.Heuristic),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -376,7 +417,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 SmartHoverResult cachedResult = new(
                     displaySource,
                     cachedSelection.Translation,
-                    SmartDictionaryResultCache.EngineLabel,
+                    _labels.Labelled(HoverProvenance.ResultCache),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -440,7 +481,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 SmartHoverResult sharedResult = new(
                     displaySource,
                     sharedOutcome.Translation,
-                    SmartDictionaryResultCache.EngineLabel,
+                    _labels.Labelled(HoverProvenance.ResultCache),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -546,7 +587,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     return new SmartHoverResult(
                         recognized.Text,
                         lookup.ContextTranslation,
-                        SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                        _labels.Labelled(HoverProvenance.Tatoeba),
                         DictionaryFound: true,
                         IsPhrase: true,
                         lookup.Language,
@@ -558,7 +599,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     displaySource,
                     visibleCandidates,
-                    SmartEngineLabel(smartBackend) + "  •  НЕ УВЕРЕН",
+                    _labels.Labelled(HoverProvenance.RankerAbstained(provider)),
                     DictionaryFound: true,
                     displayIsPhrase,
                     lookup.Language,
@@ -575,7 +616,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             SmartHoverResult selectedResult = new(
                 displaySource,
                 selectedOutcome.Translation,
-                SmartEngineLabel(smartBackend),
+                _labels.Labelled(HoverProvenance.Ranker(provider)),
                 DictionaryFound: true,
                 displayIsPhrase,
                 lookup.Language,
@@ -606,7 +647,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 return new SmartHoverResult(
                     recognized.Text,
                     lookup.ContextTranslation,
-                    SmartDictionaryHeuristicRanker.TatoebaEngineLabel,
+                    _labels.Labelled(HoverProvenance.Tatoeba),
                     DictionaryFound: true,
                     IsPhrase: true,
                     lookup.Language,
@@ -623,20 +664,20 @@ internal sealed class SmartHoverPipeline : IDisposable
         }
     }
 
-    private static SmartHoverResult LocalSmartResult(
+    private SmartHoverResult LocalSmartResult(
         DictionaryLookupResult lookup,
         string? source = null,
         bool? isPhrase = null) =>
         new(
             source ?? lookup.Source,
             lookup.Translation,
-            LocalDictionaryService.EngineLabel,
+            _labels.Labelled(HoverProvenance.Dictionary),
             DictionaryFound: true,
             isPhrase ?? lookup.IsPhrase,
             lookup.Language,
             Confidence: null);
 
-    private static SmartHoverResult UnavailableSmartResult(
+    private SmartHoverResult UnavailableSmartResult(
         DictionaryLookupResult lookup,
         string smartBackend,
         string? source = null,
@@ -644,7 +685,7 @@ internal sealed class SmartHoverPipeline : IDisposable
         new(
             source ?? lookup.Source,
             lookup.Translation,
-            SmartEngineLabel(smartBackend) + "  •  НЕДОСТУПЕН",
+            _labels.Labelled(HoverProvenance.RankerUnavailable(ResolveRankerProvider(smartBackend))),
             DictionaryFound: true,
             isPhrase ?? lookup.IsPhrase,
             lookup.Language,
@@ -794,7 +835,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 requestRejection);
         }
 
-        string engineLabel = TranslateGemmaTranslationService.GetEngineLabel(phraseBackend);
+        string engineLabel = _labels.Phrase(phraseBackend);
         SmartHoverPhraseLine? shownPreview = null;
         Action<SmartPhraseTranslationResult>? directPreview = provisionalLine is null
             ? null
@@ -816,7 +857,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                         FromCache: false)
                     {
                         SenseHints = senseHints,
-                        IsProvisional = true
+                        IsProvisional = true,
+                        Backend = phraseBackend
                     };
                     provisionalLine(shownPreview);
                 }
@@ -882,7 +924,8 @@ internal sealed class SmartHoverPipeline : IDisposable
                 translated.FromCache)
             {
                 SenseHints = senseHints,
-                AppliedSenseHints = translated.AppliedSenseHints
+                AppliedSenseHints = translated.AppliedSenseHints,
+                Backend = phraseBackend
             };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1117,18 +1160,19 @@ internal sealed class SmartHoverPipeline : IDisposable
     // The reason is a required argument rather than an optional one: every
     // unavailable line has to state whether a guard refused an existing
     // translation or generation never produced one.
-    private static SmartHoverPhraseLine UnavailablePhraseLine(
+    private SmartHoverPhraseLine UnavailablePhraseLine(
         string source,
         TranslateGemmaExecutionBackend phraseBackend,
         SmartPhraseRejectionReason? rejectionReason) =>
         new(
             source,
             string.Empty,
-            TranslateGemmaTranslationService.GetEngineLabel(phraseBackend),
+            _labels.Phrase(phraseBackend),
             SmartPhraseLineStatus.Unavailable,
             FromCache: false)
         {
-            RejectionReason = rejectionReason
+            RejectionReason = rejectionReason,
+            Backend = phraseBackend
         };
 
     private TranslateGemmaExecutionBackend PhraseBackend =>
@@ -1226,14 +1270,10 @@ internal sealed class SmartHoverPipeline : IDisposable
             : "English";
     }
 
-    private static GlossBertRankerProvider ResolveRankerProvider(string backend) =>
+    internal static GlossBertRankerProvider ResolveRankerProvider(string backend) =>
         backend == SmartDictionaryBackends.Npu
             ? GlossBertRankerProvider.Npu
             : GlossBertRankerProvider.Cpu;
-
-    internal static string SmartEngineLabel(string backend) =>
-        GlossBertDictionarySelectorService.GetEngineLabel(
-            ResolveRankerProvider(backend));
 
     private SmartDictionaryCacheRequest CreateSmartCacheRequest(
         string context,

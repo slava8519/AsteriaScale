@@ -7,7 +7,7 @@
 | Проект | Назначение |
 |---|---|
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor и Windows-хост наведения (`HoverTranslationService`: распознавание, трекер курсора и показ карточек для `HoverCoordinator`) |
-| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки, оркестрация наведения (`HoverCoordinator`), текстовые правила OCR без пиксельных единиц (`OcrTextRules`) и признаки вида карточки по строке движка (`HoverEngineLabelClassifier`). Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
+| `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки, оркестрация наведения (`HoverCoordinator`), текстовые правила OCR без пиксельных единиц (`OcrTextRules`), признаки вида карточки по строке движка (`HoverEngineLabelClassifier`), типизированное происхождение результата (`HoverProvenance`) и метки движка, которые задаёт хост (`HoverEngineLabels`). Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Путь ranker-воркера и каталог его моделей хост передаёт через `RankerWorkerLocation` (по умолчанию — прежний `Ranker/AsteriaScale.RankerWorker.exe` рядом с exe), а каталоги данных — через `CoreDataLayout`. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
 | `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime. `win-x64`: CPU и NPU (Windows ML/VitisAI); `osx-arm64`: только CPU — эти же исходники компилирует по ссылке `src/AsteriaScale.RankerWorker.MacOS` (без `Content`, не входит в `AsteriaScale.slnx`) |
 | `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI. `tests/AsteriaScale.Tests.MacOS` — macOS-подмножество того же набора с общим `Program.cs` (Windows-only части под `#if WINDOWS`), не входит в `AsteriaScale.slnx` |
@@ -186,10 +186,12 @@ LocalApplicationData оставляет пользовательскую пол�
 `GetEngineLabel` и `GetModelCacheId` — исчерпывающие switch, поэтому новый
 провайдер не унаследует CPU-identity кэша. Новый провайдер добавляется так:
 экземпляр со всеми шестью признаками в `RankerProviderTraits` и в `All`, значения
-в обоих перечислениях и обоих `Traits()`, ветви в `GetEngineLabel` и
-`GetModelCacheId`, обновлённые закреплённые значения в smoke-тесте
-«Ranker provider traits» (`RankerProviderTraitsTests`: значения, оба
-сопоставления и round-trip аргументов хост → `WorkerOptions.TryParse`). Смена
+в обоих перечислениях и обоих `Traits()`, ветви в `GetEngineLabel`,
+`GetModelCacheId` и в метке смысла не-Windows набора `HoverEngineLabels`,
+обновлённые закреплённые значения в smoke-тесте «Ranker provider traits»
+(`RankerProviderTraitsTests`: значения, оба сопоставления и round-trip
+аргументов хост → `WorkerOptions.TryParse`) и строки нового провайдера в
+таблице меток `HoverProvenanceTests` (она сверяется с `HoverProvenance.All`). Смена
 признака меняет вход модели или identity кэша, поэтому требует тех же
 доказательств, что и любая правка ranker. Настройка ONNX-сессии внутри воркера
 (`RankerEngine.cs`: проверка NPU-исполнения, формы тензоров, artifact tag в
@@ -221,7 +223,8 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 | Вторая строка, шаг 12 ниже | `SmartHoverPipeline.TranslatePhraseLineAsync` → `SmartPhraseContextBuilder`, `SmartPhraseIdiomRewriter`, `TranslationScaffoldBuilder`, `SemanticSenseEvidenceFactory`, `SensePreservationGate`, `SmartPhraseTranslationGuard`, `SmartPhraseTranslationCache` | ядро |
 | Генерация через `llama-server` | `TranslateGemmaTranslationService` | ядро |
 | Карточка | `HoverTranslationOverlay` | хост |
-| Вид карточки по строке движка: словарь, TATOEBA, «без модели», кэш, ускоритель смысла CPU/NPU, «НЕ УВЕРЕН», «НЕДОСТУПЕН», широкий заголовок для этих статусов, подпись строки фразы | `HoverEngineLabelClassifier` (WPF-карточка подключает его через `using static`) | ядро |
+| Вид карточки по строке движка: словарь, TATOEBA, «без модели», кэш, ускоритель смысла CPU/NPU, «НЕ УВЕРЕН», «НЕДОСТУПЕН», широкий заголовок для этих статусов, подпись строки фразы; чтение сохранённой метки любого хоста обратно в происхождение (`ReadProvenance`, в том числе в виде из истории) | `HoverEngineLabelClassifier` (WPF-карточка подключает его через `using static`) | ядро |
+| Происхождение результата и метки хоста: 7 источников (словарь, эвристика, TATOEBA, кэш, ранжировщик, «не уверен», «недоступен»; у трёх последних — CPU или NPU), строки движка и имя источника текста в статусах прогрева. Windows-набор `WindowsAiNpuOcr` (по умолчанию) возвращает прежние строки байт в байт, macOS-набор `AppleVision` — «APPLE VISION  •  …» без «NPU OCR» и «VULKAN». Результат конвейера и карточка координатора несут происхождение, строка фразы — бэкенд | `HoverProvenance`, `LabelledProvenance`, `HoverEngineLabels` (`HoverProvenance.cs`) | ядро; набор меток выбирает хост |
 | История показанных переводов | `TranslationHistoryService` | ядро |
 | Журнал ошибок, выгрузка моделей | `HoverDiagnostics`, `ModelActivityGate` | ядро |
 | Каталоги словарей, морфологии и данных пользователя | `CoreDataLayout` | ядро |

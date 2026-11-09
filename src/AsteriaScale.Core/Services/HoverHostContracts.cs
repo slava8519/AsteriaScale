@@ -124,7 +124,17 @@ internal sealed record HoverCard<TAnchor>(
     HoverTextSource TextSource,
     SmartHoverPhraseLine? PhraseLine,
     CurrentSpeakerContext? CurrentSpeaker,
-    bool SpeakerEditorAvailable);
+    bool SpeakerEditorAvailable)
+{
+    /// <summary>
+    /// What produced the primary result, so a host renders the card kind from
+    /// a type instead of parsing <see cref="Engine"/>; the WPF card still reads
+    /// the engine string (MACOS.md T2). The coordinator sets it on every card
+    /// it posts. It is nullable only because a result built from a bare engine
+    /// string, which only tests do, has none.
+    /// </summary>
+    public HoverProvenance? Provenance { get; init; }
+}
 
 /// <summary>The speaker of the visible card, as the speaker editor edits it.</summary>
 internal sealed record HoverSpeakerTarget<TAnchor>(

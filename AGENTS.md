@@ -51,6 +51,12 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   (settings, user dictionaries, history, caches, hover log, TranslateGemma
   models) come from `CoreDataLayout`, the ranker worker and its model folder
   from `RankerWorkerLocation`; their Windows defaults are the old paths.
+  Core does not name the text source either: engine labels and the source
+  name in warm-up statuses come from the host's `HoverEngineLabels` (the
+  default Windows set returns the old strings byte for byte, the macOS set
+  says «APPLE VISION»), and every result and card carries a typed
+  `HoverProvenance`, which a new host renders from instead of parsing the
+  label. A new label goes into every set of `HoverEngineLabels`.
 - `src/AsteriaScale` — the WPF host and every Windows facility (UI, overlays,
   tray, hotkeys, Magpie, DPI, Windows AI OCR, Textractor).
   `HoverTranslationService` is only the Windows host of `HoverCoordinator`: it

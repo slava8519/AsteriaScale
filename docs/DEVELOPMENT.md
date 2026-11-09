@@ -656,20 +656,20 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 
 Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026), этапа №20.1,
 регистрации «Smart hover engine strings», швов ядра этапа 20.2, переноса
-в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки
-(9 ноября 2026):
+в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки,
+типизированного происхождения результата и меток хоста (9 ноября 2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
 (`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
-и три собственные проверки. В `tests/` `49` файлов C# — `28 814` строк вместе с
+и три собственные проверки. В `tests/` `50` файлов C# — `29 592` строк вместе с
 harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
-против `36 760` строк C# в `src/`. Отдельно есть пять
+против `37 042` строк C# в `src/`. Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
 |---|---|---|---|
-| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером, признаки вида карточки по строке движка и побайтные эталоны Windows-строк движка, каталоги данных ядра (прежние пути Windows, отказ при пустом или относительном LocalAppData, однократная настройка, журнал наведения вне текущего каталога) | блоки `Program.cs`, `CoreDataLayoutTests` (внутри «Settings round trip»), `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
+| Чистая логика | словарный поиск и группировку смыслов, эвристики, регистр, извлечение OCR-предложения, prompt/parser/guard/gate TranslateGemma, маршруты hover-конвейера с подставными переводчиком и воркером, признаки вида карточки по строке движка и побайтные эталоны Windows-строк движка, типизированное происхождение результата и метки хоста (Windows-набор — прежние строки, macOS-набор — без «NPU OCR» и «VULKAN» в метках и статусах; каждая метка читается обратно в происхождение, в том числе в виде из истории; происхождение в результате конвейера и карточке координатора, бэкенд в строке фразы), каталоги данных ядра (прежние пути Windows, отказ при пустом или относительном LocalAppData, однократная настройка, журнал наведения вне текущего каталога) | блоки `Program.cs`, `CoreDataLayoutTests` (внутри «Settings round trip»), `HoverProvenanceTests` (внутри «Hover coordinator ordering and lifecycle»), `SmartDictionaryQualityFoundationTests`, `SmartPhraseTranslationFoundationTests`, `SmartHoverPhraseIntegrationTests`, `TranslateGemmaTranslationServiceTests` | ничего |
 | Контракты данных C# ↔ Python | одинаковую нормализацию ключей (общий `scripts/dictionary-normalization-contract.tsv` читают и тест, и генератор), VN-слои, schema и provenance наборов, приём output C#-runner Python-scorer'ом | `LocalDictionaryNormalizationTests`, `VnDictionaryLayerTests`, `RankerBenchmarkProvenanceTests`, `TranslationSuiteTests`, `AtomicOutputSafetyTests` | Python 3.11+ как `python` в `PATH`: тесты запускают `tools/translation-benchmark.py` и `tools/atomic_output.py` |
 | Процессы, IPC, кэши, транзакции | протокол v4 и fail-closed identity воркера, путь воркера и каталог моделей по умолчанию и от хоста, дедлайн ответа с остановкой воркера, строку движка каждого результата hover-конвейера (словарь, эвристики, Tatoeba, оба кэша, выбор и воздержание ранжировщика CPU и NPU, его недоступность, строки фразы) с поддельным воркером, оркестрацию наведения в ядре с подставным хостом (порядок карточек, основная карточка до записи в кэш результатов, отмена и скрытие, история показанного, жизненный цикл, освобождение в две фазы, строки движка карточки загрузки, тексты статусов прогрева и готовности), общие признаки провайдеров с CLI-round-trip хост → воркер, ключи и инвалидацию кэшей решений, транзакционность установщиков и `build`-скриптов, безопасность правок конфига Magpie, text-hook, DPI override (через in-memory хранилище, не реестр) | `GlossBertDictionarySelectorServiceTests`, `SmartHoverEngineStringTests`, `HoverCoordinatorTests`, `RankerWorkerRegressionTests`, `RankerProviderTraitsTests`, `GlossBertDecisionCacheTests`, `SmartDictionaryResultCacheTests`, `ConsecBundleInfrastructureTests`, `BuildScriptSafetyTests`, `MagpieSafetyTests`, `TextHookSafetyTests`, `DpiCompatibilityServiceTests` | встроенный Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`): им запускаются поддельный воркер и проверяемые скрипты. Модели не нужны |
 | Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |

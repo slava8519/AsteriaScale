@@ -8,7 +8,8 @@ namespace AsteriaScale.Services;
 /// unchanged out of <c>HoverTranslationOverlay</c> (owner decision M12), so
 /// another host and the shared tests read a card kind exactly as the Windows
 /// card does. They match the Windows label constants, which history files
-/// and benchmark reports store, so those strings stay byte for byte.
+/// and benchmark reports store, so those strings stay byte for byte. Reading
+/// a stored label back to its typed provenance covers every host's labels.
 /// </summary>
 internal static class HoverEngineLabelClassifier
 {
@@ -65,4 +66,36 @@ internal static class HoverEngineLabelClassifier
 
     internal static bool IsSmartUnavailableEngine(string engine) =>
         engine.Contains("НЕДОСТУПЕН", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The provenance a stored primary-result label names, under any host's
+    /// label set, or null for a phrase label or an unknown string. A history
+    /// list reports typed provenance this way instead of leaving its reader
+    /// to parse the label. The predicates above stay what the WPF card reads.
+    /// </summary>
+    internal static HoverProvenance? ReadProvenance(string engine)
+    {
+        // The history stores a label with its whitespace runs collapsed
+        // (TranslationHistoryService.Record), so both sides are compared in
+        // that form: a live label and its history entry read the same.
+        string stored = CollapseWhitespace(engine);
+        foreach (HoverEngineLabels labels in HoverEngineLabels.All)
+        {
+            foreach (HoverProvenance provenance in HoverProvenance.All)
+            {
+                if (string.Equals(
+                        CollapseWhitespace(labels.For(provenance)),
+                        stored,
+                        StringComparison.Ordinal))
+                {
+                    return provenance;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }
