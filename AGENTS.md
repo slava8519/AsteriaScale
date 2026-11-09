@@ -84,7 +84,18 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   Its launch arguments are exactly
   `tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`, its wire bytes
   are pinned by `protocol-v1.golden.jsonl` next to it, and its `test.*`
-  commands exist only with `--enable-test-commands`.
+  commands exist only with `--enable-test-commands`. After `core.init` it
+  serves hovers, settings, model status, history, «Мой словарь» and speaker
+  genders through Core's `HoverCoordinator` (Apple Vision labels, no phrase
+  model before 20.5); it is the only writer of `settings.json`, writes the
+  macOS first-run settings (ConSeC on the CPU, docs/MACOS.md T7) instead of
+  changing the shared `AppSettings` defaults, and shows a sense-ranker error
+  as Russian text naming the code (`Host/RankerErrorText.cs`; paths only in
+  `detail`). A settings change (`settings.update`, `speaker.set`) joins
+  Core's settings queue when it is admitted, on the reader thread, never from
+  its pool work, so a hover, warm-up, unload or change admitted after it sees
+  it however late the pool runs; the Core-backed check pins this with the
+  test command `test.delayNextWork`.
 - `tests/AsteriaScale.Tests` — the smoke suite.
 - `tests/AsteriaScale.Tests.MacOS` — the macOS subset of the same suite. It
   shares `Program.cs`; Windows-only parts sit under `#if WINDOWS` and declare
@@ -138,7 +149,8 @@ osx-arm64 library), the arm64 .NET 10 SDK and Python 3.11+ as `python3`; no
 PowerShell or Magpie. There only the CPU worker (ConSeC), CoreHost and the
 macOS subset of the smoke suite build and run. Report that run as the "macOS subset" with
 its final `PASS (macOS subset): …` line, never as the smoke suite; the line
-also states whether the ConSeC real-bundle checks ran. Keep a macOS clone
+also states whether the ConSeC real-bundle checks (worker smoke and the
+CoreHost smart hover) ran. Keep a macOS clone
 outside iCloud Drive-synced folders, or in a folder whose name ends in
 `.nosync` (docs/DEVELOPMENT.md, «macOS (Apple Silicon)»).
 
@@ -370,8 +382,9 @@ certificate creation, `Add-AppxPackage`.
   hover log is dropped. Such a test passes its own folder under `tempRoot`.
 - A behavior fix ships with a test that fails before the fix.
 - The CoreHost checks ("macOS: CoreHost protocol conformance", "… lifecycle
-  and stdio isolation", "… fault containment") are macOS-only registrations
-  in the `#else` branch at the end of `Program.cs` (`MacSmoke.MacOnlyRegistrationCount`).
+  and stdio isolation", "… fault containment", "… answers a hover through
+  Core") are macOS-only registrations in the `#else` branch at the end of
+  `Program.cs` (`MacSmoke.MacOnlyRegistrationCount`, seven macOS checks in all).
   They start the real apphost through `posix_spawn` (own process group,
   `CLOEXEC_DEFAULT`, an empty signal mask) and talk to it with a strict
   client that enforces one terminal per request and a Russian message
@@ -381,7 +394,11 @@ certificate creation, `Add-AppxPackage`.
   `tests/` that may create a symbolic link is
   `CoreHostFixtures.CreateLinkToEmptyDirectory` (its target is a fresh empty
   folder under the run's temporary root); the project parity check enforces
-  it.
+  it. The Core-backed check reads the owner's ConSeC bundle in place
+  (`--ranker-models src/AsteriaScale.RankerWorker/Models`) and reports
+  `CoreHost smart hover: checked in place` or `absent: <path>`. The parity
+  check also fails on «ядро» anywhere in CoreHost's sources or in the macOS
+  app's Swift sources and string catalogs (M15).
 - Keep a generic class such as `Task<T>` at its own type in shared tests:
   declaring it as `Task` or `object`, assigning it to a property or field of
   that type, passing it to a test-assembly method that takes that type, or

@@ -18,12 +18,14 @@ internal interface IHoverEvents
 }
 
 /// <summary>
-/// What resolves hovers behind the hover lane. The lane guarantees one call at
-/// a time: the next hover starts only after the previous call returned, which
-/// is what Core's ModelActivityGate expects. Returns the wire outcome
-/// (completed, empty or failed); throwing OperationCanceledException means
-/// the hover was cancelled, any other exception is a failed hover, never a
-/// dead host.
+/// What resolves hovers behind the hover lane: Core after core.init
+/// (<see cref="CoreSession"/>), or the scripted engine of test.fakeCore. The
+/// lane guarantees one call at a time: the next hover starts only after the
+/// previous call returned, which is what Core's ModelActivityGate expects.
+/// Returns the wire outcome (completed, empty or failed); throwing
+/// OperationCanceledException means the hover was cancelled, a
+/// RequestErrorException is answered as that error (hover_disabled), and any
+/// other exception is a failed hover, never a dead host.
 /// </summary>
 internal interface IHoverEngine : IAsyncDisposable
 {

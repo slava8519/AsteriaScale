@@ -130,6 +130,14 @@ internal static class LaunchArguments
             }
         }
 
+        // The worker and its model folder only make sense together: Core's
+        // RankerWorkerLocation needs both, and guessing the other one would
+        // start a worker against a folder nobody named.
+        if (values.ContainsKey("--ranker-worker") != values.ContainsKey("--ranker-models"))
+        {
+            return Fail("--ranker-worker и --ranker-models задаются только вместе", out options, out error);
+        }
+
         bool testCommands = values.ContainsKey("--enable-test-commands");
         TimeSpan drainTimeout = DefaultDrainTimeout;
         if (values.TryGetValue("--drain-timeout-ms", out string? drain))

@@ -6,7 +6,8 @@
 #          --drain-timeout-ms needs --enable-test-commands) | reserved (exit 2
 #          with «зарезервировано для 20.5»)
 #   value: path (absolute, otherwise exit 2) | ms (whole milliseconds) | none (a flag)
-# Any other name exits 2.
+# Any other name exits 2, and so does --ranker-worker or --ranker-models
+# without the other.
 --data-root required path
 --user-data required path
 --log-dir required path

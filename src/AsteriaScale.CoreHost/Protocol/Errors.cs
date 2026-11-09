@@ -52,6 +52,37 @@ internal static class Errors
     public static ErrorBody Internal(string detail) =>
         Create(ErrorCodes.InternalError, "Внутренняя ошибка службы перевода.", detail);
 
+    public static ErrorBody Cancelled(string detail) =>
+        Create(ErrorCodes.Cancelled, "Запрос отменён.", detail);
+
+    public static ErrorBody HoverDisabled() =>
+        Create(ErrorCodes.HoverDisabled, "Перевод текста выключен — включите его в меню.", "hover translation is off");
+
+    public static ErrorBody UnsupportedOnPlatform(string detail) =>
+        Create(ErrorCodes.UnsupportedOnPlatform, "Эта возможность недоступна на macOS.", detail);
+
+    public static ErrorBody InvalidSettings(string detail) =>
+        Create(ErrorCodes.InvalidSettings, "Недопустимое значение настройки перевода.", detail);
+
+    public static ErrorBody Conflict(long revision) =>
+        Create(ErrorCodes.Conflict, "Настройки уже изменились; обновите их и повторите.", $"the current revision is {revision}");
+
+    public static ErrorBody SettingsSaveFailed(string detail) =>
+        Create(ErrorCodes.SettingsSaveFailed, "Не удалось сохранить настройки перевода.", detail);
+
+    public static ErrorBody MorphologyMissing(string detail) =>
+        Create(ErrorCodes.MorphologyMissing, "Не найден морфологический словарь перевода.", detail);
+
+    public static ErrorBody DictionaryMissing(string detail) =>
+        Create(ErrorCodes.DictionaryMissing, "Не найдены словари перевода.", detail);
+
+    /// <summary>A rejected «Мой словарь» entry; Core's own Russian reason is the message.</summary>
+    public static ErrorBody InvalidEntry(string message) =>
+        Create(ErrorCodes.InvalidEntry, message, "the user dictionary rejected the entry");
+
+    public static ErrorBody IoError(string detail) =>
+        Create(ErrorCodes.IoError, "Не удалось прочитать или записать данные перевода.", detail);
+
     /// <summary>The Russian text of a connection-fatal fault.</summary>
     public static string FaultMessage(string code) => code switch
     {

@@ -33,13 +33,20 @@
 > нужны настройки, кэш или словарь пользователя, передаёт свой каталог во
 > временном корне.
 > Приведи его итоговую строку `PASS (macOS subset): 43/57 shared smoke tests +
-> 6 macOS checks; …` и не выдавай её за полный smoke. CoreHost запускай только
+> 7 macOS checks; …` (с `CoreHost smart hover: checked in place` или
+> `absent: <путь>`) и не выдавай её за полный smoke. CoreHost запускай только
 > так, как это делают проверки подмножества: во временном домашнем каталоге, с
 > собственным `TMPDIR` и `DOTNET_EnableDiagnostics=0`; проверки не роняют
 > процессы через abort или сигнал ошибки (отчёт о сбое попадёт в настоящую
 > `~/Library/Logs/DiagnosticReports`), только `_exit` или SIGKILL. Аргументы
 > CoreHost меняются вместе с `tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`,
-> байты протокола — вместе с `protocol-v1.golden.jsonl`. `AsteriaScale.slnx`, Windows-воркер и
+> байты протокола — вместе с `protocol-v1.golden.jsonl`. `settings.json` на
+> macOS пишет только CoreHost (на первом запуске — ConSeC на CPU, значения по
+> умолчанию `AppSettings` не трогай; изменение настроек встаёт в очередь при
+> приёме запроса, а не в его работе в пуле), ошибки модели значений показываются
+> русским текстом с кодом и без путей, а в тексте интерфейса и сообщениях
+> CoreHost нет слова «ядро» (M15) — команды и правила в docs/DEVELOPMENT.md,
+> раздел «CoreHost». `AsteriaScale.slnx`, Windows-воркер и
 > Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`
 > они останавливаются на NETSDK1100, а с ним Windows-воркер (в том числе в
 > составе `AsteriaScale.slnx`) копирует бандл ConSeC в `bin/`. Код для macOS

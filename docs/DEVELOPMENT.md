@@ -393,7 +393,7 @@ apphost или не Apple Silicon; любой другой — код самог
 тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
 них — бюджет управляемой памяти, который один тест, «Local dictionary
 lookup», печатает дважды (замеры `Layered dictionaries` и `Aligned sense
-metadata`), поэтому строк `note` четыре. Затем идут шесть проверок только
+metadata`), поэтому строк `note` четыре. Затем идут семь проверок только
 для macOS (префикс `macOS: `):
 
 - паритет с Windows-проектами: пакеты и их версии, общие файлы воркера,
@@ -405,34 +405,38 @@ metadata`), поэтому строк `note` четыре. Затем идут �
   WPF-проекта, нет в `AsteriaScale.slnx` и ни в одном Windows-проекте) и
   единственный помощник, создающий symlink в `tests/`
   (`CoreHostFixtures.CreateLinkToEmptyDirectory`; в его файле нет имён
-  каталогов моделей);
+  каталогов моделей), а также отсутствие слова «ядро» в исходниках CoreHost
+  и в Swift-исходниках и каталогах строк macOS-приложения (решение M15);
 - отказ воркера от NPU без перехода на CPU: `--provider npu --smoke` и
   `--smoke` с провайдером по умолчанию дают `npu_provider_unavailable` и код
   выхода `1`;
 - ответ воркера на запрос ConSeC: `--smoke` с бандлом, прочитанным на месте из
   `src/AsteriaScale.RankerWorker/Models`, проверяет выбор, провайдер, pipeline
   и точную identity модели;
-- «CoreHost protocol conformance», «CoreHost lifecycle and stdio isolation» и
-  «CoreHost fault containment» — CoreHost снаружи, как его видит
-  приложение (раздел «CoreHost» ниже); вместе они занимают около 5 с.
+- «CoreHost protocol conformance», «CoreHost lifecycle and stdio isolation»,
+  «CoreHost fault containment» и «CoreHost answers a hover through Core» —
+  CoreHost снаружи, как его видит приложение (раздел «CoreHost» ниже); первые
+  три занимают около 5 с, четвёртая, с настоящим ядром и бандлом ConSeC, —
+  около 12 с.
 
-Эталонный прогон: `49` строк `ok`, `14` — `skip`, `4` — `note`, последняя
+Эталонный прогон: `50` строк `ok`, `14` — `skip`, `4` — `note`, последняя
 строка:
 
 ```text
-PASS (macOS subset): 43/57 shared smoke tests + 6 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
+PASS (macOS subset): 43/57 shared smoke tests + 7 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place; CoreHost smart hover: checked in place. Not the full Windows smoke suite.
 ```
 
 Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
 именно так. `MacSmoke.Summarize` печатает строку `PASS`, только если
 выполненные и объявленные регистрации вместе дают ровно `57` с
-неповторяющимися именами, прошли все шесть macOS-проверок
+неповторяющимися именами, прошли все семь macOS-проверок
 (`MacSmoke.MacOnlyRegistrationCount`), достигнуты все три объявленные части и
-записаны оба статуса ConSeC. `checked in place` значит,
+записаны все три статуса ConSeC. `checked in place` значит,
 что токенизатор сверен с закреплёнными длиной и SHA-256 и двумя
-tensor-эталонами, а воркер ответил на `--smoke`. Без бандла оба статуса
-начинаются с `absent: ` и называют отсутствующий путь; прогон остаётся
-зелёным, но строка это показывает.
+tensor-эталонами, воркер ответил на `--smoke`, а CoreHost через ядро
+ранжировал умное наведение на ConSeC CPU с точной identity бандла. Без бандла
+все три статуса начинаются с `absent: ` и называют отсутствующий путь; прогон
+остаётся зелёным, но строка это показывает.
 
 Сам `Summarize` видит только то, что скомпилировала macOS-сборка, поэтому
 регистрацию, добавленную или переименованную внутри блока `#if WINDOWS`, он
@@ -539,7 +543,7 @@ AOT и single-file — ошибки сборки. Запускают CoreHost п
 | `--user-data` | обязательный | настройки, «Мой словарь», история, по умолчанию и кэши; блокировка `Runtime/corehost.lock` |
 | `--log-dir` | обязательный | журнал наведения ядра `hover-translation.log` |
 | `--cache-dir` | необязательный | три кэша; без него — `--user-data` |
-| `--ranker-worker`, `--ranker-models` | необязательные | воркер ранжировщика и каталог его моделей; пока только записываются и возвращаются в `core.hello` |
+| `--ranker-worker`, `--ranker-models` | необязательные, только вместе | исполняемый файл воркера ранжировщика и каталог его моделей (воркер читает бандл на месте; symlink он отвергает); без них умный словарь сообщает `worker_missing`, а не ранжирует чем-то другим |
 | `--enable-test-commands` | тестовый | включает команды `test.*`; `core.hello` сообщает `testCommands: true`, и приложение такой процесс не принимает |
 | `--drain-timeout-ms` | тестовый | срок упорядоченного завершения вместо 10 с; только вместе с `--enable-test-commands` |
 | `--phrase-models`, `--phrase-runtime` | зарезервированы | код `2` с «зарезервировано для 20.5» |
@@ -575,12 +579,78 @@ SIGCHLD заблокированы в унаследованной маске с
 `message` — русский текст для пользователя без слова «ядро» (M15), `detail` —
 английский текст для журнала. Байты протокола закреплены эталоном
 `tests/AsteriaScale.Tests.MacOS/CoreHost/protocol-v1.golden.jsonl` (pid, пути,
-версии и тайминги при сверке подменяются). Сейчас CoreHost обслуживает
-`core.hello`, `core.ping`, `request.cancel`, `core.shutdown` и линию
-наведения `hover.resolve` (одно наведение за раз, новое заменяет текущее;
-пока движок наведения не готов — `not_ready`), а `ocr.select` (20.3),
+версии и тайминги при сверке подменяются). Команды — в таблице ниже;
+`ocr.select` и `hover.resolve` с `source.kind: "observations"` (20.3),
 `models.install`, `models.verify` и `phrase.variants` (20.5) отвечают
-`not_implemented`.
+`not_implemented`, любая другая — `unknown_command`.
+
+**Команды v1.** Управляющие команды отвечают сразу из снимков в памяти и не
+считаются в лимит `busy`; наведение — одно за раз, новое заменяет текущее
+(`superseded`); остальные идут в пуле потоков. Отмена: немедленная — ответ
+`cancelled` сразу, работа доигрывает сама; кооперативная — сигнал, ответ даёт
+сама работа; неотменяемая — всё, что пишет на диск, доигрывается до конца.
+
+| Команда | Линия, отмена | Запрос → ответ |
+|---|---|---|
+| `core.hello` | управляющая | `{client, protocolMin, protocolMax}` → версии, `build`, pid и pgid, `processGroupLeader`, `testCommands`, `blockedSignals`, пути, возможности платформы; до него любой запрос — `hello_required` |
+| `core.ping` | управляющая (через пул потоков) | `{}` → `{uptimeMs, outstanding, gcHeapBytes, workingSetBytes}` |
+| `request.cancel` | управляющая | `{target}` → `{cancelled, reason?}` |
+| `core.shutdown` | управляющая | `{}` → `{}` после упорядоченного завершения |
+| `core.init` | пул, неотменяемая | `{}` → `{settings, revision, dictionary{entries, sources, version}, morphologyEntries, loadMs, warmupLookupMs, firstRun?}`; один раз за процесс, до его ответа остальные команды ниже — `not_ready` |
+| `settings.get` | управляющая | `{}` → `{settings, revision}` |
+| `settings.update` | пул, неотменяемая | `{baseRevision, patch}` → `{settings, revision}`; встаёт в очередь изменений при приёме; `conflict`, `invalid_settings`, `unsupported_on_platform`, `settings_save_failed` |
+| `models.status` | управляющая | `{}` → `{dictionary{loaded, entries, sources, version, morphologyEntries, senseMetadataKeys}, sense{inUse, provider, model, keepWarm, running, pid?, activeProvider?, modelVersion?, error?}, phrase{available, requested, warmedUp?, status?}}` |
+| `models.warmUp` | пул, кооперативная | `{targets: ["dictionary", "sense"]}` (одна или обе) → снимок `models.status`; грузит то, что нужно настройкам после изменений, принятых раньше; ошибка воркера — её код |
+| `models.unload` | пул, неотменяемая | `{}` → снимок; после изменений настроек, принятых раньше, — проход выгрузки ядра по запросу хоста |
+| `hover.resolve` | наведение, немедленная | `{mode?, source{kind: "selection", text, hoveredWord, characterIndex, sentenceStable?, speakerName?}, game?{key, displayName}}` → событие `hover.primary` (`hover.phrase` — с 20.5), затем `{outcome: completed, empty или failed, timings}`; `hover_disabled`, если перевод выключен; `bad_request`, если `mode` не совпадает с активным режимом (режим меняет только `settings.update`) |
+| `hover.displayed` | пул, неотменяемая | `{hoverId, part: primary или phrase}` → `{recorded}` |
+| `userDictionary.list` | пул, немедленная | `{}` → `{entries: [{key, translation, language}]}` |
+| `userDictionary.save`, `userDictionary.remove` | пул, неотменяемая | `{key, translation}` → `{key}`, `{key}` → `{removed}`; затем словари перечитываются; `invalid_entry` |
+| `history.list`, `history.exportAnki` | пул, немедленная | `{}` → `{entries: [{source, translation, engine, context, language, recordedAt}]}`, `{}` → `{tsv, count}` (файл пишет приложение) |
+| `history.clear` | пул, неотменяемая | `{}` → `{cleared}` |
+| `speaker.set` | пул, неотменяемая | `{game{key, displayName}, observedName, name, gender}` → `{speaker{name, gender, gameKey}}`; встаёт в ту же очередь изменений при приёме; ревизию настроек не меняет (род говорящего не входит в `settings`), поэтому ожидающий `settings.update` клиента не получает `conflict` |
+
+`hover.primary` несёт `source`, `translation`, `language`, `isPhrase`,
+`found`, `confidence`, типизированное происхождение `provenance`
+(`dictionary`, `heuristic`, `tatoeba`, `resultCache`, `ranker`,
+`rankerAbstained`, `rankerUnavailable`; у трёх последних — `senseProvider`),
+русскую метку `engineLabel` для журнала и истории (приложение её не
+разбирает), `context` и `speaker`.
+
+**Ядро за протоколом.** `core.init` сначала проверяет данные и до того
+ничего не пишет: ноль записей морфологии (`Morphology/ru-morph.tsv.gz`) —
+`morphology_missing`, нет `eng-rus*.tsv.gz` или `jpn-rus*.tsv.gz` в
+`Dictionaries/` — `dictionary_missing`. Затем он читает `settings.json`,
+загружает словари с одним пробным поиском и запускает `HoverCoordinator`
+ядра с метками Apple Vision (`APPLE VISION  •  СЛОВАРЬ` и так далее, MACOS.md
+T4) и без модели фраз до 20.5. **Первый запуск** (нет `settings.json`):
+CoreHost явно записывает `smartDictionaryRankerModel=consec` и
+`smartDictionaryBackend=cpu`, перевод при наведении остаётся выключенным, как
+на Windows (MACOS.md T7); ответ `core.init` содержит `firstRun`, а статус —
+«Первый запуск на macOS: модель значений — ConSeC (CPU)». Значения по
+умолчанию `AppSettings` (общий код Windows-сборки) не меняются. `settings.json`
+пишет только CoreHost: изменения (`settings.update`, `speaker.set`) встают в
+очередь в момент приёма запроса и применяются в порядке поступления, поэтому
+наведение, `models.warmUp`, `models.unload` и следующее изменение, принятые
+после них, их уже видят, даже если пул потоков начнёт работу изменения
+позже; ответ приходит после записи на диск. Ничего не подменяется: `npu` и
+`translategemma-4b` — `unsupported_on_platform`, другое неизвестное значение —
+`invalid_settings`. Выделение (`selection`) проходит те же правила текста,
+что и OCR (`OcrTextRules`: схлопывание пробелов, починка смешанных алфавитов,
+извлечение предложения и проверка его полноты); `characterIndex` — в
+UTF-16-единицах присланного текста. В историю попадает только то, о показе
+чего приложение сообщило `hover.displayed` (CoreHost помнит восемь последних
+наведений). Свободный текст статусов самого ядра приходит событием `status`
+с `area: "translation"` без `state`: приложение показывает его только в окне
+«Проверка перевода» и журнале, а не в меню и не в оверлее.
+
+**Ошибки модели значений.** Код воркера или селектора (`worker_missing`,
+`model_directory_missing`, `consec_bundle_missing`, `consec_manifest_missing`,
+`consec_artifact_path_unsafe` и другие) передаётся без изменений; `message` —
+русская фраза, называющая этот код, без путей (`Host/RankerErrorText.cs`;
+неизвестный код — «Ошибка модели значений (<код>)»), `detail` — исходный текст
+с путями для журнала. Так же выглядит `models.status.sense.error`, пока
+следующая транзакция воркера не пройдёт.
 
 **Завершение и коды выхода.**
 
@@ -653,11 +723,44 @@ SIGKILL, отчётов они не оставляют.
   задерживают читающего клиента; шесть нарушений кадра — `core.fault` и код
   `3`; строку не-JSON в stdout ловит клиент; клиент, переставший читать, —
   код `5`; закрытый stdout — EPIPE и код `4`.
+- «CoreHost answers a hover through Core»: CoreHost с настоящим ядром, без
+  тестовых команд (кроме одного запуска, см. конец пункта). `core.init` с
+  пустым каталогом данных — `morphology_missing`, с одной морфологией —
+  `dictionary_missing`; со всеми данными — `881 924`
+  записи из `12` словарей и `154 527` записей морфологии, статус и запись
+  настроек первого запуска (ConSeC, CPU, перевод выключен), которые ядро
+  читает без `.broken`-копии, а до `core.init` команды ядра — `not_ready`.
+  Наведение при выключенном переводе — `hover_disabled`; `npu` и
+  `translategemma-4b` — `unsupported_on_platform`, прочие неверные значения —
+  `invalid_settings`, устаревшая ревизия — `conflict`. Наведение сразу после
+  включения словарного режима: bank → «берег» с меткой
+  `APPLE VISION  •  СЛОВАРЬ`; история — только после `hover.displayed`, по
+  разу на часть; экспорт Anki текстом; запись «Моего словаря» видна
+  следующему наведению; род говорящего сохраняется через ядро в
+  `settings.json`. Ошибки каталога моделей (`consec_bundle_missing`,
+  `consec_manifest_missing`, `consec_artifact_path_unsafe` через symlink,
+  `model_directory_missing`, а без `--ranker-*` — `worker_missing`) — русский
+  текст с кодом и без `/`, путь — в `detail`. С бандлом ConSeC, прочитанным на
+  месте, `models.status` сообщает точную identity, умное наведение
+  ранжируется на ConSeC CPU (`APPLE VISION  •  CPU-СМЫСЛ`), воркер — в группе
+  CoreHost и завершается вместе с ним; без бандла итоговая строка говорит
+  `CoreHost smart hover: absent: <путь>`. Ни одна метка и ни один статус не
+  содержат «NPU OCR» или «VULKAN». Ещё один запуск — с тестовыми командами
+  только ради `test.delayNextWork`: она задерживает на полсекунды работу
+  следующего запроса рабочей линии (у изменения настроек — само изменение),
+  как её задержал бы перегруженный пул; этот запуск идёт параллельно
+  остальным. Отправленные сразу за таким запросом всё равно видят его
+  изменение: наведение за включающим `settings.update`,
+  `models.warmUp` за переключением в умный режим (грузятся метаданные
+  смыслов), наведение за `speaker.set` (род говорящего), второй
+  `settings.update` за первым (без `conflict`) и `models.unload` за
+  выключением перевода (словари выгружены).
 
 После каждого запуска проверки требуют пустую группу процессов, пустые
 текущий каталог, `TMPDIR` и каталог журнала, домашний каталог только с пустой
-`Library/Application Support`, а в `--user-data` — только блокировку и то, что
-положил сам тест. Каждое сообщение об ошибке, `core.fault` и статус обязаны
+`Library/Application Support`, а в `--user-data` — только блокировку, то, что
+положил сам тест, и ровно те файлы, которые ядро должно вести в этом сценарии
+(`settings.json`, история, папка «Моего словаря», кэши). Каждое сообщение об ошибке, `core.fault` и статус обязаны
 быть русскими и без слова «ядро».
 
 #### Проверка, что Windows-сборка не изменилась
@@ -826,14 +929,15 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 регистрации «Smart hover engine strings», швов ядра этапа 20.2, переноса
 в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки,
 типизированного происхождения результата и меток хоста (9 ноября 2026), API
-координатора для CoreHost и самого CoreHost (10 ноября 2026):
+координатора для CoreHost, самого CoreHost и его команд через ядро (10 ноября
+2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
 (`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
-и шесть собственных проверок. В `tests/` `57` файлов C# — `32 646` строк вместе с
-harness gated-бенчмарков и девятью файлами `tests/AsteriaScale.Tests.MacOS` —
-против `40 031` строки C# в `src/` (вместе с CoreHost). Отдельно есть пять
+и семь собственных проверок. В `tests/` `58` файлов C# — `33 378` строк вместе с
+harness gated-бенчмарков и десятью файлами `tests/AsteriaScale.Tests.MacOS` —
+против `41 975` строк C# в `src/` (вместе с CoreHost). Отдельно есть пять
 Python-наборов `unittest` на `71` тест (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
@@ -847,7 +951,7 @@ Python-наборов `unittest` на `71` тест (см. «Python-тесты �
 На macOS из этих слоёв выполняются чистая логика (без WPF-помощников),
 контракты данных — с `python3` — и процессы/IPC: поддельные воркеры там
 написаны на `python3` и `/bin/sh` вместо Windows PowerShell. Кроме того, только на
-macOS три проверки запускают CoreHost отдельным процессом (раздел «CoreHost»
+macOS четыре проверки запускают CoreHost отдельным процессом (раздел «CoreHost»
 выше). Установщики,
 `build`-скрипты, Magpie, text-hook, DPI, реальный движок и gated-бенчмарки на
 macOS не выполняются (`skip` или не компилируются).

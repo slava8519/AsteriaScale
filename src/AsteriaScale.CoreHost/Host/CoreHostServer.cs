@@ -18,7 +18,12 @@ namespace AsteriaScale.CoreHost.Host;
 /// arrival order and never blocks: control commands are answered at once
 /// (ping through the thread pool, so a starved pool shows up as a missed
 /// ping), the hover lane holds one hover and a newer one supersedes it, and
-/// everything else runs as a pool task whose ordering is Core's business.
+/// everything else runs as a pool task whose ordering is Core's business,
+/// except that a settings change takes its place in Core's settings queue at
+/// admission, so whatever is admitted after it sees it however late the pool
+/// runs either.
+/// The Core-backed commands (CoreHostServer.Core.cs) answer not_ready until
+/// core.init has built the <see cref="CoreSession"/>.
 ///
 /// Lifecycle. core.shutdown and SIGTERM start the same orderly drain: refuse
 /// new requests, answer Immediate ones, signal Cooperative ones, wait for the
@@ -66,6 +71,8 @@ internal sealed partial class CoreHostServer
     private RequestState? _hoverCurrent;
     private Task _hoverTail = Task.CompletedTask;
     private IHoverEngine? _hoverEngine;
+    private CoreSession? _core;
+    private int _initStarted;
 
     // The writer exists before the SIGTERM handler is registered, so a
     // SIGTERM that arrives before the first frame still drains cleanly.
@@ -163,6 +170,11 @@ internal sealed partial class CoreHostServer
             case Commands.HoverResolve:
                 AdmitHover(envelope);
                 return;
+        }
+
+        if (AdmitCore(envelope))
+        {
+            return;
         }
 
         if (Commands.ReservedStage(envelope.Command) is { } stage)
@@ -445,11 +457,23 @@ internal sealed partial class CoreHostServer
             request.Cancellation.Token.ThrowIfCancellationRequested();
             sink.MarkStarted();
             string outcome = await engine.ResolveAsync(job, sink, request.Cancellation.Token).ConfigureAwait(false);
+            if (outcome == HoverOutcomes.Failed)
+            {
+                // Core has logged it and reported its own text; the app gets
+                // the same structured status as for a failing engine.
+                EmitStatus("hover", "error", ErrorCodes.HoverFailed, "Не удалось перевести текст под курсором.");
+            }
+
             Respond(request, new HoverResolveResult { Outcome = outcome, Timings = sink.Timings }, J.HoverResolveResult);
         }
         catch (OperationCanceledException) when (request.Cancellation.IsCancellationRequested)
         {
             Fail(request, Errors.Cancelled());
+        }
+        catch (RequestErrorException exception)
+        {
+            // hover_disabled and the like: an answer, not a failed hover.
+            Fail(request, exception.Body);
         }
         catch (Exception exception)
         {
@@ -532,8 +556,17 @@ internal sealed partial class CoreHostServer
 
     private void StartWork(RequestState request, Func<RequestState, Task> work)
     {
+        // Zero unless test.delayNextWork asked for this request to start late.
+        TimeSpan holdBack = TakeTestHoldBack();
         Task task = Task.Run(async () =>
         {
+            if (holdBack > TimeSpan.Zero)
+            {
+                // Not cancellable: a held-back request is still answered by
+                // its own work, as one the pool ran late would be.
+                await Task.Delay(holdBack).ConfigureAwait(false);
+            }
+
             try
             {
                 await work(request).ConfigureAwait(false);
@@ -664,7 +697,7 @@ internal sealed partial class CoreHostServer
         }
     }
 
-    private void EmitStatus(string area, string state, string? code, string text)
+    private void EmitStatus(string area, string? state, string? code, string text)
     {
         string key = state + "\n" + code + "\n" + text;
         lock (_statusLock)
@@ -846,9 +879,17 @@ internal sealed partial class CoreHostServer
 
     private async Task DisposeServicesCoreAsync()
     {
-        if (Interlocked.Exchange(ref _hoverEngine, null) is { } engine)
+        // The Core session may also be the hover engine; it is disposed once,
+        // after any other engine (test.fakeCore) that replaced it.
+        CoreSession? core = Volatile.Read(ref _core);
+        if (Interlocked.Exchange(ref _hoverEngine, null) is { } engine && !ReferenceEquals(engine, core))
         {
             await engine.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (core is not null)
+        {
+            await core.DisposeAsync().ConfigureAwait(false);
         }
 
         KillTestChildren();

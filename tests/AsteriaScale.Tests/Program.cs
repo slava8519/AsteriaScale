@@ -3714,6 +3714,9 @@ try
     await RunAsync(
         MacSmoke.MacOnlyPrefix + "CoreHost fault containment",
         () => CoreHostFaultTests.RunAsync(tempRoot));
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "CoreHost answers a hover through Core",
+        () => CoreHostCoreTests.RunAsync(tempRoot));
     Console.WriteLine(MacSmoke.Summarize(sharedPassed, passed - sharedPassed));
 #endif
     return 0;

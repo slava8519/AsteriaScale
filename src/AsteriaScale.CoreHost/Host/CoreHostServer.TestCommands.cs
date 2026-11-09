@@ -9,10 +9,10 @@ namespace AsteriaScale.CoreHost.Host;
 // testCommands, and the app's supervisor refuses such a helper). They stand
 // in for Core where the macOS subset needs a deterministic one: slow,
 // cooperative or uncancellable work, a fake hover engine with gates and
-// delays, a long-lived child like llama-server, floods of stdout and stderr,
-// and a sudden exit. There is no abort mode on purpose: SIGABRT and SIGSEGV
-// make ReportCrash write into the owner's real ~/Library/Logs/DiagnosticReports
-// whatever HOME the process had.
+// delays, a work-lane request the pool starts late, a long-lived child like
+// llama-server, floods of stdout and stderr, and a sudden exit. There is no
+// abort mode on purpose: SIGABRT and SIGSEGV make ReportCrash write into the
+// owner's real ~/Library/Logs/DiagnosticReports whatever HOME the process had.
 internal sealed partial class CoreHostServer
 {
     private const int MaxTestDelayMs = 600_000;
@@ -20,6 +20,7 @@ internal sealed partial class CoreHostServer
     private const int StderrLineBytes = 1024;
 
     private readonly List<Process> _testChildren = [];
+    private int _nextWorkDelayMs;
 
     private bool AdmitTest(RequestEnvelope envelope)
     {
@@ -30,6 +31,9 @@ internal sealed partial class CoreHostServer
                 return true;
             case "test.fakeCore":
                 AdmitControl(envelope, J.TestFakeCorePayload, ConfigureFakeCore);
+                return true;
+            case "test.delayNextWork":
+                AdmitControl(envelope, J.TestDelayNextWorkPayload, DelayNextWork);
                 return true;
             case "test.stats":
                 AdmitControl(envelope, J.EmptyPayload, (request, _) => Respond(request, new TestStatsResult
@@ -112,6 +116,30 @@ internal sealed partial class CoreHostServer
             Respond(state, new EmptyResult(), J.EmptyResult);
         });
     }
+
+    // The next request admitted to the work lane starts its pool work this
+    // much later (a settings change: the change itself), as a starved or
+    // preempted pool would run it. Whatever must follow arrival order has to
+    // be decided at admission, on the reader thread; the Core-backed CoreHost
+    // check pins that with real Core behind the protocol.
+    private void DelayNextWork(RequestState request, TestDelayNextWorkPayload payload)
+    {
+        if (payload.Ms is < 0 or > MaxTestDelayMs)
+        {
+            Fail(request, Errors.BadRequest("test.delayNextWork takes ms 0..600000"));
+            return;
+        }
+
+        Volatile.Write(ref _nextWorkDelayMs, payload.Ms);
+        Respond(request, new EmptyResult(), J.EmptyResult);
+    }
+
+    // Read at admission on the reader thread, so the delay belongs to exactly
+    // the next work-lane request; always zero without test commands.
+    private TimeSpan TakeTestHoldBack() =>
+        _options.TestCommands
+            ? TimeSpan.FromMilliseconds(Interlocked.Exchange(ref _nextWorkDelayMs, 0))
+            : TimeSpan.Zero;
 
     private void ConfigureFakeCore(RequestState request, TestFakeCorePayload payload)
     {

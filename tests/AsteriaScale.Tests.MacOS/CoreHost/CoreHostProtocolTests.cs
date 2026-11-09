@@ -88,6 +88,11 @@ internal static class CoreHostProtocolTests
             "--drain-timeout-ms должен быть целым числом"));
         refusals.Add(ExpectUsageAsync(tempRoot, sandbox => [.. Base(sandbox), "--log-dir", "/x"], "аргумент --log-dir задан дважды"));
         refusals.Add(ExpectUsageAsync(tempRoot, sandbox => [.. Base(sandbox), "--cache-dir"], "у аргумента --cache-dir нет значения"));
+        // Core's worker location needs both; neither is guessed from the other.
+        refusals.Add(ExpectUsageAsync(tempRoot, sandbox => [.. Base(sandbox), "--ranker-worker", "/x/worker"],
+            "--ranker-worker и --ranker-models задаются только вместе"));
+        refusals.Add(ExpectUsageAsync(tempRoot, sandbox => [.. Base(sandbox), "--ranker-models", "/x/models"],
+            "--ranker-worker и --ranker-models задаются только вместе"));
         await Task.WhenAll(refusals);
 
         // Every accepted name at once: hello echoes each path, and nothing

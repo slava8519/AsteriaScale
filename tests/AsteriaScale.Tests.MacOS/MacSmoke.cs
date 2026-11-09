@@ -21,7 +21,7 @@ internal static class MacSmoke
 
     // Registrations that exist only in the macOS branch at the end of
     // Program.cs; change together.
-    internal const int MacOnlyRegistrationCount = 6;
+    internal const int MacOnlyRegistrationCount = 7;
 
     internal const string MacOnlyPrefix = "macOS: ";
 
@@ -47,6 +47,10 @@ internal static class MacSmoke
     // Set by MacWorkerTests: whether the macOS worker answered a ConSeC
     // request on the bundle read in place, or which bundle file is absent.
     internal static string ConsecWorkerSmoke { get; set; } = NotReached;
+
+    // Set by CoreHostCoreTests: whether CoreHost ranked a smart hover through
+    // Core on the ConSeC bundle read in place, or which bundle file is absent.
+    internal static string CoreHostSmartHover { get; set; } = NotReached;
 
     internal static void Begin(string[] args)
     {
@@ -157,17 +161,18 @@ internal static class MacSmoke
                 string.Join(", ", missingParts) + ".");
         }
 
-        if (ConsecRealBundle == NotReached || ConsecWorkerSmoke == NotReached)
+        if (ConsecRealBundle == NotReached || ConsecWorkerSmoke == NotReached || CoreHostSmartHover == NotReached)
         {
             throw new InvalidOperationException(
                 $"A ConSeC status was never recorded (real bundle: {ConsecRealBundle}; " +
-                $"worker smoke: {ConsecWorkerSmoke}).");
+                $"worker smoke: {ConsecWorkerSmoke}; CoreHost smart hover: {CoreHostSmartHover}).");
         }
 
         return $"PASS (macOS subset): {sharedPassed}/{SharedRegistrationCount} shared smoke tests + " +
             $"{macOnlyPassed} macOS checks; SKIPPED: {s_skipped} Windows-only; " +
             $"{ExpectedParts.Length} Windows-only parts not run; " +
-            $"ConSeC real bundle: {ConsecRealBundle}; ConSeC worker smoke: {ConsecWorkerSmoke}. " +
+            $"ConSeC real bundle: {ConsecRealBundle}; ConSeC worker smoke: {ConsecWorkerSmoke}; " +
+            $"CoreHost smart hover: {CoreHostSmartHover}. " +
             "Not the full Windows smoke suite.";
     }
 

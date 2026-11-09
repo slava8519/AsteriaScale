@@ -53,6 +53,7 @@ internal static class MacProjectParityTests
         VerifyCoreHostProject(root, coreHost, wpf, macTests);
         VerifyOutsideTheSolution(root);
         VerifySymbolicLinkHelper(root);
+        VerifyNoHostWordInUserText(root);
         VerifyNoHelperFilesInTestOutput();
         return Task.CompletedTask;
     }
@@ -155,6 +156,55 @@ internal static class MacProjectParityTests
         string[] forbidden = ["Consec", "ConSeC_WNGT", "Models"];
         Check(!forbidden.Any(word => text.Contains(word, StringComparison.OrdinalIgnoreCase)),
             $"{LinkHelperFile} must not name the model folders ({string.Join(", ", forbidden)}).");
+    }
+
+    // Owner decision M15: the user never reads the internal word for the
+    // translation service («ядро»); the interface says «перевод» or «служба
+    // перевода», and only an error code may show up in details. Everything
+    // the macOS side can show comes from CoreHost's messages and statuses or
+    // from the macOS app's own strings (its Swift sources and string catalogs
+    // under macos/, from roadmap 20.2 step 12 on). Their comments are English
+    // (AGENTS.md), so every occurrence in those files is user text and fails.
+    // Core's own free-text statuses are checked on the wire by CoreHostClient.
+    private static void VerifyNoHostWordInUserText(string root)
+    {
+        string[] sources = ["src/AsteriaScale.CoreHost", "macos"];
+        string[] extensions = [".cs", ".swift", ".strings", ".stringsdict", ".xcstrings"];
+        string[] generated = ["bin", "obj", ".build", ".swiftpm"];
+        int scanned = 0;
+        List<string> hits = [];
+        foreach (string source in sources)
+        {
+            string folder = Path.Combine(root, source.Replace('/', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(folder))
+            {
+                continue;
+            }
+
+            foreach (string path in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+            {
+                string relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+                if (relative.Split('/').Any(part => generated.Contains(part)) ||
+                    !extensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                scanned++;
+                string[] lines = File.ReadAllLines(path);
+                for (int index = 0; index < lines.Length; index++)
+                {
+                    if (lines[index].Contains("ядр", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hits.Add($"{relative}:{index + 1}");
+                    }
+                }
+            }
+        }
+
+        Check(scanned > 0, "No CoreHost or macOS app source was found to check for M15.");
+        Check(hits.Count == 0,
+            "User-visible text names the translation service «ядро» (owner decision M15): " + string.Join(", ", hits));
     }
 
     // MacSmoke.Summarize can only count what the macOS build compiled, so a

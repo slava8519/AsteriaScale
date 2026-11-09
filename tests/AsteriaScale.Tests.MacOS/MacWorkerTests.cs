@@ -20,7 +20,7 @@ internal static class MacWorkerTests
     internal const string WorkerTargetFramework = "net10.0";
     internal const string WorkerRuntimeIdentifier = "osx-arm64";
 
-    private const string ExpectedConsecModelVersion =
+    internal const string ExpectedConsecModelVersion =
         "ConSeC:WNGT:9602b5fd:adapter-consec-wngt-positional-extractor-v1:g-0eb0688f3fd2:" +
         "d-1257dc55ebec:t-df91c443c8ea:pretokenizer-v3:context-full-v1:s512:" +
         "pipeline-consec-independent";
@@ -45,28 +45,13 @@ internal static class MacWorkerTests
     {
         // A missing apphost is a failure even where the bundle is absent.
         string worker = LocateWorkerApphost();
-        string models = Path.Combine(
-            MacSmoke.FindRepositoryRoot(),
-            "src",
-            "AsteriaScale.RankerWorker",
-            "Models");
-        string bundle = Path.Combine(models, ConsecArtifactBundle.BundleDirectoryName);
-        foreach (string relativePath in new[]
-                 {
-                     ConsecArtifactBundle.TokenizerFileName,
-                     ConsecArtifactBundle.ManifestFileName,
-                     ConsecArtifactBundle.GraphRelativePath,
-                     ConsecArtifactBundle.ExternalDataRelativePath
-                 })
+        string models = RepositoryModelDirectory;
+        if (MissingConsecBundleFile(models) is { } missing)
         {
-            string path = Path.Combine(bundle, relativePath.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(path))
-            {
-                // The licensed bundle is installed by the owner, never by the
-                // build; its absence is reported in the summary line, not hidden.
-                MacSmoke.ConsecWorkerSmoke = "absent: " + path;
-                return;
-            }
+            // The licensed bundle is installed by the owner, never by the
+            // build; its absence is reported in the summary line, not hidden.
+            MacSmoke.ConsecWorkerSmoke = "absent: " + missing;
+            return;
         }
 
         // --model-directory points at the repository folder, so the bundle is
@@ -93,6 +78,39 @@ internal static class MacWorkerTests
         MacSmoke.ConsecWorkerSmoke = "checked in place";
     }
 
+    /// <summary>
+    /// The owner's model folder in the repository. Every check reads it in
+    /// place (--model-directory, --ranker-models); nothing is ever copied,
+    /// moved or linked out of it.
+    /// </summary>
+    internal static string RepositoryModelDirectory => Path.Combine(
+        MacSmoke.FindRepositoryRoot(),
+        "src",
+        "AsteriaScale.RankerWorker",
+        "Models");
+
+    /// <summary>The first ConSeC bundle file that is absent under <paramref name="models"/>, or null.</summary>
+    internal static string? MissingConsecBundleFile(string models)
+    {
+        string bundle = Path.Combine(models, ConsecArtifactBundle.BundleDirectoryName);
+        foreach (string relativePath in new[]
+                 {
+                     ConsecArtifactBundle.TokenizerFileName,
+                     ConsecArtifactBundle.ManifestFileName,
+                     ConsecArtifactBundle.GraphRelativePath,
+                     ConsecArtifactBundle.ExternalDataRelativePath
+                 })
+        {
+            string path = Path.Combine(bundle, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+            {
+                return path;
+            }
+        }
+
+        return null;
+    }
+
     private static async Task VerifyNpuRefusalAsync(string worker, string[] arguments, string label)
     {
         WorkerRun run = await RunWorkerAsync(worker, arguments, NpuRefusalTimeout);
@@ -107,7 +125,7 @@ internal static class MacWorkerTests
             "a CPU attribution would hide a silent fallback.");
     }
 
-    private static string LocateWorkerApphost()
+    internal static string LocateWorkerApphost()
     {
         string? configuration = typeof(MacWorkerTests).Assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()

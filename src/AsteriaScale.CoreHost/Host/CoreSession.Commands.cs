@@ -1,0 +1,644 @@
+using AsteriaScale.CoreHost.Protocol;
+using AsteriaScale.Models;
+using AsteriaScale.Services;
+
+namespace AsteriaScale.CoreHost.Host;
+
+// The Core-backed commands other than hover.resolve: settings, model status,
+// warm-up and unload, history of what the app showed, «Мой словарь» and the
+// speaker gender.
+internal sealed partial class CoreSession
+{
+    private const int RecentHoverCount = 8;
+
+    private static readonly string[] WarmUpTargets = ["dictionary", "sense"];
+
+    // Settings changes (settings.update, speaker.set) join _applyTail when they
+    // are admitted, on the reader thread, and run one at a time in that
+    // arrival order, each after the previous one, under _settingsGate; the
+    // gate also covers every save, so settings.json is never serialized while
+    // a change is half applied. The tail never faults, so a hover, warm-up or
+    // unload can wait for it whatever the change before it did.
+    private readonly SemaphoreSlim _settingsGate = new(1, 1);
+    private readonly object _applyLock = new();
+    private readonly object _recentLock = new();
+    private readonly LinkedList<RecentHover> _recent = new();
+    private Task _applyTail = Task.CompletedTask;
+    private long _revision;
+    private SettingsView _settingsView;
+    private RankerFailure? _lastRankerFailure;
+
+    public SettingsResult Settings
+    {
+        get
+        {
+            lock (_applyLock)
+            {
+                return new SettingsResult { Settings = _settingsView, Revision = _revision };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks a patch without touching anything. Nothing is coerced: an NPU
+    /// backend or the TranslateGemma phrase line is refused as unavailable on
+    /// macOS (rule 3), any other unknown spelling as invalid.
+    /// </summary>
+    public static ErrorBody? Validate(SettingsPatch patch)
+    {
+        if (patch.HoverDelayMs is int delay && delay is < 350 or > 1500)
+        {
+            return Errors.InvalidSettings($"hoverDelayMs must be 350..1500 ms, got {delay}");
+        }
+
+        if (patch.Mode is { } mode && mode is not (HoverTranslationModes.Smart or HoverTranslationModes.Dictionary))
+        {
+            return Errors.InvalidSettings($"mode must be smart or dictionary, got '{mode}'");
+        }
+
+        if (patch.Sense is { } sense)
+        {
+            if (sense.Backend == SmartDictionaryBackends.Npu)
+            {
+                return Errors.UnsupportedOnPlatform("the npu sense backend needs a Windows NPU; macOS ranks senses on the CPU");
+            }
+
+            if (sense.Backend is { } backend && backend is not (SmartDictionaryBackends.Auto or SmartDictionaryBackends.Cpu))
+            {
+                return Errors.InvalidSettings($"sense.backend must be auto or cpu, got '{backend}'");
+            }
+
+            if (sense.Model is { } model && model is not (SmartDictionaryRankerModels.GlossBert or SmartDictionaryRankerModels.Consec))
+            {
+                return Errors.InvalidSettings($"sense.model must be glossbert or consec, got '{model}'");
+            }
+
+            if (sense.SourceLanguage is { } language && language is not (
+                    SmartDictionarySourceLanguages.Auto or
+                    SmartDictionarySourceLanguages.English or
+                    SmartDictionarySourceLanguages.Japanese))
+            {
+                return Errors.InvalidSettings($"sense.sourceLanguage must be auto, en or ja, got '{language}'");
+            }
+        }
+
+        if (patch.Phrase?.Mode is { } phraseMode)
+        {
+            if (phraseMode == SmartPhraseTranslationModes.TranslateGemma)
+            {
+                return Errors.UnsupportedOnPlatform("the TranslateGemma phrase line arrives on macOS with 20.5");
+            }
+
+            if (phraseMode != SmartPhraseTranslationModes.Off)
+            {
+                return Errors.InvalidSettings($"phrase.mode must be off, got '{phraseMode}'");
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Queues a validated settings.update behind the changes admitted before
+    /// it and returns once it is applied in memory (later hovers see it);
+    /// <see cref="SaveSettingsAsync"/> then makes it durable. Called at
+    /// admission; <paramref name="holdBack"/> is zero except under
+    /// test.delayNextWork.
+    /// </summary>
+    public Task<SettingsResult> QueueSettingsUpdate(long baseRevision, SettingsPatch patch, TimeSpan holdBack) =>
+        QueueSettingsChange(holdBack, () =>
+        {
+            if (baseRevision != _revision)
+            {
+                throw new RequestErrorException(Errors.Conflict(_revision));
+            }
+
+            ApplyPatch(patch);
+            SettingsView view = View(_settings);
+            lock (_applyLock)
+            {
+                _revision++;
+                _settingsView = view;
+                return new SettingsResult { Settings = view, Revision = _revision };
+            }
+        });
+
+    /// <summary>
+    /// speaker.set: stores the gender of a speaker in one game through Core
+    /// (the alias for a corrected spelling included) and returns the speaker
+    /// as it now resolves. The speaker editor that sends it arrives with 20.3.
+    /// Queued at admission like a settings.update; speaker genders are not
+    /// part of the settings view, so the revision stays.
+    /// </summary>
+    public Task<SpeakerSetResult> QueueSpeakerChange(SpeakerSetPayload payload, TimeSpan holdBack) =>
+        QueueSettingsChange(holdBack, () =>
+        {
+            SpeakerGender gender = payload.Gender switch
+            {
+                SpeakerGenderPreferences.MasculineValue => SpeakerGender.Masculine,
+                SpeakerGenderPreferences.FeminineValue => SpeakerGender.Feminine,
+                SpeakerGenderPreferences.IgnoreValue => SpeakerGender.Ignore,
+                _ => throw new RequestErrorException(Errors.BadRequest(
+                    $"gender must be masculine, feminine or ignore, got '{payload.Gender}'")),
+            };
+            SpeakerGameIdentity game = new(payload.Game.Key, payload.Game.DisplayName);
+            CurrentSpeakerContext observed = SpeakerGenderPreferences.Resolve(_settings, game, payload.ObservedName);
+            if (observed.GameKey.Length == 0 || observed.Name.Length == 0 ||
+                SpeakerGenderPreferences.NormalizeSpeakerName(payload.Name).Length == 0)
+            {
+                // Core would store nothing and still report the choice saved.
+                throw new RequestErrorException(Errors.BadRequest(
+                    "game.key must start with path: or process:, and both names must hold 1..48 characters"));
+            }
+
+            HoverSpeakerTarget<CoreHostHover> saved = _coordinator.SaveSpeakerGender(
+                new HoverSpeakerTarget<CoreHostHover>(game, observed, CoreHostHover.Detached),
+                gender,
+                payload.Name);
+            return new SpeakerSetResult { Speaker = ToSpeakerView(saved.Speaker) };
+        });
+
+    /// <summary>Writes settings.json; a failure is settings_save_failed.</summary>
+    public async Task SaveSettingsAsync()
+    {
+        try
+        {
+            await PersistSettingsAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new RequestErrorException(Errors.SettingsSaveFailed(exception.Message));
+        }
+    }
+
+    // Also the coordinator's save hook (a saved speaker gender).
+    private async Task PersistSettingsAsync()
+    {
+        await _settingsGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _settingsService.SaveAsync(_settings).ConfigureAwait(false);
+        }
+        finally
+        {
+            _settingsGate.Release();
+        }
+    }
+
+    // Called on the reader thread at admission (CoreHostServer.AdmitSettingsChange),
+    // so the queue order is the arrival order. The change itself runs on the
+    // pool: the coordinator's lifecycle calls must never run on the reader
+    // thread, which admits requests and never blocks. holdBack starts it late
+    // the way a starved pool would (test.delayNextWork only).
+    private Task<T> QueueSettingsChange<T>(TimeSpan holdBack, Func<T> change)
+    {
+        lock (_applyLock)
+        {
+            Task previous = _applyTail;
+            Task<T> applied = Task.Run(async () =>
+            {
+                if (holdBack > TimeSpan.Zero)
+                {
+                    await Task.Delay(holdBack).ConfigureAwait(false);
+                }
+
+                await previous.ConfigureAwait(false);
+                await _settingsGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    return change();
+                }
+                finally
+                {
+                    _settingsGate.Release();
+                }
+            });
+            _applyTail = applied.ContinueWith(
+                static _ => { },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return applied;
+        }
+    }
+
+    private Task AppliedSettingsAsync()
+    {
+        lock (_applyLock)
+        {
+            return _applyTail;
+        }
+    }
+
+    // The order the Windows settings window leaves Core in: values first,
+    // then one lifecycle call per kind of change. Switching off goes first and
+    // switching on last, so neither warms up a mode that is about to change.
+    private void ApplyPatch(SettingsPatch patch)
+    {
+        if (patch.HoverEnabled == false && _coordinator.Enabled)
+        {
+            _coordinator.SetEnabled(false);
+        }
+
+        if (patch.HoverDelayMs is int delay)
+        {
+            _settings.HoverTranslationDelayMs = delay;
+        }
+
+        bool smartChanged = false;
+        if (patch.Sense is { } sense)
+        {
+            if (sense.Backend is { } backend &&
+                backend != SmartDictionaryBackends.Normalize(_settings.SmartDictionaryBackend))
+            {
+                _settings.SmartDictionaryBackend = backend;
+                smartChanged = true;
+            }
+
+            if (sense.Model is { } model &&
+                model != SmartDictionaryRankerModels.Normalize(_settings.SmartDictionaryRankerModel))
+            {
+                _settings.SmartDictionaryRankerModel = model;
+                smartChanged = true;
+            }
+
+            if (sense.SourceLanguage is { } language &&
+                language != SmartDictionarySourceLanguages.Normalize(_settings.SmartDictionarySourceLanguage))
+            {
+                _settings.SmartDictionarySourceLanguage = language;
+                smartChanged = true;
+            }
+
+            if (sense.KeepWarm is bool keepWarm && keepWarm != _settings.SmartDictionaryKeepWarm)
+            {
+                _settings.SmartDictionaryKeepWarm = keepWarm;
+                smartChanged = true;
+            }
+        }
+
+        if (patch.Phrase?.Mode is { } phraseMode &&
+            phraseMode != SmartPhraseTranslationModes.Normalize(_settings.SmartPhraseTranslationMode))
+        {
+            _settings.SmartPhraseTranslationMode = phraseMode;
+            smartChanged = true;
+        }
+
+        if (patch.Mode is { } mode &&
+            mode != HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode))
+        {
+            _coordinator.SetMode(mode);
+        }
+
+        if (smartChanged)
+        {
+            _coordinator.ApplySmartDictionarySettings();
+        }
+
+        if (patch.HoverEnabled == true && !_coordinator.Enabled)
+        {
+            _coordinator.SetEnabled(true);
+        }
+    }
+
+    private static SettingsView View(AppSettings settings) => new()
+    {
+        HoverEnabled = settings.HoverTranslationEnabled,
+        HoverDelayMs = settings.HoverTranslationDelayMs,
+        Mode = HoverTranslationModes.NormalizeUserMode(settings.HoverTranslationMode),
+        Sense = new SenseSettingsView
+        {
+            Backend = SmartDictionaryBackends.Normalize(settings.SmartDictionaryBackend),
+            Model = SmartDictionaryRankerModels.Normalize(settings.SmartDictionaryRankerModel),
+            SourceLanguage = SmartDictionarySourceLanguages.Normalize(settings.SmartDictionarySourceLanguage),
+            KeepWarm = settings.SmartDictionaryKeepWarm,
+        },
+        Phrase = new PhraseSettingsView
+        {
+            Mode = SmartPhraseTranslationModes.Normalize(settings.SmartPhraseTranslationMode),
+            Backend = SmartPhraseTranslationBackends.Normalize(settings.SmartPhraseTranslationBackend),
+        },
+    };
+
+    // ---- models --------------------------------------------------------------
+
+    /// <summary>
+    /// models.status from the coordinator's snapshot, which waits for nothing
+    /// and loads nothing.
+    /// </summary>
+    public ModelsStatusResult ModelStatus()
+    {
+        HoverModelStatus status = _coordinator.GetModelStatus();
+        return new ModelsStatusResult
+        {
+            Dictionary = new DictionaryModelStatus
+            {
+                Loaded = status.Dictionary.Loaded,
+                Entries = status.Dictionary.Entries,
+                Sources = status.Dictionary.Sources,
+                Version = status.Dictionary.Version,
+                MorphologyEntries = RussianMorphologyLexicon.EntryCount,
+                SenseMetadataKeys = status.Dictionary.SenseMetadataKeys,
+            },
+            Sense = new SenseModelStatus
+            {
+                InUse = status.Sense.InUse,
+                Provider = ProviderName(status.Sense.Provider),
+                Model = status.Sense.Model == RankerCpuModelProfile.Consec
+                    ? SmartDictionaryRankerModels.Consec
+                    : SmartDictionaryRankerModels.GlossBert,
+                KeepWarm = status.Sense.KeepWarm,
+                Running = status.Sense.Running,
+                Pid = status.Sense.ProcessId,
+                ActiveProvider = status.Sense.ActiveProvider is { } active ? ProviderName(active) : null,
+                ModelVersion = status.Sense.ActiveModelVersion,
+                Error = status.Sense.LastErrorCode is { } code ? ToSenseError(code) : null,
+            },
+            Phrase = new PhraseModelStatus
+            {
+                Available = status.Phrase.Available,
+                Requested = status.Phrase.Requested,
+                WarmedUp = status.Phrase.WarmedUp,
+                Status = status.Phrase.UnavailableStatus,
+            },
+        };
+    }
+
+    public static ErrorBody? ValidateWarmUp(string[] targets) =>
+        targets.Length == 0 ||
+        targets.Distinct(StringComparer.Ordinal).Count() != targets.Length ||
+        targets.Any(target => !WarmUpTargets.Contains(target))
+            ? Errors.BadRequest("targets must name dictionary and/or sense, each once")
+            : null;
+
+    /// <summary>
+    /// models.warmUp: loads the dictionaries the active mode reads and/or
+    /// starts the sense worker for the selected model and backend, as the
+    /// coordinator's own warm-up does. A worker error is answered with its
+    /// code and Russian text (and stays in models.status until a later
+    /// transaction succeeds); nothing falls back to another provider.
+    /// </summary>
+    public async Task<ModelsStatusResult> WarmUpAsync(string[] targets, CancellationToken cancellationToken)
+    {
+        // The mode, model and backend of every settings change admitted
+        // before this warm-up decide what it loads.
+        await AppliedSettingsAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        foreach (string target in targets)
+        {
+            if (target == "dictionary")
+            {
+                bool senseMetadata =
+                    HoverTranslationModes.NormalizeUserMode(_settings.HoverTranslationMode) == HoverTranslationModes.Smart &&
+                    SmartDictionarySourceLanguages.Normalize(_settings.SmartDictionarySourceLanguage) !=
+                    SmartDictionarySourceLanguages.Japanese;
+                await (senseMetadata
+                    ? _services.Dictionary.LoadSenseMetadataAsync(cancellationToken)
+                    : _services.Dictionary.LoadAsync(cancellationToken)).ConfigureAwait(false);
+                continue;
+            }
+
+            GlossBertRankerProvider provider =
+                SmartDictionaryBackends.Normalize(_settings.SmartDictionaryBackend) == SmartDictionaryBackends.Npu
+                    ? GlossBertRankerProvider.Npu
+                    : GlossBertRankerProvider.Cpu;
+            try
+            {
+                await _services.Selector.ConfigureCpuModelProfileAsync(
+                    SemanticRankerProfileResolver.FromSettings(_settings),
+                    cancellationToken).ConfigureAwait(false);
+                await _services.Selector.WarmUpAsync(provider, cancellationToken).ConfigureAwait(false);
+            }
+            catch (GlossBertRankerException exception)
+            {
+                Volatile.Write(ref _lastRankerFailure, new RankerFailure(exception.ErrorCode, exception.Message));
+                HostLog.Write($"sense warm-up failed: {exception.ErrorCode}: {exception.Message}");
+                throw new RequestErrorException(Errors.Create(
+                    exception.ErrorCode,
+                    RankerErrorText.For(exception.ErrorCode),
+                    exception.Message));
+            }
+        }
+
+        return ModelStatus();
+    }
+
+    /// <summary>
+    /// models.unload: Core's coalesced unload pass on the host's behalf; it
+    /// unloads what the settings do not need, the changes admitted before it
+    /// included, so it first waits for those to be applied.
+    /// </summary>
+    public async Task<ModelsStatusResult> UnloadAsync()
+    {
+        await AppliedSettingsAsync().ConfigureAwait(false);
+        await _coordinator.RequestUnload().ConfigureAwait(false);
+        return ModelStatus();
+    }
+
+    private SenseError ToSenseError(string code)
+    {
+        RankerFailure? failure = Volatile.Read(ref _lastRankerFailure);
+        return new SenseError
+        {
+            Code = code,
+            Message = RankerErrorText.For(code),
+            Detail = failure is not null && failure.Code == code
+                ? failure.Detail
+                : $"the last sense worker transaction failed with {code}",
+        };
+    }
+
+    private sealed record RankerFailure(string Code, string Detail);
+
+    // ---- history of what the app showed --------------------------------------
+
+    private void RememberShown(HoverCard<CoreHostHover> card)
+    {
+        lock (_recentLock)
+        {
+            RecentHover? entry = _recent.FirstOrDefault(candidate => candidate.Id == card.Anchor.Id);
+            if (entry is null)
+            {
+                entry = new RecentHover(card.Anchor.Id);
+                _recent.AddFirst(entry);
+                while (_recent.Count > RecentHoverCount)
+                {
+                    _recent.RemoveLast();
+                }
+            }
+
+            if (card.PhraseLine is null)
+            {
+                entry.Primary = card;
+            }
+            else if (!card.PhraseLine.IsProvisional)
+            {
+                entry.FinalPhrase = card;
+            }
+        }
+    }
+
+    /// <summary>
+    /// hover.displayed: the app rendered a part of one of the last eight
+    /// hovers, so Core records it now, by its own rules (a found primary
+    /// result; a final translated phrase line), once per part. History holds
+    /// only what the user saw, as on Windows.
+    /// </summary>
+    public bool RecordDisplayed(long hoverId, string part)
+    {
+        HoverCard<CoreHostHover>? card;
+        lock (_recentLock)
+        {
+            RecentHover? entry = _recent.FirstOrDefault(candidate => candidate.Id == hoverId);
+            if (entry is null)
+            {
+                return false;
+            }
+
+            if (part == "primary")
+            {
+                card = entry.PrimaryRecorded ? null : entry.Primary;
+                entry.PrimaryRecorded |= card is not null;
+            }
+            else
+            {
+                card = entry.PhraseRecorded ? null : entry.FinalPhrase;
+                entry.PhraseRecorded |= card is not null;
+            }
+        }
+
+        if (card is null)
+        {
+            return false;
+        }
+
+        _coordinator.RecordShown(card);
+        return card.PhraseLine is null ? card.DictionaryFound : HoverPolicy.IsPhraseHistoryEntry(card.PhraseLine);
+    }
+
+    public HistoryListResult History() => new()
+    {
+        Entries = _coordinator.History.Snapshot()
+            .Select(entry => new HistoryItem
+            {
+                Source = entry.Source,
+                Translation = entry.Translation,
+                Engine = entry.Engine,
+                Context = entry.Context,
+                Language = entry.Language,
+                RecordedAt = entry.RecordedAt,
+            })
+            .ToArray(),
+    };
+
+    public bool ClearHistory() => _coordinator.History.Clear();
+
+    /// <summary>
+    /// The Anki export as text. Core writes it to a file, so it goes to a
+    /// private file in CoreHost's TMPDIR, is read back and deleted: the app,
+    /// not CoreHost, writes where the user chose.
+    /// </summary>
+    public HistoryExportResult ExportAnki()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"asteria-anki-{Guid.NewGuid():N}.tsv");
+        try
+        {
+            int count = _coordinator.History.ExportToAnki(path);
+            return new HistoryExportResult
+            {
+                Count = count,
+                // ReadAllText drops the UTF-8 BOM Core writes for Anki.
+                Tsv = count == 0 ? "" : File.ReadAllText(path),
+            };
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new RequestErrorException(Errors.IoError(exception.Message));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    // ---- «Мой словарь» -------------------------------------------------------
+
+    public async Task<UserDictionaryListResult> UserDictionaryAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<UserDictionaryEntry> entries = await UserDictionaryIoAsync(
+            () => _userDictionary.LoadAsync(cancellationToken)).ConfigureAwait(false);
+        return new UserDictionaryListResult
+        {
+            Entries = entries
+                .Select(entry => new UserDictionaryItem
+                {
+                    Key = entry.Key,
+                    Translation = entry.Translation,
+                    Language = entry.Language,
+                })
+                .ToArray(),
+        };
+    }
+
+    public async Task<string> SaveUserEntryAsync(string key, string translation)
+    {
+        string canonicalKey = await UserDictionaryIoAsync(
+            () => _userDictionary.SaveEntryAsync(key, translation)).ConfigureAwait(false);
+        await ReloadDictionariesAsync().ConfigureAwait(false);
+        return canonicalKey;
+    }
+
+    public async Task<bool> RemoveUserEntryAsync(string key)
+    {
+        bool removed = await UserDictionaryIoAsync(
+            () => _userDictionary.RemoveEntryAsync(key)).ConfigureAwait(false);
+        if (removed)
+        {
+            await ReloadDictionariesAsync().ConfigureAwait(false);
+        }
+
+        return removed;
+    }
+
+    // The user layer has the highest priority, so an edit is visible to the
+    // next hover only after Core re-reads the layers (under its maintenance
+    // lease, after the hover in flight).
+    private async Task ReloadDictionariesAsync()
+    {
+        await _coordinator.ReloadDictionariesAsync().ConfigureAwait(false);
+        LocalDictionaryService dictionary = _services.Dictionary;
+        _status("dictionary", "ready", null,
+            $"Словари перезагружены: {dictionary.EntryCount:N0} записей из {dictionary.SourceCount} словарей");
+    }
+
+    private static async Task<T> UserDictionaryIoAsync<T>(Func<Task<T>> operation)
+    {
+        try
+        {
+            return await operation().ConfigureAwait(false);
+        }
+        catch (ArgumentException exception)
+        {
+            // Core's reason is Russian; the framework appends the parameter
+            // name in English, which is not for the user.
+            string message = exception.Message;
+            int parameter = message.IndexOf(" (Parameter '", StringComparison.Ordinal);
+            throw new RequestErrorException(Errors.InvalidEntry(parameter < 0 ? message : message[..parameter]));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new RequestErrorException(Errors.IoError(exception.Message));
+        }
+    }
+
+    private sealed class RecentHover(long id)
+    {
+        public long Id { get; } = id;
+
+        public HoverCard<CoreHostHover>? Primary { get; set; }
+
+        public HoverCard<CoreHostHover>? FinalPhrase { get; set; }
+
+        public bool PrimaryRecorded { get; set; }
+
+        public bool PhraseRecorded { get; set; }
+    }
+}

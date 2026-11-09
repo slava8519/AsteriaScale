@@ -74,11 +74,11 @@ internal sealed class CoreHostSandbox
     }
 
     /// <summary>The required arguments with this sandbox's roots.</summary>
-    public List<string> Arguments(bool testCommands = true, string? userData = null)
+    public List<string> Arguments(bool testCommands = true, string? userData = null, string? dataRoot = null)
     {
         List<string> arguments =
         [
-            "--data-root", CoreHostFixtures.DataRoot,
+            "--data-root", dataRoot ?? CoreHostFixtures.DataRoot,
             "--user-data", userData ?? UserData,
             "--log-dir", Logs,
         ];
@@ -146,10 +146,11 @@ internal sealed class CoreHostSession : IDisposable
         IEnumerable<string>? extraArguments = null,
         uint blockedSignals = 0,
         bool readStdout = true,
-        string? userData = null)
+        string? userData = null,
+        string? dataRoot = null)
     {
         CoreHostSandbox sandbox = CoreHostSandbox.Create(tempRoot, label);
-        List<string> arguments = sandbox.Arguments(testCommands, userData);
+        List<string> arguments = sandbox.Arguments(testCommands, userData, dataRoot);
         arguments.AddRange(extraArguments ?? []);
         CoreHostProcess process = CoreHostProcess.Start(
             CoreHostFixtures.Apphost,

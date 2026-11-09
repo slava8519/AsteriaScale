@@ -54,6 +54,17 @@ internal static class ErrorCodes
     public const string Superseded = "superseded";
     public const string InternalError = "internal_error";
 
+    // Request-level terminals of the Core-backed commands.
+    public const string HoverDisabled = "hover_disabled";
+    public const string UnsupportedOnPlatform = "unsupported_on_platform";
+    public const string InvalidSettings = "invalid_settings";
+    public const string Conflict = "conflict";
+    public const string SettingsSaveFailed = "settings_save_failed";
+    public const string MorphologyMissing = "morphology_missing";
+    public const string DictionaryMissing = "dictionary_missing";
+    public const string InvalidEntry = "invalid_entry";
+    public const string IoError = "io_error";
+
     // Lifecycle faults.
     public const string ShutdownTimeout = "shutdown_timeout";
     public const string HoverFailed = "hover_failed";
@@ -180,8 +191,31 @@ internal sealed class HoverPrimaryEvent
     public bool IsPhrase { get; set; }
     public bool Found { get; set; }
     public double? Confidence { get; set; }
+
+    // One of dictionary, heuristic, tatoeba, resultCache, ranker,
+    // rankerAbstained, rankerUnavailable (Core's HoverResultSource). The app
+    // renders the card kind from it and never parses engineLabel.
     public string Provenance { get; set; } = "";
+
+    // cpu or npu, set exactly for the three ranker provenances.
+    public string? SenseProvider { get; set; }
+
+    // Russian, from the host's label set; history stores it as the engine.
     public string EngineLabel { get; set; } = "";
+
+    // The sentence the hover was resolved in (what history records as context).
+    public string? Context { get; set; }
+
+    public SpeakerView? Speaker { get; set; }
+}
+
+internal sealed class SpeakerView
+{
+    public string Name { get; set; } = "";
+
+    // unknown, masculine, feminine or ignore.
+    public string Gender { get; set; } = "";
+    public string? GameKey { get; set; }
 }
 
 internal sealed class HoverPhraseEvent
@@ -206,9 +240,247 @@ internal sealed class PhraseModelIdentity
 internal sealed class StatusEvent
 {
     public string Area { get; set; } = "";
-    public string State { get; set; } = "";
+
+    // Null for area "translation": Core's own free text, which the app shows
+    // only in its diagnostic window and log, never in the menu or the overlay.
+    public string? State { get; set; }
     public string? Code { get; set; }
     public string Text { get; set; } = "";
+}
+
+// ---- Core-backed commands ------------------------------------------------
+
+internal sealed class InitResult
+{
+    public SettingsView Settings { get; set; } = new();
+    public long Revision { get; set; }
+    public InitDictionary Dictionary { get; set; } = new();
+    public int MorphologyEntries { get; set; }
+    public double LoadMs { get; set; }
+    public double WarmupLookupMs { get; set; }
+
+    // Set when this init found no settings.json and wrote the macOS first-run
+    // settings (docs/MACOS.md T7).
+    public FirstRunSettings? FirstRun { get; set; }
+}
+
+internal sealed class InitDictionary
+{
+    public int Entries { get; set; }
+    public int Sources { get; set; }
+    public string Version { get; set; } = "";
+}
+
+internal sealed class FirstRunSettings
+{
+    public string SenseModel { get; set; } = "";
+    public string SenseBackend { get; set; } = "";
+    public bool HoverEnabled { get; set; }
+}
+
+/// <summary>
+/// The translation subset of settings.json that the app may read and change.
+/// The values are Core's normalized spellings; a settings.json written by
+/// Windows may hold npu or translategemma-4b, which are shown as they are.
+/// </summary>
+internal sealed class SettingsView
+{
+    public bool HoverEnabled { get; set; }
+    public int HoverDelayMs { get; set; }
+    public string Mode { get; set; } = "";
+    public SenseSettingsView Sense { get; set; } = new();
+    public PhraseSettingsView Phrase { get; set; } = new();
+}
+
+internal sealed class SenseSettingsView
+{
+    public string Backend { get; set; } = "";
+    public string Model { get; set; } = "";
+    public string SourceLanguage { get; set; } = "";
+    public bool KeepWarm { get; set; }
+}
+
+internal sealed class PhraseSettingsView
+{
+    public string Mode { get; set; } = "";
+    public string Backend { get; set; } = "";
+}
+
+internal sealed class SettingsResult
+{
+    public SettingsView Settings { get; set; } = new();
+    public long Revision { get; set; }
+}
+
+internal sealed class SettingsUpdatePayload
+{
+    [JsonRequired] public long BaseRevision { get; set; }
+    [JsonRequired] public SettingsPatch Patch { get; set; } = new();
+}
+
+/// <summary>Every member optional; an absent member keeps its value.</summary>
+internal sealed class SettingsPatch
+{
+    public bool? HoverEnabled { get; set; }
+    public int? HoverDelayMs { get; set; }
+    public string? Mode { get; set; }
+    public SensePatch? Sense { get; set; }
+    public PhrasePatch? Phrase { get; set; }
+}
+
+internal sealed class SensePatch
+{
+    public string? Backend { get; set; }
+    public string? Model { get; set; }
+    public string? SourceLanguage { get; set; }
+    public bool? KeepWarm { get; set; }
+}
+
+internal sealed class PhrasePatch
+{
+    public string? Mode { get; set; }
+}
+
+internal sealed class ModelsWarmUpPayload
+{
+    [JsonRequired] public string[] Targets { get; set; } = [];
+}
+
+internal sealed class ModelsStatusResult
+{
+    public DictionaryModelStatus Dictionary { get; set; } = new();
+    public SenseModelStatus Sense { get; set; } = new();
+    public PhraseModelStatus Phrase { get; set; } = new();
+}
+
+internal sealed class DictionaryModelStatus
+{
+    public bool Loaded { get; set; }
+    public int Entries { get; set; }
+    public int Sources { get; set; }
+    public string Version { get; set; } = "";
+    public int MorphologyEntries { get; set; }
+    public int SenseMetadataKeys { get; set; }
+}
+
+internal sealed class SenseModelStatus
+{
+    public bool InUse { get; set; }
+    public string Provider { get; set; } = "";
+    public string Model { get; set; } = "";
+    public bool KeepWarm { get; set; }
+    public bool Running { get; set; }
+    public int? Pid { get; set; }
+    public string? ActiveProvider { get; set; }
+
+    // The identity the running worker reported (for ConSeC the exact bundle).
+    public string? ModelVersion { get; set; }
+    public SenseError? Error { get; set; }
+}
+
+/// <summary>
+/// The last failed worker transaction: the worker's or the selector's code,
+/// a Russian sentence naming that code for the status line (no paths), and
+/// the original text, which may hold paths, for the log.
+/// </summary>
+internal sealed class SenseError
+{
+    public string Code { get; set; } = "";
+    public string Message { get; set; } = "";
+    public string? Detail { get; set; }
+}
+
+internal sealed class PhraseModelStatus
+{
+    public bool Available { get; set; }
+    public bool Requested { get; set; }
+    public bool? WarmedUp { get; set; }
+    public string? Status { get; set; }
+}
+
+internal sealed class HoverDisplayedPayload
+{
+    [JsonRequired] public long HoverId { get; set; }
+    [JsonRequired] public string Part { get; set; } = "";
+}
+
+internal sealed class HoverDisplayedResult
+{
+    public bool Recorded { get; set; }
+}
+
+internal sealed class UserDictionaryItem
+{
+    public string Key { get; set; } = "";
+    public string Translation { get; set; } = "";
+    public string Language { get; set; } = "";
+}
+
+internal sealed class UserDictionaryListResult
+{
+    public UserDictionaryItem[] Entries { get; set; } = [];
+}
+
+internal sealed class UserDictionarySavePayload
+{
+    [JsonRequired] public string Key { get; set; } = "";
+    [JsonRequired] public string Translation { get; set; } = "";
+}
+
+internal sealed class UserDictionarySaveResult
+{
+    public string Key { get; set; } = "";
+}
+
+internal sealed class UserDictionaryRemovePayload
+{
+    [JsonRequired] public string Key { get; set; } = "";
+}
+
+internal sealed class UserDictionaryRemoveResult
+{
+    public bool Removed { get; set; }
+}
+
+internal sealed class HistoryItem
+{
+    public string Source { get; set; } = "";
+    public string Translation { get; set; } = "";
+    public string Engine { get; set; } = "";
+    public string Context { get; set; } = "";
+    public string Language { get; set; } = "";
+    public DateTimeOffset RecordedAt { get; set; }
+}
+
+internal sealed class HistoryListResult
+{
+    public HistoryItem[] Entries { get; set; } = [];
+}
+
+internal sealed class HistoryExportResult
+{
+    // The Anki file's text (front, back, context per line); the app writes it
+    // where the user chose. CoreHost never writes outside its own roots.
+    public string Tsv { get; set; } = "";
+    public int Count { get; set; }
+}
+
+internal sealed class HistoryClearResult
+{
+    public bool Cleared { get; set; }
+}
+
+internal sealed class SpeakerSetPayload
+{
+    [JsonRequired] public GameIdentity Game { get; set; } = new();
+    [JsonRequired] public string ObservedName { get; set; } = "";
+    [JsonRequired] public string Name { get; set; } = "";
+    [JsonRequired] public string Gender { get; set; } = "";
+}
+
+internal sealed class SpeakerSetResult
+{
+    public SpeakerView Speaker { get; set; } = new();
 }
 
 internal sealed class FaultEvent
@@ -243,6 +515,11 @@ internal sealed class TestFakeCorePayload
     public int PhraseDelayMs { get; set; }
     public bool IgnoreCancel { get; set; }
     public bool Fail { get; set; }
+}
+
+internal sealed class TestDelayNextWorkPayload
+{
+    [JsonRequired] public int Ms { get; set; }
 }
 
 internal sealed class TestBytesPayload
@@ -288,9 +565,27 @@ internal sealed class TestChildResult
 [JsonSerializable(typeof(HoverPhraseEvent))]
 [JsonSerializable(typeof(StatusEvent))]
 [JsonSerializable(typeof(FaultEvent))]
+[JsonSerializable(typeof(InitResult))]
+[JsonSerializable(typeof(SettingsResult))]
+[JsonSerializable(typeof(SettingsUpdatePayload))]
+[JsonSerializable(typeof(ModelsWarmUpPayload))]
+[JsonSerializable(typeof(ModelsStatusResult))]
+[JsonSerializable(typeof(HoverDisplayedPayload))]
+[JsonSerializable(typeof(HoverDisplayedResult))]
+[JsonSerializable(typeof(UserDictionaryListResult))]
+[JsonSerializable(typeof(UserDictionarySavePayload))]
+[JsonSerializable(typeof(UserDictionarySaveResult))]
+[JsonSerializable(typeof(UserDictionaryRemovePayload))]
+[JsonSerializable(typeof(UserDictionaryRemoveResult))]
+[JsonSerializable(typeof(HistoryListResult))]
+[JsonSerializable(typeof(HistoryExportResult))]
+[JsonSerializable(typeof(HistoryClearResult))]
+[JsonSerializable(typeof(SpeakerSetPayload))]
+[JsonSerializable(typeof(SpeakerSetResult))]
 [JsonSerializable(typeof(TestSleepPayload))]
 [JsonSerializable(typeof(TestTickEvent))]
 [JsonSerializable(typeof(TestFakeCorePayload))]
+[JsonSerializable(typeof(TestDelayNextWorkPayload))]
 [JsonSerializable(typeof(TestBytesPayload))]
 [JsonSerializable(typeof(TestStatsResult))]
 [JsonSerializable(typeof(TestChildResult))]
