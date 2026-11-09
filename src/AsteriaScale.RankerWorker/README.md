@@ -41,6 +41,9 @@ The worker validates both length and SHA-256 before loading any artifact:
 The CPU path is explicitly pinned to `Microsoft.ML.OnnxRuntime` 1.27.1 and
 uses the unquantized FP32 reference graph. The previous full dynamic-INT8
 artifact was removed because it changed both top choices and score margins.
+The same package runs on both platforms: it supplies `onnxruntime.dll` to the
+win-x64 build and `libonnxruntime.dylib` to the osx-arm64 build
+(`src/AsteriaScale.RankerWorker.MacOS`, see "macOS (osx-arm64)" below).
 
 ## Removed CPU profiles
 
@@ -78,9 +81,15 @@ Models/
 
 All four paths, sizes, hashes, manifest fields and tokenizer special IDs are
 validated before the ONNX session is created. Read leases remain alive for the
-graph and external-data file while inference is possible, so neither can be
-replaced after validation. No ConSeC request can run on NPU or fall back to
-GlossBERT.
+graph and external-data file while inference is possible, so on Windows
+neither can be replaced after validation. On macOS the guarantee is weaker
+("validated at load"): .NET maps `FileShare` to an advisory `flock(2)`, so a
+lease refuses only another opener that asks for an exclusive lock, while any
+other process can still replace, truncate or delete the file, and ONNX Runtime
+reopens the graph by path and maps external data copy-on-write. This guarantee
+was chosen for 20.1 as the default during implementation; the owner may
+revisit it. Hardening it is a roadmap card 20 follow-up. No ConSeC request can
+run on NPU or fall back to GlossBERT.
 
 The immutable runtime identity is:
 
@@ -136,7 +145,10 @@ accuracy). The NPU artifact is a faster explicit option: it accepted 16
 decisions, of which 15 matched. The worker never silently substitutes CPU for
 a failed NPU request.
 
-## NPU fail-closed proof
+## NPU fail-closed proof (Windows only)
+
+The NPU path exists only in the Windows build, which reaches the certified
+VitisAI provider through Windows ML. On macOS see "macOS (osx-arm64)" below.
 
 `--provider npu` requires an optimal compatibility result for the selected AMD
 NPU and exact Int64 `[4,64]` inputs plus Float `[4,2]` classifier output. After
@@ -162,3 +174,28 @@ dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csp
 Every check must report the current protocol, exact pinned model identity and
 pipeline, and finish without fallback. The model-specific regression suite
 asserts the expected selected GroupId and margin behavior.
+
+## macOS (osx-arm64)
+
+`src/AsteriaScale.RankerWorker.MacOS` builds these same sources (by link) for
+Apple Silicon, CPU only (roadmap 20.1). It declares no Content, so no build
+copies a model bundle into `bin/`; the worker reads the bundle in place
+through `--model-directory`. Only the ConSeC check applies there: the
+GlossBERT CPU artifact is not in git (`model_missing`), and there is no NPU.
+
+```bash
+dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
+src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
+  --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
+```
+
+The build has no Windows ML. With `--provider npu`, and also without
+`--provider` (the default stays NPU), every model request fails with
+`npu_provider_unavailable` before any artifact is read; CPU is never
+substituted. `--smoke` then exits 1. A JSONL session keeps serving: `hello`
+succeeds, each `warm` and each well-formed `select` answers `ok:false` with
+that `errorCode` (the failure is cached), and the worker exits 0 on
+`shutdown` or end of input. Artifact leases are
+"validated at load" there (see "ConSeC CPU profile"). Never build the Windows
+project on macOS: with `EnableWindowsTargeting` it schedules a complete local
+ConSeC bundle into `bin/`.

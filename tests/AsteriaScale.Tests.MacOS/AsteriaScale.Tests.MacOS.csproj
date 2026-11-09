@@ -1,0 +1,121 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The macOS (Apple Silicon) subset of the same smoke suite (docs/MACOS.md M7,
+    roadmap 20.1). It compiles the shared sources of tests/AsteriaScale.Tests by
+    link and shares its Program.cs: Windows-only registrations and sub-checks sit
+    under #if WINDOWS there, which this plain net10.0 target leaves undefined, and
+    their #else branches declare what was not run through MacSmoke, so the run can
+    never pass for the full Windows suite.
+
+    The assembly keeps the name AsteriaScale.Tests, so the InternalsVisibleTo of
+    src/AsteriaScale.Core applies unchanged. Like the Windows test project it does
+    not reference ONNX Runtime: the macOS worker is built first only so the
+    macOS-only checks can start its apphost, and none of its outputs are copied
+    here. MacProjectParityTests keeps the links, packages and data items in step
+    with the Windows projects. Never add this project to AsteriaScale.slnx: the
+    solution is the Windows build.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AsteriaScale.Tests</AssemblyName>
+    <RootNamespace>AsteriaScale.Tests</RootNamespace>
+    <!-- A Windows-only API reached from shared code must fail this build, not the run. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
+    <SharedTestDirectory>$(MSBuildThisFileDirectory)..\AsteriaScale.Tests\</SharedTestDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <!--
+      Top level only, like the Windows project's own glob. The excluded classes
+      are reached only from registrations under #if WINDOWS in Program.cs and
+      call types of the WPF assembly or Windows-only executables.
+    -->
+    <Compile Include="$(SharedTestDirectory)*.cs"
+             Exclude="$(SharedTestDirectory)ApplicationLifecycleSafetyTests.cs;$(SharedTestDirectory)DpiCompatibilityServiceTests.cs;$(SharedTestDirectory)MagpieSafetyTests.cs;$(SharedTestDirectory)TextHookSafetyTests.cs;$(SharedTestDirectory)BuildScriptSafetyTests.cs;$(SharedTestDirectory)ConsecBundleInfrastructureTests.cs"
+             Link="Shared\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\AsteriaScale.Core\AsteriaScale.Core.csproj" />
+    <ProjectReference Include="..\..\src\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
+    <!--
+      Build order only: MacWorkerTests starts this project's apphost from its own
+      bin folder. ReferenceOutputAssembly=false keeps the worker assembly out of
+      the compilation and the output folder; MacProjectParityTests checks that no
+      ONNX Runtime file reaches this project's output.
+    -->
+    <ProjectReference Include="..\..\src\AsteriaScale.RankerWorker.MacOS\AsteriaScale.RankerWorker.MacOS.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+    <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.osx-arm64" Version="1.4.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- MacWorkerTests locates the worker built with the same Configuration without searching. -->
+    <AssemblyMetadata Include="AsteriaScaleBuildConfiguration" Value="$(Configuration)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The same worker files as tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj. -->
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerException.cs"
+             Link="RankerException.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerArtifactIntegrity.cs"
+             Link="RankerArtifactIntegrity.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerOutputProbabilities.cs"
+             Link="RankerOutputProbabilities.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\RankerSelectionLogic.cs"
+             Link="RankerSelectionLogic.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\WorkerOptions.cs"
+             Link="WorkerOptions.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecArtifactBundle.cs"
+             Link="ConsecArtifactBundle.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecTokenizer.cs"
+             Link="ConsecTokenizer.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecInputBuilder.cs"
+             Link="ConsecInputBuilder.cs" />
+    <Compile Include="..\..\src\AsteriaScale.RankerWorker\ConsecScorer.cs"
+             Link="ConsecScorer.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      On Windows this runtime data reaches the test output through the WPF
+      project reference (src/AsteriaScale/AsteriaScale.csproj); the Include and
+      Link strings are identical so MacProjectParityTests can compare them.
+    -->
+    <Content Include="..\..\assets\Dictionaries\*.tsv.gz"
+             Link="Dictionaries\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\TextHook\*.tsv"
+             Link="TextHook\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\Morphology\*.tsv.gz"
+             Link="Morphology\%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\Dictionaries\README.md"
+             Link="Dictionaries\README.md"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\Dictionaries\vn-build-manifest.json"
+             Link="Dictionaries\vn-build-manifest.json"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\tools\dictionary-source\vn-sources.lock.json"
+             Link="Dictionaries\vn-sources.lock.json"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\THIRD_PARTY_NOTICES.md"
+             Link="THIRD_PARTY_NOTICES.md"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\LICENSE"
+             Link="LICENSE"
+             CopyToOutputDirectory="PreserveNewest" />
+    <!-- The golden of tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj. -->
+    <Content Include="..\..\tools\consec-upstream-reference-golden.json"
+             Link="Ranker\Reference\consec-upstream-reference-golden.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Target Name="RequireOsxArm64"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(RuntimeIdentifier)' != 'osx-arm64'">
+    <Error Text="AsteriaScale.Tests.MacOS builds only for osx-arm64 (got '$(RuntimeIdentifier)'). The Windows suite is tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj on Windows; Intel Macs are not supported." />
+  </Target>
+</Project>

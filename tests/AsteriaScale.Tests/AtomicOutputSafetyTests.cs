@@ -75,7 +75,12 @@ internal static class AtomicOutputSafetyTests
                 raise SystemExit("an unsafe artifact path collision was accepted")
             """;
 
+#if WINDOWS
         ProcessStartInfo startInfo = new("python")
+#else
+        // macOS ships no 'python' alias; python3 is the documented prerequisite.
+        ProcessStartInfo startInfo = new("python3")
+#endif
         {
             WorkingDirectory = repositoryRoot,
             UseShellExecute = false,

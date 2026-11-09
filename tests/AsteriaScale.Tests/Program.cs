@@ -12,6 +12,12 @@ Directory.CreateDirectory(tempRoot);
 
 try
 {
+#if !WINDOWS
+    // Rejects every option and a launch through the dotnet muxer before any
+    // test runs, so a gated mode compiled out below can never fall through to
+    // a green macOS subset (TestCommandLine.cs explains the hazard).
+    MacSmoke.Begin(args);
+#endif
     if (args.Any(arg => string.Equals(arg, "--benchmark-only", StringComparison.OrdinalIgnoreCase)))
     {
         int benchmarkOnlyRankerArgument = Array.FindIndex(args, arg =>
@@ -225,6 +231,7 @@ try
                SmartDictionaryRankerModels.Normalize("unsupported") ==
                    SmartDictionaryRankerModels.GlossBert,
             "Smart dictionary ranker-model normalization failed.");
+#if WINDOWS
         Assert(HoverTranslationOverlay.SmartAccelerator(
                    GlossBertDictionarySelectorService.CpuEngineLabel + " • НЕ УВЕРЕН") == "CPU" &&
                HoverTranslationOverlay.SmartAccelerator(
@@ -235,6 +242,12 @@ try
         Assert(HoverTranslationOverlay.IsSmartUnavailableEngine(
                    GlossBertDictionarySelectorService.CpuEngineLabel + " • НЕДОСТУПЕН"),
             "GlossBERT unavailable status recognition failed.");
+#else
+        MacSmoke.Part(
+            "overlay-labels",
+            "Settings round trip",
+            "HoverTranslationOverlay accelerator/engine predicates live in the WPF assembly");
+#endif
         Assert(SmartDictionarySourceLanguages.Normalize("EN") == SmartDictionarySourceLanguages.English &&
                SmartDictionarySourceLanguages.Normalize("unsupported") == SmartDictionarySourceLanguages.Auto,
             "Smart dictionary source-language normalization failed.");
@@ -381,17 +394,35 @@ try
             "The ConSeC research profile no longer survives normalization.");
     });
 
+#if WINDOWS
     await RunAsync("Per-app DPI compatibility", () => DpiCompatibilityServiceTests.RunAsync(tempRoot));
+#else
+    MacSmoke.Skip(
+        "Per-app DPI compatibility",
+        "DpiCompatibilityService lives in the WPF assembly (registry, user32)");
+#endif
 
     await RunAsync("Model activity lifecycle gate", ModelActivityGateTests.RunAsync);
 
+#if WINDOWS
     await RunAsync(
         "Magpie config and backup safety",
         () => MagpieSafetyTests.RunAsync(tempRoot));
+#else
+    MacSmoke.Skip(
+        "Magpie config and backup safety",
+        "MagpieConfigEditor, MagpieEngineService and AutoScaleService; copies System32 ping.exe and drives powershell.exe");
+#endif
 
+#if WINDOWS
     await RunAsync(
         "Application lifecycle and theme safety",
         ApplicationLifecycleSafetyTests.RunAsync);
+#else
+    MacSmoke.Skip(
+        "Application lifecycle and theme safety",
+        "a named EventWaitHandle and PendingShowRequestState from the WPF assembly");
+#endif
 
     await RunAsync(
         "Smart semantic-ranker cold start",
@@ -571,6 +602,7 @@ try
                slangContraction.Translation.Contains("что", StringComparison.OrdinalIgnoreCase),
             $"The slang contraction layer must cover 'whaddya': {slangContraction.Translation}");
 
+#if WINDOWS
         // OCR homoglyph repair: a Cyrillic "а" inside Latin text must not
         // break phrase lookup, and genuine Russian must stay untouched.
         string repairedMixed = WindowsAiOcrService.RepairMixedScriptText(
@@ -582,6 +614,12 @@ try
             "Pure-script tokens must never be rewritten.");
         Assert(WindowsAiOcrService.RepairMixedScriptText("Привeт") == "Привет",
             "A Latin homoglyph inside a Russian token must be repaired toward Cyrillic.");
+#else
+        MacSmoke.Part(
+            "ocr-homoglyph-repair",
+            "Local dictionary lookup",
+            "WindowsAiOcrService.RepairMixedScriptText lives in the WPF assembly");
+#endif
 
         DictionaryLookupResult beaming = await dictionary.LookupAsync(
             "A beaming, innocent smile appeared on her shining face.", "beaming", 4);
@@ -1502,6 +1540,7 @@ try
         Assert(!separateRoomsSpan.IsPhrase,
             "An attributive adjective after get was mistaken for a participle.");
 
+#if WINDOWS
         Assert(HoverTranslationOverlay.PreferredWidth(
                    "pants",
                    "брюки; трусы; пыхтение; пыхтеть; трепетать; тосковать",
@@ -1553,6 +1592,12 @@ try
         Assert(
             phraseWidth > phraseBaseWidth && phraseWidth >= 320 && phraseWidth <= 430,
             "The independent TranslateGemma line does not reserve a readable card width.");
+#else
+        MacSmoke.Part(
+            "overlay-width",
+            "Smart dictionary sense grouping and surface selection",
+            "card widths are measured with a WPF Typeface");
+#endif
 
         Assert(SmartDictionarySenseResolver.CanonicalizePartOfSpeech("Adjective") == "adj" &&
                SmartDictionarySenseResolver.CanonicalizePartOfSpeech("ADV") == "adv" &&
@@ -1958,6 +2003,7 @@ try
         return Task.CompletedTask;
     });
 
+#if WINDOWS
     await RunAsync("Text hook sentence buffer", async () =>
     {
         AppSettings hookSettings = new() { TextHookEnabled = true, TextractorDirectory = tempRoot };
@@ -2036,10 +2082,21 @@ try
                shipped.Count(row => row.Key == "ags") == 6,
             $"The shipped hook-code base must load with multi-code exe support: {shipped.Count}");
     });
+#else
+    MacSmoke.Skip(
+        "Text hook sentence buffer",
+        "TextHookService (Textractor host) lives in the WPF assembly");
+#endif
 
+#if WINDOWS
     await RunAsync(
         "Text hook process isolation and token boundaries",
         () => TextHookSafetyTests.RunAsync(tempRoot));
+#else
+    MacSmoke.Skip(
+        "Text hook process isolation and token boundaries",
+        "TextHookService and HoverTranslationOverlay from the WPF assembly; copies cmd.exe as TextractorCLI.exe");
+#endif
 
     await RunAsync(
         "Smart dictionary phrase routing",
@@ -2065,13 +2122,25 @@ try
         "User dictionary editor and translation history",
         () => UserDictionaryAndHistoryTests.RunAsync(tempRoot));
 
+#if WINDOWS
     await RunAsync(
         "Build artifact rollback",
         () => BuildScriptSafetyTests.RunAsync(tempRoot));
+#else
+    MacSmoke.Skip(
+        "Build artifact rollback",
+        "drives scripts/build-state.ps1 through Windows PowerShell");
+#endif
 
+#if WINDOWS
     await RunAsync(
         "ConSeC bundle install and publish contract",
         () => ConsecBundleInfrastructureTests.RunAsync(tempRoot));
+#else
+    MacSmoke.Skip(
+        "ConSeC bundle install and publish contract",
+        "drives the ConSeC install/verify scripts through Windows PowerShell");
+#endif
 
     await RunAsync("Benchmark set schema", async () =>
     {
@@ -2397,7 +2466,11 @@ try
             biEncoderArtifacts.Any(path => path.EndsWith("eng-senses.vec", StringComparison.Ordinal)) &&
             biEncoderArtifacts.Any(path => path.EndsWith("minilm-l6-v2.onnx", StringComparison.Ordinal)) &&
             biEncoderArtifacts.Any(path =>
+#if WINDOWS
                 path.EndsWith("GlossEmbeddings\\tokenizer.json", StringComparison.Ordinal)) &&
+#else
+                path.EndsWith("GlossEmbeddings/tokenizer.json", StringComparison.Ordinal)) &&
+#endif
             biEncoderArtifacts.All(path =>
                 !path.EndsWith("stale.onnx", StringComparison.Ordinal) &&
                 !path.EndsWith("stale-experiment.onnx", StringComparison.Ordinal) &&
@@ -2612,6 +2685,7 @@ try
         "ConSeC official-reference input and scoring parity",
         () => ConsecRankerTests.RunAsync(tempRoot));
 
+#if WINDOWS
     await RunAsync("Magpie visible cursor mapping", () =>
     {
         AsteriaScale.Interop.NativeMethods.Rect source = new()
@@ -3188,6 +3262,29 @@ try
             "Separate speaker and interface labels were incorrectly merged.");
         return Task.CompletedTask;
     });
+#else
+    MacSmoke.Skip(
+        "Magpie visible cursor mapping",
+        "VisibleCursorService and Interop.NativeMethods live in the WPF assembly");
+    MacSmoke.Skip(
+        "Neural OCR wrapped sentence",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+    MacSmoke.Skip(
+        "Sentence boundaries",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+    MacSmoke.Skip(
+        "Smart OCR capture geometry",
+        "WindowsAiOcrService and Interop.NativeMethods live in the WPF assembly");
+    MacSmoke.Skip(
+        "Smart OCR unchanged-frame cache guard",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+    MacSmoke.Skip(
+        "Smart OCR sentence stabilization",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+    MacSmoke.Skip(
+        "Screen OCR block grouping",
+        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
+#endif
 
     await RunAsync("Concurrent settings saves", async () =>
     {
@@ -3206,6 +3303,7 @@ try
             "Temporary settings files were not cleaned up.");
     });
 
+#if WINDOWS
     await RunAsync("Magpie config edit", async () =>
     {
         string path = Path.Combine(tempRoot, "magpie", "config.json");
@@ -3328,7 +3426,19 @@ try
         Assert(!engine.IsOwnedEngineRunning,
             "The Magpie process owned by the integration test did not stop cleanly.");
     });
+#else
+    MacSmoke.Skip(
+        "Magpie config edit",
+        "MagpieConfigEditor lives in the WPF assembly");
+    MacSmoke.Skip(
+        "Installed effects",
+        "MagpieEngineService and an installed Magpie 0.12.1");
+    MacSmoke.Skip(
+        "Engine lifecycle",
+        "MagpieEngineService starts the real Magpie engine");
+#endif
 
+#if WINDOWS
     int screenOcrImageArgument = Array.FindIndex(args, arg =>
         string.Equals(arg, "--screen-ocr-image", StringComparison.OrdinalIgnoreCase));
     if (screenOcrImageArgument >= 0)
@@ -3366,6 +3476,7 @@ try
                 : $"{diagnostic.Selection.HoveredWord} | {diagnostic.Selection.Text} | index={diagnostic.Selection.CharacterIndex}"));
         });
     }
+#endif
 
     int rankerBenchmarkArgument = Array.FindIndex(args, arg =>
         string.Equals(arg, "--ranker-benchmark", StringComparison.OrdinalIgnoreCase));
@@ -3438,6 +3549,7 @@ try
                 registerOptions.CpuModel));
     }
 
+#if WINDOWS
     if (args.Any(arg => string.Equals(arg, "--live", StringComparison.OrdinalIgnoreCase)))
     {
         await RunAsync("Live scaling handshake", async () =>
@@ -3484,8 +3596,29 @@ try
             }
         });
     }
+#endif
 
+#if WINDOWS
     Console.WriteLine(string.Format("PASS: {0} smoke tests", passed));
+#else
+    // The macOS-only checks run after the shared set so the shared count and
+    // order stay comparable with the Windows run. The project parity check
+    // reads this file as each build compiles it and fails unless the Windows
+    // default-path registrations and the ones run or skipped here have the same
+    // names, in the same order, numbering MacSmoke.SharedRegistrationCount;
+    // Summarize then fails if a registration was neither run nor skipped.
+    int sharedPassed = passed;
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "project parity with the Windows projects",
+        MacProjectParityTests.RunAsync);
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "worker refuses NPU without CPU fallback",
+        MacWorkerTests.VerifyNpuRefusedWithoutFallbackAsync);
+    await RunAsync(
+        MacSmoke.MacOnlyPrefix + "worker answers a ConSeC request on the real bundle",
+        MacWorkerTests.VerifyConsecSmokeOnRealBundleAsync);
+    Console.WriteLine(MacSmoke.Summarize(sharedPassed, passed - sharedPassed));
+#endif
     return 0;
 }
 catch (Exception ex)
@@ -3509,6 +3642,9 @@ async Task RunAsync(string name, Func<Task> test)
 {
     await test();
     passed++;
+#if !WINDOWS
+    MacSmoke.Record(name);
+#endif
     Console.WriteLine("ok  " + name);
 }
 
@@ -3662,9 +3798,21 @@ static long AssertManagedBudget(long baselineBytes, long budgetBytes, string sub
         used = Math.Min(used, SettledManagedBytes() - baselineBytes);
     }
 
+#if WINDOWS
     Assert(used < budgetBytes,
         $"{subject} exceeded its {budgetBytes / 1024 / 1024} MB managed-memory budget: " +
         $"{used / 1024d / 1024d:N1} MB retained.");
+#else
+    // The budgets were calibrated on Windows. On macOS the settled figure
+    // still includes memory a later collection releases (a later subject
+    // measured negative), so it is reported until a macOS budget is measured
+    // (ROADMAP card 20 follow-up) instead of being loosened without data.
+    MacSmoke.Part(
+        "managed-memory-budget",
+        subject,
+        $"retained {used / 1024d / 1024d:N1} MB against the Windows " +
+        $"{budgetBytes / 1024 / 1024} MB budget; NOT ENFORCED on macOS");
+#endif
     return used;
 }
 

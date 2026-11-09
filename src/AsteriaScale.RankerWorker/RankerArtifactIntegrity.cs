@@ -17,6 +17,13 @@ internal static class RankerArtifactIntegrity
             // FileShare.Read is intentional: after authentication, another
             // process may still read the artifact, but it cannot replace,
             // truncate or delete the path while a native loader reopens it.
+            // That exclusion is Windows FileShare semantics. On macOS .NET
+            // maps FileShare to an advisory flock(2): only another opener that
+            // asks for an exclusive lock is refused, while any other process
+            // can still replace, truncate or delete the file. ONNX Runtime
+            // later reopens the file by path and maps external data
+            // copy-on-write, so on macOS an artifact is "validated at load"
+            // rather than pinned for the session (see the worker README).
             stream = new FileStream(
                 path,
                 FileMode.Open,

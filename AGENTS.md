@@ -44,9 +44,29 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 - `src/AsteriaScale.RankerProtocol` — the shared host/worker contract: JSONL
   protocol, `RankerProviderTraits`, `RankerAbstention`.
 - `src/AsteriaScale.RankerWorker` — the ONNX worker. Some of its files are
-  compiled into the test project via `<Compile Include … Link>` in
-  `AsteriaScale.Tests.csproj`.
+  compiled into both test projects via `<Compile Include … Link>` in
+  `AsteriaScale.Tests.csproj` and `AsteriaScale.Tests.MacOS.csproj`.
+- `src/AsteriaScale.RankerWorker.MacOS` — the osx-arm64 CPU build of the same
+  worker sources (roadmap 20.1). It links them, declares no Content (models are
+  read in place through `--model-directory`, so no build copies a bundle) and
+  is never added to `AsteriaScale.slnx`.
 - `tests/AsteriaScale.Tests` — the smoke suite.
+- `tests/AsteriaScale.Tests.MacOS` — the macOS subset of the same suite. It
+  shares `Program.cs`; Windows-only parts sit under `#if WINDOWS` and declare
+  themselves through `MacSmoke.cs`. Never added to `AsteriaScale.slnx`.
+- `tools/macos/check-windows-identity.sh` — proves on a Mac that a change
+  leaves every Windows build output byte-identical.
+
+A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
+`#else` branch by default (the SDK defines `WINDOWS` only for the
+`net10.0-windows…` targets), so the Windows-visible tokens stay unchanged;
+prove it with the identity tool. An edit that changes Windows-visible tokens
+outside `#if` is allowed only when the identity tool proves the Windows outputs
+identical (roadmap 20.1 has five: a dead `using` removed, and four constants
+read from `PreviousContextLimits` in Core instead of their equal
+`TextHookService` aliases). A shared-source change the tool cannot prove
+identical needs the Windows build and smoke run on the owner's Windows
+machine.
 
 ## Prerequisites
 
@@ -58,8 +78,16 @@ Windows PowerShell. Build and the default smoke run need no model artifacts
 (ranker tests use fake bytes); the ConSeC tokenizer check is skipped
 silently when that ignored bundle is absent, so a clean-clone pass covers
 less than the owner's machine. `scripts/build.cmd` and every benchmark need the
-real artifacts (docs/DEVELOPMENT.md). Only Core and RankerProtocol target plain
-`net10.0`; on a non-Windows host say so instead of reporting a test run.
+real artifacts (docs/DEVELOPMENT.md).
+
+On macOS: Apple Silicon, macOS 14.0+ (the minimum of the ONNX Runtime 1.27.1
+osx-arm64 library), the arm64 .NET 10 SDK and Python 3.11+ as `python3`; no
+PowerShell or Magpie. There only the CPU worker (ConSeC) and the macOS subset
+of the smoke suite build and run. Report that run as the "macOS subset" with
+its final `PASS (macOS subset): …` line, never as the smoke suite; the line
+also states whether the ConSeC real-bundle checks ran. Keep a macOS clone
+outside iCloud Drive-synced folders, or in a folder whose name ends in
+`.nosync` (docs/DEVELOPMENT.md, «macOS (Apple Silicon)»).
 
 ## Commands
 
@@ -74,7 +102,8 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Relea
 
 An unrecognized option fails the run instead of falling through to the default
 smoke set, so a removed gated mode cannot report a pass it never performed.
-The Python suites are offline and stdlib-only; the C# smoke does not run them:
+The Python suites are offline and stdlib-only; the C# smoke does not run them.
+On macOS run each command below as `python3 …`:
 
 | After changing | Run |
 |---|---|
@@ -83,13 +112,45 @@ The Python suites are offline and stdlib-only; the C# smoke does not run them:
 | `tools/sense-gate-early-exit.py` | `python tools/test-sense-gate-early-exit.py` |
 | `tools/fetch-benchmark-datasets.py` | `python tools/tests/test_fetch_benchmark_datasets.py` |
 
+**Safe on a macOS clone (Apple Silicon).** Build the worker and the macOS
+subset (the test build also builds the worker first), run the subset, and
+check the ConSeC worker with the bundle read in place:
+
+```bash
+dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
+dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
+dotnet run --project tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release --no-build
+src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
+  --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
+```
+
+After editing a shared source or anything else the Windows build reads, prove
+that the Windows outputs did not change; it must print
+`IDENTICAL: <n> Windows output files` and exit 0 (`TMPDIR` must lie outside
+the clone). The one expected exception is an edit to `THIRD_PARTY_NOTICES.md`,
+which the WPF project copies: then exactly one manifest line,
+`./Tests/THIRD_PARTY_NOTICES.md`, differs and the tool exits 1.
+
+```bash
+bash tools/macos/check-windows-identity.sh <base-rev> [--worktree | <candidate-rev>]
+```
+
+Never build `AsteriaScale.slnx`,
+`src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj` or
+`tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj` in the live tree on macOS:
+they stop at NETSDK1100, and with `EnableWindowsTargeting` the Windows worker
+schedules the local 1.6 GB CC BY-NC-SA ConSeC bundle into `bin/`. The identity
+tool builds them only inside an export that cannot contain the bundle.
+
 **Owner's machine only, and only after asking:** `./scripts/build.cmd`
 (replaces `dist/`; close the tray app first — it locks the EXE),
 `./scripts/run.cmd`, `scripts/verify-*.ps1`, and any
 `--live`, `--*-benchmark` or `--translation-suite` run. On a clean clone
 `build.cmd` fails on the missing model artifacts (`Get-AsteriaRequiredRankerFiles`
 in `scripts/build-state.ps1`) or the missing `CN=Asteria Scale Local` signing
-certificate. That is expected: report it, never weaken the checks.
+certificate. That is expected: report it, never weaken the checks. The macOS
+subset rejects every option, so the gated modes and benchmarks stay
+Windows-only until benchmark provenance records the platform (roadmap card 20).
 
 **Never on your own:** `./scripts/install.cmd` (it runs winget with
 `--accept-package-agreements` and registers the MSIX identity with
@@ -132,7 +193,11 @@ certificate creation, `Add-AppxPackage`.
    leases, NPU input/output shapes) may still branch on the worker's
    `RankerProvider` enum. `RankerEngine.cs` still tests the enum in one place
    where `AlternativeModels` is the trait (the ConSeC CPU-only guard) — do not
-   copy that pattern. TranslateGemma follows the same rule: the
+   copy that pattern. The macOS worker build has no Windows ML: every NPU
+   request fails with `npu_provider_unavailable` before any artifact is read
+   (`--smoke` exits 1; a JSONL session answers each `warm`/`select` with that
+   error and keeps serving), the default provider stays NPU, and that platform
+   gate counts as worker-internal session setup. TranslateGemma follows the same rule: the
    CPU/Vulkan backend (and Vulkan's coopmat-free path) is explicit and part of
    the model identity, and a Vulkan failure never starts CPU.
 4. **Abstention is margin-only** (threshold `0.25`, frozen on the dev set,
@@ -186,11 +251,34 @@ certificate creation, `Add-AppxPackage`.
 - Smoke tests are plain `await RunAsync("name", ...)` blocks in
   `tests/AsteriaScale.Tests/Program.cs` or `internal static class XxxTests`
   files with a `RunAsync(tempRoot)` entry, registered in `Program.cs`.
-- `InternalsVisibleTo("AsteriaScale.Tests")` is already in place.
+- `InternalsVisibleTo("AsteriaScale.Tests")` is already in place. The macOS
+  test assembly keeps the name `AsteriaScale.Tests`, so it applies there too.
 - Dictionary tests must use the internal `LocalDictionaryService(bundled, user)`
   constructor with temp directories — never write into the real
-  `%LOCALAPPDATA%\AsteriaScale\Dictionaries`.
+  `%LOCALAPPDATA%\AsteriaScale\Dictionaries`. On macOS LocalApplicationData is
+  `~/Library/Application Support`; a run may write
+  `AsteriaScale/hover-translation.log` there, and it creates
+  `AsteriaScale/Dictionaries` there: the shared test "Aligned dictionary sense
+  metadata" constructs `LocalDictionaryService(sensePath)`, which keeps the
+  default user directory, so its load creates that folder and reads any
+  `eng-rus*`/`jpn-rus*` user layers in it. This pre-existing behaviour is
+  shared with the Windows suite, where the folder is under `%LOCALAPPDATA%`.
 - A behavior fix ships with a test that fails before the fix.
+- The macOS subset shares `Program.cs`. A registration that cannot run on
+  macOS is wrapped as `#if WINDOWS … #else MacSmoke.Skip("<exact name>",
+  "<the Windows-only API that forces it>"); #endif`; a Windows-only sub-check
+  inside a registration that does run uses `MacSmoke.Part`. Never skip by
+  catching an exception (`PlatformNotSupportedException`, `Win32Exception` or
+  any other). The check "macOS: project parity with the Windows projects"
+  reads `Program.cs` as each build compiles it (it understands only
+  `#if WINDOWS`, `#if !WINDOWS`, `#else` and `#endif`) and fails unless the
+  default-path `RunAsync` names of the Windows build and the names the macOS
+  build runs or skips are identical, in the same order, without duplicates,
+  and number `MacSmoke.SharedRegistrationCount`. So adding or removing a
+  default registration, Windows-only ones included, needs the count updated
+  in the same change, and a Windows-only one also needs its matching
+  `MacSmoke.Skip`; renaming a Windows-only registration needs only the
+  `MacSmoke.Skip` name changed with it. Otherwise the macOS run fails.
 
 ## Danger zones
 

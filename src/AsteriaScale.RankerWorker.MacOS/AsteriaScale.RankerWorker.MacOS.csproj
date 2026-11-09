@@ -1,0 +1,57 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The osx-arm64 CPU build of the same ranker worker (docs/MACOS.md M7,
+    roadmap 20.1). It compiles the shared sources of src/AsteriaScale.RankerWorker
+    by link, never by copy (AGENTS.md rule 2); Windows-only code in them sits
+    under #if WINDOWS, which this plain net10.0 target leaves undefined, so the
+    NPU path fails with npu_provider_unavailable and the default provider stays NPU.
+
+    There is deliberately no Content, None or EmbeddedResource item: models are
+    read in place through the model-directory option, so no build of this
+    project can copy the CC BY-NC-SA ConSeC bundle (or any other model) into bin.
+
+    Package versions must match src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj;
+    MacProjectParityTests enforces this. Never add this project to AsteriaScale.slnx:
+    the solution is the Windows build.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AsteriaScale.RankerWorker</AssemblyName>
+    <RootNamespace>AsteriaScale.RankerWorker</RootNamespace>
+    <Version>1.0.0</Version>
+    <!-- A Windows-only API reached from shared code must fail this build, not the run. -->
+    <WarningsAsErrors>$(WarningsAsErrors);CA1416</WarningsAsErrors>
+    <SharedWorkerSourceDirectory>$(MSBuildThisFileDirectory)..\AsteriaScale.RankerWorker\</SharedWorkerSourceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Top level only: the Windows project's obj folder holds generated *.cs files. -->
+    <Compile Include="$(SharedWorkerSourceDirectory)*.cs" Link="Shared\%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AsteriaScale.RankerProtocol\AsteriaScale.RankerProtocol.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.27.1" />
+    <PackageReference Include="Tokenizers.DotNet" Version="1.4.1" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.osx-arm64" Version="1.4.1" />
+  </ItemGroup>
+  <Target Name="RequireOsxArm64"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(RuntimeIdentifier)' != 'osx-arm64'">
+    <Error Text="AsteriaScale.RankerWorker.MacOS builds only for osx-arm64 (got '$(RuntimeIdentifier)'). Build win-* with src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj on Windows; Intel Macs are not supported." />
+  </Target>
+  <!--
+    ONNX Runtime's Microsoft.ML.OnnxRuntime.props (build/netstandard2.1 for
+    net10.0) adds the win-arm64 onnxruntime.dll and onnxruntime_providers_shared.dll
+    as None items whenever PlatformTarget is ARM64, which the SDK infers from
+    osx-arm64. The macOS native library comes from runtimes/osx-arm64 instead.
+  -->
+  <Target Name="DropOnnxRuntimeWindowsNatives" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <None Remove="@(None)" Condition="'%(None.Extension)' == '.dll' And $([System.String]::new('%(None.FullPath)').Contains('microsoft.ml.onnxruntime'))" />
+    </ItemGroup>
+  </Target>
+</Project>

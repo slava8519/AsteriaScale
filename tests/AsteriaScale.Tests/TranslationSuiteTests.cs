@@ -69,7 +69,7 @@ internal static class TranslationSuiteTests
         {
             PreviousContext =
             [
-                new string('x', TextHookService.MaximumContextCharacters + 1)
+                new string('x', PreviousContextLimits.MaximumCharacters + 1)
             ]
         };
         Check(TranslationSuiteRunner.IsSourceWithinModelGuard(oversizedContext) &&
@@ -627,7 +627,12 @@ internal static class TranslationSuiteTests
         string scorer = Path.Combine(repositoryRoot!, "tools", "translation-benchmark.py");
         Check(File.Exists(scorer), "The translation reporting CLI is missing.");
         string scoredReport = Path.Combine(root, "scored-report.json");
+#if WINDOWS
         var startInfo = new ProcessStartInfo("python")
+#else
+        // macOS ships no 'python' alias; python3 is the documented prerequisite.
+        var startInfo = new ProcessStartInfo("python3")
+#endif
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,

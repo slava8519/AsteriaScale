@@ -141,6 +141,9 @@ internal static class ConsecRankerTests
         string? root = FindRepositoryRoot();
         if (root is null)
         {
+#if !WINDOWS
+            MacSmoke.ConsecRealBundle = "absent: repository root not found above the test binary";
+#endif
             return;
         }
 
@@ -153,6 +156,9 @@ internal static class ConsecRankerTests
             "tokenizer.json");
         if (!File.Exists(path))
         {
+#if !WINDOWS
+            MacSmoke.ConsecRealBundle = "absent: " + path;
+#endif
             return;
         }
 
@@ -201,6 +207,9 @@ internal static class ConsecRankerTests
             ConsecInputBuilder.ComputeTensorBundleSha256(scientific) ==
                 "efc5bf2cee347d30941cf6c07cc31c50ff4b176e98ebee8746dd846fc21f81b3",
             "The installed tokenizer diverged from the mixed-case scientific golden.");
+#if !WINDOWS
+        MacSmoke.ConsecRealBundle = "checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens";
+#endif
     }
 
     private static void VerifyContextPretokenizer()
@@ -384,7 +393,14 @@ internal static class ConsecRankerTests
 
     private static string? FindRepositoryRoot()
     {
+#if WINDOWS
         DirectoryInfo? directory = new(Directory.GetCurrentDirectory());
+#else
+        // The macOS subset reports whether this check ran, so it must not
+        // depend on the shell's working directory; every other test already
+        // walks up from the binary.
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+#endif
         while (directory is not null)
         {
             if (File.Exists(Path.Combine(directory.FullName, "AsteriaScale.slnx")))

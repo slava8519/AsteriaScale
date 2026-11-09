@@ -3,7 +3,9 @@ using System.Text.Json;
 using AsteriaScale.RankerProtocol;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+#if WINDOWS
 using Microsoft.Windows.AI.MachineLearning;
+#endif
 
 namespace AsteriaScale.RankerWorker;
 
@@ -476,6 +478,16 @@ internal sealed class RankerEngine : IDisposable
             ThrowCachedInitializationFailure();
             try
             {
+#if !WINDOWS
+                // Windows ML is the only route to the certified VitisAI provider and only the
+                // Windows build contains it. Failing before any artifact is leased keeps the error
+                // from suggesting that installing NPU files would help; the failure is cached like
+                // any other initialization failure, and CPU is never substituted (rule 3).
+                if (_options.Provider == RankerProvider.Npu)
+                {
+                    throw NpuUnavailableOnThisPlatform();
+                }
+#endif
                 if (_options.CpuModel == CpuRankerModel.Consec)
                 {
                     LoadConsecCpuModel();
@@ -916,6 +928,7 @@ internal sealed class RankerEngine : IDisposable
     private async Task<NpuSessionSetup> CreateNpuSessionOptionsAsync(
         string compatibilityInfo)
     {
+#if WINDOWS
         var catalog = ExecutionProviderCatalog.GetDefault()
             ?? throw new RankerException(
                 "npu_catalog_unavailable",
@@ -967,6 +980,11 @@ internal sealed class RankerEngine : IDisposable
                 $"Windows ML could not register a certified NPU provider: {ex.Message}",
                 ex);
         }
+#else
+        // Unreachable while EnsureLoadedAsync rejects NPU first; kept so no later caller can
+        // reach NPU session setup without Windows ML.
+        await Task.FromException(NpuUnavailableOnThisPlatform());
+#endif
 
         var environment = OrtEnv.Instance();
         var npuDevice = environment
@@ -1841,6 +1859,14 @@ internal sealed class RankerEngine : IDisposable
             .ToArray();
     }
 
+#if !WINDOWS
+    private static RankerException NpuUnavailableOnThisPlatform() => new(
+        "npu_provider_unavailable",
+        "The VitisAI NPU ranker needs Windows ML, which only the Windows build of the worker contains; " +
+        $"{System.Runtime.InteropServices.RuntimeInformation.OSDescription} " +
+        $"({System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}) has no NPU execution provider. " +
+        "Request --provider cpu explicitly; CPU is never substituted.");
+#endif
 }
 
 internal sealed record RankerSelection(

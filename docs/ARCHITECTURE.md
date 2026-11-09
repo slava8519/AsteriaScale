@@ -9,8 +9,8 @@
 | `src/AsteriaScale` | WPF-приложение и всё, что требует Windows: UI и оверлеи, трей, горячие клавиши, Magpie, DPI, Windows AI OCR, Textractor, оркестрация наведения (`HoverTranslationService`) |
 | `src/AsteriaScale.Core` | Платформенно-нейтральное ядро перевода (`net10.0`, без RID): словари и нормализация, морфология, выбор смысла, каркас и фразовый перевод, TranslateGemma-клиент, кэши, настройки. Вызовы Windows-API сюда не попадают: CA1416 — ошибка сборки. Строковые имена Windows-бинарников CA1416 не ловит: путь `Ranker/AsteriaScale.RankerWorker.exe` и архивы llama.cpp `win-cpu-x64`/`win-vulkan-x64` с `llama-server.exe` пока зашиты в ядро и для macOS должны прийти от хоста. Основа будущей macOS-версии ([MACOS.md](MACOS.md)) |
 | `src/AsteriaScale.RankerProtocol` | Общий JSONL-протокол v4 между приложением и definition-aware ranker-воркером, а также то, о чём обе стороны обязаны договориться: порог воздержания (`RankerAbstention`), привязка вхождения цели (`RankerTargetAnchor`), признаки провайдеров (`RankerProviderTraits`) |
-| `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime |
-| `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI |
+| `src/AsteriaScale.RankerWorker` | Изолированный консольный процесс: GlossBERT или ConSeC для умного словаря и EN semantic evidence на ONNX Runtime. `win-x64`: CPU и NPU (Windows ML/VitisAI); `osx-arm64`: только CPU — эти же исходники компилирует по ссылке `src/AsteriaScale.RankerWorker.MacOS` (без `Content`, не входит в `AsteriaScale.slnx`) |
+| `tests/AsteriaScale.Tests` | Консольный smoke-набор (без xUnit); gated-режимы по аргументам CLI. `tests/AsteriaScale.Tests.MacOS` — macOS-подмножество того же набора с общим `Program.cs` (Windows-only части под `#if WINDOWS`), не входит в `AsteriaScale.slnx` |
 | `scripts/` | Сборка, установка, запуск, генерация словарей (`build-dictionaries.py`) |
 | `assets/` | Данные: словари TSV.gz (`Dictionaries/`), морфословарь (`Morphology/`), таблица hook-кодов для Textractor (`TextHook/`), бенчмарк-наборы ранжировщика (`Ranker/`) и исторические наборы полного перевода (`Translation/`; их CLI-режимы удалены вместе с Qwen-конвейером) |
 | `packaging/Identity` | MSIX identity-пакет для Windows AI API |
@@ -172,7 +172,11 @@ CA1416 не ловит строковые имена Windows-бинарнико�
 доказательств, что и любая правка ranker. Настройка ONNX-сессии внутри воркера
 (`RankerEngine.cs`: проверка NPU-исполнения, формы тензоров, artifact tag в
 `modelVersion`) по-прежнему сравнивает `RankerProvider` напрямую — новый
-провайдер должен пройти и эти места.
+провайдер должен пройти и эти места. Туда же относится платформенный запрет
+NPU вне Windows: первая проверка внутри `EnsureLoadedAsync` под
+`#if !WINDOWS` отвечает `npu_provider_unavailable` до аренды любых артефактов,
+а регистрация провайдера через каталог Windows ML в
+`CreateNpuSessionOptionsAsync` стоит под `#if WINDOWS`.
 
 ## Конвейер hover-перевода
 
@@ -473,7 +477,7 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 
 1. **Каноническая форма ключей.** Все ключи всех слоёв нормализуются при загрузке той же функцией, что и ключи поиска (`NormalizeEnglish`: NFC, invariant lowercase с закреплёнными expanding folds, `’`→`'`, схлопывание пробелов и удаление только внешней display-пунктуации; внутренние цифры и пунктуация сохраняются; `NormalizeJapanese`: только японские символы). Python-генератор (`normalize_english`) обязан давать ту же форму. Ключ предложения — отдельная token-only форма без пунктуации и цифр (`NormalizeEnglishSentenceKey` / `normalize_english_sentence_key`), в точности как в генераторе.
 2. **GroupId == индекс.** `CreateRankerPlan` нумерует outcomes последовательно; `visibleTranslations` упорядочены по GroupId; кэш валидирует индекс против кандидатов. Дедупликация в трёх местах (resolver `NormalizeRussianSurface`, кэш `NormalizeCandidate`, воркер `GroupScores`) должна оставаться согласованной.
-3. **Никакого тихого fallback провайдера.** Запрос NPU исполняется на NPU или падает с ошибкой; воркер обязан вернуть заявленные provider/device/model, хост валидирует (`ValidateResponse`). Несовместимый драйвер → словарный результат, выбор CPU — только явный.
+3. **Никакого тихого fallback провайдера.** Запрос NPU исполняется на NPU или падает с ошибкой; воркер обязан вернуть заявленные provider/device/model, хост валидирует (`ValidateResponse`). Несовместимый драйвер → словарный результат, выбор CPU — только явный. На macOS NPU-провайдера нет: запрос NPU — явная ошибка `npu_provider_unavailable`.
 4. **Воздержание только по margin.** Порог `0.25` заморожен по dev-набору; менять его или критерии принятия решения можно только после прогона `--ranker-benchmark` (см. [RESEARCH.md](RESEARCH.md)). Значение объявлено один раз в `RankerAbstention.MarginThreshold` (общая protocol-сборка) и входит в ключи обоих кэшей решений: перекалибровка обязана инвалидировать сохранённые вердикты, иначе воздержания, которые новый порог превратил бы в решения, продолжат читаться с диска.
 5. **Fail-open POS-фильтр.** Фильтр не применяется, если оставляет < 2 групп или не меняет состав; неполные метаданные не могут стереть все смыслы.
 6. **Дисциплина IPC.** После записи запроса в stdin воркера транзакция не отменяется: ровно один ответ вычитывается из stdout, иначе следующий запрос получит чужой ответ. Ошибка протокола → kill всего дерева процесса. stderr дренируется отдельно и никогда не смешивается с JSONL.

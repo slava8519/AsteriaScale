@@ -173,9 +173,14 @@ Exact local bundle:
 | `tokenizer.json` | 3,560,546 | `DF91C443C8EAC73A42FF72086F25B16AD3B244AE2BF0303625298265D50F73F1` |
 | `model-manifest.json` | 4,407 | `13A8A14E3938D4F20519F7DA79A51F75543ECED352BD39456B5A43C4D93402B8` |
 
-The bundle is ignored by git and excluded from a normal build/distribution.
-For personal scientific/non-commercial work under CC BY-NC-SA 4.0, install and
-verify it explicitly:
+The bundle is ignored by git and is never part of a public distribution. A
+Windows worker build or publish copies a complete local bundle into its own
+output (`AsteriaScale.RankerWorker.csproj` includes `Models\Consec\**` once all
+four files exist), so a local `dist/` contains it; the macOS worker project
+(`src/AsteriaScale.RankerWorker.MacOS`) never copies it and reads it in place
+through `--model-directory`. For personal scientific/non-commercial work under
+CC BY-NC-SA 4.0, install and verify it explicitly (Windows; macOS has no
+installer, see [docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md)):
 
 ```powershell
 .\scripts\install-consec.cmd `

@@ -47,7 +47,8 @@ optional neural sentence translation all run locally, with no cloud calls.
   the model's cache identity.
 - **Groundwork for a second platform.** The translation core (~20k lines) is a separate
   `net10.0` library; calling a Windows-only API there fails the build (CA1416 as error).
-  The ranker worker and three hard-coded binary names are still Windows-specific.
+  The CPU ranker worker also builds for Apple Silicon (ConSeC, roadmap 20.1); three
+  hard-coded Windows binary names remain in the core.
 
 ## Results
 
@@ -93,10 +94,10 @@ graph LR
 ## Tech stack
 
 C# / .NET 10 · WPF and Win32 interop · Windows AI Text Recognition (NPU) · ONNX Runtime
-(CPU, AMD Vitis AI NPU) · llama.cpp (CPU, Vulkan) · Python (dictionary builds, ONNX
-export, benchmarking) · PowerShell build with MSIX identity signing.
+(CPU on Windows and Apple Silicon, AMD Vitis AI NPU) · llama.cpp (CPU, Vulkan) · Python
+(dictionary builds, ONNX export, benchmarking) · PowerShell build with MSIX identity signing.
 
-About 36k lines of C# in `src/`, 25k lines of C# tests, 13k lines of Python tooling.
+About 36k lines of C# in `src/`, 26k lines of C# tests, 13k lines of Python tooling.
 
 ## How this project is built
 
@@ -119,7 +120,8 @@ Version 0.9.3, a personal project.
   have no public download yet, so a clean clone builds and passes the tests but cannot
   publish the app (details in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
 - A macOS version is planned as a native Swift app written from scratch on top of the
-  platform-neutral core (decisions and open questions: [docs/MACOS.md](docs/MACOS.md)).
+  platform-neutral core (decisions and open questions: [docs/MACOS.md](docs/MACOS.md);
+  status: Track III, card 20 of [docs/ROADMAP.md](docs/ROADMAP.md)).
 
 ## Build and test
 

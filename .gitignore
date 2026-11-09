@@ -7,6 +7,9 @@ dist/
 *.user
 *.suo
 
+# macOS Finder metadata: a macOS clone writes these into every folder it opens.
+.DS_Store
+
 # GlossBERT model artifacts: 626 MB, individual files exceed GitHub's 100 MB
 # limit. Distribute via Git LFS or GitHub Release assets; expected sizes and
 # SHA-256 hashes are pinned in assets/Ranker/README.md and RankerEngine.cs.
@@ -25,8 +28,11 @@ src/AsteriaScale.RankerWorker/Models/Sandwich/
 
 # ConSeC is a non-commercial research-only ONNX bundle with 1.6 GB external
 # tensor data. Install it locally with scripts/install-consec.ps1; never add
-# its payload or generated manifest to ordinary git history.
-src/AsteriaScale.RankerWorker/Models/Consec/
+# its payload or generated manifest to ordinary git history. No trailing
+# slash: a directory-only pattern does not match a symlink, so a symlinked
+# Consec would surface as untracked and reach the working-tree export of
+# tools/macos/check-windows-identity.sh (which refuses it).
+src/AsteriaScale.RankerWorker/Models/Consec
 
 # Dictionary source dumps (downloaded separately, multi-GB)
 tools/dictionary-source/*.bz2

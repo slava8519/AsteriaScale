@@ -364,9 +364,9 @@ internal static class TranslationSuiteRunner
         long contextCharacters = benchmarkCase.PreviousContext.Sum(
             value => (long)value.Length);
         return IsSourceWithinModelGuard(benchmarkCase) &&
-               benchmarkCase.PreviousContext.Count <= TextHookService.MaximumContextSentences &&
+               benchmarkCase.PreviousContext.Count <= PreviousContextLimits.MaximumSentences &&
                contextCharacters <=
-                   TextHookService.MaximumContextCharacters;
+                   PreviousContextLimits.MaximumCharacters;
     }
 
     internal static bool IsSourceWithinModelGuard(TranslationSuiteCase benchmarkCase)

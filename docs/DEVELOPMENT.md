@@ -5,13 +5,14 @@
 | Компонент | Версия | Обязательно |
 |---|---|---|
 | Windows 11 | build 26100+ (для NPU OCR) | да |
+| macOS (Apple Silicon) | 14.0+ (`libonnxruntime.dylib` ORT 1.27.1) | только CPU-воркер (ConSeC) и macOS-подмножество smoke |
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
 | TranslateGemma 4B Q4_K_M + llama.cpp CPU/Vulkan | b9632 | опционально, независимый перевод фразы второй строкой |
 | AMD NPU + драйвер | 32.0.203.329+ | опционально (NPU-путь GlossBERT) |
 | ConSeC/WNGT | upstream `9602b5fd…`, CC BY-NC-SA 4.0 | опционально, личный научный/некоммерческий CPU ranker |
-| Python | 3.11+ (`python` в `PATH`) | для полного smoke-набора и регенерации артефактов |
+| Python | 3.11+ (`python` в `PATH` на Windows, `python3` на macOS) | для полного smoke-набора, macOS-подмножества и регенерации артефактов |
 
 ## Артефакты модели GlossBERT
 
@@ -44,7 +45,10 @@
 заглушки, а тест-проект не ссылается на ONNX Runtime. `scripts/build.cmd`,
 напротив, без условий требует все пять файлов GlossBERT и три файла
 GlossEmbeddings (`Get-AsteriaRequiredRankerFiles` в `scripts/build-state.ps1`)
-и останавливается с `Publish is incomplete. Missing: …`.
+и останавливается с `Publish is incomplete. Missing: …`. `AsteriaScale.slnx`
+собирается только на Windows; на macOS проекты собираются по одному (раздел
+«macOS (Apple Silicon)» ниже), и macOS-проект воркера ничего не копирует из
+`Models`.
 
 Раскладка:
 
@@ -114,6 +118,14 @@ CPU-only, сообщает `pipeline=consec-independent`, сохраняет п�
 и отказывается от входа длиннее 512 токенов вместо скрытого усечения или
 fallback. Exact model/cache identity и размеры/SHA приведены в
 [assets/Ranker/README.md](../assets/Ranker/README.md).
+
+На macOS установщика и проверочного скрипта нет: оба написаны на PowerShell.
+Бандл лежит в том же ignored-каталоге `src/AsteriaScale.RankerWorker/Models/Consec`
+(те же условия CC BY-NC-SA 4.0), а проверкой служит собственная сверка
+воркера при каждой загрузке: четыре пути, размеры, SHA-256, поля manifest и
+special IDs токенизатора. macOS-воркер читает бандл на месте через
+`--model-directory src/AsteriaScale.RankerWorker/Models` и никуда его не
+копирует (раздел «macOS (Apple Silicon)»).
 
 Безопасный export и официальный reference gate описаны в
 [`tools/README-consec.md`](../tools/README-consec.md). Gate уже пройден против
@@ -313,12 +325,230 @@ dotnet run --project tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj -c Relea
 
 Smoke-набор — консольная программа без тестового фреймворка: каждый тест — `await RunAsync("имя", ...)` c `Assert`. По умолчанию прогоняются все базовые тесты, включая короткий реальный жизненный цикл Magpie («Engine lifecycle»). Тестовые классы — `internal static class XxxTests` с `RunAsync(tempRoot)`; доступ к internal-членам приложения открыт через `InternalsVisibleTo("AsteriaScale.Tests")`.
 
+### macOS (Apple Silicon)
+
+На macOS собираются и запускаются только CPU-воркер (ConSeC) и
+macOS-подмножество smoke-набора (роадмап №20.1, решение M7 в
+[MACOS.md](MACOS.md)). Оба проекта — `net10.0`/`osx-arm64`, не входят в
+`AsteriaScale.slnx` и компилируют те же исходники по ссылке, а не копией:
+
+- `src/AsteriaScale.RankerWorker.MacOS` — воркер без Windows ML и без единого
+  `Content`: модели читаются на месте через `--model-directory`, поэтому его
+  сборка никогда не копирует бандл ConSeC в `bin/`;
+- `tests/AsteriaScale.Tests.MacOS` — подмножество того же набора с общим
+  `Program.cs`. Windows-only части стоят под `#if WINDOWS`, а ветки `#else`
+  объявляют, что не выполнено (`MacSmoke.cs`). Сборка тест-проекта сначала
+  собирает macOS-воркер (ссылка только задаёт порядок сборки); как и Windows
+  тест-проект, он не ссылается на ONNX Runtime.
+
+```bash
+dotnet build tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release
+dotnet run --project tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release --no-build
+```
+
+Подмножество запускается только через apphost: `dotnet run` или
+`bin/Release/net10.0/osx-arm64/AsteriaScale.Tests`. Ядро ищет словари и
+морфологию рядом с процессом, а под `dotnet AsteriaScale.Tests.dll` это каталог
+установки `dotnet`, где морфологический лексикон молча оказался бы пустым,
+поэтому такой запуск завершается ошибкой. Любой аргумент тоже ошибка:
+`MacSmoke.Begin` отвергает его до первого теста, поэтому gated-режимы и
+бенчмарки на macOS недостижимы, пока provenance бенчмарка не различает
+платформу. Их код при этом компилируется; под `#if WINDOWS` вынесены только
+`--live` и режимы OCR-изображений.
+
+Из `55` общих регистраций выполняются `38`. Остальные `17` Windows-only
+объявлены на месте через `MacSmoke.Skip` с названием API, которое их требует
+(WPF-сборка, Magpie, Windows AI OCR, Windows PowerShell, `cmd.exe`), и
+печатаются строками `skip`. Шесть Windows-only проверок внутри выполняемых
+тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
+них — бюджет управляемой памяти, который один тест, «Local dictionary
+lookup», печатает дважды (замеры `Layered dictionaries` и `Aligned sense
+metadata`), поэтому строк `note` семь. Затем идут три проверки только для
+macOS (префикс `macOS: `):
+
+- паритет с Windows-проектами: пакеты и их версии, общие файлы воркера,
+  данные тест-проекта, отсутствие `Content`/`None`/`EmbeddedResource` у
+  macOS-воркера, отсутствие ONNX Runtime в выходе тестов и регистрации общего
+  `Program.cs` (см. ниже);
+- отказ воркера от NPU без перехода на CPU: `--provider npu --smoke` и
+  `--smoke` с провайдером по умолчанию дают `npu_provider_unavailable` и код
+  выхода `1`;
+- ответ воркера на запрос ConSeC: `--smoke` с бандлом, прочитанным на месте из
+  `src/AsteriaScale.RankerWorker/Models`, проверяет выбор, провайдер, pipeline
+  и точную identity модели.
+
+Эталонный прогон: `41` строка `ok`, `17` — `skip`, `7` — `note`, последняя
+строка:
+
+```text
+PASS (macOS subset): 38/55 shared smoke tests + 3 macOS checks; SKIPPED: 17 Windows-only; 6 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place. Not the full Windows smoke suite.
+```
+
+Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
+именно так. `MacSmoke.Summarize` печатает строку `PASS`, только если
+выполненные и объявленные регистрации вместе дают ровно `55` с
+неповторяющимися именами, прошли все три macOS-проверки, достигнуты все шесть
+объявленных частей и записаны оба статуса ConSeC. `checked in place` значит,
+что токенизатор сверен с закреплёнными длиной и SHA-256 и двумя
+tensor-эталонами, а воркер ответил на `--smoke`. Без бандла оба статуса
+начинаются с `absent: ` и называют отсутствующий путь; прогон остаётся
+зелёным, но строка это показывает.
+
+Сам `Summarize` видит только то, что скомпилировала macOS-сборка, поэтому
+регистрацию, добавленную или переименованную внутри блока `#if WINDOWS`, он
+бы не заметил. Это закрывает проверка «macOS: project parity with the Windows
+projects»: она читает `tests/AsteriaScale.Tests/Program.cs` так, как его
+компилирует каждая сборка (понимает только `#if WINDOWS`, `#if !WINDOWS`,
+`#else` и `#endif`; любая другая директива или несбалансированная
+вложенность — ошибка), берёт default-путь между проверкой
+`TestCommandLine.FindUnknownOption(args)` и `int screenOcrImageArgument` и
+требует, чтобы имена `await RunAsync(…)` Windows-сборки совпадали с именами
+`await RunAsync(…)` и `MacSmoke.Skip(…)` macOS-сборки (без префикса
+`macOS: `) поимённо и по порядку, без повторов, и чтобы их было ровно
+`MacSmoke.SharedRegistrationCount`. Поэтому добавление или удаление
+регистрации default-пути, в том числе Windows-only, требует в той же правке
+нового значения счётчика, а для Windows-only — ещё и парного `MacSmoke.Skip`;
+при переименовании Windows-only регистрации меняется только имя в её
+`MacSmoke.Skip`. Иначе прогон падает с сообщением о первом расхождении.
+
+Прогон может записать в `~/Library/Application Support/AsteriaScale` журнал
+`hover-translation.log` и создаёт там папку `Dictionaries`: общий тест
+«Aligned dictionary sense metadata» создаёт `LocalDictionaryService(sensePath)`
+с пользовательским каталогом по умолчанию, поэтому загрузка создаёт эту папку
+и читает лежащие в ней пользовательские слои `eng-rus*`/`jpn-rus*`. Это
+прежнее поведение общего набора; на Windows то же происходит в
+`%LOCALAPPDATA%`.
+
+Что подмножество печатает, а не проверяет:
+
+- **Бюджеты управляемой памяти не применяются.** Тест «Local dictionary
+  lookup» печатает оба замера, `Layered dictionaries` и `Aligned sense
+  metadata`, с удержанными МБ рядом с Windows-бюджетом и пометкой
+  `NOT ENFORCED on macOS`. На эталонном прогоне слоёные словари удерживали
+  `314,7 МБ` при бюджете `256 МБ`, а sense-метаданные — `-67,1 МБ`:
+  отрицательное значение показывает, что settle-замер на macOS ненадёжен.
+  Калибровка — follow-up карточки №20 [ROADMAP.md](ROADMAP.md).
+- **Артефакты модели — «validated at load».** На Windows `FileShare.Read` не
+  даёт другому процессу заменить, обрезать или удалить проверенный файл модели,
+  пока воркер его держит. На macOS .NET отображает `FileShare` на advisory
+  `flock(2)`: отказ получает только открывающий с эксклюзивной блокировкой (это
+  подмножество и проверяет), а запись, переименование и удаление другими
+  процессами не блокируются; ONNX Runtime к тому же повторно открывает файл по
+  пути. Поэтому на macOS гарантия — сверка размера и SHA-256 при загрузке. Эта
+  гарантия выбрана для 20.1 по умолчанию при реализации этапа; владелец может
+  её пересмотреть. Усиление — follow-up карточки №20.
+
+Воркер отдельно:
+
+```bash
+W=src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker
+dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
+$W --provider cpu --cpu-model consec --model-directory src/AsteriaScale.RankerWorker/Models --smoke
+```
+
+Ожидается код `0` и одна строка JSON с `ok:true`, `index:20`,
+`CPUExecutionProvider`/`CPU`, `pipeline:"consec-independent"` и точной identity
+ConSeC; в stderr — только строки `[ranker]`. Без `--smoke` воркер ведёт обычную
+JSONL-сессию с теми же аргументами. Запрос NPU (`--provider npu`, а также
+запуск без `--provider`: провайдер по умолчанию по-прежнему NPU) получает
+ошибку `npu_provider_unavailable` до чтения любых артефактов; CPU не
+подставляется. С `--smoke` воркер печатает эту ошибку и завершается с кодом
+`1`. В JSONL-сессии процесс не завершается: `hello` отвечает успехом, каждый
+`warm` и каждый корректный `select` — `ok:false` с `errorCode`
+`npu_provider_unavailable` (отказ кэшируется), а воркер обслуживает запросы
+дальше до `shutdown` или конца stdin и выходит с кодом `0`. `--provider cpu`
+без `--cpu-model consec` требует CPU-ONNX GlossBERT, которого нет в git, и
+отвечает `model_missing`.
+
+**Не собирайте Windows-проекты в рабочем дереве на macOS:** `AsteriaScale.slnx`,
+`src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csproj` и
+`tests/AsteriaScale.Tests/AsteriaScale.Tests.csproj`. Без
+`EnableWindowsTargeting` они останавливаются на NETSDK1100, а с ним csproj
+Windows-воркера ставит локальный бандл ConSeC (`1,6 ГБ`, CC BY-NC-SA 4.0) в
+`bin/`.
+
+#### Проверка, что Windows-сборка не изменилась
+
+Правка общего исходника (`src/AsteriaScale.RankerWorker/*.cs`,
+`tests/AsteriaScale.Tests/*.cs`) ради macOS по умолчанию не меняет токены,
+видимые Windows-сборке: код для macOS стоит под `#if !WINDOWS` или в ветке
+`#else` (SDK определяет `WINDOWS` только для целей `net10.0-windows…`). Правка
+видимых Windows токенов вне `#if` допустима, только если скрипт ниже доказал,
+что выходы Windows-сборки не изменились. В этапе 20.1 таких правок пять:
+удалён неиспользуемый `using`, и четыре константы читаются из оригинала в ядре
+(`PreviousContextLimits`) вместо равных им псевдонимов `TextHookService`.
+Неизменность выходов, как и неизменность любого другого входа Windows-сборки,
+доказывается так:
+
+```bash
+bash tools/macos/check-windows-identity.sh <base-rev> [--worktree | <candidate-rev>]
+```
+
+Без второго аргумента кандидат — рабочее дерево (`--worktree`), включая
+незакоммиченные правки. Скрипт экспортирует обе стороны в `$TMPDIR` (внутри
+клона он работать откажется; `git archive` для ревизии,
+`git ls-files -co --exclude-standard` для рабочего дерева, поэтому ignored-бандл
+ConSeC в экспорт не попадает) и подкладывает четыре пустые заглушки бандла.
+Symlink на месте `ConSeC_WNGT` или `Models/Consec` либо внутри них, на месте
+`src`, папки воркера или `Models`, а также любой symlink под `Models`, если он
+попал в экспорт, останавливают скрипт до записи заглушек: запись через такую
+ссылку обнулила бы настоящий бандл. Обычная неотслеживаемая ссылка на месте
+`Models/Consec` или внутри него игнорируется `.gitignore` и в экспорт не
+попадает; отказ срабатывает, когда ссылку отслеживает git или её содержит
+проверяемая ревизия. Неотслеживаемый вложенный git-репозиторий пропускается с
+пометкой в stderr, без его содержимого. Затем скрипт по очереди в одном и том
+же каталоге выполняет publish воркера из
+`scripts/build.ps1` (`-r win-x64`, self-contained) и сборку Windows
+smoke-набора с `EnableWindowsTargeting` и сравнивает SHA-256 каждого
+полученного файла. Успех — `IDENTICAL: <n> Windows output files` и код `0`
+(сейчас `n` = `286`); иначе печатается diff манифестов, код `1`, а рабочий
+каталог сохраняется. Сравнивайте по этой строке, а не по хешам DLL между
+запусками: хеш `AsteriaScale.Core.dll` зависит от пути нового рабочего каталога
+(`[GeneratedRegex]`), а `AsteriaScale.Tests.dll` Windows-сборки невоспроизводим
+даже из одного дерева (генератор CsWinRT пишет таблицу vtable в случайном
+порядке), поэтому скрипт собирает набор дважды; подробности — в заголовке
+скрипта. Правка `THIRD_PARTY_NOTICES.md` ожидаемо даёт ровно одну
+отличающуюся строку, `./Tests/THIRD_PARTY_NOTICES.md`: WPF-проект копирует этот
+файл в выход.
+
+Проверка не доказывает того, что выполняется только на Windows: сам
+smoke-набор, NPU/VitisAI, MakePri и MSIX. Эти прогоны видят неизменённые входы,
+а запускает их владелец на Windows. Правка общего исходника, неизменность
+выходов которой скрипт не доказал, требует Windows-сборки и smoke-набора на
+машине владельца.
+
+#### Клон и iCloud Drive
+
+Держите клон вне папок, которые синхронизирует iCloud Drive (например,
+`~/Documents` при включённой синхронизации «Рабочего стола» и «Документов»),
+или в папке, имя которой оканчивается на `.nosync`: такие папки iCloud не
+синхронизирует. Если клон переименован, по старому пути можно оставить symlink
+на новую папку. Причины:
+
+- iCloud создаёт копии-конфликты вида `name 2.ext` в `bin/`, `obj/` и среди
+  исходников, а лишний `* 2.cs` попадает в glob `*.cs` проектов;
+- iCloud выгрузил бы в облако бандл ConSeC, которому по CC BY-NC-SA и решению
+  M7 нельзя попадать в публичные хранилища;
+- «Оптимизировать хранилище Mac» оставляет на диске только заглушки давно не
+  открывавшихся больших файлов, в том числе моделей; их чтение требует
+  повторной загрузки из облака.
+
+Проверка reparse point в воркере (`ConsecArtifactBundle.cs`) отвергает
+symlink у самого каталога `--model-directory` (`Models`), у `Models/Consec` и
+у всего ниже, с ошибкой `consec_artifact_path_unsafe`. Каталоги выше
+`--model-directory` не проверяются, поэтому symlink на месте старого пути к
+клону работает, а symlink на `Models`, `Models/Consec` или файлы бандла — нет.
+
 ### Стратегия тестирования
 
-Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026): default-путь
-`tests/AsteriaScale.Tests/Program.cs` содержит `55` блоков `await RunAsync(...)`,
-из них `31` вызывают отдельные классы `XxxTests.RunAsync`. В `tests/` `43` файла C# — `25 414` строк вместе с harness
-gated-бенчмарков — против `36 036` строк C# в `src/`. Отдельно есть четыре
+Объём после удаления SANDWiCH и GlossDeBERTa (8 ноября 2026) и этапа №20.1
+(9 ноября 2026): default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
+`55` блоков `await RunAsync(...)`, из них `31` вызывают отдельные классы
+`XxxTests.RunAsync`. `55` — число регистраций Windows-прогона
+(`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `38` из них
+и три собственные проверки. В `tests/` `46` файлов C# — `26 327` строк вместе с
+harness gated-бенчмарков и тремя файлами `tests/AsteriaScale.Tests.MacOS` —
+против `36 069` строк C# в `src/`. Отдельно есть четыре
 Python-набора `unittest` на `53` теста (см. «Python-тесты инструментов»).
 
 | Слой | Что проверяет | Где | Что нужно кроме .NET 10 SDK |
@@ -329,6 +559,12 @@ Python-набора `unittest` на `53` теста (см. «Python-тесты �
 | Реальный движок | «Installed effects» (эффекты всех пресетов на месте) и «Engine lifecycle» (запуск и остановка Magpie с временным `config.json` и его резервной копией) | конец default-пути `Program.cs` | установленный Magpie 0.12.1 |
 | Gated-бенчмарки | качество, покрытие и задержку на открытых и замороженных наборах через собранную публикацию | режимы из таблицы ниже, только по явному аргументу | `workerBaseDir` с воркером и моделями; для `npu` — AMD NPU; для `--translation-suite` — установленная TranslateGemma и скачанные наборы |
 
+На macOS из этих слоёв выполняются чистая логика (без WPF-помощников),
+контракты данных — с `python3` — и процессы/IPC: поддельные воркеры там
+написаны на `python3` и `/bin/sh` вместо Windows PowerShell. Установщики,
+`build`-скрипты, Magpie, text-hook, DPI, реальный движок и gated-бенчмарки на
+macOS не выполняются (`skip` или не компилируются).
+
 Сознательно не покрыто default-набором:
 
 - **WPF UI.** Окна и оверлеи не создаются; `App.xaml` и `AsteriaScale.csproj`
@@ -336,13 +572,17 @@ Python-набора `unittest` на `53` теста (см. «Python-тесты �
 - **Живой NPU OCR.** Проверяются статические помощники `WindowsAiOcrService`
   (сборка предложения, границы захвата, починка mixed-script); распознавание
   Windows AI запускают только `--ocr-image` и `--screen-ocr-image`.
-- **Инференс моделей и качество вывода GPU.** Тест-проект не ссылается на ONNX
-  Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan
+- **Инференс моделей и качество вывода GPU.** Ни один тест-проект не ссылается
+  на ONNX Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan
   `llama-server` и окружение процесса без его запуска. Живой вывод проверяют
-  gated-режимы и `scripts/verify-translategemma.ps1`.
-- **Локальный бандл ConSeC.** Сверка его tokenizer с закреплённым
+  gated-режимы и `scripts/verify-translategemma.ps1`. Исключение —
+  macOS-подмножество: при установленном бандле оно запускает собранный
+  macOS-воркер отдельным процессом и получает один ответ ConSeC (`--smoke`).
+- **Локальный бандл ConSeC.** На Windows сверка его tokenizer с закреплённым
   эталоном молча пропускается, если бандл не установлен (`ConsecRankerTests`);
-  контракт кэша и установщика проверяется без артефактов.
+  контракт кэша и установщика проверяется без артефактов. macOS-подмножество
+  печатает в итоговой строке, выполнена ли сверка (`checked in place` или
+  `absent: …`).
 
 Почему раннер — консольная программа, а не xUnit, в репозитории не записано.
 Фактически это один процесс: блоки идут последовательно, первое исключение
@@ -352,6 +592,10 @@ gated-режимы, а internal-члены открыты через `InternalsV
 который без исправления падает.
 
 ### Gated-режимы тестов (по аргументам CLI)
+
+Gated-режимы пока только для Windows: macOS-подмножество отвергает любой
+аргумент, пока provenance бенчмарка не записывает платформу (follow-up
+карточки №20 [ROADMAP.md](ROADMAP.md)).
 
 | Аргумент | Что делает |
 |---|---|
@@ -490,7 +734,10 @@ self-contained. Целостность многофайловой публика
   [assets/Ranker/README.md](../assets/Ranker/README.md);
 - если локально установлен проверенный четырёхфайловый ConSeC bundle,
   `Models\Consec\` также копируется условно и попадает в output manifest.
-  Отсутствие личного CC BY-NC-SA профиля не делает обычную публикацию неполной;
+  Отсутствие личного CC BY-NC-SA профиля не делает обычную публикацию неполной.
+  Условие в csproj Windows-воркера — наличие всех четырёх файлов, и копирует
+  их не только publish, но и обычная сборка воркера (`bin/`); macOS-проект
+  воркера бандл не копирует никогда;
 - `AsteriaScale.Identity.msix` рядом с каталогом публикации: проверяются
   манифест, block map, content types, обязательные PNG с точными размерами и
   подпись `CN=Asteria Scale Local`; после подписания отдельно запускается
@@ -564,10 +811,13 @@ python tools/test-sense-gate-early-exit.py           # tools/sense-gate-early-ex
 python tools/tests/test_fetch_benchmark_datasets.py  # tools/fetch-benchmark-datasets.py (11)
 ```
 
+На macOS те же команды запускаются как `python3 …`.
+
 C#-smoke эти наборы не запускает, но сам вызывает `python` для части `tools/`:
 `TranslationSuiteTests` прогоняет `tools/translation-benchmark.py score` на
 output C#-runner, `AtomicOutputSafetyTests` — `tools/atomic_output.py`. Без `python` в `PATH`
-полный smoke падает.
+полный smoke падает. macOS-подмножество вызывает вместо него `python3` (через
+него же работает поддельный воркер `GlossBertDictionarySelectorServiceTests`).
 
 `tools/tests/` намеренно без `__init__.py`, поэтому файл запускается напрямую, а
 не через `unittest discover`.

@@ -79,7 +79,9 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 ## Microsoft ML ONNX Runtime
 
 - Project: https://github.com/microsoft/onnxruntime
-- Package/version: `Microsoft.ML.OnnxRuntime` 1.27.1
+- Package/version: `Microsoft.ML.OnnxRuntime` 1.27.1; the same package supplies
+  `onnxruntime.dll` to the win-x64 worker and `libonnxruntime.dylib` to the
+  osx-arm64 CPU worker
 - License: MIT
 - Role: CPU execution of the FP32 GlossBERT reference artifact and the optional
   ConSeC external-data graph
@@ -87,8 +89,10 @@ Magpie ships additional effects such as SSimDownscaler and xBRZ. Their notices a
 ## Tokenizers.DotNet
 
 - Project: https://github.com/sappho192/Tokenizers.DotNet
-- Packages/versions: `Tokenizers.DotNet` 1.4.1 and
-  `Tokenizers.DotNet.runtime.win-x64` 1.4.1
+- Packages/versions: `Tokenizers.DotNet` 1.4.1,
+  `Tokenizers.DotNet.runtime.win-x64` 1.4.1 and
+  `Tokenizers.DotNet.runtime.osx-arm64` 1.4.1 (ships `libhf_tokenizers.dylib`
+  for the osx-arm64 CPU worker)
 - License: MIT
 - Role: deterministic loading and execution of the packaged Hugging Face tokenizer
 

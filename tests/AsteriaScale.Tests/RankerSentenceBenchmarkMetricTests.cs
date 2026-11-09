@@ -166,7 +166,11 @@ internal static class RankerSentenceBenchmarkMetricTests
             "Two output paths were accepted for one sentence benchmark.");
         CheckThrows(
             () => RankerSentenceBenchmark.RejectFrozenHoldout(
+#if WINDOWS
                 @"C:\research\ranker-holdout-v4.json"),
+#else
+                "/research/ranker-holdout-v4.json"),
+#endif
             "The open sentence runner accepted a frozen holdout path.");
     }
 

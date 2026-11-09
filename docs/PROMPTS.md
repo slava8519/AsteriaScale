@@ -17,6 +17,29 @@
 > `-Accept*Terms`. Поведенческий фикс — только вместе с тестом, который падает
 > до фикса.
 
+На macOS-клоне (Apple Silicon) вместо неё:
+
+> Прочитай AGENTS.md и docs/ARCHITECTURE.md перед изменениями. На macOS
+> собирай только macOS-проекты: `dotnet build
+> tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj -c Release`
+> (собирает и `src/AsteriaScale.RankerWorker.MacOS`) и прогони macOS-подмножество
+> `dotnet run --project tests/AsteriaScale.Tests.MacOS/AsteriaScale.Tests.MacOS.csproj
+> -c Release --no-build`. Приведи его итоговую строку `PASS (macOS subset): …`
+> и не выдавай её за полный smoke. `AsteriaScale.slnx`, Windows-воркер и
+> Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`
+> они останавливаются на NETSDK1100, а с ним Windows-воркер (в том числе в
+> составе `AsteriaScale.slnx`) копирует бандл ConSeC в `bin/`. Код для macOS
+> в общих исходниках по умолчанию ставь под `#if !WINDOWS` / `#else`; видимые Windows токены
+> вне `#if` меняй, только если скрипт ниже доказал, что выходы Windows-сборки
+> не изменились. После любой правки общего исходника докажи это:
+> `bash tools/macos/check-windows-identity.sh <base> --worktree` должен
+> напечатать `IDENTICAL` (единственное допустимое отличие — строка
+> `./Tests/THIRD_PARTY_NOTICES.md` после правки этого файла). Правку, которую
+> скрипт не доказал, проверяет владелец Windows-сборкой и smoke-набором; полный
+> Windows smoke всегда прогоняет владелец на Windows. Python вызывай как `python3`. Не запускай
+> `--live`-режимы, `scripts/install-*.cmd` и флаги `-Accept*Terms`.
+> Поведенческий фикс — только вместе с тестом, который падает до фикса.
+
 ## 1. Онбординг / аудит
 
 > Сделай аудит подсистемы `<словарей / умного словаря / OCR / апскейла>`.
@@ -84,6 +107,17 @@
 > не используй для подбора — только одно финальное подтверждение с записью в
 > docs/RESEARCH.md. Приведи цифры до/после в отчёте и назови ранжировщик
 > каждой руки.
+>
+> На macOS junction и бенчмарк выше — только для Windows. Валидация там —
+> `--smoke` macOS-воркера с ConSeC
+> (`src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker
+> --provider cpu --cpu-model consec --model-directory
+> src/AsteriaScale.RankerWorker/Models --smoke`), JSONL-сессия с теми же
+> аргументами без `--smoke` и macOS-подмножество. Запрос NPU на macOS всегда
+> получает ошибку `npu_provider_unavailable`: `--smoke` выходит с кодом `1`, а
+> JSONL-сессия отвечает этой ошибкой на `warm`/`select` и работает дальше до
+> `shutdown`. Бенчмарков на macOS нет, пока
+> provenance не различает платформу.
 
 ## 5. Новый словарный слой / регенерация словарей
 
@@ -155,4 +189,11 @@ RTX 5080 закрыт 29 июля 2026, а 8 ноября 2026 его инстр
 > >100 МБ; ослаблять валидацию протокола воркера; удалять резервную копию
 > конфига Magpie; запускать `scripts/install-*.cmd`, флаги `-Accept*Terms` и
 > скачивание датасетов; ослаблять проверки `build.cmd` на артефакты модели и
-> сертификат; править хеши в `vn-build-manifest.json` вручную.
+> сертификат; править хеши в `vn-build-manifest.json` вручную; собирать на
+> macOS `AsteriaScale.slnx`, Windows-воркер или Windows тест-проект в рабочем
+> дереве (с `EnableWindowsTargeting` Windows-воркер, в том числе в составе
+> `AsteriaScale.slnx`, копирует бандл ConSeC в `bin/`);
+> выдавать macOS-подмножество за полный smoke-набор; менять видимые Windows
+> токены общих исходников вне `#if !WINDOWS` / `#else`, пока
+> `tools/macos/check-windows-identity.sh` не доказал неизменность выходов
+> Windows-сборки (иначе — только с Windows-сборкой и smoke-набором владельца).

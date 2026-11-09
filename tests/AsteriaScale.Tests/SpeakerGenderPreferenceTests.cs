@@ -14,11 +14,19 @@ internal static class SpeakerGenderPreferenceTests
     private static void VerifyGameIdentity()
     {
         SpeakerGameIdentity? pathIdentity = SpeakerGenderPreferences.CreateGameIdentity(
+#if WINDOWS
             @"C:\Games\Visual Novel\Novel.exe",
+#else
+            "/Games/Visual Novel/Novel.exe",
+#endif
             "ignored-process-name");
         SpeakerGameIdentity? equivalentPathIdentity =
             SpeakerGenderPreferences.CreateGameIdentity(
+#if WINDOWS
                 @"c:\games\visual novel\NOVEL.EXE",
+#else
+                "/games/visual novel/NOVEL.EXE",
+#endif
                 "Novel");
         Assert(pathIdentity is not null &&
                equivalentPathIdentity is not null &&
@@ -59,10 +67,18 @@ internal static class SpeakerGenderPreferenceTests
     private static void VerifyExplicitGameScopedResolution()
     {
         SpeakerGameIdentity game = SpeakerGenderPreferences.CreateGameIdentity(
+#if WINDOWS
             @"C:\Games\Novel\Novel.exe",
+#else
+            "/Games/Novel/Novel.exe",
+#endif
             "Novel")!;
         SpeakerGameIdentity otherGame = SpeakerGenderPreferences.CreateGameIdentity(
+#if WINDOWS
             @"C:\Games\Other\Other.exe",
+#else
+            "/Games/Other/Other.exe",
+#endif
             "Other")!;
         AppSettings settings = new()
         {

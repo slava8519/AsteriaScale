@@ -239,6 +239,23 @@ dotnet run --project src/AsteriaScale.RankerWorker/AsteriaScale.RankerWorker.csp
   --model-directory src/AsteriaScale.RankerWorker/Models --smoke
 ```
 
+На macOS (Apple Silicon) установщика и `verify-consec.ps1` нет. Тот же бандл в
+`src/AsteriaScale.RankerWorker/Models/Consec` читает на месте osx-arm64-сборка
+воркера: у её проекта нет `Content`, поэтому сборка ничего не копирует в
+`bin/`, а воркер при каждой загрузке сам сверяет пути, размеры и SHA-256:
+
+```bash
+dotnet build src/AsteriaScale.RankerWorker.MacOS/AsteriaScale.RankerWorker.MacOS.csproj -c Release
+src/AsteriaScale.RankerWorker.MacOS/bin/Release/net10.0/osx-arm64/AsteriaScale.RankerWorker \
+  --provider cpu --cpu-model consec \
+  --model-directory src/AsteriaScale.RankerWorker/Models --smoke
+```
+
+Windows-проект воркера на macOS не собирайте: с `EnableWindowsTargeting` он
+копирует полный локальный бандл в `bin/`. `Models` и `Models/Consec` не должны
+быть symlink: воркер отвергает их с `consec_artifact_path_unsafe` (подробнее —
+[docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md), «macOS (Apple Silicon)»).
+
 Pipeline — `consec-independent`: полное предложение остаётся неизменённым,
 worker размечает точный target по anchor index, independently оценивает его
 группы и применяет общий margin `0.25`. NPU/fallback и silent truncation нет;

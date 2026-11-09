@@ -593,6 +593,7 @@ internal static class GlossBertDictionarySelectorServiceTests
             Path.Combine(rankerDirectory, "AsteriaScale.RankerWorker.exe"),
             []);
 
+#if WINDOWS
         string powershell = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell",
@@ -600,8 +601,10 @@ internal static class GlossBertDictionarySelectorServiceTests
             "powershell.exe");
         Check(File.Exists(powershell),
             "The profile-race fixture requires the inbox Windows PowerShell executable.");
+#endif
 
         const int selectedGroupId = 7;
+#if WINDOWS
         string workerCommand =
             "$model = '" +
             GlossBertDictionarySelectorService.CpuModelCacheId +
@@ -624,6 +627,28 @@ internal static class GlossBertDictionarySelectorServiceTests
             "[Console]::Out.WriteLine(($response | ConvertTo-Json -Compress)); " +
             "[Console]::Out.Flush(); " +
             "if ($request.command -eq 'shutdown') { break } }";
+#else
+        // The same JSONL contract as the PowerShell fake above. python3 is
+        // already a prerequisite of the macOS subset (atomic_output and the
+        // translation-benchmark scorer), and -I keeps the fake isolated from
+        // the working directory and user site-packages.
+        const string workerScript = """
+            import json, sys
+            model, version, provider, group = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+            for line in sys.stdin:
+                request = json.loads(line)
+                response = {"version": version, "requestId": str(request.get("requestId")), "ok": True,
+                            "index": None, "abstained": False, "margin": None, "score": None,
+                            "confidence": None, "provider": provider, "device": "CPU",
+                            "modelVersion": model, "pipeline": "cross", "errorCode": None, "error": None}
+                if request.get("command") == "select":
+                    response.update(index=group, margin=0.5, score=0.9, confidence=0.9)
+                sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+                sys.stdout.flush()
+                if request.get("command") == "shutdown":
+                    break
+            """;
+#endif
 
         await using GlossBertDictionarySelectorService service = new(
             root,
@@ -631,12 +656,25 @@ internal static class GlossBertDictionarySelectorServiceTests
             TimeSpan.FromSeconds(5),
             _ =>
             {
+#if WINDOWS
                 ProcessStartInfo startInfo = new(powershell);
                 startInfo.ArgumentList.Add("-NoLogo");
                 startInfo.ArgumentList.Add("-NoProfile");
                 startInfo.ArgumentList.Add("-NonInteractive");
                 startInfo.ArgumentList.Add("-Command");
                 startInfo.ArgumentList.Add(workerCommand);
+#else
+                ProcessStartInfo startInfo = new("python3");
+                startInfo.ArgumentList.Add("-I");
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add(workerScript);
+                startInfo.ArgumentList.Add(
+                    GlossBertDictionarySelectorService.CpuModelCacheId + ":pipeline-cross");
+                startInfo.ArgumentList.Add(RankerProtocolV2.Version);
+                startInfo.ArgumentList.Add(GlossBertDictionarySelectorService.CpuExecutionProvider);
+                startInfo.ArgumentList.Add(
+                    selectedGroupId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+#endif
                 return startInfo;
             });
 
@@ -678,6 +716,7 @@ internal static class GlossBertDictionarySelectorServiceTests
             Path.Combine(rankerDirectory, "AsteriaScale.RankerWorker.exe"),
             []);
 
+#if WINDOWS
         string powershell = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System),
             "WindowsPowerShell",
@@ -685,6 +724,7 @@ internal static class GlossBertDictionarySelectorServiceTests
             "powershell.exe");
         Check(File.Exists(powershell),
             "The response-timeout fixture requires the inbox Windows PowerShell executable.");
+#endif
 
         await using GlossBertDictionarySelectorService service = new(
             root,
@@ -692,6 +732,7 @@ internal static class GlossBertDictionarySelectorServiceTests
             TimeSpan.FromMilliseconds(300),
             _ =>
             {
+#if WINDOWS
                 ProcessStartInfo startInfo = new(powershell);
                 startInfo.ArgumentList.Add("-NoLogo");
                 startInfo.ArgumentList.Add("-NoProfile");
@@ -699,6 +740,13 @@ internal static class GlossBertDictionarySelectorServiceTests
                 startInfo.ArgumentList.Add("-Command");
                 startInfo.ArgumentList.Add(
                     "$null = [Console]::In.ReadLine(); Start-Sleep -Seconds 30");
+#else
+                // Reads the first request and then never answers, like the
+                // PowerShell fake; the deadline must kill the whole tree.
+                ProcessStartInfo startInfo = new("/bin/sh");
+                startInfo.ArgumentList.Add("-c");
+                startInfo.ArgumentList.Add("read line; sleep 30");
+#endif
                 return startInfo;
             });
 

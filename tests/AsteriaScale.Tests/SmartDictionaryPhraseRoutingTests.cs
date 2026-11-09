@@ -1,4 +1,3 @@
-using AsteriaScale.Interop;
 using AsteriaScale.Models;
 using AsteriaScale.Services;
 using System.Drawing;

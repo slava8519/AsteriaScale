@@ -66,6 +66,7 @@ internal static class RankerWorkerRegressionTests
             {
                 Check(lease.ReadAllBytes().SequenceEqual(expected),
                     "The integrity lease did not retain the authenticated bytes.");
+#if WINDOWS
                 bool writeBlocked = false;
                 try
                 {
@@ -101,6 +102,34 @@ internal static class RankerWorkerRegressionTests
 
                 Check(moveBlocked,
                     "The authenticated artifact lease allowed a concurrent replacement.");
+#else
+                // .NET maps FileShare to an advisory flock(2) on macOS. The part
+                // that holds is asserted: an exclusive opener is refused while the
+                // lease is held. Writers that do not ask for a lock, renames and
+                // deletes are not blocked, so there the artifact is validated at
+                // load (RankerArtifactIntegrity.cs, worker README).
+                bool exclusiveOpenBlocked = false;
+                try
+                {
+                    using FileStream _ = new(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Write,
+                        FileShare.None);
+                }
+                catch (IOException)
+                {
+                    exclusiveOpenBlocked = true;
+                }
+
+                Check(exclusiveOpenBlocked,
+                    "The authenticated artifact lease did not refuse an exclusive opener.");
+                MacSmoke.Part(
+                    "lease-exclusion",
+                    "Ranker worker fail-open and target anchoring",
+                    "macOS FileShare is an advisory flock; writers, renames and deletes by other " +
+                    "processes are not blocked, so artifacts are validated at load");
+#endif
             }
 
             expected[^2] = expected[^2] == (byte)'x' ? (byte)'y' : (byte)'x';
