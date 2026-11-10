@@ -190,8 +190,15 @@ macOS subset of the smoke suite build and run. Report that run as the "macOS sub
 its final `PASS (macOS subset): …` line, never as the smoke suite; the line
 also states whether the ConSeC real-bundle checks (worker smoke and the
 CoreHost smart hover) ran. Keep a macOS clone
-outside iCloud Drive-synced folders, or in a folder whose name ends in
-`.nosync` (docs/DEVELOPMENT.md, «macOS (Apple Silicon)»).
+outside every File Provider domain (iCloud Drive's Desktop and Documents,
+`~/Library/Mobile Documents`, the folders in `~/Library/CloudStorage`), for
+example in `~/Developer/AsteriaScale`: a `.nosync` name stops the upload, not
+File Provider's tags (`com.apple.FinderInfo`) on every new `.app` folder,
+which codesign rejects, so `tools/macos/build-app.sh` refuses such an output
+with exit 2. Moving a clone is the owner's, never an agent's
+(docs/DEVELOPMENT.md, «Клон и iCloud Drive», also for the stale
+`com.apple.fileprovider.dir#N` tags a moved clone keeps, which are harmless
+outside a domain).
 
 ## Commands
 
@@ -308,6 +315,25 @@ bash tools/macos/build-app.sh --self-test --ranker-models src/AsteriaScale.Ranke
 bash tools/macos/build-app.sh --run-isolated --ranker-models src/AsteriaScale.RankerWorker/Models
 ```
 
+The default `--output` (`artifacts/macos` in the clone) works only in a clone
+outside every File Provider domain. Before it creates the output, in every
+mode including `--no-build`, the script reads (only, with `/usr/bin/xattr`)
+the extended attributes of the output's nearest existing folder, resolved
+with `pwd -P`, and of every folder above it, and exits 2 with nothing built
+or created when one of them is a domain root
+(`com.apple.file-provider-domain-id`), when the part of `--output` that does
+not exist yet has a `.` or `..` component, when a part of it exists but is
+not a folder (a file, or a link to nothing or to a file), or when it cannot
+resolve that folder or read a folder's attributes. A
+`com.apple.fileprovider.*` tag on the nearest folder with no domain root
+found above it (the `dir#N` a moved clone keeps) only prints a one-line
+warning: outside a domain it is inert (measured on 2026-11-10). For a folder
+in the clone the warning names the owner's optional removal, which acts on
+links themselves (`xattr -s`), never on what they point at. Do not move the
+clone or remove such tags yourself: report a domain to the owner, or pass
+`--output` outside every domain (a new path is a new LaunchServices record
+to list).
+
 Report the self-test as "app self-test: SELFTEST PASS n/n" (plus the
 `codesign` lines "valid on disk" and "satisfies its Designated
 Requirement"); without `--ranker-models` its in-flight ConSeC line says
@@ -329,13 +355,20 @@ list the bundle paths you launched in your report. A physical press of
 the handler, not that the window server delivers a real key. Exit 4 is a
 failed build or a warning (from `swift build` or either `dotnet publish`,
 which runs at `-v minimal` so MSBuild prints its warnings), 5 signing or
-verification, 6 a failed self-test, 9 a file left in the run's cwd, 10 a new
-crash report (the G-crash listing), 11 a process left
+verification (on codesign's "detritus" or "Disallowed xattr" it also names
+the extended attributes on the bundle and marks the likely culprits), 6 a
+failed self-test, 9 a file left in the run's cwd, 10 a new crash report (the
+G-crash listing) or a listing that fails after the build, 11 a process left
 running (killed when the run started it, only listed otherwise), 12 a new
 entry in the real `~/Library` named after the app or SwiftPM, 2 a usage
-error or a process already running from the bundle: the script then stops
-before it builds, replaces or kills anything, so an owner's running copy
-keeps its bundle and its CoreHost.
+error, an `--output` inside a File Provider domain (or with `.` or `..` in
+its missing part, or a file or a link to no folder on its way), a
+`TMPDIR` inside the clone, a bad `--home`, `--no-build` without a bundle,
+an unreadable crash-report folder or a process already running from the
+bundle. Every exit 2 comes before the output folder is
+created, so none leaves it behind, not even empty: the script has built,
+created, replaced and killed nothing, and an owner's running copy keeps its
+bundle and its CoreHost.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
