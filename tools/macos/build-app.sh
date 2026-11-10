@@ -176,6 +176,12 @@ if [[ $(uname -s) != Darwin || $(uname -m) != arm64 ]]; then
     echo "build-app: Apple Silicon macOS only" >&2
     exit 2
 fi
+# The Command Line Tools whenever they are installed, whatever xcode-select
+# says (docs/MACOS.md T33): Xcode.app may be on this Mac only for the
+# owner's signing certificate (M16). The swift shim honors DEVELOPER_DIR.
+if [[ -d /Library/Developer/CommandLineTools ]]; then
+    export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+fi
 for tool in swift dotnet codesign plutil ditto python3; do
     command -v "$tool" >/dev/null || { echo "build-app: $tool not found" >&2; exit 2; }
 done

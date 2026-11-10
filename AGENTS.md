@@ -183,8 +183,11 @@ real artifacts (docs/DEVELOPMENT.md).
 
 On macOS: Apple Silicon, macOS 14.0+ (the minimum of the ONNX Runtime 1.27.1
 osx-arm64 library), the arm64 .NET 10 SDK, Python 3.11+ as `python3` and the
-Command Line Tools with Swift 6 (no Xcode; their `/usr/bin/python3` runs the
-Swift suite's fake CoreHost); no PowerShell or Magpie. There only the CPU
+Command Line Tools with Swift 6 (their `/usr/bin/python3` runs the Swift
+suite's fake CoreHost); no PowerShell or Magpie. Xcode.app may be installed
+for the owner's signing certificate, but `test-swift.sh` and `build-app.sh`
+export `DEVELOPER_DIR=/Library/Developer/CommandLineTools` whenever the
+Command Line Tools are installed (docs/MACOS.md T33). There only the CPU
 worker (ConSeC), CoreHost, the Swift package `macos/AsteriaScale` and the
 macOS subset of the smoke suite build and run. Report that run as the "macOS subset" with
 its final `PASS (macOS subset): …` line, never as the smoke suite; the line

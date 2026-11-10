@@ -110,10 +110,18 @@ count_lines() {
     if [[ -z $1 ]]; then echo 0; else wc -l <<<"$1" | tr -d ' '; fi
 }
 
+# The Command Line Tools whenever they are installed, whatever xcode-select
+# says: Xcode.app may be on this Mac only for the owner's signing
+# certificate (docs/MACOS.md T33, M16), and every gate is measured on the
+# CLT. The swift shim in /usr/bin honors DEVELOPER_DIR.
+clt_root=/Library/Developer/CommandLineTools
+if [[ -d $clt_root ]]; then
+    export DEVELOPER_DIR=$clt_root
+fi
 # Stays empty with Xcode selected: bash 3.2 (/bin/bash) calls an empty
 # "${clt_flags[@]}" unbound under set -u, hence ${clt_flags[@]+…} below.
 clt_flags=()
-developer=$(xcode-select -p)
+developer=${DEVELOPER_DIR:-$(xcode-select -p)}
 if [[ $developer == */CommandLineTools ]]; then
     frameworks="$developer/Library/Developer/Frameworks"
     interop="$developer/Library/Developer/usr/lib"

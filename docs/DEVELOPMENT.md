@@ -6,7 +6,7 @@
 |---|---|---|
 | Windows 11 | build 26100+ (для NPU OCR) | да |
 | macOS (Apple Silicon) | 14.0+ (`libonnxruntime.dylib` ORT 1.27.1) | только CPU-воркер (ConSeC), CoreHost, Swift-пакет `macos/AsteriaScale` и macOS-подмножество smoke |
-| Command Line Tools (Swift) | Swift 6 (проверено на 6.3.3), без Xcode | для Swift-пакета macOS-приложения (`tools/macos/test-swift.sh`) |
+| Command Line Tools (Swift) | Swift 6 (проверено на 6.3.3); Xcode.app может стоять ради сертификата, но `test-swift.sh` и `build-app.sh` берут CLT (`DEVELOPER_DIR`, MACOS.md T33) | для Swift-пакета macOS-приложения (`tools/macos/test-swift.sh`) |
 | .NET SDK | 10.0 | да |
 | [Magpie](https://github.com/Blinue/Magpie) | 0.12.1 | да (движок апскейла, ставится отдельно) |
 | Windows AI Text Recognition | из Windows App SDK | для OCR-перевода |
@@ -952,7 +952,11 @@ bash tools/macos/test-swift.sh -- --filter ConnectionTests   # аргумент�
 | `12` | SwiftPM записал что-то в настоящие `~/Library` или `~/.swiftpm` |
 | иной | код `swift test` |
 
-`--keep` оставляет W и после успешного прогона. С Command Line Tools простой
+`--keep` оставляет W и после успешного прогона. Если Command Line Tools
+установлены, скрипт берёт их, что бы ни выбрал `xcode-select`: он
+экспортирует `DEVELOPER_DIR=/Library/Developer/CommandLineTools` (MACOS.md
+T33; Xcode.app на машине разработки — только ради сертификата, M16), и так
+же поступает `build-app.sh`. С Command Line Tools простой
 `swift test` не находит модуль `Testing`: CLT держат `Testing.framework` и
 `lib_TestingInterop.dylib` вне путей поиска, и скрипт добавляет `-F` и
 `-rpath` для них. XCTest в CLT нет совсем, а `#Preview` и другие Xcode-only
@@ -1126,7 +1130,7 @@ bash tools/macos/build-app.sh --self-test --ranker-models src/AsteriaScale.Ranke
 bash tools/macos/build-app.sh --no-build --run-isolated --ranker-models src/AsteriaScale.RankerWorker/Models
 ```
 
-Только Command Line Tools, без Xcode; около 25 с, самопроверка — ещё 10–20 с.
+Только Command Line Tools (`DEVELOPER_DIR`, T33), даже если установлен Xcode.app; около 25 с, самопроверка — ещё 10–20 с.
 Результат — `artifacts/macos/Asteria Scale.app` (`--output <каталог>`;
 промежуточные файлы — в его `.work`). Каталог вывода не может лежать в домене
 File Provider. После проверок аргументов, платформы, инструментов,
