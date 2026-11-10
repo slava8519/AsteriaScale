@@ -96,6 +96,25 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   its pool work, so a hover, warm-up, unload or change admitted after it sees
   it however late the pool runs; the Core-backed check pins this with the
   test command `test.delayNextWork`.
+- `macos/AsteriaScale` — the native macOS app (owner decisions M2, M11,
+  M13-M15), a SwiftPM package built with the Command Line Tools only (no
+  Xcode project) and never added to `AsteriaScale.slnx`.
+  `Sources/AsteriaScaleKit` holds everything that runs without a window
+  server, Foundation and Darwin only: the strict protocol-v1 client
+  (`CoreConnection`), `ChildProcess` (posix_spawn: own process group,
+  `CLOEXEC_DEFAULT`, an empty signal mask, default SIGPIPE), the
+  `CoreSupervisor` (hello checks, optional `core.init`, ping, restart with
+  backoff, orderly stop; the process group is killed before the zombie is
+  reaped), the single-instance `InstanceLock`, the `OrphanSweep` of a group a
+  killed app left behind, `AppPaths` (CoreHost's arguments exactly per
+  `launch-args-v1.txt`, its environment with `DOTNET_EnableDiagnostics=0` and
+  a private `TMPDIR`), the default hotkeys ⌥T, ⌥D and ⌥V (M14) and every
+  user-facing string in `RU` (`Strings.swift`). Those strings are Russian and
+  say «перевод»/«служба перевода», never the internal word for the host
+  (M15); the Swift suite and the C# parity check scan the package for it. No
+  `#Preview` or other Xcode-only macros (the Command Line Tools ship no
+  PreviewsMacros plugin) and no XCTest (they have none): tests are Swift
+  Testing only, through `tools/macos/test-swift.sh`.
 - `tests/AsteriaScale.Tests` — the smoke suite.
 - `tests/AsteriaScale.Tests.MacOS` — the macOS subset of the same suite. It
   shares `Program.cs`; Windows-only parts sit under `#if WINDOWS` and declare
@@ -108,6 +127,10 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
 - `tools/macos/audit-verbatim-move.py` — audits a move or an edit of shared
   code line by line (`move`: multiset and order-aware) and compares the
   `[GeneratedRegex]` attributes with a base revision (`regex`).
+- `tools/macos/test-swift.sh` — builds CoreHost and the Swift package (any
+  warning fails) and runs its Swift Testing suite in a throwaway home with
+  SwiftPM's state under `.build/swiftpm-state`, failing on anything left
+  behind.
 
 A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
 `#else` branch by default (the SDK defines `WINDOWS` only for the
@@ -145,8 +168,10 @@ less than the owner's machine. `scripts/build.cmd` and every benchmark need the
 real artifacts (docs/DEVELOPMENT.md).
 
 On macOS: Apple Silicon, macOS 14.0+ (the minimum of the ONNX Runtime 1.27.1
-osx-arm64 library), the arm64 .NET 10 SDK and Python 3.11+ as `python3`; no
-PowerShell or Magpie. There only the CPU worker (ConSeC), CoreHost and the
+osx-arm64 library), the arm64 .NET 10 SDK, Python 3.11+ as `python3` and the
+Command Line Tools with Swift 6 (no Xcode; their `/usr/bin/python3` runs the
+Swift suite's fake CoreHost); no PowerShell or Magpie. There only the CPU
+worker (ConSeC), CoreHost, the Swift package `macos/AsteriaScale` and the
 macOS subset of the smoke suite build and run. Report that run as the "macOS subset" with
 its final `PASS (macOS subset): …` line, never as the smoke suite; the line
 also states whether the ConSeC real-bundle checks (worker smoke and the
@@ -216,6 +241,35 @@ SIGABRT, SIGSEGV): ReportCrash then writes into the owner's real
 `~/Library/Logs/DiagnosticReports` whatever `HOME` was. A sudden death is
 simulated with `_exit` (CoreHost's `test.exit`) or SIGKILL, which leave no
 report.
+
+Build and test the Swift package only through the script (it also builds
+CoreHost first, because the suite launches it to `core.hello` and
+`core.init`):
+
+```bash
+bash tools/macos/test-swift.sh       # about 20 s, about a minute from an empty .build
+bash tools/macos/test-swift.sh -- --filter ConnectionTests
+```
+
+Report its result as "Swift suite: N tests", from Swift Testing's `Test run
+with N tests in M suites passed`; it is neither the smoke suite nor the macOS
+subset. The script runs every `swift` command with `HOME`/`CFFIXED_USER_HOME`
+at a throwaway home, its own `TMPDIR` and an empty cwd inside a `mktemp -d`
+folder W, with `--cache-path`, `--config-path`, `--security-path` under
+`macos/AsteriaScale/.build/swiftpm-state` and `--manifest-cache local`: even
+with those flags SwiftPM creates `~/.swiftpm` and `~/Library/org.swift.swiftpm`
+in the home it is given, so a plain `swift build` or `swift test` writes into
+the real `~/Library`. A `warning:` in the release or test build fails the run
+(exit 4). `swift test --skip-build` starts only when the test bundle exists:
+without it `swiftpm-testing-helper` dies of a fatal error (SIGTRAP), which
+writes a crash report into the owner's DiagnosticReports. Afterwards the
+suite's scratch folder and cwd must be empty and its home and `TMPDIR` may
+hold only SwiftPM's own entries (exit 9), no process the suite started may be
+left (exit 11, killed), nothing may be newer than the run in the real
+`~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` or
+`~/.swiftpm` (exit 12), and the crash-report count must not grow (exit 10);
+exit 3 is a failed CoreHost build, 2 a usage error or missing Command Line
+Tools frameworks, any other code `swift test`'s own.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
@@ -399,6 +453,18 @@ certificate creation, `Add-AppxPackage`.
   `CoreHost smart hover: checked in place` or `absent: <path>`. The parity
   check also fails on «ядро» anywhere in CoreHost's sources or in the macOS
   app's Swift sources and string catalogs (M15).
+- The Swift suite (`macos/AsteriaScale/Tests/AsteriaScaleKitTests`) is Swift
+  Testing only. Every suite that starts a process is nested in the
+  serialized `ProcessSuites`; a test puts its folders under `Scratch` (the
+  script's `ASTERIA_TEST_TMPDIR`) and removes them, gives every child it
+  spawns its own home and `TMPDIR`, and marks every `/bin/sleep` it starts
+  with the duration `3141.59`, by which the script finds leftovers. Faults
+  come from the stdlib fake `Fixtures/fake-corehost.py` (protocol v1 under
+  `/usr/bin/python3`), never from crashing a real process; the real CoreHost
+  is launched only by `realCoreHostReachesHello`, with `AppPaths` arguments
+  in a throwaway home. A change to CoreHost's arguments or wire bytes
+  updates the Swift side in the same commit: `launchArgumentsMatchGolden`
+  and the golden-transcript tests read the same two files as the C# checks.
 - Keep a generic class such as `Task<T>` at its own type in shared tests:
   declaring it as `Task` or `object`, assigning it to a property or field of
   that type, passing it to a test-assembly method that takes that type, or

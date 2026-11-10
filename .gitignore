@@ -42,3 +42,9 @@ tools/dictionary-source/*.tar.gz
 tools/dictionary-source/*.tei
 tools/dictionary-source/JMdict.gz
 **/__pycache__/
+
+# SwiftPM output of the macOS app package. tools/macos/test-swift.sh also
+# keeps SwiftPM's cache, configuration and security state under .build, so
+# nothing reaches ~/Library or ~/.swiftpm.
+macos/AsteriaScale/.build/
+macos/AsteriaScale/.swiftpm/
