@@ -91,18 +91,25 @@ extension ProcessSuites {
         }
 
         /// CPython ignores SIGPIPE itself, so this checks /bin/sleep through the
-        /// kernel's view (kinfo_proc.p_sigignore) while the parent ignores it.
-        @Test func childDoesNotInheritIgnoredSIGPIPE() throws {
+        /// kernel's view (kinfo_proc.p_sigignore) while the parent ignores
+        /// SIGPIPE, SIGTERM, SIGINT and SIGHUP, as the app does with the first
+        /// three (an ignored disposition survives exec).
+        @Test func childDoesNotInheritIgnoredSignals() throws {
             let scratch = try Scratch("sigpipe")
             defer { scratch.remove() }
-            let previous = signal(SIGPIPE, SIG_IGN)
-            defer { signal(SIGPIPE, previous) }
-            let bit = UInt32(1) << (SIGPIPE - 1)
-            #expect((ProcessTable.ignoredSignals(getpid()) ?? 0) & bit != 0, "control: the parent ignores SIGPIPE")
+            let signals = [SIGPIPE, SIGTERM, SIGINT, SIGHUP]
+            #expect(ChildProcess.signalsResetToDefault == signals)
+            let previous = signals.map { signal($0, SIG_IGN) }
+            defer { for (number, handler) in zip(signals, previous) { signal(number, handler) } }
+            let bits = signals.reduce(UInt32(0)) { $0 | UInt32(1) << ($1 - 1) }
+            #expect((ProcessTable.ignoredSignals(getpid()) ?? 0) & bits == bits, "control: the parent ignores them")
             let child = try ChildProcess.spawn(executable: "/bin/sleep", arguments: [sleepMarker],
                                                environment: [:], workingDirectory: scratch.cwd.path)
             defer { killAndReap(child) }
-            #expect((ProcessTable.ignoredSignals(child.pid) ?? bit) & bit == 0, "the child has the default SIGPIPE")
+            let ignored = ProcessTable.ignoredSignals(child.pid) ?? bits
+            for number in signals {
+                #expect(ignored & UInt32(1) << (number - 1) == 0, "the child ignores signal \(number)")
+            }
             #expect(getpgid(child.pid) == child.pid)
         }
 

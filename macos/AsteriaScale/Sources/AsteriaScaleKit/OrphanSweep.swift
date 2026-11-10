@@ -101,10 +101,12 @@ public enum OrphanSweep {
         return report
     }
 
-    /// proc_pidpath reports the resolved path, so a prefix is resolved too and
-    /// ends in "/" ("/bin" must not admit "/binx/…").
+    /// proc_pidpath reports the real path, so a prefix is resolved the same
+    /// way (realpath, which keeps /private/tmp; Foundation's
+    /// resolvingSymlinksInPath would strip /private and never match) and ends
+    /// in "/" ("/bin" must not admit "/binx/…").
     static func normalizedPrefix(_ prefix: String) -> String {
-        let resolved = URL(fileURLWithPath: prefix).resolvingSymlinksInPath().path
+        let resolved = ProcessTable.realPath(prefix)
         return resolved.hasSuffix("/") ? resolved : resolved + "/"
     }
 }

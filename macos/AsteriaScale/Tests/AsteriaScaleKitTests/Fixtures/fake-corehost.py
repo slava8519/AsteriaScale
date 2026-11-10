@@ -13,6 +13,9 @@ Startup modes (argv[1]):
   core.shutdown), init-fails, golden <transcript> (replays the outbound lines
   of protocol-v1.golden.jsonl after each matching request).
 
+Settings: core.init, settings.get and settings.update keep CoreHost's
+settings view and revision (a stale baseRevision answers conflict).
+
 Fault commands: test.sleep {ms}, test.events {count}, test.unsolicited,
 test.violate, test.unknownId, test.duplicate, test.eventAfterTerminal,
 test.unknownMember, test.badVersion, test.crash, test.hang,
@@ -41,6 +44,11 @@ current_hover = None    # dict: id, cancel, done, superseded_by
 shown_hovers = set()
 started = time.time()
 shutdown_answered = False
+settings_lock = threading.Lock()
+settings = {"hoverEnabled": False, "hoverDelayMs": 700, "mode": "smart",
+            "sense": {"backend": "cpu", "model": "consec", "sourceLanguage": "auto", "keepWarm": True},
+            "phrase": {"mode": "off", "backend": "cpu"}}
+revision = 1
 
 
 def emit_raw(data):
@@ -179,6 +187,26 @@ def cancel_request(rid, payload):
         ok(rid, {"cancelled": False, "reason": "not_in_flight"})
 
 
+def settings_result():
+    return {"settings": json.loads(json.dumps(settings)), "revision": revision}
+
+
+def update_settings(rid, payload):
+    global revision
+    with settings_lock:
+        if payload.get("baseRevision") != revision:
+            err(rid, "conflict", "Настройки перевода изменились; повторите.", "revision is %d" % revision)
+            return
+        patch = payload.get("patch") or {}
+        for key, value in patch.items():
+            if isinstance(value, dict):
+                settings[key].update(value)
+            else:
+                settings[key] = value
+        revision += 1
+        ok(rid, settings_result())
+
+
 def handle(frame):
     global shutdown_answered
     rid = frame.get("id")
@@ -201,9 +229,10 @@ def handle(frame):
         if MODE == "init-fails":
             err(rid, "dictionary_missing", "Не найдены словари перевода.", "no eng-rus*.tsv.gz in /fake")
         else:
-            ok(rid, {"settings": {"hoverTranslationEnabled": False}, "revision": 1,
-                     "dictionary": {"entries": 3, "sources": 1, "version": "fake"}, "morphologyEntries": 1,
-                     "loadMs": 1, "warmupLookupMs": 1})
+            result = settings_result()
+            result.update({"dictionary": {"entries": 3, "sources": 1, "version": "fake"}, "morphologyEntries": 1,
+                           "loadMs": 1, "warmupLookupMs": 1})
+            ok(rid, result)
     elif command == "request.cancel":
         cancel_request(rid, payload)
     elif command == "hover.resolve":
@@ -211,7 +240,10 @@ def handle(frame):
     elif command == "hover.displayed":
         ok(rid, {"recorded": payload.get("hoverId") in shown_hovers})
     elif command == "settings.get":
-        ok(rid, {"settings": {"hoverTranslationEnabled": True, "hoverDelayMs": 700}, "revision": 1})
+        with settings_lock:
+            ok(rid, settings_result())
+    elif command == "settings.update":
+        update_settings(rid, payload)
     elif command == "test.sleep":
         pending[rid] = threading.Event()
         threading.Thread(target=sleeper, args=(rid, payload.get("ms", 1000)), daemon=True).start()

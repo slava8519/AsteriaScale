@@ -38,7 +38,14 @@
 > так, как это делают проверки подмножества: во временном домашнем каталоге, с
 > собственным `TMPDIR` и `DOTNET_EnableDiagnostics=0`; проверки не роняют
 > процессы через abort или сигнал ошибки (отчёт о сбое попадёт в настоящую
-> `~/Library/Logs/DiagnosticReports`), только `_exit` или SIGKILL. Аргументы
+> `~/Library/Logs/DiagnosticReports`), только `_exit` или SIGKILL, и не
+> запускают копии системных программ вне их места (смерть копии `/bin/sleep`
+> оставляет отчёт «SIGKILL (Code Signature Invalid)»; тесту Swift-пакета служит
+> копия `AsteriaTestSleeper`). Новый отчёт процесса проверки (по имени,
+> родителю или убийце, `tools/macos/crash-reports.py`; после его правки —
+> `python3 tools/macos/test-crash-reports.py`) роняет `run-macos-subset.sh`,
+> `test-swift.sh` и `build-app.sh` кодом `10`; такие отчёты не удаляй, а
+> перечисли владельцу. Аргументы
 > CoreHost меняются вместе с `tests/AsteriaScale.Tests.MacOS/CoreHost/launch-args-v1.txt`,
 > байты протокола — вместе с `protocol-v1.golden.jsonl`. `settings.json` на
 > macOS пишет только CoreHost (на первом запуске — ConSeC на CPU, значения по
@@ -56,7 +63,16 @@
 > со словами «перевод»/«служба перевода» и без слова «ядро» (M15); горячие
 > клавиши по умолчанию — ⌥T, ⌥D, ⌥V (M14), и если система откажет в
 > регистрации, приложение показывает русскую ошибку, а другие сочетания не
-> подбираются молча. `AsteriaScale.slnx`, Windows-воркер и
+> подбираются молча. Приложение собирай и проверяй только `bash
+> tools/macos/build-app.sh --self-test --ranker-models
+> src/AsteriaScale.RankerWorker/Models` (бандл ConSeC читается на месте и
+> никогда не копируется; ни одного файла модели в `.app`) и приводи итог
+> строкой «app self-test: SELFTEST PASS n/n» вместе с «valid on disk» и
+> «satisfies its Designated Requirement». Ручные проверки — только `bash
+> tools/macos/build-app.sh --run-isolated` во временном домашнем каталоге;
+> запуск приложения в настоящем домашнем каталоге (`open`,
+> `~/Applications`), копия бандла ConSeC командой `ditto` и реальное нажатие
+> горячих клавиш — только владелец. `AsteriaScale.slnx`, Windows-воркер и
 > Windows тест-проект в рабочем дереве не собирай: без `EnableWindowsTargeting`
 > они останавливаются на NETSDK1100, а с ним Windows-воркер (в том числе в
 > составе `AsteriaScale.slnx`) копирует бандл ConSeC в `bin/`. Код для macOS
@@ -245,7 +261,9 @@ RTX 5080 закрыт 29 июля 2026, а 8 ноября 2026 его инстр
 > macOS `AsteriaScale.slnx`, Windows-воркер или Windows тест-проект в рабочем
 > дереве (с `EnableWindowsTargeting` Windows-воркер, в том числе в составе
 > `AsteriaScale.slnx`, копирует бандл ConSeC в `bin/`);
-> выдавать macOS-подмножество за полный smoke-набор; менять видимые Windows
+> выдавать macOS-подмножество за полный smoke-набор; запускать
+> macOS-приложение в настоящем домашнем каталоге или класть файл модели в
+> `.app`; менять видимые Windows
 > токены общих исходников вне `#if !WINDOWS` / `#else` без доказательства
 > `tools/macos/check-windows-identity.sh` (`IDENTICAL`) — кроме намеренных
 > Windows-правок Трека III по M12, которые обязаны кросс-собираться (код `1`,

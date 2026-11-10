@@ -25,19 +25,21 @@
 # The first run that fails or leaves anything else stops the loop, and its
 # work folder is kept for inspection; a clean run's folder is deleted.
 #
-# The owner's crash reports are counted before and after all runs with the
-# G-crash pattern ^(AsteriaScale|dotnet|Python|python3|swift) in
-# ~/Library/Logs/DiagnosticReports. That folder is only listed, never
-# changed. ReportCrash writes there for the account whatever HOME the crashed
-# process had, so the folder comes from the user database, not from $HOME
-# (a caller may already have pointed HOME at a sandbox).
+# The owner's crash reports in ~/Library/Logs/DiagnosticReports are listed
+# before and after all runs with tools/macos/crash-reports.py (G-crash): a
+# report named after AsteriaScale, dotnet, Python, python3 or swift, or whose
+# crashed process, parent or killer has such a name, that was not there
+# before fails the runner. That folder is only read, never changed.
+# ReportCrash writes there for the account whatever HOME the crashed process
+# had, so the folder comes from the user database, not from $HOME (a caller
+# may already have pointed HOME at a sandbox).
 #
 # Exit codes:
 #   0   every run passed, left nothing outside --allow, and no crash report appeared
 #   2   usage error, no built apphost, not Apple Silicon macOS, or the work
 #       folder would lie inside the clone
 #   9   a passing run left an entry outside --allow
-#   10  the crash-report count went up
+#   10  a new crash report of the runs' processes appeared
 #   any other code is the subset's own (it exits 1 on FAIL)
 set -euo pipefail
 
@@ -99,21 +101,17 @@ real_home=$(python3 -I -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_di
     exit 2
 }
 reports="$real_home/Library/Logs/DiagnosticReports"
-crash_pattern='^(AsteriaScale|dotnet|Python|python3|swift)'
 
-# Prints the matching report names, one per line. A missing folder (an
-# account that never crashed anything) is empty; an unreadable one is an
-# error, never a count of zero.
+# Prints the attributed report names, one per line, sorted. A missing folder
+# (an account that never crashed anything) is empty; an unreadable one is an
+# error, never an empty listing.
 crash_reports() {
-    if [[ ! -e $reports ]]; then
-        return 0
-    fi
     local listing
-    if ! listing=$(ls "$reports"); then
+    if ! listing=$(python3 -I "$script_dir/crash-reports.py" "$reports"); then
         echo "run-macos-subset: cannot list $reports" >&2
         exit 2
     fi
-    grep -E "$crash_pattern" <<<"$listing" || true
+    LC_ALL=C sort <<<"$listing"
 }
 
 count_lines() {
@@ -141,7 +139,7 @@ is_allowed() {
 
 crashes_before=$(crash_reports)
 echo "run-macos-subset: $apphost"
-echo "run-macos-subset: crash reports matching $crash_pattern in $reports: $(count_lines "$crashes_before")"
+echo "run-macos-subset: crash reports of the checks' processes in $reports: $(count_lines "$crashes_before")"
 
 status=0
 passed=0
@@ -215,12 +213,12 @@ done
 # pause a crash in the last run would be blamed on the next check instead.
 sleep 2
 crashes_after=$(crash_reports)
-before_count=$(count_lines "$crashes_before")
-after_count=$(count_lines "$crashes_after")
-echo "run-macos-subset: crash reports matching $crash_pattern: $before_count before, $after_count after"
-if [[ $after_count -gt $before_count ]]; then
+crashes_new=$(LC_ALL=C comm -13 <(printf '%s\n' "$crashes_before") <(printf '%s\n' "$crashes_after") | sed '/^$/d')
+echo "run-macos-subset: crash reports of the checks' processes: $(count_lines "$crashes_before") before," \
+    "$(count_lines "$crashes_after") after, $(count_lines "$crashes_new") new"
+if [[ -n $crashes_new ]]; then
     echo "run-macos-subset: new crash reports (left in place for the owner):" >&2
-    comm -13 <(LC_ALL=C sort <<<"$crashes_before") <(LC_ALL=C sort <<<"$crashes_after") | sed 's/^/  /' >&2
+    sed 's/^/  /' <<<"$crashes_new" >&2
     [[ $status -eq 0 ]] && status=10
 fi
 

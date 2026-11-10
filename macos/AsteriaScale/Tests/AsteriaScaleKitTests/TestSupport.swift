@@ -30,6 +30,25 @@ let hostWord = "\u{044F}\u{0434}\u{0440}"
 /// tools/macos/test-swift.sh finds leftovers by it.
 let sleepMarker = "3141.59"
 
+/// The package's sleep(1) stand-in (Tests/AsteriaTestSleeper), which SwiftPM
+/// builds beside the test bundle. A test that needs an executable inside its
+/// scratch folder copies this one, never a system binary: a copy of /bin/sleep
+/// dies as "Code Signature Invalid" and leaves a crash report.
+enum TestSleeper {
+    static func url() throws -> URL {
+        // <bin>/AsteriaScalePackageTests.xctest/Contents/MacOS/<image>
+        var info = Dl_info()
+        guard dladdr(#dsohandle, &info) != 0, let name = info.dli_fname else {
+            throw POSIXError(.ENOENT)
+        }
+        var bin = URL(fileURLWithPath: String(cString: name))
+        for _ in 0..<4 { bin.deleteLastPathComponent() }
+        let url = bin.appendingPathComponent("AsteriaTestSleeper")
+        guard FileManager.default.isExecutableFile(atPath: url.path) else { throw POSIXError(.ENOENT) }
+        return url
+    }
+}
+
 /// A private folder tree, removed by the test, under ASTERIA_TEST_TMPDIR:
 /// tools/macos/test-swift.sh points that at an empty folder of its work
 /// folder and fails if anything is left in it. SwiftPM keeps its own lock

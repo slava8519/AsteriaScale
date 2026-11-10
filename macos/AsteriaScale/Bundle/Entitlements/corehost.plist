@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- CoreHost: a self-contained single-file .NET apphost with JIT. CoreCLR
+     needs MAP_JIT under the hardened runtime, so allow-jit only; it loads no
+     separate dylib, so library validation stays on. A NativeAOT CoreHost
+     (docs/MACOS.md M11) will need no entitlement. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+</dict>
+</plist>

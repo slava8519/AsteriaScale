@@ -166,7 +166,9 @@ public struct HoverClient: Sendable {
 
     public init(supervisor: CoreSupervisor) { self.supervisor = supervisor }
 
+    /// - Parameter onSent: called with the request id once hover.resolve is written.
     public func resolve(_ selection: HoverSelection, mode: String? = nil,
+                        onSent: (@Sendable (Int64) -> Void)? = nil,
                         onUpdate: @escaping @Sendable (HoverUpdate) -> Void) async -> HoverOutcome {
         var payload: [String: JSONValue] = ["source": selection.payload]
         if let mode { payload["mode"] = .string(mode) }
@@ -174,7 +176,10 @@ public struct HoverClient: Sendable {
         do {
             let result = try await supervisor.request(
                 "hover.resolve", .object(payload), deadline: CoreDeadlines.hover, cancelInHost: true,
-                onSent: { hoverId.set($0) },
+                onSent: { id in
+                    hoverId.set(id)
+                    onSent?(id)
+                },
                 onEvent: { event in
                     switch event.name {
                     case "hover.primary": onUpdate(.primary(HoverPrimary(hoverId: hoverId.get, payload: event.payload)))

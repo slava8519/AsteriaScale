@@ -26,11 +26,34 @@ let package = Package(
             name: "AsteriaScaleKit",
             path: "Sources/AsteriaScaleKit"
         ),
+        // The menu-bar app (AppKit, SwiftUI, Carbon): status item, overlay
+        // panel, global hotkeys, the settings and «Проверка перевода» windows
+        // and the scripted --self-test. tools/macos/build-app.sh puts its
+        // release binary into Asteria Scale.app with CoreHost, the ranker
+        // worker and the data; `swift run` alone finds no CoreHost.
+        .executableTarget(
+            name: "AsteriaScale",
+            dependencies: ["AsteriaScaleKit"],
+            path: "Sources/AsteriaScale",
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("Carbon"),
+                .linkedFramework("SwiftUI"),
+            ]
+        ),
+        // A sleep(1) stand-in the suite copies into its scratch folders: a
+        // copy of /bin/sleep run from there dies as "Code Signature Invalid"
+        // and leaves a crash report (see its main.swift). Built beside the
+        // test bundle; never part of the app.
+        .executableTarget(
+            name: "AsteriaTestSleeper",
+            path: "Tests/AsteriaTestSleeper"
+        ),
         // Swift Testing only. Fixtures/ holds the fake CoreHost (stdlib
         // python3), which is data, not a source.
         .testTarget(
             name: "AsteriaScaleKitTests",
-            dependencies: ["AsteriaScaleKit"],
+            dependencies: ["AsteriaScaleKit", "AsteriaTestSleeper"],
             path: "Tests/AsteriaScaleKitTests",
             exclude: ["Fixtures"]
         ),

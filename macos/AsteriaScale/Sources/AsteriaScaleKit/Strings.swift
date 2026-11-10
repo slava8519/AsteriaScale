@@ -18,6 +18,25 @@ public enum RU {
     public static let menuSettings = "Настройки…"
     public static let menuRestartTranslation = "Перезапустить перевод"
     public static let menuQuit = "Выход"
+    /// The alert of a second instance.
+    public static let alreadyRunning = "Asteria Scale уже запущен: его значок — в строке меню."
+    /// The alert of a start that cannot create its folders: a Russian
+    /// reason and the error's domain and code, never Foundation's
+    /// description, which follows the system language (rule 9); the app
+    /// writes the description to stderr.
+    public static func startFoldersFailed(_ error: any Error) -> String {
+        let error = error as NSError
+        return "Asteria Scale не запустился: не удалось создать папки приложения в ~/Library"
+            + " (\(error.domain) \(error.code))."
+    }
+
+    /// The alert of a start whose single-instance lock file cannot be
+    /// opened or locked: the failed call and its errno, not strerror's
+    /// English text, which the app writes to app.log.
+    public static func startLockFailed(_ failure: InstanceLock.Failure) -> String {
+        "Asteria Scale не запустился: не удалось открыть файл блокировки экземпляра"
+            + " (\(failure.call), errno \(failure.code))."
+    }
 
     // The translation state line under the menu-bar icon (M15).
     public static let stateStopped = "Перевод: остановлен"
@@ -55,9 +74,22 @@ public enum RU {
         case "superseded": return "Запрос заменён новым наведением."
         case "bad_request": return "Некорректный запрос к службе перевода."
         case "request_too_large": return "Запрос к службе перевода слишком длинный."
+        case "conflict": return "Настройки перевода изменились одновременно с запросом; повторите."
+        case "bad_response": return "Служба перевода ответила в неверном формате."
         default: return "Ошибка службы перевода (\(code))."
         }
     }
+
+    // The menu's model line (models.status). A worker error is shown as the
+    // Russian sentence CoreHost sends, which names the code.
+    public static let senseNotInUse = "Модель значений: не используется"
+    public static let senseUnknown = "Модель значений: состояние неизвестно"
+    public static func senseModelName(_ model: String, provider: String) -> String {
+        let name = model == "consec" ? "ConSeC" : model == "glossbert" ? "GlossBERT" : model
+        return provider.isEmpty ? name : "\(name), \(provider.uppercased())"
+    }
+    public static func senseRunning(_ name: String) -> String { "Модель значений: \(name) — загружена" }
+    public static func senseIdle(_ name: String) -> String { "Модель значений: \(name) — не загружена" }
 
     // Overlay. The two loading lines are the WPF overlay's wording.
     public static let overlayLookingUpDictionary = "Ищу в локальных словарях…"
@@ -65,6 +97,8 @@ public enum RU {
     public static let overlayNotFound = "Нет в словарях"
     public static let overlayUnavailable = "Перевод недоступен — служба перевода перезапускается"
     public static let overlayFailed = "Перевод не выполнен — подробности в окне «Проверка перевода»"
+    /// Shown for a moment by the app's self-test only.
+    public static let overlaySelfTest = "Проверка оверлея"
 
     // Hotkeys (M14).
     public static let hotkeyToggleHover = "Включить или выключить перевод при наведении"
@@ -74,6 +108,8 @@ public enum RU {
     public static func hotkeyFailed(_ gesture: String, status: Int32) -> String {
         "Не удалось зарегистрировать сочетание \(gesture) (код \(status))"
     }
+    public static let hotkeyNotAssigned = "не назначено"
+    public static func hotkeyLine(_ title: String, _ gesture: String) -> String { "\(title): \(gesture)" }
 
     // The 20.2 diagnostic hover source; Apple Vision replaces it in 20.3.
     public static let diagnosticTitle = "Проверка перевода"
@@ -85,6 +121,15 @@ public enum RU {
     public static let diagnosticClipboardDenied = "Доступ к буферу обмена запрещён в Системных настройках"
     public static let diagnosticHoverDisabled = "Перевод текста выключен — включите его в меню"
     public static let diagnosticServiceMessages = "Сообщения службы перевода (диагностика)"
+    public static let diagnosticNoMessages = "Сообщений пока нет"
+    public static let diagnosticResult = "Результат"
+    public static let diagnosticShown = "Перевод показан в оверлее"
+    public static let diagnosticNothingToShow = "Переводить нечего: в тексте нет слова под курсором"
+    public static let diagnosticFailed = "Перевод не выполнен — причина в сообщениях службы перевода ниже"
+    public static func diagnosticError(_ message: String, code: String) -> String { "\(message) (\(code))" }
+    public static func diagnosticCard(source: String, translation: String, badge: String) -> String {
+        "\(source) → \(translation) [\(badge)]"
+    }
 
     // Settings window. The translation section's values belong to CoreHost.
     public static let settingsTitle = "Настройки Asteria Scale"
@@ -93,6 +138,11 @@ public enum RU {
     public static let settingsHotkeys = "Горячие клавиши"
     public static let settingsService = "Служба перевода"
     public static let settingsFolders = "Папки"
+    public static let settingsSense = "Модель значений"
+    public static let folderUserData = "Данные пользователя"
+    public static let folderModels = "Модели значений"
+    public static let folderLogs = "Журналы"
+    public static func folderLine(_ title: String, _ path: String) -> String { "\(title): \(path)" }
     public static func milliseconds(_ value: Int) -> String { "\(value) мс" }
 
     /// The badge of a primary card. Swift renders it from the typed
@@ -121,7 +171,10 @@ public enum RU {
     public static var allFixedStrings: [String] {
         let fixed = [
             menuHoverTranslation, menuTranslationMode, menuModeSmart, menuModeDictionary, menuCheckTranslation,
-            menuTranslateClipboard, menuSettings, menuRestartTranslation, menuQuit,
+            menuTranslateClipboard, menuSettings, menuRestartTranslation, menuQuit, alreadyRunning,
+            senseNotInUse, senseUnknown, overlaySelfTest, hotkeyNotAssigned,
+            diagnosticNoMessages, diagnosticResult, diagnosticShown, diagnosticNothingToShow, diagnosticFailed,
+            settingsSense, folderUserData, folderModels, folderLogs,
             stateStopped, stateStarting, stateReady, stateRestarting, stateUnavailable,
             reasonStopped, reasonExitedUnexpectedly, reasonProtocolBroken, reasonHelloRejected, reasonNoAnswer,
             reasonHelperMissing, reasonSpawnFailed, reasonCrashLoop,
@@ -135,9 +188,16 @@ public enum RU {
             restartDetail(attempt: 2, delay: .milliseconds(500), reason: reasonNoAnswer),
             reasonInitFailed("Не найдены словари перевода.", code: "dictionary_missing"),
             hotkeyTaken("⌥V"), hotkeyFailed("⌥V", status: -9878), milliseconds(700),
+            startFoldersFailed(CocoaError(.fileWriteNoPermission)),
+            startLockFailed(InstanceLock.Failure(call: "open", code: EACCES)),
+            senseRunning(senseModelName("consec", provider: "cpu")),
+            senseIdle(senseModelName("glossbert", provider: "cpu")), hotkeyLine(hotkeyToggleHover, "⌥T"),
+            diagnosticError(errorText("not_ready"), code: "not_ready"),
+            diagnosticCard(source: "bank", translation: "берег", badge: provenance(.dictionary, found: true)),
+            folderLine(folderLogs, "/x"),
         ]
         let errors = ["connection_lost", "timeout", "not_ready", "cancelled", "superseded", "bad_request",
-                      "request_too_large", "x"].map(errorText)
+                      "request_too_large", "conflict", "bad_response", "x"].map(errorText)
         let badges = Provenance.allKnown.flatMap { [provenance($0, found: true), provenance($0, found: false)] }
         return fixed + samples + errors + badges
     }

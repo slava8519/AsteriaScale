@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The ranker worker: JIT plus libonnxruntime.dylib and
+     libhf_tokenizers.dylib beside it. Without a Team ID (ad-hoc or a
+     self-signed identity) library validation rejects those, so it also
+     needs disable-library-validation. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>

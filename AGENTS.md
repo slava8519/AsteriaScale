@@ -102,19 +102,30 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   `Sources/AsteriaScaleKit` holds everything that runs without a window
   server, Foundation and Darwin only: the strict protocol-v1 client
   (`CoreConnection`), `ChildProcess` (posix_spawn: own process group,
-  `CLOEXEC_DEFAULT`, an empty signal mask, default SIGPIPE), the
+  `CLOEXEC_DEFAULT`, an empty signal mask, default SIGPIPE, SIGTERM, SIGINT
+  and SIGHUP), the
   `CoreSupervisor` (hello checks, optional `core.init`, ping, restart with
   backoff, orderly stop; the process group is killed before the zombie is
   reaped), the single-instance `InstanceLock`, the `OrphanSweep` of a group a
   killed app left behind, `AppPaths` (CoreHost's arguments exactly per
   `launch-args-v1.txt`, its environment with `DOTNET_EnableDiagnostics=0` and
-  a private `TMPDIR`), the default hotkeys ⌥T, ⌥D and ⌥V (M14) and every
+  a private `TMPDIR`), the default hotkeys ⌥T, ⌥D and ⌥V (M14), the
+  settings and model status the app reads (`SettingsClient`, the only path
+  to `settings.json`, which CoreHost alone writes; `ModelsStatus`), how a
+  hover's end is shown (`HoverReport`), the app log, the bundle id
+  `io.github.slava8519.AsteriaScale` (`AppIdentity`, M13) and every
   user-facing string in `RU` (`Strings.swift`). Those strings are Russian and
   say «перевод»/«служба перевода», never the internal word for the host
-  (M15); the Swift suite and the C# parity check scan the package for it. No
-  `#Preview` or other Xcode-only macros (the Command Line Tools ship no
-  PreviewsMacros plugin) and no XCTest (they have none): tests are Swift
-  Testing only, through `tools/macos/test-swift.sh`.
+  (M15); the Swift suite and the C# parity check scan the package for it.
+  `Sources/AsteriaScale` is the menu-bar app (AppKit, SwiftUI, Carbon): the
+  status item, the click-through overlay, the Carbon hotkeys, the settings
+  and «Проверка перевода» windows and the scripted `--self-test`; CoreHost's
+  free-text statuses appear only in «Проверка перевода» and `app.log`, never
+  in the menu or the overlay. `Bundle/` holds the Info.plist template and
+  the entitlements `tools/macos/build-app.sh` signs with. No `#Preview` or
+  other Xcode-only macros (the Command Line Tools ship no PreviewsMacros
+  plugin) and no XCTest (they have none): tests are Swift Testing only,
+  through `tools/macos/test-swift.sh`.
 - `tests/AsteriaScale.Tests` — the smoke suite.
 - `tests/AsteriaScale.Tests.MacOS` — the macOS subset of the same suite. It
   shares `Program.cs`; Windows-only parts sit under `#if WINDOWS` and declare
@@ -131,6 +142,9 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   warning fails) and runs its Swift Testing suite in a throwaway home with
   SwiftPM's state under `.build/swiftpm-state`, failing on anything left
   behind.
+- `tools/macos/build-app.sh` — builds, assembles, signs (inside out, hardened
+  runtime, ad-hoc by default) and verifies `Asteria Scale.app`, and runs it
+  only in a throwaway home (`--self-test`, `--run-isolated`).
 
 A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
 `#else` branch by default (the SDK defines `WINDOWS` only for the
@@ -202,6 +216,7 @@ On macOS run each command below as `python3 …`:
 | `tools/sense-gate-early-exit.py` | `python tools/test-sense-gate-early-exit.py` |
 | `tools/fetch-benchmark-datasets.py` | `python tools/tests/test_fetch_benchmark_datasets.py` |
 | `tools/macos/audit-verbatim-move.py` | `python3 tools/macos/test-audit-verbatim-move.py` (needs `git`) |
+| `tools/macos/crash-reports.py` | `python3 tools/macos/test-crash-reports.py` |
 
 **Safe on a macOS clone (Apple Silicon).** Build the worker, CoreHost and the
 macOS subset (the test build also builds the worker and CoreHost first; the
@@ -225,10 +240,14 @@ Support`; none with `--empty-home`), so it never writes into the real
 on one that `--allow <path relative to W>` does not name; a clean run leaves
 nothing there, so the command above passes no `--allow`. `--repeat N` runs
 it N times and stops at the first failure, keeping that folder. It also
-counts the owner's crash reports (`~/Library/Logs/DiagnosticReports`, names
-matching `^(AsteriaScale|dotnet|Python|python3|swift)`; read only) and exits
-10 when the count grows; exit 2 is a usage error or a missing build, any other
-code is the subset's own. Launching the apphost directly or with `dotnet run`
+lists the owner's crash reports (`~/Library/Logs/DiagnosticReports`, read
+only) before and after with `tools/macos/crash-reports.py` (G-crash) and
+exits 10 on a new one: a report counts when its name, or the crashed
+process, its parent or its killer recorded in it, starts with
+`AsteriaScale`, `dotnet`, `Python`, `python3` or `swift`, so a child spawned
+under a system name (a `sleep` started by `swiftpm-testing-helper`) counts
+too. Exit 2 is a usage error or a missing build, any other code is the
+subset's own. Launching the apphost directly or with `dotnet run`
 uses the real home: do not report such a run.
 
 Never start CoreHost (or any helper a test spawns) with the real home: the
@@ -240,7 +259,13 @@ abort or a fault signal (`Environment.FailFast`, an unhandled exception,
 SIGABRT, SIGSEGV): ReportCrash then writes into the owner's real
 `~/Library/Logs/DiagnosticReports` whatever `HOME` was. A sudden death is
 simulated with `_exit` (CoreHost's `test.exit`) or SIGKILL, which leave no
-report.
+report. Never copy a system binary (`/bin/sleep`, anything under `/usr/bin`)
+out of place and run it: outside the sealed system volume it is no longer a
+platform binary, the kernel marks its signature invalid, and its death, even
+by the test's own SIGKILL, leaves a "SIGKILL (Code Signature Invalid)"
+report. A test
+that needs an executable inside its scratch folder copies the package's own
+`AsteriaTestSleeper` (Swift) instead.
 
 Build and test the Swift package only through the script (it also builds
 CoreHost first, because the suite launches it to `core.hello` and
@@ -267,9 +292,40 @@ suite's scratch folder and cwd must be empty and its home and `TMPDIR` may
 hold only SwiftPM's own entries (exit 9), no process the suite started may be
 left (exit 11, killed), nothing may be newer than the run in the real
 `~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` or
-`~/.swiftpm` (exit 12), and the crash-report count must not grow (exit 10);
-exit 3 is a failed CoreHost build, 2 a usage error or missing Command Line
-Tools frameworks, any other code `swift test`'s own.
+`~/.swiftpm` (exit 12), and no new crash report of the run's processes may
+appear (exit 10, the G-crash listing above); exit 3 is a failed CoreHost
+build, 2 a usage error or missing Command Line Tools frameworks, any other
+code `swift test`'s own.
+
+Build the app and run its self-test only through the script; read the
+owner's ConSeC bundle in place, never copy it:
+
+```bash
+bash tools/macos/build-app.sh --self-test --ranker-models src/AsteriaScale.RankerWorker/Models
+bash tools/macos/build-app.sh --run-isolated --ranker-models src/AsteriaScale.RankerWorker/Models
+```
+
+Report the self-test as "app self-test: SELFTEST PASS n/n" (plus the
+`codesign` lines "valid on disk" and "satisfies its Designated
+Requirement"); without `--ranker-models` its in-flight ConSeC line says
+`absent: <path>`. The script publishes CoreHost and the worker with
+`--artifacts-path` under its output's `.work` folder, so the clone's `bin/`
+and `obj/` stay as they are, and stops with exit 3 on any model file in the
+bundle. The app runs only by direct exec in a throwaway home (`HOME` and
+`CFFIXED_USER_HOME` at `W/home`, its own `TMPDIR`, an empty cwd);
+`--run-isolated` prints `W` and keeps it, `--home W` reuses it, and ^C or
+`kill -TERM` quits the app in order. Never launch the app in the real home
+(`open`, a copy in `~/Applications`, a double click): that, and copying the
+ConSeC bundle into `~/Library/Application Support/AsteriaScale/Models/Ranker`
+with `ditto`, are the owner's alone (docs/MACOS.md T9). A physical press of
+⌥T, ⌥D or ⌥V is an owner check too: the self-test proves registration and
+the handler, not that the window server delivers a real key. Exit 4 is a
+failed build or a warning (from `swift build` or either `dotnet publish`,
+which runs at `-v minimal` so MSBuild prints its warnings), 5 signing or
+verification, 6 a failed self-test, 9 a file left in the run's cwd, 10 a new
+crash report (the G-crash listing), 11 a process left
+running (killed), 12 a new entry in the real `~/Library` named after the app
+or SwiftPM, 2 a usage error.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
@@ -458,7 +514,11 @@ certificate creation, `Add-AppxPackage`.
   serialized `ProcessSuites`; a test puts its folders under `Scratch` (the
   script's `ASTERIA_TEST_TMPDIR`) and removes them, gives every child it
   spawns its own home and `TMPDIR`, and marks every `/bin/sleep` it starts
-  with the duration `3141.59`, by which the script finds leftovers. Faults
+  with the duration `3141.59`, by which the script finds leftovers. An
+  executable that must lie inside a scratch folder is a copy (named `sleep`,
+  with the same marker) of the package's `AsteriaTestSleeper`, which SwiftPM
+  builds beside the test bundle (`TestSleeper.url()`), never a copy of a
+  system binary. Faults
   come from the stdlib fake `Fixtures/fake-corehost.py` (protocol v1 under
   `/usr/bin/python3`), never from crashing a real process; the real CoreHost
   is launched only by `realCoreHostReachesHello`, with `AppPaths` arguments

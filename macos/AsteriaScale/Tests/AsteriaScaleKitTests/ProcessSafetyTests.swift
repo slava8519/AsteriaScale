@@ -60,6 +60,39 @@ extension ProcessSuites {
             #expect(!FileManager.default.fileExists(atPath: record.path))
         }
 
+        /// A prefix under /tmp or /var (links to /private/…), as the
+        /// suite's scratch folder and an isolated app run have: proc_pidpath
+        /// names /private/…, so the prefix must be resolved the same way.
+        /// The leader is a copy of the package's own sleeper: a copy of
+        /// /bin/sleep would leave a crash report (see TestSleeper).
+        @Test func killsALeaderUnderALinkedPrefix() throws {
+            let scratch = try Scratch("sweep-linked")
+            defer { scratch.remove() }
+            let bin = try scratch.folder("bin")
+            let sleep = bin.appendingPathComponent("sleep")
+            try FileManager.default.copyItem(at: try TestSleeper.url(), to: sleep)
+            // The copy really runs from here: a binary the kernel refuses
+            // would die of SIGKILL, not exit 0.
+            let probe = try ChildProcess.spawn(executable: sleep.path, arguments: ["0.01"], environment: [:],
+                                               workingDirectory: scratch.cwd.path)
+            probe.closeParentEnds()
+            #expect(ChildProcess.reap(probe.pid) == .exited(0))
+            // /tmp and /var are links to /private/tmp and /private/var, where
+            // test-swift.sh's work folder lives; the prefix uses the link.
+            let real = ProcessTable.realPath(bin.path)
+            try #require(real.hasPrefix("/private/"), "the scratch folder is not under /private: \(real)")
+            let linked = String(real.dropFirst("/private".count))
+            let record = scratch.root.appendingPathComponent("corehost.pid")
+            let child = try ChildProcess.spawn(executable: sleep.path, arguments: [sleepMarker], environment: [:],
+                                               workingDirectory: scratch.cwd.path)
+            defer { child.closeParentEnds() }
+            try OrphanSweep.record(pid: child.pid, executable: sleep.path, to: record)
+            let report = OrphanSweep.sweep(recordAt: record, allowedPrefixes: [linked])
+            if report.killed != [child.pid] { Darwin.kill(child.pid, SIGKILL) }
+            #expect(report.killed == [child.pid] && report.spared.isEmpty, "\(report)")
+            #expect(ChildProcess.reap(child.pid) == .signaled(SIGKILL))
+        }
+
         @Test func sparesAMismatchingStartTimeOrPath() throws {
             let scratch = try Scratch("sweep-spare")
             defer { scratch.remove() }

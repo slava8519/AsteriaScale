@@ -48,6 +48,9 @@ public enum ExitStatus: Sendable, Equatable, CustomStringConvertible {
 }
 
 public enum ChildProcess {
+    /// The dispositions every helper starts with at their default (SETSIGDEF).
+    public static let signalsResetToDefault: [Int32] = [SIGPIPE, SIGTERM, SIGINT, SIGHUP]
+
     /// Serialises pipe creation: a pipe end must be close-on-exec before any
     /// other thread of this process can spawn, and macOS has no pipe2.
     private static let pipeGate = NSLock()
@@ -62,7 +65,11 @@ public enum ChildProcess {
     ///   passes the calling thread's mask on, and .NET keeps it, so without
     ///   this CoreHost would ignore SIGTERM and Process.WaitForExit would hang
     ///   (CoreHost reports the mask it got in core.hello).
-    /// - SETSIGDEF(SIGPIPE): the app ignores SIGPIPE, the child must not.
+    /// - SETSIGDEF(SIGPIPE, SIGTERM, SIGINT, SIGHUP): an ignored disposition
+    ///   survives exec. The app ignores SIGPIPE, and SIGTERM and SIGINT too
+    ///   (it handles them through dispatch sources for an orderly quit), but a
+    ///   helper must start with the defaults: CoreHost's own SIGTERM drain and
+    ///   the stop's SIGTERM to the group depend on it.
     /// - addchdir_np: a fixed working directory (the non-_np form is macOS 26+).
     /// - F_SETNOSIGPIPE on our write end: writing to a dead helper returns
     ///   EPIPE instead of killing the app, whatever its SIGPIPE disposition.
@@ -107,7 +114,7 @@ public enum ChildProcess {
         posix_spawnattr_setpgroup(&attributes, 0)
         var defaults = sigset_t()
         sigemptyset(&defaults)
-        sigaddset(&defaults, SIGPIPE)
+        for number in signalsResetToDefault { sigaddset(&defaults, number) }
         posix_spawnattr_setsigdefault(&attributes, &defaults)
         var mask = sigset_t()
         sigemptyset(&mask)
@@ -192,6 +199,17 @@ public enum ProcessTable {
         let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
         return ProcessStartTime(seconds: info.pbi_start_tvsec, microseconds: info.pbi_start_tvusec)
+    }
+
+    /// The path as the kernel names it (realpath(3)): /tmp/x is
+    /// /private/tmp/x, as proc_pidpath reports it. A path that does not exist
+    /// comes back standardized but unresolved.
+    public static func realPath(_ path: String) -> String {
+        guard let resolved = Darwin.realpath(path, nil) else {
+            return URL(fileURLWithPath: path).standardizedFileURL.path
+        }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     public static func executablePath(_ pid: pid_t) -> String? {

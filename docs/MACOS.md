@@ -46,7 +46,7 @@
 | T6 | Тесты CoreHost — четыре macOS-only регистрации в macOS-подмножестве (итог `+ 7 macOS checks`). | Отдельный тестовый проект со своей командой. |
 | T7 | Первый запуск на macOS (нет `settings.json`): CoreHost явно записывает `smartDictionaryRankerModel=consec` и `smartDictionaryBackend=cpu` и сообщает об этом русским статусом; перевод при наведении выключен, как на Windows. Значения по умолчанию `AppSettings` не меняются: это общий код, и их правка видна в Windows-сборке. | Владелец копирует ещё и бандлы GlossBERT CPU и GlossEmbeddings, а по умолчанию остаётся GlossBERT. |
 | T8 | Данные на macOS: настройки, пользовательские словари, история и три кэша — в `~/Library/Application Support/AsteriaScale` (как `%LOCALAPPDATA%\AsteriaScale` на Windows); журналы — в `~/Library/Logs/AsteriaScale`. | Кэши — в `~/Library/Caches/<bundle id>`. |
-| T9 | Бандл ConSeC для приложения — настоящий каталог (не symlink), который владелец сам копирует командой `ditto` в `~/Library/Application Support/AsteriaScale/Models/Ranker`. Агенты его не копируют, не перемещают и не связывают ссылками; команда для владельца появится в DEVELOPMENT.md вместе с `tools/macos/build-app.sh`. Самопроверки разработки и `--run-isolated` читают `src/AsteriaScale.RankerWorker/Models` на месте, прямым запуском исполняемого файла. | — |
+| T9 | Бандл ConSeC для приложения — настоящий каталог (не symlink), который владелец сам копирует командой `ditto` в `~/Library/Application Support/AsteriaScale/Models/Ranker`. Агенты его не копируют, не перемещают и не связывают ссылками; команда для владельца — в DEVELOPMENT.md, «Сборка `Asteria Scale.app`». Самопроверки разработки и `--run-isolated` читают `src/AsteriaScale.RankerWorker/Models` на месте, прямым запуском исполняемого файла. | — |
 | T10 | Изоляция тестов: только на macOS `MacSmoke.Begin` настраивает `CoreDataLayout`, пользовательская половина которого — явная ошибка (Windows-сборка не меняется), а документированной командой становится герметичный `tools/macos/run-macos-subset.sh`. Общие тесты, которые это выявит, делаются герметичными по одному. | Один `CoreDataLayout.Configure` с временным корнем в начале общего `Program.cs`: это видно в Windows-сборке и сдвигает Windows gated-режимы. |
 | T11 | Помощники (CoreHost и воркер) в 20.2 — self-contained single-file ReadyToRun с JIT: около 97 МБ каждый, `.app` около 255 МБ. NativeAOT-сборка CoreHost — позже (M11). | Обычный single-file: около 80 МБ, загружается медленнее. |
 | T12 | Поставляемый CoreHost работает с `DOTNET_EnableDiagnostics=0` и `TMPDIR` в `~/Library/Application Support/AsteriaScale/Runtime/tmp`: не остаются FIFO отладчика и нет неаутентифицированного diagnostics IPC. Цена: к CoreHost из `.app` не подключаются управляемый отладчик и `dotnet-trace`; отлаживают framework-dependent сборку. | Оставить диагностику .NET включённой. |
@@ -102,19 +102,33 @@
 - **Пользовательские строки — русские** (жёсткое правило 9), в том числе в
   Swift-приложении.
 
-## Предварительная схема процессов
+## Схема процессов
 
-Связь Swift и ядра выбрана (M11); остальное — рабочая гипотеза для 20.3–20.5.
+Процессы 20.2 (M11) собраны в `Asteria Scale.app` скриптом
+`tools/macos/build-app.sh` (DEVELOPMENT.md, «Сборка `Asteria Scale.app`»);
+захват, апскейл, Apple Vision и llama-server — рабочая гипотеза для
+20.3–20.5 (пунктир).
 
 ```mermaid
 graph LR
-    A[Asteria Scale.app<br/>Swift: строка меню, горячие клавиши, оверлеи] -->|ScreenCaptureKit| C[Захват окна игры<br/>нативной или CrossOver]
-    C -->|Metal| U[Пространственный апскейл]
-    C -->|Apple Vision| O[Распознавание текста]
-    A -->|JSONL stdin/stdout, M11| K[CoreHost: AsteriaScale.Core<br/>.NET, словари, смыслы, каркас]
-    K -->|JSONL stdin/stdout| R[RankerWorker osx-arm64<br/>ConSeC, CPU]
-    K -->|HTTP loopback| T[llama-server Metal<br/>TranslateGemma 4B / 12B / 27B]
+    A["Asteria Scale.app<br/>Contents/MacOS/AsteriaScale<br/>Swift: строка меню, горячие клавиши, оверлей, окна"] -->|"posix_spawn: своя группа процессов,<br/>пустая маска сигналов; JSONL v1 stdin/stdout"| K["CoreHost<br/>Contents/Helpers/AsteriaScale.CoreHost<br/>.NET: словари, смыслы, настройки"]
+    K -->|"та же группа процессов;<br/>JSONL stdin/stdout"| R["RankerWorker osx-arm64<br/>Contents/Helpers/Ranker<br/>ConSeC, CPU"]
+    R -.->|"читает на месте"| M[("~/Library/Application Support/<br/>AsteriaScale/Models/Ranker")]
+    K -->|"--data-root"| D[("Contents/Resources/Data<br/>словари, морфология")]
+    A -.->|"ScreenCaptureKit, 20.4"| C["Захват окна игры<br/>нативной или CrossOver"]
+    C -.->|"Metal"| U["Пространственный апскейл"]
+    C -.->|"Apple Vision, 20.3"| O["Распознавание текста"]
+    K -.->|"HTTP loopback, 20.5"| T["llama-server Metal<br/>TranslateGemma 4B / 12B / 27B"]
 ```
+
+Как процессы заканчиваются: приложение останавливает CoreHost
+(`core.shutdown`, EOF stdin, затем SIGTERM и SIGKILL всей группе) и при
+«Выход», и при SIGTERM; CoreHost, убитый или зависший, приложение замечает и
+перезапускает с нарастающей паузой, а его группу (с воркером) завершает до
+сбора зомби; убитое приложение CoreHost видит как EOF stdin и сам завершает
+свою группу (на этой машине — за 12–30 мс, в том числе во время прогрева
+ConSeC), а следующий запуск приложения сверяет запись `Runtime/corehost.pid`
+и убирает то, что осталось.
 
 ## Открытые вопросы
 

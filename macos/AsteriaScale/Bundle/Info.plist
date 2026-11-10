@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for Asteria Scale.app/Contents/Info.plist; tools/macos/build-app.sh
+  fills the @…@ values. The bundle id is owner decision M13 (docs/MACOS.md):
+  macOS binds privacy grants to it, so it never changes after the first
+  Screen Recording grant (20.3). AsteriaCoreHostBuild is the CoreHost
+  informational version the app accepts in core.hello.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key><string>ru</string>
+  <key>CFBundleExecutable</key><string>AsteriaScale</string>
+  <key>CFBundleIdentifier</key><string>io.github.slava8519.AsteriaScale</string>
+  <key>CFBundleName</key><string>Asteria Scale</string>
+  <key>CFBundleDisplayName</key><string>Asteria Scale</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>CFBundleVersion</key><string>@BUILD@</string>
+  <key>AsteriaCoreHostBuild</key><string>@COREHOST_BUILD@</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>LSUIElement</key><true/>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSSupportsAutomaticTermination</key><false/>
+  <key>NSSupportsSuddenTermination</key><false/>
+</dict>
+</plist>

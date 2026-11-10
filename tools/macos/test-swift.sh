@@ -39,9 +39,12 @@
 # them (measured with CLT for Swift 6.3.3). XCTest does not exist in the CLT
 # at all, so the suite is Swift Testing only.
 #
-# The owner's crash reports (~/Library/Logs/DiagnosticReports, names matching
-# ^(AsteriaScale|dotnet|Python|python3|swift); only listed) are counted
-# before and after, as in run-macos-subset.sh.
+# The owner's crash reports (~/Library/Logs/DiagnosticReports; only read) are
+# listed before and after with tools/macos/crash-reports.py, as in
+# run-macos-subset.sh: a report named after AsteriaScale, dotnet, Python,
+# python3 or swift, or whose crashed process, parent or killer has such a
+# name (a child the suite spawned under a system name), that was not there
+# before fails the run.
 #
 # Exit codes:
 #   0   build and suite passed, nothing left behind
@@ -50,7 +53,7 @@
 #   3   the CoreHost build or its version query failed
 #   4   a Swift build failed or printed a warning
 #   9   the run left an entry in W/test outside the rules above
-#   10  the crash-report count went up
+#   10  a new crash report of the run's processes appeared
 #   11  a process the suite started was still running afterwards (killed)
 #   12  SwiftPM state appeared under ~/Library or ~/.swiftpm
 #   any other code is swift test's own
@@ -85,18 +88,15 @@ state="$pkg/.build/swiftpm-state"
 
 real_home=$(python3 -I -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
 reports="$real_home/Library/Logs/DiagnosticReports"
-crash_pattern='^(AsteriaScale|dotnet|Python|python3|swift)'
 
+# The G-crash listing: reports attributed to the checks' processes, sorted.
 crash_reports() {
-    if [[ ! -e $reports ]]; then
-        return 0
-    fi
     local listing
-    if ! listing=$(ls "$reports"); then
+    if ! listing=$(python3 -I "$script_dir/crash-reports.py" "$reports"); then
         echo "test-swift: cannot list $reports" >&2
         exit 2
     fi
-    grep -E "$crash_pattern" <<<"$listing" || true
+    LC_ALL=C sort <<<"$listing"
 }
 
 count_lines() {
@@ -119,7 +119,7 @@ state_flags=(--package-path "$pkg" --cache-path "$state/cache" --config-path "$s
     --security-path "$state/security" --manifest-cache local)
 
 crashes_before=$(crash_reports)
-echo "test-swift: crash reports matching $crash_pattern in $reports: $(count_lines "$crashes_before")"
+echo "test-swift: crash reports of the checks' processes in $reports: $(count_lines "$crashes_before")"
 
 # SwiftPM's state in the real home is compared by modification time.
 swiftpm_marker=$(mktemp "${TMPDIR:-/tmp}/asteria-swiftpm-marker.XXXXXX")
@@ -263,12 +263,12 @@ fi
 # ReportCrash writes a report a moment after the process dies.
 sleep 2
 crashes_after=$(crash_reports)
-before_count=$(count_lines "$crashes_before")
-after_count=$(count_lines "$crashes_after")
-echo "test-swift: crash reports matching $crash_pattern: $before_count before, $after_count after"
-if [[ $after_count -gt $before_count ]]; then
+crashes_new=$(LC_ALL=C comm -13 <(printf '%s\n' "$crashes_before") <(printf '%s\n' "$crashes_after") | sed '/^$/d')
+echo "test-swift: crash reports of the checks' processes: $(count_lines "$crashes_before") before," \
+    "$(count_lines "$crashes_after") after, $(count_lines "$crashes_new") new"
+if [[ -n $crashes_new ]]; then
     echo "test-swift: new crash reports (left in place for the owner):" >&2
-    comm -13 <(LC_ALL=C sort <<<"$crashes_before") <(LC_ALL=C sort <<<"$crashes_after") | sed 's/^/  /' >&2
+    sed 's/^/  /' <<<"$crashes_new" >&2
     [[ $status -eq 0 ]] && status=10
 fi
 

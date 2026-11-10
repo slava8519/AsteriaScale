@@ -69,6 +69,39 @@ import Testing
         }
     }
 
+    /// Rule 9 at start-up: the alert names the reason in Russian and the
+    /// error by its code, never by Foundation's or strerror's text, which is
+    /// English on an English system. /dev/null/… fails without touching disk.
+    @Test func startFailuresAreRussianWithTheirCode() throws {
+        var lockError: InstanceLock.Failure?
+        do {
+            _ = try InstanceLock.acquire(at: URL(fileURLWithPath: "/dev/null/app.lock"))
+        } catch {
+            lockError = error
+        }
+        let lock = try #require(lockError)
+        let lockText = RU.startLockFailed(lock)
+        #expect(lockText == "Asteria Scale не запустился: не удалось открыть файл блокировки экземпляра"
+                + " (open, errno \(ENOTDIR)).")
+        var foldersError: (any Error)?
+        do {
+            try FileManager.default.createDirectory(atPath: "/dev/null/Logs", withIntermediateDirectories: true)
+        } catch {
+            foldersError = error
+        }
+        let folders = try #require(foldersError) as NSError
+        let foldersText = RU.startFoldersFailed(folders)
+        #expect(foldersText == "Asteria Scale не запустился: не удалось создать папки приложения в ~/Library"
+                + " (\(folders.domain) \(folders.code)).")
+        for text in [lockText, foldersText] {
+            // Latin only in the app's name, ~/Library and the trailing code.
+            let reason = text.replacingOccurrences(of: #" \([^()]*\)\.$"#, with: "", options: .regularExpression)
+                .replacingOccurrences(of: RU.appName, with: "").replacingOccurrences(of: "~/Library", with: "")
+            #expect(reason.range(of: "[A-Za-z]", options: .regularExpression) == nil, "\(text)")
+            #expect(!text.contains(lock.description) && !text.contains(folders.localizedDescription), "\(text)")
+        }
+    }
+
     @Test func stateLinesUseTheOwnersWording() {
         #expect(CoreState.ready(CoreSessionInfo(pid: 1, hello: CoreHelloInfo([:]), initResult: nil)).russian
                 == "Перевод: готов")

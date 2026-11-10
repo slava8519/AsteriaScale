@@ -1,5 +1,14 @@
 import Foundation
 
+/// The app's bundle id, owner decision M13 (docs/MACOS.md): macOS binds
+/// privacy grants to it, so it never changes after the first Screen
+/// Recording grant (20.3). Bundle/Info.plist and tools/macos/build-app.sh
+/// name the same string (a test compares them); the helpers are signed as
+/// <id>.corehost and <id>.rankerworker.
+public enum AppIdentity {
+    public static let bundleIdentifier = "io.github.slava8519.AsteriaScale"
+}
+
 /// Every location the app and CoreHost use. The app passes each of them to
 /// CoreHost explicitly (the M12 seams), so Core never derives a path from
 /// Environment.ProcessPath, SpecialFolder or the working directory.
@@ -22,9 +31,14 @@ public struct AppPaths: Sendable, Equatable {
     /// ~/Library/Application Support/AsteriaScale: settings, «Мой словарь»,
     /// history and the three caches (docs/MACOS.md T8).
     public let userData: URL
-    /// userData/Models/Ranker: the worker's --model-directory. Models are
-    /// never inside the bundle (licence M7, size, the bundle seal).
+    /// The worker's --model-directory: userData/Models/Ranker, where the owner
+    /// copies the ConSeC bundle with ditto (docs/MACOS.md T9), unless a
+    /// development run names another folder (the repository's
+    /// src/AsteriaScale.RankerWorker/Models, read in place). Models are never
+    /// inside the bundle (licence M7, size, the bundle seal).
     public let rankerModels: URL
+    /// userData/Models/Ranker, whatever `rankerModels` is.
+    public let defaultRankerModels: URL
     /// ~/Library/Logs/AsteriaScale: CoreHost's hover-translation.log and app.log.
     public let logs: URL
     /// userData/Runtime: locks, the CoreHost record and the folders below.
@@ -40,13 +54,14 @@ public struct AppPaths: Sendable, Equatable {
     /// Swift-owned preferences (hotkeys, overlay level); settings.json is CoreHost's.
     public let preferences: URL
 
-    public init(home: URL, coreHost: URL, dataRoot: URL, rankerWorker: URL?) {
+    public init(home: URL, coreHost: URL, dataRoot: URL, rankerWorker: URL?, rankerModels: URL? = nil) {
         self.home = home
         self.coreHost = coreHost
         self.dataRoot = dataRoot
         self.rankerWorker = rankerWorker
         userData = home.appendingPathComponent("Library/Application Support/AsteriaScale", isDirectory: true)
-        rankerModels = userData.appendingPathComponent("Models/Ranker", isDirectory: true)
+        defaultRankerModels = userData.appendingPathComponent("Models/Ranker", isDirectory: true)
+        self.rankerModels = rankerModels ?? defaultRankerModels
         logs = home.appendingPathComponent("Library/Logs/AsteriaScale", isDirectory: true)
         runtime = userData.appendingPathComponent("Runtime", isDirectory: true)
         coreHostTemp = runtime.appendingPathComponent("tmp", isDirectory: true)
@@ -57,24 +72,37 @@ public struct AppPaths: Sendable, Equatable {
     }
 
     /// The installed layout: helpers and data inside the bundle.
-    public static func bundled(bundle: URL, home: URL) -> AppPaths {
+    public static func bundled(bundle: URL, home: URL, rankerModels: URL? = nil) -> AppPaths {
         let contents = bundle.appendingPathComponent("Contents", isDirectory: true)
         return AppPaths(home: home,
                         coreHost: contents.appendingPathComponent("Helpers/AsteriaScale.CoreHost"),
                         dataRoot: contents.appendingPathComponent("Resources/Data", isDirectory: true),
-                        rankerWorker: contents.appendingPathComponent("Helpers/Ranker/AsteriaScale.RankerWorker"))
+                        rankerWorker: contents.appendingPathComponent("Helpers/Ranker/AsteriaScale.RankerWorker"),
+                        rankerModels: rankerModels)
     }
 
     /// The real app: NSHomeDirectory() follows CFFIXED_USER_HOME, which the
     /// isolated runs point at a throwaway home.
-    public static func current(bundle: URL) -> AppPaths {
-        bundled(bundle: bundle, home: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true))
+    public static func current(bundle: URL, rankerModels: URL? = nil) -> AppPaths {
+        bundled(bundle: bundle, home: URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true),
+                rankerModels: rankerModels)
     }
 
+    /// Creates the app's own folders. Never a model folder named on the
+    /// command line: that one is read in place and must already exist.
     public func createUserDirectories() throws {
-        for folder in [userData, rankerModels, logs, runtime, coreHostTemp, coreHostWorkingDirectory] {
+        for folder in [userData, defaultRankerModels, logs, runtime, coreHostTemp, coreHostWorkingDirectory] {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         }
+    }
+
+    /// What the orphan sweep may kill: the bundle's helpers (CoreHost and
+    /// the ranker worker) and, from 20.5, the TranslateGemma runtime.
+    public var sweepPrefixes: [String] {
+        var prefixes = [coreHost.deletingLastPathComponent().path]
+        if let rankerWorker { prefixes.append(rankerWorker.deletingLastPathComponent().path) }
+        prefixes.append(userData.appendingPathComponent("Models/TranslateGemma", isDirectory: true).path)
+        return prefixes
     }
 
     /// How the app uses each launch argument of protocol v1. It must name

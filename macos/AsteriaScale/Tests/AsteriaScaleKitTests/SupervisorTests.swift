@@ -298,6 +298,22 @@ extension ProcessSuites {
             #expect((session.initResult?["morphologyEntries"]?.int64Value ?? 0) > 0)
             #expect(OrphanSweep.read(paths.coreHostRecord)?.pid == session.pid)
             _ = try await supervisor.request("core.ping", deadline: .seconds(2))
+
+            // The app's settings path against the real CoreHost: the first-run
+            // choice (docs/MACOS.md T7), then a stale revision, which CoreHost
+            // answers with conflict and the client recovers from once.
+            let initial = try #require(session.initResult.flatMap { SettingsSnapshot(result: $0) })
+            #expect(!initial.settings.hoverEnabled && initial.settings.senseModel == "consec"
+                    && initial.settings.senseBackend == "cpu")
+            let settingsClient = SettingsClient(supervisor: supervisor)
+            await settingsClient.adopt(SettingsSnapshot(settings: initial.settings, revision: initial.revision - 1))
+            let updated = try await settingsClient.update(SettingsPatch(hoverEnabled: true, mode: .dictionary))
+            #expect(updated.revision == initial.revision + 1 && updated.settings.hoverEnabled
+                    && updated.settings.translationMode == .dictionary)
+            let status = try #require(ModelsStatus(try await supervisor.request("models.status", deadline: .seconds(2))))
+            // (The dictionaries may be reloading for the new mode right now.)
+            #expect(status.morphologyEntries > 0)
+            #expect(status.senseLine.range(of: #"\p{Cyrillic}"#, options: .regularExpression) != nil, "\(status.senseLine)")
             await supervisor.stop()
 
             #expect(ProcessTable.liveMembers(session.pid).isEmpty)
