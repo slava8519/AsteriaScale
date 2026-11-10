@@ -16,6 +16,13 @@ Startup modes (argv[1]):
 Settings: core.init, settings.get and settings.update keep CoreHost's
 settings view and revision (a stale baseRevision answers conflict).
 
+Speakers: a hover whose source names a speakerName answers with a speaker
+{name, gender, gameKey?, observedName}, observedName being the spelling sent
+and name the one a choice stored for it (in any mode; CoreHost sends a
+speaker only for a smart hover); speaker.set {game, observedName, name,
+gender} stores the choice under observedName as it is and, when the name
+differs, under the name too, like CoreHost.
+
 Fault commands: test.sleep {ms}, test.events {count}, test.unsolicited,
 test.violate, test.unknownId, test.duplicate, test.eventAfterTerminal,
 test.unknownMember, test.badVersion, test.crash, test.hang,
@@ -47,6 +54,7 @@ shown_hovers = set()
 started = time.time()
 shutdown_answered = False
 settings_lock = threading.Lock()
+speakers = {}           # (game key, spelling) casefolded -> (display name, gender)
 settings = {"hoverEnabled": False, "hoverDelayMs": 700, "mode": "smart",
             "sense": {"backend": "cpu", "model": "consec", "sourceLanguage": "auto", "keepWarm": True},
             "phrase": {"mode": "off", "backend": "cpu"}}
@@ -166,10 +174,13 @@ def run_hover(me, previous, payload):
             ok(rid, {"outcome": "empty", "timings": {"queuedMs": 0}})
             return
         shown_hovers.add(rid)
-        event("hover.primary", rid, {
+        primary = {
             "source": word, "translation": "перевод: " + word, "language": "en", "isPhrase": False,
             "found": True, "provenance": "dictionary", "engineLabel": "APPLE VISION  •  СЛОВАРЬ",
-            "context": source.get("text"), "characterIndex": source.get("characterIndex")})
+            "context": source.get("text"), "characterIndex": source.get("characterIndex")}
+        if source.get("speakerName"):
+            primary["speaker"] = speaker_view((payload.get("game") or {}).get("key"), source["speakerName"])
+        event("hover.primary", rid, primary)
         event("hover.phrase", rid, {"source": source.get("text", ""), "translation": "черновик", "status": "translated",
                                     "provisional": True, "fromCache": False,
                                     "model": {"family": "test", "variant": "fake", "backend": "cpu", "identity": "fake"}})
@@ -209,6 +220,32 @@ def update_settings(rid, payload):
         ok(rid, settings_result())
 
 
+def speaker_view(game_key, observed):
+    with settings_lock:
+        name, gender = speakers.get(((game_key or "").casefold(), observed.casefold()), (observed, "unknown"))
+    view = {"name": name, "gender": gender}
+    if game_key:
+        view["gameKey"] = game_key
+    view["observedName"] = observed
+    return view
+
+
+def set_speaker(rid, payload):
+    game = payload.get("game") or {}
+    observed = payload.get("observedName") or ""
+    name = payload.get("name") or ""
+    gender = payload.get("gender")
+    if not game.get("key") or not observed or not name or gender not in ("masculine", "feminine", "ignore"):
+        err(rid, "bad_request", "Некорректный запрос к службе перевода.", "speaker.set needs game, both names and a gender")
+        return
+    key = game["key"].casefold()
+    with settings_lock:
+        speakers[(key, observed.casefold())] = (name, gender)
+        if name.casefold() != observed.casefold():
+            speakers[(key, name.casefold())] = (name, gender)
+    ok(rid, {"speaker": speaker_view(game["key"], observed)})
+
+
 def handle(frame):
     global shutdown_answered
     rid = frame.get("id")
@@ -246,6 +283,8 @@ def handle(frame):
             ok(rid, settings_result())
     elif command == "settings.update":
         update_settings(rid, payload)
+    elif command == "speaker.set":
+        set_speaker(rid, payload)
     elif command == "test.sleep":
         pending[rid] = threading.Event()
         threading.Thread(target=sleeper, args=(rid, payload.get("ms", 1000)), daemon=True).start()

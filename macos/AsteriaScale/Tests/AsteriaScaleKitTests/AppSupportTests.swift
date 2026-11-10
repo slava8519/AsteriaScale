@@ -37,6 +37,33 @@ import Testing
         #expect(TranslationMode.allCases.map(\.russianTitle) == [RU.menuModeSmart, RU.menuModeDictionary])
     }
 
+    /// hover.primary's speaker: a card that shows the corrected name still
+    /// carries the spelling the text source saw, and the editor's speaker.set
+    /// sends that spelling back unchanged.
+    @Test func speakerCarriesTheObservedSpelling() throws {
+        let primary = HoverPrimary(hoverId: 3, payload: [
+            "source": "bank", "translation": "берег", "found": true, "provenance": "dictionary",
+            "speaker": ["name": "Hinata", "gender": "feminine", "gameKey": "process:asteria-test",
+                        "observedName": "Hlnata"],
+        ])
+        let speaker = try #require(primary.speaker)
+        #expect(speaker.name == "Hinata" && speaker.gender == "feminine" && speaker.gameKey == "process:asteria-test"
+                && speaker.observedName == "Hlnata")
+        #expect(speaker.choice(gameKey: "process:asteria-test", gameDisplayName: "Asteria Test", name: "Hinata",
+                               gender: "masculine")
+                == ["game": ["key": "process:asteria-test", "displayName": "Asteria Test"],
+                    "observedName": "Hlnata", "name": "Hinata", "gender": "masculine"])
+
+        // observedName is optional on the wire: without it there is nothing to
+        // store a choice under, and no speaker at all is no speaker.
+        let bare = try #require(HoverSpeaker(["name": "Hinata", "gender": "unknown"]))
+        #expect(bare.observedName == nil && bare.gameKey == nil)
+        #expect(bare.choice(gameKey: "process:asteria-test", gameDisplayName: "Asteria Test", name: "Hinata",
+                            gender: "feminine") == nil)
+        #expect(HoverPrimary(hoverId: 3, payload: ["source": "bank"]).speaker == nil)
+        #expect(HoverSpeaker(["name": "Hinata"]) == nil)
+    }
+
     @Test func modelsStatusAndTheMenuLine() throws {
         func status(_ sense: JSONValue) -> ModelsStatus? {
             ModelsStatus(["dictionary": ["loaded": true, "entries": 881924, "sources": 12, "version": "v",

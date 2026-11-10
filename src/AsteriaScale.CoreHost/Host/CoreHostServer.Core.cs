@@ -172,9 +172,9 @@ internal sealed partial class CoreHostServer
     // task arbitrarily late. A hover, warm-up, unload or later change admitted
     // after this one therefore always finds the change queued and waits for
     // it. Queuing never blocks (a lock and a pool task); the queued task ends
-    // once settings.json holds the change (a settings.update writes it before
-    // Core changes, so a failed write changes nothing), and the work task
-    // only awaits it and answers.
+    // once settings.json holds the change (each change writes it before Core
+    // changes, so a failed write changes nothing), and the work task only
+    // awaits it and answers.
     private void AdmitSettingsChange<T, TResult>(
         RequestEnvelope envelope,
         JsonTypeInfo<T> info,

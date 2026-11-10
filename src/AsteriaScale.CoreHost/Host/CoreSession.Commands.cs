@@ -19,10 +19,11 @@ internal sealed partial class CoreSession
     // arrival order, each after the previous one, under _settingsGate; the
     // gate also covers every save, so settings.json is never serialized while
     // a change is half applied. Each change writes settings.json under the
-    // gate before its task ends; a settings.update writes its patched copy
-    // before Core changes at all, so a failed write leaves Core, the revision
-    // and the view as they were. The tail never faults, so a hover, warm-up
-    // or unload can wait for it whatever the change before it did.
+    // gate before its task ends, and writes its changed copy before Core
+    // changes at all, so a failed write leaves Core (the speaker genders
+    // included), the revision and the view as they were. The tail never
+    // faults, so a hover, warm-up or unload can wait for it whatever the
+    // change before it did.
     private readonly SemaphoreSlim _settingsGate = new(1, 1);
     private readonly object _applyLock = new();
     private readonly object _recentLock = new();
@@ -134,15 +135,24 @@ internal sealed partial class CoreSession
         });
 
     /// <summary>
-    /// speaker.set: stores the gender of a speaker in one game through Core
-    /// (the alias for a corrected spelling included) and returns the speaker
-    /// as it now resolves. The speaker editor that sends it arrives with 20.3.
-    /// Queued at admission like a settings.update; speaker genders are not
-    /// part of the settings view, so the revision stays. Core stores the
-    /// gender before settings.json is written (both under the gate), so a
-    /// failed write is settings_save_failed with the gender kept in memory
-    /// until the next successful save or restart; unlike settings.update it
-    /// is not rolled back, because Core has no call that removes a gender.
+    /// speaker.set: stores the gender of a speaker in one game (the alias for
+    /// a corrected spelling included) and returns the speaker as it now
+    /// resolves, with the spelling it was stored under. The speaker editor
+    /// that sends it arrives with 20.3. Queued at admission like a
+    /// settings.update; speaker genders are not part of the settings view, so
+    /// the revision stays. observedName is the spelling the card carried
+    /// (hover.primary's speaker.observedName) and is used as it is: resolving
+    /// it again would turn a corrected spelling into its display name, and a
+    /// second edit would never reach the entry the next hover reads.
+    /// Transactional like settings.update (docs/MACOS.md T30): Core's
+    /// SaveSpeakerGender changes the live list, reports the choice saved and
+    /// queues a save of its own, all before CoreHost could write anything, so
+    /// the change is first made on a copy of the list and written; only a
+    /// successful write swaps the copy in. Core's call then finds the choice
+    /// stored, saves nothing and reports it (PersistSettingsAsync names the
+    /// cases where it would still save). A failed write is
+    /// settings_save_failed, and the genders, the status and the file stay as
+    /// they were.
     /// </summary>
     public Task<SpeakerSetResult> QueueSpeakerChange(SpeakerSetPayload payload, TimeSpan holdBack) =>
         QueueSettingsChange(holdBack, async () =>
@@ -156,8 +166,11 @@ internal sealed partial class CoreSession
                     $"gender must be masculine, feminine or ignore, got '{payload.Gender}'")),
             };
             SpeakerGameIdentity game = new(payload.Game.Key, payload.Game.DisplayName);
-            CurrentSpeakerContext observed = SpeakerGenderPreferences.Resolve(_settings, game, payload.ObservedName);
-            if (observed.GameKey.Length == 0 || observed.Name.Length == 0 ||
+            string observedName = SpeakerGenderPreferences.NormalizeSpeakerName(payload.ObservedName);
+            // Resolve only normalizes the game key here (Core keeps that
+            // normalization private); its name is not used.
+            string gameKey = SpeakerGenderPreferences.Resolve(_settings, game, observedName).GameKey;
+            if (gameKey.Length == 0 || observedName.Length == 0 ||
                 SpeakerGenderPreferences.NormalizeSpeakerName(payload.Name).Length == 0)
             {
                 // Core would store nothing and still report the choice saved.
@@ -165,13 +178,57 @@ internal sealed partial class CoreSession
                     "game.key must start with path: or process:, and both names must hold 1..48 characters"));
             }
 
-            HoverSpeakerTarget<CoreHostHover> saved = _coordinator.SaveSpeakerGender(
-                new HoverSpeakerTarget<CoreHostHover>(game, observed, CoreHostHover.Detached),
-                gender,
-                payload.Name);
-            await WriteSettingsAsync(_settings).ConfigureAwait(false);
-            return new SpeakerSetResult { Speaker = ToSpeakerView(saved.Speaker) };
+            // Core normalizes a stored game key again on every pass, and some
+            // keys change on the second one (process:x.exe.exe loses one
+            // ".exe" per pass; a quoted path: key ending in a space loses the
+            // space). Such a key never resolves, and Core's own call after
+            // the swap would add the choice to the live list again and queue
+            // a save of its own, so it is refused like a key Core drops.
+            string storedKey = SpeakerGenderPreferences.Resolve(
+                _settings, new SpeakerGameIdentity(gameKey, game.DisplayName), observedName).GameKey;
+            if (!string.Equals(storedKey, gameKey, StringComparison.Ordinal))
+            {
+                throw new RequestErrorException(Errors.BadRequest(
+                    $"game.key must keep its normalized form when normalized again, got '{payload.Game.Key}'"));
+            }
+
+            HoverSpeakerTarget<CoreHostHover> target = new(
+                game,
+                new CurrentSpeakerContext(observedName, SpeakerGender.Unknown, gameKey),
+                CoreHostHover.Detached);
+            AppSettings candidate = CopyOf(_settings);
+            // CopyOf shares the list; Set happens to replace it (Normalize),
+            // which this must not rely on.
+            candidate.SpeakerGenders = [.. _settings.SpeakerGenders];
+            StoreSpeakerGender(candidate, target, gender, payload.Name);
+            await WriteSettingsAsync(candidate).ConfigureAwait(false);
+            // One reference store: a hover running meanwhile reads either list
+            // whole, and CoreHost changes no list a hover can see in place.
+            _settings.SpeakerGenders = candidate.SpeakerGenders;
+            HoverSpeakerTarget<CoreHostHover> saved = _coordinator.SaveSpeakerGender(target, gender, payload.Name);
+            return new SpeakerSetResult { Speaker = ToSpeakerView(saved.Speaker, observedName) };
         });
+
+    // Core's SaveSpeakerGender (HoverCoordinator) stores exactly this: the
+    // choice under the observed spelling and, when the user's name differs
+    // from it, under that name too, so a later frame that recognizes the
+    // correction cleanly finds it. The operands are the ones Core compares,
+    // so for a game key speaker.set accepts its own call after the swap
+    // changes nothing and queues no save; a change to Core's rule must
+    // change this copy with it, or that save comes back (PersistSettingsAsync
+    // logs it, and the CoreHost speaker check fails on the line).
+    private static void StoreSpeakerGender(
+        AppSettings settings,
+        HoverSpeakerTarget<CoreHostHover> target,
+        SpeakerGender gender,
+        string name)
+    {
+        SpeakerGenderPreferences.Set(settings, target.Game, target.Speaker.Name, gender, name);
+        if (!string.Equals(target.Speaker.Name, name, StringComparison.OrdinalIgnoreCase))
+        {
+            SpeakerGenderPreferences.Set(settings, target.Game, name, gender, name);
+        }
+    }
 
     // A settings change's own write: the change holds _settingsGate, which is
     // not reentrant, so this must not take it again. A failed write is
@@ -188,10 +245,21 @@ internal sealed partial class CoreSession
         }
     }
 
-    // The coordinator's save hook (a saved speaker gender): it runs outside
-    // any change, so it takes the gate itself.
+    // The coordinator's save hook, which only SaveSpeakerGender reaches, and
+    // only when it found a choice not stored yet. speaker.set stores and
+    // writes the choice before Core's call (StoreSpeakerGender) and refuses a
+    // game key Core changes again on a second pass, so this runs only if
+    // that copy of Core's rule fell behind Core, or if a hand-edited
+    // settings.json holds the same speaker under such a key (Core's next
+    // pass then merges that entry over the stored choice and stores the
+    // choice again). It then still saves what memory holds, and says so on
+    // stderr, where the CoreHost speaker check looks for the line. It runs
+    // outside any change, so it takes the gate itself.
     private async Task PersistSettingsAsync()
     {
+        HostLog.Write("Core saved the settings itself after speaker.set: " +
+                      "CoreHost's copy of Core's speaker-gender rule differs from Core's, " +
+                      "or settings.json holds this speaker under a game key Core shortens on each pass");
         await _settingsGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -361,7 +429,7 @@ internal sealed partial class CoreSession
     // analyzers accept here, a JSON round trip would need the reflection
     // serializer they refuse in CoreHost's own code. The lists are shared,
     // not copied: no settings.update changes them, and speaker.set, the only
-    // change that does, runs under the same gate.
+    // change that does, copies the speaker list itself before changing it.
     private static AppSettings CopyOf(AppSettings settings)
     {
         AppSettings copy = new();

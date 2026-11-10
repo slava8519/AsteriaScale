@@ -241,6 +241,48 @@ extension ProcessSuites {
             await supervisor.stop()
         }
 
+        /// The re-edit through the fake: the card carries observedName, and
+        /// a choice made on a card that already shows the corrected name
+        /// still reaches the spelling the next hover sends.
+        @Test func speakerReEditSendsTheObservedSpellingBack() async throws {
+            let scratch = try Scratch("speaker")
+            defer { scratch.remove() }
+            let supervisor = CoreSupervisor(Fake.config("normal", scratch))
+            await supervisor.start()
+            let game: JSONValue = ["key": "process:asteria-test", "displayName": "Asteria Test"]
+            func speakerOfHover() async throws -> HoverSpeaker? {
+                let primaries = Box<[HoverPrimary]>([])
+                let payload: JSONValue = [
+                    "source": ["kind": "selection", "text": "The bank was steep.", "hoveredWord": "bank",
+                               "characterIndex": 4, "speakerName": "Hlnata"],
+                    "game": game,
+                ]
+                _ = try await supervisor.request("hover.resolve", payload, deadline: CoreDeadlines.hover,
+                                                 onEvent: { event in
+                    if event.name == "hover.primary" {
+                        primaries.mutate { $0.append(HoverPrimary(hoverId: 0, payload: event.payload)) }
+                    }
+                })
+                return primaries.get.first?.speaker
+            }
+
+            let seen = try #require(try await speakerOfHover())
+            #expect(seen.name == "Hlnata" && seen.gender == "unknown" && seen.observedName == "Hlnata")
+            let correction: JSONValue = try #require(seen.choice(
+                gameKey: "process:asteria-test", gameDisplayName: "Asteria Test", name: "Hinata", gender: "feminine"))
+            let corrected = try await supervisor.request("speaker.set", correction, deadline: CoreDeadlines.settings)
+            #expect(HoverSpeaker(corrected["speaker"])?.observedName == "Hlnata")
+            let shown = try #require(try await speakerOfHover())
+            #expect(shown.name == "Hinata" && shown.gender == "feminine" && shown.observedName == "Hlnata")
+
+            let reEdit: JSONValue = try #require(shown.choice(
+                gameKey: "process:asteria-test", gameDisplayName: "Asteria Test", name: "Hinata", gender: "masculine"))
+            _ = try await supervisor.request("speaker.set", reEdit, deadline: CoreDeadlines.settings)
+            let after = try #require(try await speakerOfHover())
+            #expect(after.name == "Hinata" && after.gender == "masculine" && after.observedName == "Hlnata")
+            await supervisor.stop()
+        }
+
         @Test func outcomesAndRefusals() async throws {
             let scratch = try Scratch("outcomes")
             defer { scratch.remove() }

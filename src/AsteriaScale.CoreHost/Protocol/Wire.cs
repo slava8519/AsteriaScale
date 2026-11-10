@@ -216,6 +216,10 @@ internal sealed class SpeakerView
     // unknown, masculine, feminine or ignore.
     public string Gender { get; set; } = "";
     public string? GameKey { get; set; }
+
+    // The spelling the text source saw, which name shows corrected once the
+    // user corrected it; speaker.set's observedName takes it back as it is.
+    public string? ObservedName { get; set; }
 }
 
 internal sealed class HoverPhraseEvent

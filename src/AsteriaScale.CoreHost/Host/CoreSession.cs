@@ -19,8 +19,8 @@ internal delegate void StatusSink(string area, string? state, string? code, stri
 /// events. CoreHost is also the only writer of settings.json: every change
 /// joins the settings queue when it is admitted and is applied in that
 /// arrival order (hovers, warm-ups and unloads admitted later wait for it)
-/// and saved before its terminal; a settings.update is saved first and
-/// reaches Core only once the write succeeded.
+/// and saved before its terminal; a settings.update or speaker.set is saved
+/// first, from a copy, and reaches Core only once the write succeeded.
 /// </summary>
 [SupportedOSPlatform("macos")]
 internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHover>
@@ -296,8 +296,15 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
         CancellationToken cancellationToken) =>
         Task.FromResult(SelectionText.Recognize(anchor.Selection, sentenceContext));
 
-    HoverOcrResult IHoverHost<CoreHostHover>.UpgradeRecognized(CoreHostHover anchor, HoverOcrResult recognized) =>
-        recognized;
+    // The last look at the speaker name before the coordinator resolves it
+    // (ApplySpeakerPreference): a corrected spelling then shows its display
+    // name, and only this spelling reaches the entry the next hover reads.
+    HoverOcrResult IHoverHost<CoreHostHover>.UpgradeRecognized(CoreHostHover anchor, HoverOcrResult recognized)
+    {
+        string observed = SpeakerGenderPreferences.NormalizeSpeakerName(recognized.CurrentSpeaker?.Name);
+        anchor.ObservedSpeakerName = observed.Length == 0 ? null : observed;
+        return recognized;
+    }
 
     SpeakerGameIdentity? IHoverHost<CoreHostHover>.ResolveSpeakerGame(CoreHostHover anchor) =>
         anchor.Game is { } game ? new SpeakerGameIdentity(game.Key, game.DisplayName) : null;
@@ -393,7 +400,7 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
             SenseProvider = provenance.SenseProvider is { } provider ? ProviderName(provider) : null,
             EngineLabel = card.Engine,
             Context = card.Context,
-            Speaker = card.CurrentSpeaker is { } speaker ? ToSpeakerView(speaker) : null,
+            Speaker = card.CurrentSpeaker is { } speaker ? ToSpeakerView(speaker, card.Anchor.ObservedSpeakerName) : null,
         };
     }
 
@@ -428,7 +435,7 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
         _ => throw new InvalidOperationException($"Unknown sense provider {provider}."),
     };
 
-    private static SpeakerView ToSpeakerView(CurrentSpeakerContext speaker) => new()
+    private static SpeakerView ToSpeakerView(CurrentSpeakerContext speaker, string? observedName) => new()
     {
         Name = speaker.Name,
         Gender = speaker.Gender switch
@@ -439,5 +446,6 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
             _ => "unknown",
         },
         GameKey = speaker.GameKey.Length == 0 ? null : speaker.GameKey,
+        ObservedName = observedName,
     };
 }

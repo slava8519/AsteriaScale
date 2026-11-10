@@ -100,7 +100,16 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   Core's settings queue when it is admitted, on the reader thread, never from
   its pool work, so a hover, warm-up, unload or change admitted after it sees
   it however late the pool runs; the Core-backed check pins this with the
-  test command `test.delayNextWork`.
+  test command `test.delayNextWork`. Both changes write a changed copy of
+  the settings first and reach Core only after the write succeeded:
+  `speaker.set` changes a copied speaker list by Core's alias rule (mirrored
+  in `StoreSpeakerGender`) and refuses a `game.key` whose normalization
+  changes again on a second pass, so Core's own `SaveSpeakerGender` after
+  the swap stores and saves nothing unless a hand-edited `settings.json`
+  holds the same speaker under such a key (a save of Core's own is logged
+  to stderr and fails the check), and it stores the choice under the card's
+  `observedName` as it is, the spelling CoreHost records in
+  `UpgradeRecognized` before Core resolves it to a display name.
 - `macos/AsteriaScale` — the native macOS app (owner decisions M2, M11,
   M13-M15), a SwiftPM package built with the Command Line Tools only (no
   Xcode project) and never added to `AsteriaScale.slnx`.

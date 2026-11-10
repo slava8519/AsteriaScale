@@ -47,6 +47,15 @@ internal sealed class CoreHostHover
     public IHoverEvents? Events { get; }
 
     public CancellationToken CancellationToken { get; }
+
+    /// <summary>
+    /// The speaker name as the text source spelled it (normalized), or null.
+    /// Set on the hover task by UpgradeRecognized, which the coordinator
+    /// calls right before it resolves the name to a stored display name; the
+    /// cards of this hover carry it as observedName, and speaker.set stores a
+    /// choice under it.
+    /// </summary>
+    public string? ObservedSpeakerName { get; set; }
 }
 
 /// <summary>

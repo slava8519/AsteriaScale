@@ -84,6 +84,8 @@ public struct HoverPrimary: Sendable, Equatable {
     /// Russian, for history and the log only; the app never parses it.
     public let engineLabel: String
     public let context: String?
+    /// Who says the line, when the text named a speaker.
+    public let speaker: HoverSpeaker?
 
     public init(hoverId: Int64, payload: JSONValue) {
         self.hoverId = hoverId
@@ -97,10 +99,44 @@ public struct HoverPrimary: Sendable, Equatable {
         senseProvider = payload["senseProvider"]?.stringValue
         engineLabel = payload["engineLabel"]?.stringValue ?? ""
         context = payload["context"]?.stringValue
+        speaker = HoverSpeaker(payload["speaker"])
     }
 
     /// The overlay badge (rule 9).
     public var badge: String { RU.provenance(provenance, found: found) }
+}
+
+/// The `speaker` of a `hover.primary` event (and of speaker.set's answer).
+public struct HoverSpeaker: Sendable, Equatable {
+    /// The name the card shows: the user's corrected spelling once there is one.
+    public let name: String
+    /// unknown, masculine, feminine or ignore.
+    public let gender: String
+    public let gameKey: String?
+    /// The spelling the text source saw, which `name` no longer shows once
+    /// the user corrected it. Only this spelling reaches the entry the next
+    /// hover reads, so speaker.set takes it back as it is.
+    public let observedName: String?
+
+    public init?(_ value: JSONValue?) {
+        guard let value, let name = value["name"]?.stringValue, let gender = value["gender"]?.stringValue else {
+            return nil
+        }
+        self.name = name
+        self.gender = gender
+        gameKey = value["gameKey"]?.stringValue
+        observedName = value["observedName"]?.stringValue
+    }
+
+    /// The speaker.set payload for a choice made on this card (the speaker
+    /// editor, 20.3): the card's observedName goes back unchanged, whatever
+    /// name the user enters. Nil when the card carries no observedName,
+    /// which the editor shows as no speaker.
+    public func choice(gameKey: String, gameDisplayName: String, name: String, gender: String) -> JSONValue? {
+        guard let observedName else { return nil }
+        return ["game": ["key": .string(gameKey), "displayName": .string(gameDisplayName)],
+                "observedName": .string(observedName), "name": .string(name), "gender": .string(gender)]
+    }
 }
 
 /// The payload of a `hover.phrase` event (from 20.5; the golden has one).

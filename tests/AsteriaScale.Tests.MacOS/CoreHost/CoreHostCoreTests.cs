@@ -13,7 +13,11 @@ using AsteriaScale.Services;
 /// hover_disabled, a dictionary hover answers bank → «берег» with the Apple
 /// Vision labels; history records only what hover.displayed reports;
 /// «Мой словарь» edits reach the next hover; a speaker gender is saved through
-/// Core; ranker errors carry their code in Russian without a path; and with
+/// Core, and speaker.set is transactional (a failed write changes no gender,
+/// reports no save and leaves no save behind), refuses a game key Core's
+/// normalization changes again on a second pass, and stores a re-edit under
+/// the spelling the card carried as observedName; ranker errors carry their code
+/// in Russian without a path; and with
 /// the owner's ConSeC bundle read in place a smart hover ranks on ConSeC CPU
 /// with the exact pinned identity. One more launch, with test commands only
 /// for test.delayNextWork (the pool starts the next work-lane request late),
@@ -55,6 +59,7 @@ internal static class CoreHostCoreTests
             VerifyMissingDictionariesAsync(tempRoot),
             VerifyModelDirectoryErrorsAsync(tempRoot));
         await VerifyHoverSettingsAndHistoryAsync(tempRoot);
+        await VerifySpeakerAsync(tempRoot);
         await VerifyConsecInPlaceAsync(tempRoot);
     }
 
@@ -273,7 +278,6 @@ internal static class CoreHostCoreTests
 
         await VerifyHistoryAsync(client, hover.Id);
         await VerifyUserDictionaryAsync(client);
-        await VerifySpeakerAsync(client, settingsFile);
 
         // The status snapshot, and a ranker error without --ranker-* (the
         // Windows companion path beside CoreHost, which never exists here).
@@ -431,27 +435,212 @@ internal static class CoreHostCoreTests
             "userDictionary.remove did not remove exactly once.");
     }
 
-    private static async Task VerifySpeakerAsync(CoreHostClient client, string settingsFile)
+    // ---- speaker gender ------------------------------------------------------
+
+    private const string SpeakerGameKey = "process:asteria-test";
+
+    // Its own launch: a speaker reaches the card only in smart mode, and a
+    // smart hover without a ranker worker leaves worker_missing in
+    // models.status, which the core-hover session checks is clear.
+    private static async Task VerifySpeakerAsync(string tempRoot)
     {
-        JsonObject game = CoreHostFixtures.Payload(("key", "process:asteria-test"), ("displayName", "Asteria Test"));
-        JsonObject result = await client.ResultAsync(client.Send("speaker.set", CoreHostFixtures.Payload(
-            ("game", game), ("observedName", "Kotori"), ("name", "Kotori"), ("gender", "feminine"))));
+        using CoreHostSession session = CoreHostSession.Start(tempRoot, "core-speaker", testCommands: false);
+        CoreHostClient client = session.Client;
+        await client.HelloAsync(expectTestCommands: false);
+        await client.ResultAsync(client.Send("core.init"), InitDeadlineMs);
+        // keepWarm off: no ranker starts; each hover answers rankerUnavailable.
+        JsonObject smart = await client.ResultAsync(client.Send("settings.update", Update(1,
+            ("hoverEnabled", true),
+            ("mode", "smart"),
+            ("sense", CoreHostFixtures.Payload(("keepWarm", false))))));
+        CoreHostFixtures.Check(smart["revision"]!.GetValue<long>() == 2,
+            "settings.update did not enable smart mode: " + smart.ToJsonString());
+        string settingsFile = Path.Combine(session.UserData, "settings.json");
+
+        JsonObject result = await client.ResultAsync(client.Send("speaker.set",
+            SpeakerSet("Kotori", "Kotori", "feminine")));
         CoreHostFixtures.Check(
-            result["speaker"]!.ToJsonString() == "{\"name\":\"Kotori\",\"gender\":\"feminine\",\"gameKey\":\"process:asteria-test\"}",
+            result["speaker"]!.ToJsonString() ==
+            "{\"name\":\"Kotori\",\"gender\":\"feminine\",\"gameKey\":\"process:asteria-test\",\"observedName\":\"Kotori\"}",
             "speaker.set did not resolve the saved speaker: " + result.ToJsonString());
         AppSettings saved = await new SettingsService(settingsFile).LoadAsync();
         CoreHostFixtures.Check(
             saved.SpeakerGenders.Any(preference =>
-                preference.GameKey == "process:asteria-test" &&
+                preference.GameKey == SpeakerGameKey &&
                 preference.SpeakerName == "Kotori" &&
                 preference.Gender == "feminine"),
             "speaker.set answered before settings.json held the gender.");
-        await client.ErrorAsync(client.Send("speaker.set", CoreHostFixtures.Payload(
-            ("game", CoreHostFixtures.Payload(("key", "process:asteria-test"), ("displayName", "Asteria Test"))),
-            ("observedName", "Kotori"), ("name", "Kotori"), ("gender", "female"))), "bad_request");
-        await client.ErrorAsync(client.Send("speaker.set", CoreHostFixtures.Payload(
-            ("game", CoreHostFixtures.Payload(("key", "steam:42"), ("displayName", "Asteria Test"))),
-            ("observedName", "Kotori"), ("name", "Kotori"), ("gender", "feminine"))), "bad_request");
+        await client.ErrorAsync(client.Send("speaker.set", SpeakerSet("Kotori", "Kotori", "female")), "bad_request");
+        JsonObject otherGame = SpeakerSet("Kotori", "Kotori", "feminine");
+        otherGame["game"]!["key"] = "steam:42";
+        await client.ErrorAsync(client.Send("speaker.set", otherGame), "bad_request");
+        // A key Core's normalization changes again on a second pass never
+        // resolves, and Core's own call after the swap would store the choice
+        // again and save it itself; before the fix CoreHost stored it.
+        foreach (string unstableKey in new[] { "process:asteria-test.exe.exe", "process:asteria-test .exe", "path:/Games/Asteria Test.exe \"" })
+        {
+            JsonObject unstable = SpeakerSet("Kotori", "Kotori", "masculine");
+            unstable["game"]!["key"] = unstableKey;
+            await client.ErrorAsync(client.Send("speaker.set", unstable), "bad_request");
+        }
+
+        await VerifyFailedSpeakerSaveChangesNothingAsync(client, session.UserData, settingsFile);
+        await VerifySpeakerReEditAsync(client, settingsFile);
+        CheckLabelsAndStatuses(client);
+        await session.ShutdownAsync("settings.json", "Dictionaries");
+        // Core's own save after speaker.set would mean CoreHost's copy of
+        // Core's alias rule fell behind it; CoreHost logs that save. Read once
+        // the shutdown closed stderr, StderrTail keeps the lines under 512
+        // characters and only the last 8 to 16 thousand characters of them,
+        // which still hold this session's whole stderr (a few short lines).
+        CoreHostFixtures.Check(
+            !client.StderrTail.Contains("Core saved the settings itself", StringComparison.Ordinal),
+            "Core queued a save of its own after speaker.set: " + client.StderrTail);
+    }
+
+    // speaker.set is transactional (docs/MACOS.md T30): a failed write of
+    // settings.json is settings_save_failed and leaves the gender in memory
+    // as it was. Before the fix Core stored the gender and reported it saved
+    // before CoreHost wrote the file, and queued a save of its own: the next
+    // hover saw the refused gender, and that save could still write it.
+    private static async Task VerifyFailedSpeakerSaveChangesNothingAsync(
+        CoreHostClient client,
+        string userData,
+        string settingsFile)
+    {
+        // The subset runs only on macOS; this guard is what the platform
+        // analyzer (CA1416, a build error) needs before the Unix file modes.
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException("The CoreHost checks run only on macOS.");
+        }
+
+        byte[] before = await File.ReadAllBytesAsync(settingsFile);
+        DateTime writtenBefore = File.GetLastWriteTimeUtc(settingsFile);
+        int statusesBefore = client.Unsolicited.Count;
+        UnixFileMode mode = File.GetUnixFileMode(userData);
+        File.SetUnixFileMode(userData, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            await client.ErrorAsync(client.Send("speaker.set", SpeakerSet("Kotori", "Kotori", "masculine")),
+                "settings_save_failed");
+        }
+        finally
+        {
+            File.SetUnixFileMode(userData, mode);
+        }
+
+        // A refused settings.update runs under the same queue and gate, so a
+        // save queued behind the failed change has had its turn once it
+        // answers; the poll then gives a late one a bounded second more.
+        await RefuseUpdateAsync(client, "conflict", 0, ("hoverDelayMs", 900));
+        Stopwatch quiet = Stopwatch.StartNew();
+        while (quiet.Elapsed < TimeSpan.FromSeconds(1))
+        {
+            CoreHostFixtures.Check(
+                (await File.ReadAllBytesAsync(settingsFile)).AsSpan().SequenceEqual(before) &&
+                File.GetLastWriteTimeUtc(settingsFile) == writtenBefore,
+                $"settings.json was written after a speaker.set whose save failed ({quiet.ElapsedMilliseconds} ms after write access returned).");
+            await Task.Delay(50);
+        }
+
+        JsonObject speaker = await SpeakerOfHoverAsync(client, "Kotori");
+        CoreHostFixtures.Check(
+            speaker["name"]!.GetValue<string>() == "Kotori" &&
+            speaker["gender"]!.GetValue<string>() == "feminine",
+            "After a speaker.set whose save failed the next hover resolved another gender: " + speaker.ToJsonString());
+
+        string[] speakerStatuses = client.Unsolicited
+            .Skip(statusesBefore)
+            .Where(frame => frame["event"]!.GetValue<string>() == "status")
+            .Select(frame => frame["payload"]!["text"]!.GetValue<string>())
+            .Where(text =>
+                (text.Contains(": сохранён ", StringComparison.Ordinal) && text.Contains(" род для ", StringComparison.Ordinal)) ||
+                text.StartsWith("Не удалось сохранить род говорящего", StringComparison.Ordinal))
+            .ToArray();
+        CoreHostFixtures.Check(speakerStatuses.Length == 0,
+            "A speaker.set whose save failed reported a save: " + string.Join(" | ", speakerStatuses));
+
+        // With write access back the same choice saves.
+        JsonObject retried = await client.ResultAsync(client.Send("speaker.set", SpeakerSet("Kotori", "Kotori", "masculine")));
+        AppSettings saved = await new SettingsService(settingsFile).LoadAsync();
+        CoreHostFixtures.Check(
+            retried["speaker"]!["gender"]!.GetValue<string>() == "masculine" &&
+            saved.SpeakerGenders.Any(preference =>
+                preference.GameKey == SpeakerGameKey && preference.SpeakerName == "Kotori" && preference.Gender == "masculine"),
+            "speaker.set did not save once write access returned: " + retried.ToJsonString());
+    }
+
+    // The re-edit defect (docs/MACOS.md T30): a card shows the corrected
+    // name, so speaker.set must store the choice under the spelling OCR saw,
+    // which the card carries as observedName, and use it as it is. Before
+    // the fix CoreHost resolved observedName to the display name again, and
+    // a second edit never reached the entry the next hover reads.
+    private static async Task VerifySpeakerReEditAsync(CoreHostClient client, string settingsFile)
+    {
+        const string Observed = "Hlnata";
+        const string Corrected = "Hinata";
+        JsonObject seen = await SpeakerOfHoverAsync(client, Observed);
+        JsonObject first = await client.ResultAsync(client.Send("speaker.set",
+            SpeakerSet(Observed, Corrected, "feminine")));
+        JsonObject corrected = await SpeakerOfHoverAsync(client, Observed);
+        CoreHostFixtures.Check(
+            corrected["name"]!.GetValue<string>() == Corrected &&
+            corrected["gender"]!.GetValue<string>() == "feminine",
+            "The corrected name did not reach the next hover: " + corrected.ToJsonString());
+
+        // The second edit, from the card that shows the corrected name.
+        JsonObject reEdited = await client.ResultAsync(client.Send("speaker.set",
+            SpeakerSet(Observed, Corrected, "masculine")));
+        JsonObject after = await SpeakerOfHoverAsync(client, Observed);
+        CoreHostFixtures.Check(
+            after["name"]!.GetValue<string>() == Corrected &&
+            after["gender"]!.GetValue<string>() == "masculine",
+            $"A re-edit with the corrected name did not reach the OCR spelling «{Observed}»: " + after.ToJsonString());
+        JsonObject alias = await SpeakerOfHoverAsync(client, Corrected);
+        CoreHostFixtures.Check(alias["gender"]!.GetValue<string>() == "masculine",
+            "A re-edit did not reach the corrected spelling: " + alias.ToJsonString());
+
+        // The card carries the spelling OCR saw, whatever name it shows, and
+        // speaker.set answers with the one it stored the choice under.
+        string View(string name, string gender) =>
+            $"{{\"name\":\"{name}\",\"gender\":\"{gender}\",\"gameKey\":\"{SpeakerGameKey}\",\"observedName\":\"{Observed}\"}}";
+        CoreHostFixtures.Check(
+            seen.ToJsonString() == View(Observed, "unknown") &&
+            first["speaker"]!.ToJsonString() == View(Corrected, "feminine") &&
+            corrected.ToJsonString() == View(Corrected, "feminine") &&
+            reEdited["speaker"]!.ToJsonString() == View(Corrected, "masculine") &&
+            after.ToJsonString() == View(Corrected, "masculine"),
+            "The speaker views do not carry the OCR spelling: " + string.Join(" ",
+                new[] { seen, first["speaker"]!, corrected, reEdited["speaker"]!, after }.Select(node => node.ToJsonString())));
+
+        // Core's alias rule: the OCR spelling shows the corrected name, and
+        // the corrected spelling is stored too.
+        AppSettings saved = await new SettingsService(settingsFile).LoadAsync();
+        string[] entries = saved.SpeakerGenders
+            .Where(preference => preference.GameKey == SpeakerGameKey && preference.SpeakerName != "Kotori")
+            .Select(preference => $"{preference.SpeakerName}>{preference.DisplayName}:{preference.Gender}")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        CoreHostFixtures.Check(
+            entries.SequenceEqual([$"{Corrected}>{Corrected}:masculine", $"{Observed}>{Corrected}:masculine"]),
+            "settings.json does not hold both spellings of the re-edited speaker: " + string.Join(", ", entries));
+    }
+
+    private static JsonObject SpeakerSet(string observedName, string name, string gender) => CoreHostFixtures.Payload(
+        ("game", CoreHostFixtures.Payload(("key", SpeakerGameKey), ("displayName", "Asteria Test"))),
+        ("observedName", observedName),
+        ("name", name),
+        ("gender", gender));
+
+    private static async Task<JsonObject> SpeakerOfHoverAsync(CoreHostClient client, string speakerName)
+    {
+        JsonObject hover = Hover(Sentence, "bank");
+        hover["source"]!["speakerName"] = speakerName;
+        hover["game"] = CoreHostFixtures.Payload(("key", SpeakerGameKey), ("displayName", "Asteria Test"));
+        JsonObject primary = await SinglePrimaryAsync(client, client.Send("hover.resolve", hover));
+        return primary["speaker"] as JsonObject ??
+            throw new InvalidOperationException("A smart hover with a speaker name carried no speaker: " + primary.ToJsonString());
     }
 
     // ---- admission order ----------------------------------------------------
@@ -508,7 +697,7 @@ internal static class CoreHostCoreTests
         JsonObject withSpeaker = await SinglePrimaryAsync(client, client.Send("hover.resolve", spoken));
         CoreHostFixtures.Check(
             withSpeaker["speaker"]?.ToJsonString() ==
-            "{\"name\":\"Kotori\",\"gender\":\"feminine\",\"gameKey\":\"process:asteria-order\"}",
+            "{\"name\":\"Kotori\",\"gender\":\"feminine\",\"gameKey\":\"process:asteria-order\",\"observedName\":\"Kotori\"}",
             "The hover behind speaker.set did not see the saved gender: " + withSpeaker.ToJsonString());
         await client.ResultAsync(speaker);
 
