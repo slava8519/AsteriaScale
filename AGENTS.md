@@ -352,7 +352,20 @@ also registers the bundle's path in the owner's LaunchServices database
 bundle: never clean it (`lsregister -u <path>` or `-gc` is the owner's) and
 list the bundle paths you launched in your report. A physical press of
 ⌥T, ⌥D or ⌥V is an owner check too: the self-test proves registration and
-the handler, not that the window server delivers a real key. Exit 4 is a
+the handler, not that the window server delivers a real key. Stage 20.3
+(Apple Vision and screen capture) adds four rules that hold before its code
+lands. No agent run calls ScreenCaptureKit, `CGRequestScreenCaptureAccess`
+or anything else that can raise a privacy (TCC) prompt (Screen Recording,
+Accessibility, Input Monitoring): a real capture and the first grant are
+owner checks, and the app turns capture on only when the owner launches it
+through LaunchServices (docs/MACOS.md T22). The real Vision recognizer runs
+only inside the app self-test's throwaway home; the Swift suite and the
+macOS subset use synthetic observations (T26). Agents sign ad hoc only: the
+owner's Apple Development identity (`--sign`, `ASTERIA_SIGN_IDENTITY`, M16)
+is for the owner's builds, and using it can raise a keychain dialog, so pass
+`--sign -` whenever `ASTERIA_SIGN_IDENTITY` is set. `build-app.sh --install`
+(T34) goes only into a folder inside `mktemp -d`; its default
+`~/Applications` is the owner's. Exit 4 is a
 failed build or a warning (from `swift build` or either `dotnet publish`,
 which runs at `-v minimal` so MSBuild prints its warnings), 5 signing or
 verification (on codesign's "detritus" or "Disallowed xattr" it also names

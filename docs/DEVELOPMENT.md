@@ -1201,12 +1201,27 @@ Provider, в том числе в перенесённом из домена; д
    воркер (`allow-jit`, `disable-library-validation`; идентификатор
    `<bundle id>.rankerworker`), CoreHost (`allow-jit`; `<bundle id>.corehost`),
    приложение без entitlements. По умолчанию ad-hoc (`--sign <identity>` или
-   `ASTERIA_SIGN_IDENTITY`; постоянная подпись выбирается до 20.3, MACOS.md
-   T15): тогда designated requirement — cdhash, и он меняется с каждой
-   сборкой.
+   `ASTERIA_SIGN_IDENTITY`): тогда designated requirement — cdhash, и он
+   меняется с каждой сборкой. Постоянная подпись — сертификат Apple
+   Development владельца (MACOS.md M16): им подписывает только владелец
+   (обращение к ключу может вызвать диалог связки ключей), а агенты
+   подписывают ad-hoc и передают `--sign -`, если `ASTERIA_SIGN_IDENTITY`
+   задан.
 5. Проверка: `codesign --verify --strict --deep` («valid on disk»,
    «satisfies its Designated Requirement»), затем у каждого исполняемого
    файла — entitlements, флаг `runtime` и идентификатор.
+
+Правила этапа 20.3 (Apple Vision и захват экрана) действуют и до того, как
+появится его код. Ни один запуск агента не вызывает ScreenCaptureKit,
+`CGRequestScreenCaptureAccess` и ничего другого, что может вызвать запрос
+TCC («Запись экрана», «Универсальный доступ», «Мониторинг ввода»): настоящий
+захват и первое разрешение — проверки владельца, а захват приложение
+включает, только если его запустил владелец через LaunchServices (MACOS.md
+T22). Настоящий Vision работает только в самопроверке приложения во
+временном домашнем каталоге; Swift-набор и macOS-подмножество используют
+синтетические наблюдения (T26). `build-app.sh --install` (T34) агенты
+выполняют только в каталог внутри `mktemp -d`; `~/Applications` по
+умолчанию — только владелец.
 
 `--self-test` и `--run-isolated` запускают исполняемый файл бандла напрямую
 (не через `open`: ответственным процессом для TCC остаётся терминал) в
