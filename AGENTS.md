@@ -38,8 +38,13 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   hover's `HoverOutcome`, a `HoverModelStatus` snapshot and host-requested
   unloads; the phrase model is optional), the unit-free OCR text rules
   (`OcrTextRules`: clean-up, sentence extraction, the two-observation
-  agreement, frame reuse; `WindowsAiOcrService` imports them and keeps capture
-  and pixel geometry until 20.3) and the card-kind predicates over engine
+  agreement, frame reuse), the OCR pixel geometry (`OcrGeometry`: the line
+  and word nearest the cursor, sentence and nameplate assembly from line
+  boxes, screen block grouping, capture bounds and their reuse area; boxes
+  in frame pixels, bounds in the host's screen pixels;
+  `WindowsAiOcrService` imports both and keeps capture, Windows AI
+  recognition, `ExtractRecognition`, its instance cache and diagnostics)
+  and the card-kind predicates over engine
   strings (`HoverEngineLabelClassifier`; the WPF `HoverTranslationOverlay`
   imports them and keeps the card's texts and layout). CA1416 is a build
   error. Add no Windows binary names or paths; the existing ones listed in

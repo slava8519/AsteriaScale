@@ -399,9 +399,9 @@ apphost или не Apple Silicon; любой другой — код самог
 платформу. Их код при этом компилируется; под `#if WINDOWS` вынесены только
 `--live` и режимы OCR-изображений.
 
-Из `57` общих регистраций выполняются `43`. Остальные `14` Windows-only
+Из `57` общих регистраций выполняются `46`. Остальные `11` Windows-only
 объявлены на месте через `MacSmoke.Skip` с названием API, которое их требует
-(WPF-сборка, Magpie, Windows AI OCR, Windows PowerShell, `cmd.exe`), и
+(WPF-сборка, Magpie, Windows PowerShell, `cmd.exe`), и
 печатаются строками `skip`. Три Windows-only проверки внутри выполняемых
 тестов объявлены через `MacSmoke.Part` и печатаются строками `note`; одна из
 них — бюджет управляемой памяти, который один тест, «Local dictionary
@@ -432,11 +432,11 @@ metadata`), поэтому строк `note` четыре. Затем идут �
   три занимают около 5 с, четвёртая, с настоящим ядром и бандлом ConSeC, —
   около 12 с.
 
-Эталонный прогон: `50` строк `ok`, `14` — `skip`, `4` — `note`, последняя
+Эталонный прогон: `53` строки `ok`, `11` — `skip`, `4` — `note`, последняя
 строка:
 
 ```text
-PASS (macOS subset): 43/57 shared smoke tests + 7 macOS checks; SKIPPED: 14 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place; CoreHost smart hover: checked in place. Not the full Windows smoke suite.
+PASS (macOS subset): 46/57 shared smoke tests + 7 macOS checks; SKIPPED: 11 Windows-only; 3 Windows-only parts not run; ConSeC real bundle: checked in place: tokenizer length+SHA-256 pin and 2 tensor goldens; ConSeC worker smoke: checked in place; CoreHost smart hover: checked in place. Not the full Windows smoke suite.
 ```
 
 Это результат macOS-подмножества, а не smoke-набора, и сообщать о нём нужно
@@ -1714,15 +1714,15 @@ symlink у самого каталога `--model-directory` (`Models`), у `Mod
 в ядро оркестрации наведения, текстовых правил OCR и признаков вида карточки,
 типизированного происхождения результата и меток хоста (9 ноября 2026), API
 координатора для CoreHost, самого CoreHost, его команд через ядро,
-Swift-библиотеки приложения с супервизором CoreHost и самого приложения в
-строке меню (10 ноября 2026):
+Swift-библиотеки приложения с супервизором CoreHost, самого приложения в
+строке меню и переноса в ядро пиксельной геометрии OCR (10 ноября 2026):
 default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 `57` блоков `await RunAsync(...)`, из них `33` вызывают отдельные классы
 `XxxTests.RunAsync`. `57` — число регистраций Windows-прогона
-(`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `43` из них
-и семь собственных проверок. В `tests/` `58` файлов C# — `33 453` строки вместе с
+(`MacSmoke.SharedRegistrationCount`); macOS-подмножество выполняет `46` из них
+и семь собственных проверок. В `tests/` `58` файлов C# — `33 446` строк вместе с
 harness gated-бенчмарков и десятью файлами `tests/AsteriaScale.Tests.MacOS` —
-против `42 049` строк C# в `src/` (вместе с CoreHost). Отдельно есть шесть
+против `42 089` строк C# в `src/` (вместе с CoreHost). Отдельно есть шесть
 Python-наборов `unittest` на `76` тестов (см. «Python-тесты инструментов») и
 набор Swift Testing Swift-пакета macOS-приложения: `78` тестов в `19` наборах,
 `1 908` строк Swift (из них `23` — `AsteriaTestSleeper`) и поддельный
@@ -1756,10 +1756,11 @@ macOS не выполняются (`skip` или не компилируются
   проверяются только как XML.
 - **Живой NPU OCR.** Проверяются текстовые правила OCR в ядре
   (`OcrTextRules`: извлечение предложения, починка mixed-script, согласие двух
-  наблюдений, повторное использование неизменившегося кадра; выполняются и на
-  macOS) и пиксельные помощники `WindowsAiOcrService` (сборка предложения из
-  строк, границы захвата, группировка блоков; только Windows); распознавание
-  Windows AI запускают только `--ocr-image` и `--screen-ocr-image`.
+  наблюдений, повторное использование неизменившегося кадра) и пиксельная
+  геометрия OCR в ядре (`OcrGeometry`: сборка предложения из строк, границы
+  захвата, группировка блоков); и то и другое выполняется и на macOS.
+  Распознавание Windows AI запускают только `--ocr-image` и
+  `--screen-ocr-image`.
 - **Инференс моделей и качество вывода GPU.** Ни один тест-проект не ссылается
   на ONNX Runtime, а для TranslateGemma проверяются pins, аргументы CPU/Vulkan
   `llama-server` и окружение процесса без его запуска. Живой вывод проверяют

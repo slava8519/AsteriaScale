@@ -32,7 +32,7 @@
 > явная ошибка (`MacSmoke.Begin` настраивает `CoreDataLayout`): тест, которому
 > нужны настройки, кэш или словарь пользователя, передаёт свой каталог во
 > временном корне.
-> Приведи его итоговую строку `PASS (macOS subset): 43/57 shared smoke tests +
+> Приведи его итоговую строку `PASS (macOS subset): 46/57 shared smoke tests +
 > 7 macOS checks; …` (с `CoreHost smart hover: checked in place` или
 > `absent: <путь>`) и не выдавай её за полный smoke. CoreHost запускай только
 > так, как это делают проверки подмножества: во временном домашнем каталоге

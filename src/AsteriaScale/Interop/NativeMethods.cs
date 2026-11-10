@@ -367,6 +367,7 @@ internal static class NativeMethods
     {
         internal int X;
         internal int Y;
+        public static implicit operator System.Drawing.Point(Point point) => new(point.X, point.Y);
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

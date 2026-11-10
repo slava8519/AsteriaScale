@@ -14,8 +14,8 @@ namespace AsteriaScale.Services;
 /// every text source applies the same rules: the Windows recognizer imports
 /// them with <c>using static</c>, and a macOS host can build its hover
 /// selection with them instead of keeping a second copy. Line geometry, capture
-/// bounds and their pixel thresholds stay with the recognizer until the macOS
-/// coordinate unit is settled (roadmap 20.3, Q3; docs/MACOS.md T13).
+/// bounds and their pixel thresholds are the other half, in
+/// <see cref="OcrGeometry"/> (roadmap 20.3; docs/MACOS.md T13 and T18).
 /// </summary>
 internal static partial class OcrTextRules
 {

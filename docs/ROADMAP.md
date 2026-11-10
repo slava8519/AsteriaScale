@@ -1794,10 +1794,10 @@ Silicon)».
   путь вида `C:\…` на Unix не считается полным. Нужна идентичность, которую
   передаёт хост; горячая клавиша и редактор рода говорящего на macOS — тоже в
   20.3 (T17).
-- **Перенос геометрии OCR (20.3, T13).** Пиксельная геометрия
+- **Перенос геометрии OCR (20.3, T13).** Закрыт в 20.3: пиксельная геометрия
   (`SelectNearPoint`, контекст предложения, группировка блоков, границы
-  захвата) остаётся в `WindowsAiOcrService` и переносится в ядро дословно в
-  20.3, вместе с решением о единицах координат (Q3).
+  захвата) дословно перенесена из `WindowsAiOcrService` в `OcrGeometry` ядра,
+  а единица координат — пиксели (T18).
 - **Поле `reason` в происхождении (T3).** `HoverProvenance` — 7 источников и
   признак `found`; типизированной причины (`notFound`, `singleSense`,
   `decisionCache`, `trustedPhrase`) нет.
@@ -2050,10 +2050,11 @@ Silicon)».
    - Остальные коммиты этапа дают `IDENTICAL: <n> Windows output files`.
 10. **Проверки агентов.**
     - macOS-подмножество через `tools/macos/run-macos-subset.sh` зелёное 10
-      прогонов подряд. Ожидается итоговая строка `PASS (macOS subset):
-      46/57 shared smoke tests + 7 macOS checks; SKIPPED: 11 Windows-only;
-      …`. Новые проверки CoreHost живут внутри существующих
-      macOS-регистраций, их по-прежнему семь.
+      прогонов подряд. Итоговая строка, измеренная коммитом
+      `refactor(core): move OCR pixel geometry into Core (OcrGeometry)`
+      (10 прогонов подряд): `PASS (macOS subset): 46/57 shared smoke tests +
+      7 macOS checks; SKIPPED: 11 Windows-only; …`. Новые проверки CoreHost
+      живут внутри существующих macOS-регистраций, их по-прежнему семь.
     - Набор Swift Testing (`tools/macos/test-swift.sh`) зелёный 5 прогонов
       подряд; в нём нет ни одного вызова настоящего Vision и
       ScreenCaptureKit.

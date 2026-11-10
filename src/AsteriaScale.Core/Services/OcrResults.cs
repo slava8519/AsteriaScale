@@ -6,6 +6,14 @@ namespace AsteriaScale.Services;
 // live beside the Windows AI recognizer, which tied the platform-neutral hover
 // pipeline to Windows App SDK types; a macOS Vision backend produces the same
 // shapes.
+//
+// Two coordinate spaces meet here, and OcrGeometry's pixel thresholds hold
+// only if a backend keeps them apart (docs/MACOS.md T18). Word and line boxes
+// (OcrWordGeometry, OcrLineGeometry, the contents of OcrRecognition) are
+// pixels of the recognized frame: origin top-left, y down, not normalized and
+// not points. Every Drawing.Rectangle (CaptureBounds, ScreenOcrBlock.Bounds)
+// is in the host's screen space, whole pixels that may be negative on a
+// display left of or above the primary one.
 
 internal enum HoverTextSource
 {
@@ -13,6 +21,9 @@ internal enum HoverTextSource
     TextHook
 }
 
+// CaptureBounds is where the host captured the frame the selection came from.
+// Core only passes it through and never reads it, so a host with no capture
+// to report (CoreHost's text selection) passes Rectangle.Empty.
 internal sealed record HoverOcrResult(
     string Text,
     string HoveredWord,

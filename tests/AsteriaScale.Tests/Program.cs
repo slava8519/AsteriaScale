@@ -2866,8 +2866,21 @@ try
                    scalingProcessId: 20,
                    pointInsideDestination: true) == scalingWindow,
             "An invalid Magpie.SrcHWND was used as a Textractor target.");
+
+        // WindowsAiOcrService hands its NativeMethods.Point cursor to the
+        // System.Drawing.Point parameters of OcrGeometry through this implicit
+        // conversion, which no shared geometry test reaches.
+        AsteriaScale.Interop.NativeMethods.Point nativeCursor = new() { X = -1850, Y = 80 };
+        System.Drawing.Point convertedCursor = nativeCursor;
+        Assert(convertedCursor.X == -1850 && convertedCursor.Y == 80,
+            "NativeMethods.Point must convert to System.Drawing.Point field by field, keeping a negative X.");
         return Task.CompletedTask;
     });
+#else
+    MacSmoke.Skip(
+        "Magpie visible cursor mapping",
+        "VisibleCursorService and Interop.NativeMethods live in the WPF assembly");
+#endif
 
     await RunAsync("Neural OCR wrapped sentence", () =>
     {
@@ -2880,7 +2893,7 @@ try
             new("Back     Skip     Close", 250, 535, 1950, 570)
         ];
 
-        SentenceContext context = WindowsAiOcrService.BuildSentenceContext(lines, 2, 10);
+        SentenceContext context = OcrGeometry.BuildSentenceContext(lines, 2, 10);
         Assert(context.Text ==
                "More importantly, you should be able to enter this establishment for no charge with these people.\"",
             "Wrapped OCR lines were not reconstructed into the sentence containing the cursor.");
@@ -2899,7 +2912,7 @@ try
             new("rest of your life tortured by paranoia, constantly", 118, 260, 1740, 310),
             new("questioning whether the person has read your writings!", 119, 340, 1810, 390)
         ];
-        SentenceContext interleaved = WindowsAiOcrService.BuildSentenceContext(
+        SentenceContext interleaved = OcrGeometry.BuildSentenceContext(
             interleavedLines,
             0,
             9);
@@ -2913,14 +2926,6 @@ try
             "An unrelated UI control was mistaken for an OCR speaker nameplate.");
         return Task.CompletedTask;
     });
-#else
-    MacSmoke.Skip(
-        "Magpie visible cursor mapping",
-        "VisibleCursorService and Interop.NativeMethods live in the WPF assembly");
-    MacSmoke.Skip(
-        "Neural OCR wrapped sentence",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
-#endif
 
     await RunAsync("Sentence boundaries", () =>
     {
@@ -3034,12 +3039,11 @@ try
         return Task.CompletedTask;
     });
 
-#if WINDOWS
     await RunAsync("Smart OCR capture geometry", () =>
     {
         System.Drawing.Rectangle monitor = new(0, 0, 3200, 2000);
-        AsteriaScale.Interop.NativeMethods.Point cursor = new() { X = 1600, Y = 1100 };
-        System.Drawing.Rectangle first = WindowsAiOcrService.CalculateSentenceCaptureBounds(
+        System.Drawing.Point cursor = new() { X = 1600, Y = 1100 };
+        System.Drawing.Rectangle first = OcrGeometry.CalculateSentenceCaptureBounds(
             monitor,
             cursor);
         Assert(first.Width == 2400 && first.Height == 720,
@@ -3047,16 +3051,16 @@ try
         Assert(monitor.Contains(first) && first.Contains(cursor.X, cursor.Y),
             "The reduced Smart OCR capture must stay on the selected monitor and contain the cursor.");
 
-        AsteriaScale.Interop.NativeMethods.Point nearby = new() { X = 2150, Y = 1200 };
-        System.Drawing.Rectangle reused = WindowsAiOcrService.CalculateSentenceCaptureBounds(
+        System.Drawing.Point nearby = new() { X = 2150, Y = 1200 };
+        System.Drawing.Rectangle reused = OcrGeometry.CalculateSentenceCaptureBounds(
             monitor,
             nearby,
             first);
         Assert(reused == first,
             "Moving over another word in the same dialogue area must keep stable capture coordinates.");
 
-        AsteriaScale.Interop.NativeMethods.Point distant = new() { X = 3150, Y = 1900 };
-        System.Drawing.Rectangle moved = WindowsAiOcrService.CalculateSentenceCaptureBounds(
+        System.Drawing.Point distant = new() { X = 3150, Y = 1900 };
+        System.Drawing.Rectangle moved = OcrGeometry.CalculateSentenceCaptureBounds(
             monitor,
             distant,
             first);
@@ -3064,20 +3068,15 @@ try
             "The capture must be repositioned when the cursor leaves the safe reuse area.");
 
         System.Drawing.Rectangle leftMonitor = new(-1920, 0, 1920, 1080);
-        System.Drawing.Rectangle leftCapture = WindowsAiOcrService.CalculateSentenceCaptureBounds(
+        System.Drawing.Rectangle leftCapture = OcrGeometry.CalculateSentenceCaptureBounds(
             leftMonitor,
-            new AsteriaScale.Interop.NativeMethods.Point { X = -1850, Y = 80 });
+            new System.Drawing.Point { X = -1850, Y = 80 });
         Assert(leftMonitor.Contains(leftCapture) &&
                leftCapture.Width == 1920 &&
                leftCapture.Height == 720,
             "Smart OCR geometry must support monitors with negative desktop coordinates.");
         return Task.CompletedTask;
     });
-#else
-    MacSmoke.Skip(
-        "Smart OCR capture geometry",
-        "WindowsAiOcrService and Interop.NativeMethods live in the WPF assembly");
-#endif
 
     await RunAsync("Smart OCR unchanged-frame cache guard", () =>
     {
@@ -3340,7 +3339,6 @@ try
         return Task.CompletedTask;
     });
 
-#if WINDOWS
     await RunAsync("Screen OCR block grouping", () =>
     {
         OcrLineGeometry[] lines =
@@ -3353,7 +3351,7 @@ try
             new("Skip", 1500, 900, 1630, 940)
         ];
 
-        IReadOnlyList<ScreenOcrBlock> blocks = WindowsAiOcrService.BuildScreenBlocks(
+        IReadOnlyList<ScreenOcrBlock> blocks = OcrGeometry.BuildScreenBlocks(
             lines,
             new System.Drawing.Rectangle(10, 20, 1920, 1080));
         ScreenOcrBlock dialogue = blocks.Single(block => block.LineCount == 3);
@@ -3366,11 +3364,6 @@ try
             "Separate speaker and interface labels were incorrectly merged.");
         return Task.CompletedTask;
     });
-#else
-    MacSmoke.Skip(
-        "Screen OCR block grouping",
-        "WindowsAiOcrService (Windows AI OCR) lives in the WPF assembly");
-#endif
 
     await RunAsync("Concurrent settings saves", async () =>
     {
