@@ -113,8 +113,8 @@ smoke-фикстур (`GlossBertDictionarySelectorServiceTests`); числа о�
 помеченный как Windows-only, ломает уже Windows-сборку. Типы ядра сохранили прежнюю видимость: большинство `internal`, но часть публична
 (например, `AppSettings`, `LocalDictionaryService`,
 `GlossBertDictionarySelectorService`). `InternalsVisibleTo` выдан только
-`AsteriaScale`, `AsteriaScale.Tests` и `AsteriaScale.CoreHost` — будущему
-macOS-хосту ядра (`Properties/AssemblyInfo.cs`): новому потребителю
+`AsteriaScale`, `AsteriaScale.Tests` и `AsteriaScale.CoreHost` — macOS-хосту
+ядра (`Properties/AssemblyInfo.cs`): новому потребителю
 internal-членов нужна своя строка. `RootNamespace` ядра — `AsteriaScale`, и перенесённые файлы
 сохранили пространства имён (`AsteriaScale.Services`, `AsteriaScale.Models`),
 поэтому сборку типа показывает путь файла, а не namespace.
