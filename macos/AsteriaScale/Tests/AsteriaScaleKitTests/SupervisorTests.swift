@@ -138,6 +138,13 @@ extension ProcessSuites {
             await supervisor.start()
             #expect(await supervisor.state == .failed(RU.reasonHelperMissing))
             #expect(await supervisor.state.details == "не найден исполняемый файл службы перевода")
+            // Failed: no restart is scheduled, so a request is not_running
+            // (not not_ready), and the overlay does not promise a restart.
+            await #expect(throws: CoreError.notRunning) { _ = try await supervisor.request("core.ping", deadline: .seconds(1)) }
+            let outcome = await HoverClient(supervisor: supervisor).resolve(try DiagnosticSelection.parse("[bank]"),
+                                                                            onUpdate: { _ in })
+            #expect(outcome == .rejected(CoreError.notRunning))
+            #expect(HoverReport.after(outcome, shownPrimary: false).overlay == .message(RU.overlayNotRunning))
         }
 
         /// A refused core.init (data missing in the bundle) does not loop: the
@@ -239,8 +246,9 @@ extension ProcessSuites {
             defer { scratch.remove() }
             let supervisor = CoreSupervisor(Fake.config("normal", scratch))
             let hover = HoverClient(supervisor: supervisor)
+            // Not started yet (stopped): nothing will start it on its own.
             let early = await hover.resolve(try DiagnosticSelection.parse("[bank]"), onUpdate: { _ in })
-            #expect(early == .rejected(CoreError.notReady))
+            #expect(early == .rejected(CoreError.notRunning))
             await supervisor.start()
             #expect(await hover.resolve(try DiagnosticSelection.parse("[nothing]"), onUpdate: { _ in }) == .empty)
             #expect(await hover.resolve(try DiagnosticSelection.parse("[fail]"), onUpdate: { _ in }) == .failed)

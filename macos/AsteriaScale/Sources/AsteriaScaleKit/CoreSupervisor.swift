@@ -403,12 +403,19 @@ public actor CoreSupervisor {
     }
 
     /// Forwards one request to the live CoreHost. Throws not_ready while it
-    /// is starting, restarting or failed; callers degrade (hide the overlay).
+    /// is starting or restarting, and not_running when it is failed or
+    /// stopped, where no restart is scheduled; callers degrade (hide the
+    /// overlay or say why).
     public func request(_ command: String, _ payload: JSONValue? = nil, deadline: Duration,
                         cancelInHost: Bool = false,
                         onSent: (@Sendable (Int64) -> Void)? = nil,
                         onEvent: CoreConnection.EventHandler? = nil) async throws -> JSONValue {
-        guard state.isReady, let connection else { throw CoreError.notReady }
+        guard state.isReady, let connection else {
+            switch state {
+            case .failed, .stopped: throw CoreError.notRunning
+            case .starting, .restarting, .ready: throw CoreError.notReady
+            }
+        }
         return try await connection.request(command, payload, deadline: deadline, cancelInHost: cancelInHost,
                                             onSent: onSent, onEvent: onEvent)
     }

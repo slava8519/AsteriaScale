@@ -70,6 +70,7 @@ public enum RU {
         case "connection_lost": return "Служба перевода перезапустилась, запрос прерван."
         case "timeout": return "Служба перевода не ответила вовремя."
         case "not_ready": return "Служба перевода ещё не готова."
+        case "not_running": return "Служба перевода остановлена и сама не перезапустится."
         case "cancelled": return "Запрос отменён."
         case "superseded": return "Запрос заменён новым наведением."
         case "bad_request": return "Некорректный запрос к службе перевода."
@@ -96,6 +97,8 @@ public enum RU {
     public static let overlayCheckingContext = "Сверяю значения с контекстом…"
     public static let overlayNotFound = "Нет в словарях"
     public static let overlayUnavailable = "Перевод недоступен — служба перевода перезапускается"
+    /// Failed or stopped: no restart is scheduled until the user asks for one.
+    public static let overlayNotRunning = "Перевод недоступен — перезапустите перевод из меню"
     public static let overlayFailed = "Перевод не выполнен — подробности в окне «Проверка перевода»"
     /// Shown for a moment by the app's self-test only.
     public static let overlaySelfTest = "Проверка оверлея"
@@ -178,8 +181,8 @@ public enum RU {
             stateStopped, stateStarting, stateReady, stateRestarting, stateUnavailable,
             reasonStopped, reasonExitedUnexpectedly, reasonProtocolBroken, reasonHelloRejected, reasonNoAnswer,
             reasonHelperMissing, reasonSpawnFailed, reasonCrashLoop,
-            overlayLookingUpDictionary, overlayCheckingContext, overlayNotFound, overlayUnavailable, overlayFailed,
-            hotkeyToggleHover, hotkeyShowDiagnostic, hotkeyTranslateClipboard,
+            overlayLookingUpDictionary, overlayCheckingContext, overlayNotFound, overlayUnavailable, overlayNotRunning,
+            overlayFailed, hotkeyToggleHover, hotkeyShowDiagnostic, hotkeyTranslateClipboard,
             diagnosticTitle, diagnosticPrompt, diagnosticTranslate, diagnosticEmpty, diagnosticTooLong,
             diagnosticClipboardEmpty, diagnosticClipboardDenied, diagnosticHoverDisabled, diagnosticServiceMessages,
             settingsTitle, settingsTranslation, settingsDelay, settingsHotkeys, settingsService, settingsFolders,
@@ -196,7 +199,7 @@ public enum RU {
             diagnosticCard(source: "bank", translation: "берег", badge: provenance(.dictionary, found: true)),
             folderLine(folderLogs, "/x"),
         ]
-        let errors = ["connection_lost", "timeout", "not_ready", "cancelled", "superseded", "bad_request",
+        let errors = ["connection_lost", "timeout", "not_ready", "not_running", "cancelled", "superseded", "bad_request",
                       "request_too_large", "conflict", "bad_response", "x"].map(errorText)
         let badges = Provenance.allKnown.flatMap { [provenance($0, found: true), provenance($0, found: false)] }
         return fixed + samples + errors + badges

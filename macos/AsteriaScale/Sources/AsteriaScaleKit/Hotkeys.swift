@@ -73,24 +73,102 @@ public enum HotkeyAction: String, CaseIterable, Sendable, Codable {
     }
 }
 
+/// The overlay's window level as macos-app.json names it. AsteriaScaleKit has
+/// no AppKit, so the app maps a level to its NSWindow.Level.
+public enum OverlayLevel: String, CaseIterable, Sendable {
+    /// NSWindow.Level.screenSaver (window server layer 1000): above a
+    /// CrossOver or winemac full-screen window (status level + 1).
+    case screenSaver
+    /// Above a captured display's shielding window: a bottle with
+    /// CaptureDisplaysForFullscreen sits at shielding + 1 (docs/MACOS.md Q3;
+    /// measured only in 20.3/20.4).
+    case shielding
+}
+
 /// Swift-owned preferences (hotkeys, overlay level) in macos-app.json. The
 /// translation settings are Core's and live in settings.json, which only
-/// CoreHost writes.
+/// CoreHost writes. The app never writes this file; the owner does, as a
+/// JSON object:
+/// {"hotkeys": {"translateClipboard": {"keyCode": 9, "modifiers": 2304, "keyLabel": "V"}},
+///  "overlayLevel": "screenSaver"}
+/// Either key may be missing (its default is used), and an action missing
+/// from "hotkeys" keeps its M14 default.
 public struct AppPreferences: Codable, Sendable, Equatable {
+    public static let defaultHotkeys = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map { ($0, $0.defaultSpec) })
+    public static let defaultOverlayLevel = OverlayLevel.screenSaver.rawValue
+
     public var hotkeys: [HotkeyAction: HotkeySpec]
+    /// As written; `resolvedOverlayLevel` says what it means.
     public var overlayLevel: String
 
-    public init(hotkeys: [HotkeyAction: HotkeySpec] = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map { ($0, $0.defaultSpec) }),
-                overlayLevel: String = "screenSaver") {
+    public init(hotkeys: [HotkeyAction: HotkeySpec] = AppPreferences.defaultHotkeys,
+                overlayLevel: String = AppPreferences.defaultOverlayLevel) {
         self.hotkeys = hotkeys
         self.overlayLevel = overlayLevel
     }
 
-    /// A missing or unreadable file gives the defaults.
-    public static func load(from url: URL) -> AppPreferences {
-        guard let data = try? Data(contentsOf: url),
-              let preferences = try? JSONDecoder().decode(AppPreferences.self, from: data) else { return AppPreferences() }
-        return preferences
+    /// The level to use, and a note for app.log when the file names one this
+    /// build does not know (the default is used then, never a guess).
+    public var resolvedOverlayLevel: (level: OverlayLevel, note: String?) {
+        if let level = OverlayLevel(rawValue: overlayLevel) { return (level, nil) }
+        let known = OverlayLevel.allCases.map(\.rawValue).joined(separator: ", ")
+        return (.screenSaver, "preferences: unknown overlayLevel \"\(overlayLevel)\" (known: \(known)); using screenSaver")
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case hotkeys, overlayLevel
+    }
+
+    private struct ActionKey: CodingKey {
+        let stringValue: String
+        init(stringValue: String) { self.stringValue = stringValue }
+        var intValue: Int? { nil }
+        init?(intValue: Int) { nil }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if !container.contains(.hotkeys) {
+            hotkeys = AppPreferences.defaultHotkeys
+        } else if let object = try? container.nestedContainer(keyedBy: ActionKey.self, forKey: .hotkeys) {
+            var decoded: [HotkeyAction: HotkeySpec] = [:]
+            for key in object.allKeys {
+                guard let action = HotkeyAction(rawValue: key.stringValue) else {
+                    let known = HotkeyAction.allCases.map(\.rawValue).joined(separator: ", ")
+                    throw DecodingError.dataCorruptedError(forKey: key, in: object,
+                                                           debugDescription: "unknown hotkey action (known: \(known))")
+                }
+                decoded[action] = try object.decode(HotkeySpec.self, forKey: key)
+            }
+            hotkeys = decoded
+        } else {
+            // The [action, spec, …] array Swift's synthesized Codable makes
+            // of an enum-keyed dictionary, which an earlier build wrote.
+            hotkeys = try container.decode([HotkeyAction: HotkeySpec].self, forKey: .hotkeys)
+        }
+        overlayLevel = try container.decodeIfPresent(String.self, forKey: .overlayLevel) ?? AppPreferences.defaultOverlayLevel
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        var object = container.nestedContainer(keyedBy: ActionKey.self, forKey: .hotkeys)
+        for (action, spec) in hotkeys {
+            try object.encode(spec, forKey: ActionKey(stringValue: action.rawValue))
+        }
+        try container.encode(overlayLevel, forKey: .overlayLevel)
+    }
+
+    /// A missing file gives the defaults. A file that cannot be read or
+    /// decoded gives them too, but `log` says why (the app passes app.log),
+    /// so a typo never silently resets the owner's hotkeys.
+    public static func load(from url: URL, log: (String) -> Void) -> AppPreferences {
+        guard FileManager.default.fileExists(atPath: url.path) else { return AppPreferences() }
+        do {
+            return try JSONDecoder().decode(AppPreferences.self, from: Data(contentsOf: url))
+        } catch {
+            log("preferences: cannot use \(url.path): \(error); using the defaults")
+            return AppPreferences()
+        }
     }
 
     public func save(to url: URL) throws {

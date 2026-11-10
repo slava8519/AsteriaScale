@@ -58,15 +58,27 @@ struct OverlayView: View {
     }
 }
 
+extension OverlayLevel {
+    var windowLevel: NSWindow.Level {
+        switch self {
+        case .screenSaver: return .screenSaver
+        // The bottle's window is at shielding + 1; the card goes one above it.
+        case .shielding: return NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 2)
+        }
+    }
+}
+
 /// The click-through card over the game window.
 ///
 /// Level .screenSaver (window server layer 1000) stays above a CrossOver or
 /// winemac full-screen window (status level + 1); a bottle with
 /// CaptureDisplaysForFullscreen sits at shielding + 1 and may need a higher
 /// level (docs/MACOS.md Q3, measured in 20.3/20.4), which is why the level is
-/// a preference. sharingType .none keeps the card out of other apps' window
-/// reads, but ScreenCaptureKit reportedly still captures such windows on
-/// macOS 15.4+, so 20.3/20.4 must also exclude our own windows in their
+/// a preference: "overlayLevel" in macos-app.json, "screenSaver" by default
+/// or "shielding" (one above such a bottle); an unknown name is logged and
+/// the default used. sharingType .none keeps the card out of other apps'
+/// window reads, but ScreenCaptureKit reportedly still captures such windows
+/// on macOS 15.4+, so 20.3/20.4 must also exclude our own windows in their
 /// SCContentFilter.
 ///
 /// It never stays on a loading or stale card: a hover's end always keeps a
@@ -82,11 +94,11 @@ final class OverlayController {
     private(set) var hoverToken = 0
     private var hideTask: Task<Void, Never>?
 
-    init() {
+    init(level: OverlayLevel) {
         panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 80),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
-        panel.level = .screenSaver
+        panel.level = level.windowLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.ignoresMouseEvents = true
         panel.isOpaque = false

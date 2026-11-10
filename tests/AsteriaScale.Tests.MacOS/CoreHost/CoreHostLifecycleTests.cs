@@ -159,8 +159,9 @@ internal static class CoreHostLifecycleTests
             "(no protocol fd, no lock file): " + string.Join(" | ", fds));
         CoreHostFixtures.Check(CoreHostProcess.ProcessGroupOf(child) == session.Process.Pgid,
             $"The child is in group {CoreHostProcess.ProcessGroupOf(child)}, not CoreHost's {session.Process.Pgid}.");
-        await session.ShutdownAsync();
-        CoreHostFixtures.Check(!CoreHostProcess.IsAlive(child), "The child outlived the orderly exit.");
+        // The orderly exit itself must end the child: checked before the
+        // harness kills the group.
+        await session.ShutdownAsync([child]);
     }
 
     private static async Task VerifySecondInstanceAsync(string tempRoot)
@@ -190,16 +191,6 @@ internal static class CoreHostLifecycleTests
         await first.ShutdownAsync("settings.json");
     }
 
-    // A killed child of a living parent is a zombie until that parent reaps
-    // it, and kill(pid, 0) still finds a zombie; the bound covers the reap.
-    private static async Task WaitGoneAsync(int pid, TimeSpan bound, string what)
-    {
-        Stopwatch clock = Stopwatch.StartNew();
-        while (CoreHostProcess.IsAlive(pid))
-        {
-            CoreHostFixtures.Check(clock.Elapsed < bound,
-                $"{what} (pid {pid}) is still alive after {clock.ElapsedMilliseconds} ms.");
-            await Task.Delay(5);
-        }
-    }
+    private static Task WaitGoneAsync(int pid, TimeSpan bound, string what) =>
+        CoreHostFixtures.WaitGoneAsync(pid, bound, what);
 }

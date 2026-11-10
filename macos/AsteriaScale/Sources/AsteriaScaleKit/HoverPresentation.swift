@@ -45,6 +45,11 @@ public struct HoverReport: Sendable, Equatable {
                 // The service is restarting (or stopping); its state line says why.
                 return HoverReport(overlay: .message(RU.overlayUnavailable),
                                    diagnosticNote: RU.diagnosticError(error.message, code: error.code))
+            case "not_running":
+                // Failed or stopped: nothing restarts it on its own, so the
+                // overlay must not promise a restart; the menu has the action.
+                return HoverReport(overlay: .message(RU.overlayNotRunning),
+                                   diagnosticNote: RU.diagnosticError(error.message, code: error.code))
             default:
                 return HoverReport(overlay: .message(RU.overlayFailed),
                                    diagnosticNote: RU.diagnosticError(error.message, code: error.code))

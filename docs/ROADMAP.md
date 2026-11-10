@@ -1799,7 +1799,9 @@ Silicon)».
   macOS 15.4+ всё равно захватывает такие окна: захват 20.3 и 20.4 должен
   исключать окна приложения в `SCContentFilter`. Уровень оверлея
   (`.screenSaver`, слой 1000) выше полноэкранного окна CrossOver; для бутылки
-  с `CaptureDisplaysForFullscreen` его меряют в 20.3–20.4 (Q3).
+  с `CaptureDisplaysForFullscreen` его меряют в 20.3–20.4 (Q3), а до того его
+  можно поднять ключом `"overlayLevel": "shielding"` в `macos-app.json`
+  (DEVELOPMENT.md, «Оверлей»).
 - **Постоянная подпись (M13, T15).** В 20.2 подпись ad-hoc: designated
   requirement — cdhash, и он меняется с каждой сборкой. Постоянная подпись и
   `build-app.sh --install` выбираются до первого разрешения «Запись экрана»

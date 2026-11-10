@@ -171,8 +171,10 @@ internal sealed partial class CoreHostServer
     // reader's order is the arrival order, while the pool may start a work
     // task arbitrarily late. A hover, warm-up, unload or later change admitted
     // after this one therefore always finds the change queued and waits for
-    // it. Queuing never blocks (a lock and a pool task); the work task only
-    // awaits the change, saves settings.json and answers.
+    // it. Queuing never blocks (a lock and a pool task); the queued task ends
+    // once settings.json holds the change (a settings.update writes it before
+    // Core changes, so a failed write changes nothing), and the work task
+    // only awaits it and answers.
     private void AdmitSettingsChange<T, TResult>(
         RequestEnvelope envelope,
         JsonTypeInfo<T> info,
@@ -188,13 +190,8 @@ internal sealed partial class CoreHostServer
 
         // test.delayNextWork holds back the change itself; its place in the
         // queue is taken now all the same.
-        Task<TResult> applied = queue(core, payload, TakeTestHoldBack());
-        StartWork(request, async state =>
-        {
-            TResult result = await applied.ConfigureAwait(false);
-            await core.SaveSettingsAsync().ConfigureAwait(false);
-            Respond(state, result, resultInfo);
-        });
+        Task<TResult> saved = queue(core, payload, TakeTestHoldBack());
+        StartWork(request, async state => Respond(state, await saved.ConfigureAwait(false), resultInfo));
     }
 
     private bool TryAdmitCoreWork<T>(

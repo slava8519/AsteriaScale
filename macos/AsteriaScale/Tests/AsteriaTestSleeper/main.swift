@@ -11,8 +11,9 @@ import Darwin
 // from any folder and a SIGKILL leaves no report.
 //
 // Like sleep(1) it takes a duration in seconds and exits 0 after it, so the
-// suite's marker duration 3141.59 (tools/macos/test-swift.sh finds leftovers
-// by "sleep 3141.59") works for a copy named sleep as well.
+// suite's marker duration 3141.59<run token> (tools/macos/test-swift.sh finds
+// this run's leftovers by "sleep 3141.59<run token>") works for a copy named
+// sleep as well.
 let arguments = CommandLine.arguments
 let seconds = max(0, arguments.count > 1 ? Double(arguments[1]) ?? 0 : 0)
 var request = timespec(tv_sec: Int(seconds), tv_nsec: Int((seconds - seconds.rounded(.down)) * 1_000_000_000))

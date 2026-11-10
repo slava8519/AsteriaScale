@@ -32,6 +32,13 @@
 #  4. swift test --skip-build runs only when the test bundle exists: without
 #     it swiftpm-testing-helper stops with a fatal error (SIGTRAP), which
 #     writes a crash report into the owner's DiagnosticReports.
+#  5. Every process the suite starts carries this run's token: the suite
+#     gets ten random digits as ASTERIA_TEST_RUN_TOKEN, appends them to the
+#     marker duration of every sleep it starts (3141.59<token>) and passes
+#     them to the fake CoreHost as -X asteria_run=<token>, and the fake
+#     appends them to its own sleeps. The leftover check afterwards matches
+#     only those and the work folder W, so two runs at once (another clone,
+#     an export) never kill each other's processes.
 #
 # With the Command Line Tools, plain `swift test` fails with "no such module
 # 'Testing'": the CLT keep Testing.framework and lib_TestingInterop.dylib
@@ -103,6 +110,8 @@ count_lines() {
     if [[ -z $1 ]]; then echo 0; else wc -l <<<"$1" | tr -d ' '; fi
 }
 
+# Stays empty with Xcode selected: bash 3.2 (/bin/bash) calls an empty
+# "${clt_flags[@]}" unbound under set -u, hence ${clt_flags[@]+…} below.
 clt_flags=()
 developer=$(xcode-select -p)
 if [[ $developer == */CommandLineTools ]]; then
@@ -115,6 +124,9 @@ if [[ $developer == */CommandLineTools ]]; then
     clt_flags=(-Xswiftc -F -Xswiftc "$frameworks" -Xlinker -F -Xlinker "$frameworks"
         -Xlinker -rpath -Xlinker "$frameworks" -Xlinker -rpath -Xlinker "$interop")
 fi
+# This run's token (step 5); fixed length, so one token never prefixes another.
+run_token=$(od -An -N4 -tu4 /dev/urandom | tr -d ' \n')
+run_token=$(printf '%010u' "$run_token")
 state_flags=(--package-path "$pkg" --cache-path "$state/cache" --config-path "$state/config"
     --security-path "$state/security" --manifest-cache local)
 
@@ -161,7 +173,7 @@ isolated() {
     shift
     (cd "$work/$phase/cwd" && exec env CFFIXED_USER_HOME="$work/$phase/home" HOME="$work/$phase/home" \
         TMPDIR="$work/$phase/tmp/" ASTERIA_TEST_TMPDIR="$work/test/scratch" \
-        ASTERIA_COREHOST_BUILD="$corehost_build" "$@" </dev/null)
+        ASTERIA_TEST_RUN_TOKEN="$run_token" ASTERIA_COREHOST_BUILD="$corehost_build" "$@" </dev/null)
 }
 
 status=0
@@ -170,7 +182,7 @@ for build in release tests; do
     if [[ $build == release ]]; then
         args=(swift build -c release "${state_flags[@]}")
     else
-        args=(swift build --build-tests "${state_flags[@]}" "${clt_flags[@]}")
+        args=(swift build --build-tests "${state_flags[@]}" ${clt_flags[@]+"${clt_flags[@]}"})
     fi
     echo "test-swift: ${args[*]:0:4}"
     if ! isolated build "${args[@]}" >"$build_log" 2>&1; then
@@ -190,7 +202,7 @@ rm -f "$build_log"
 
 test_log="$work/test.log"
 if [[ $status -eq 0 ]]; then
-    bin=$(isolated build swift build --show-bin-path --build-tests "${state_flags[@]}" "${clt_flags[@]}")
+    bin=$(isolated build swift build --show-bin-path --build-tests "${state_flags[@]}" ${clt_flags[@]+"${clt_flags[@]}"})
     bundle="$bin/AsteriaScalePackageTests.xctest/Contents/MacOS/AsteriaScalePackageTests"
     if [[ ! -x $bundle ]]; then
         echo "test-swift: no test bundle at $bundle; not starting swift test" >&2
@@ -216,10 +228,10 @@ if [[ $status -eq 0 ]]; then
 fi
 rm -f "$test_log"
 
-# Every process the suite starts carries the fake's script name, the work
-# folder or the marker duration 3141.59 of its /bin/sleep children.
+# Every process the suite starts carries this run's token (step 5) or the
+# work folder; another run's fakes and sleeps carry neither.
 sleep 0.5
-leftovers=$(pgrep -f "fake-corehost\\.py|sleep 3141\\.59|$work" || true)
+leftovers=$(pgrep -f "asteria_run=$run_token( |\$)|sleep 3141\\.59$run_token( |\$)|$work" || true)
 if [[ -n $leftovers ]]; then
     echo "test-swift: processes the suite started are still running; killing them:" >&2
     ps -o pid=,pgid=,command= -p "$(paste -sd, - <<<"$leftovers")" >&2 || true

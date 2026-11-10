@@ -290,7 +290,8 @@ without it `swiftpm-testing-helper` dies of a fatal error (SIGTRAP), which
 writes a crash report into the owner's DiagnosticReports. Afterwards the
 suite's scratch folder and cwd must be empty and its home and `TMPDIR` may
 hold only SwiftPM's own entries (exit 9), no process the suite started may be
-left (exit 11, killed), nothing may be newer than the run in the real
+left (exit 11, killed; found by the run's token or W, so a concurrent run's
+processes are never touched), nothing may be newer than the run in the real
 `~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` or
 `~/.swiftpm` (exit 12), and no new crash report of the run's processes may
 appear (exit 10, the G-crash listing above); exit 3 is a failed CoreHost
@@ -324,8 +325,11 @@ failed build or a warning (from `swift build` or either `dotnet publish`,
 which runs at `-v minimal` so MSBuild prints its warnings), 5 signing or
 verification, 6 a failed self-test, 9 a file left in the run's cwd, 10 a new
 crash report (the G-crash listing), 11 a process left
-running (killed), 12 a new entry in the real `~/Library` named after the app
-or SwiftPM, 2 a usage error.
+running (killed when the run started it, only listed otherwise), 12 a new
+entry in the real `~/Library` named after the app or SwiftPM, 2 a usage
+error or a process already running from the bundle: the script then stops
+before it builds, replaces or kills anything, so an owner's running copy
+keeps its bundle and its CoreHost.
 
 After editing a shared source or anything else the Windows build reads, run
 the identity tool (`TMPDIR` must lie outside the clone). A change meant to be
@@ -514,7 +518,9 @@ certificate creation, `Add-AppxPackage`.
   serialized `ProcessSuites`; a test puts its folders under `Scratch` (the
   script's `ASTERIA_TEST_TMPDIR`) and removes them, gives every child it
   spawns its own home and `TMPDIR`, and marks every `/bin/sleep` it starts
-  with the duration `3141.59`, by which the script finds leftovers. An
+  with the duration `sleepMarker` (`3141.59` followed by the run's ten-digit
+  `ASTERIA_TEST_RUN_TOKEN`; the fake gets the token as `-X asteria_run=…`),
+  by which the script finds this run's leftovers and no other run's. An
   executable that must lie inside a scratch folder is a copy (named `sleep`,
   with the same marker) of the package's `AsteriaTestSleeper`, which SwiftPM
   builds beside the test bundle (`TestSleeper.url()`), never a copy of a

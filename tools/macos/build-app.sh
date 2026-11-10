@@ -64,9 +64,14 @@
 #     and "satisfies its Designated Requirement"), then each binary's
 #     entitlements, runtime flag and identifier.
 #  6. With --self-test or --run-isolated: the run above, then no process of
-#     the bundle may be left (exit 11, killed), W/cwd must be empty (exit 9),
-#     nothing named after the app may be newer than the run in the real
-#     ~/Library (exit 12).
+#     the bundle may be left (exit 11; killed when this run started it,
+#     only listed otherwise), W/cwd must be empty (exit 9), nothing named
+#     after the app may be newer than the run in the real ~/Library
+#     (exit 12).
+# Before step 1, and with --no-build too, any process running from the
+# bundle's Contents (an owner's copy started with open(1), say) stops the
+# script with exit 2: it would otherwise lose its bundle to step 1 and its
+# CoreHost to step 6. Nothing is built, replaced or killed then.
 # The owner's crash reports (~/Library/Logs/DiagnosticReports; only read) are
 # listed before and after with tools/macos/crash-reports.py (G-crash: named
 # after AsteriaScale, dotnet, Python, python3 or swift, or with such a
@@ -75,15 +80,16 @@
 #
 # Exit codes:
 #   0   built and verified (and the self-test passed)
-#   2   usage error, not Apple Silicon macOS, a missing tool, or a work
-#       folder inside the clone
+#   2   usage error, not Apple Silicon macOS, a missing tool, a work
+#       folder inside the clone, or a process running from the bundle
 #   3   a model file or an oversized file in the bundle
 #   4   a build failed or printed a warning
 #   5   signing or verification failed
 #   6   the self-test failed (or did not end within 150 s)
 #   9   the run left an entry in its working directory
 #   10  a new crash report of the build's or the app's processes appeared
-#   11  a process of the bundle was still running afterwards (killed)
+#   11  a process of the bundle was still running afterwards (killed when
+#       this run started it, listed and left running otherwise)
 #   12  something new in the real ~/Library is named after the app or SwiftPM
 set -euo pipefail
 
@@ -143,6 +149,18 @@ temp_root=$(cd "${TMPDIR:-/tmp}" && pwd -P)
 case "$temp_root/" in
     "$repo/"*) echo "build-app: TMPDIR lies inside the repository; set it elsewhere" >&2; exit 2 ;;
 esac
+
+# pgrep -f takes an extended regular expression; the bundle path is matched
+# literally.
+contents_pattern=$(sed 's/[][\\.^$*+?(){}|]/\\&/g' <<<"$contents/")
+bundle_pids() { pgrep -f "$contents_pattern" || true; }
+running=$(bundle_pids)
+if [[ -n $running ]]; then
+    echo "build-app: processes are running from $app; quit that copy first" \
+        "(nothing was built, replaced or killed):" >&2
+    ps -o pid=,command= -p "$(paste -sd, - <<<"$running")" >&2 || true
+    exit 2
+fi
 
 real_home=$(python3 -I -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')
 reports="$real_home/Library/Logs/DiagnosticReports"
@@ -399,11 +417,43 @@ if [[ $mode != none ]]; then
     fi
 
     sleep 0.5
-    leftovers=$(pgrep -f "$contents/" || true)
+    # Killed: only what this run started, that is the app, every process
+    # whose arguments name the run folder (CoreHost's --user-data and
+    # --log-dir lie in it), and the members and children of those (the
+    # worker sits in CoreHost's group). The check before step 1 refused a
+    # bundle that was already running, so any other match was started by
+    # someone else during the run, or nothing ties it to this run any more:
+    # it fails the run too, but is only listed and left running.
+    leaders=" $app_pid "
+    snapshot=""
+    candidates=$(bundle_pids)
+    if [[ -n $candidates ]]; then
+        snapshot=$(ps -o pid=,ppid=,pgid=,command= -p "$(paste -sd, - <<<"$candidates")" || true)
+    fi
+    while read -r pid ppid pgid command; do
+        [[ -n $pid ]] || continue
+        if [[ $pid == "$app_pid" || $command == *"$run/"* ]]; then leaders+="$pid "; fi
+    done <<<"$snapshot"
+    leftovers=""
+    others=""
+    while read -r pid ppid pgid command; do
+        [[ -n $pid ]] || continue
+        if [[ $leaders == *" $pid "* || $leaders == *" $pgid "* || $leaders == *" $ppid "* ]]; then
+            leftovers+="$pid"$'\n'
+        else
+            others+="  $pid $pgid $command"$'\n'
+        fi
+    done <<<"$snapshot"
     if [[ -n $leftovers ]]; then
-        echo "build-app: processes of the bundle are still running; killing them:" >&2
-        ps -o pid=,pgid=,command= -p "$(paste -sd, - <<<"$leftovers")" >&2 || true
-        xargs kill -KILL <<<"$leftovers" 2>/dev/null || true
+        echo "build-app: processes this run started are still running; killing them:" >&2
+        ps -o pid=,pgid=,command= -p "$(sed '/^$/d' <<<"$leftovers" | paste -sd, -)" >&2 || true
+        sed '/^$/d' <<<"$leftovers" | xargs kill -KILL 2>/dev/null || true
+        [[ $status -eq 0 ]] && status=11
+    fi
+    if [[ -n $others ]]; then
+        echo "build-app: processes of the bundle that this run cannot claim are running; left running" \
+            "(pid, pgid, command):" >&2
+        printf '%s' "$others" >&2
         [[ $status -eq 0 ]] && status=11
     fi
     strays=$(find "$run/cwd" -mindepth 1 -print)

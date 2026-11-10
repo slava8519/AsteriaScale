@@ -21,8 +21,9 @@ test.violate, test.unknownId, test.duplicate, test.eventAfterTerminal,
 test.unknownMember, test.badVersion, test.crash, test.hang,
 test.stderrFlood {bytes}, test.spawnGrandchild {inherit?}.
 
-Every /bin/sleep it starts runs for 3141.59 s: tools/macos/test-swift.sh
-finds leftovers by that marker.
+Every /bin/sleep it starts runs for 3141.59 s followed by the run's token
+(-X asteria_run=<ten digits>, which the suite passes): tools/macos/test-swift.sh
+finds this run's leftovers by that marker.
 """
 import json
 import os
@@ -33,7 +34,8 @@ import threading
 import time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
-SLEEP_MARKER = "3141.59"
+RUN_TOKEN = sys._xoptions.get("asteria_run", "")
+SLEEP_MARKER = "3141.59" + (RUN_TOKEN if len(RUN_TOKEN) == 10 and RUN_TOKEN.isdigit() else "")
 WATCHED_SIGNALS = [("SIGHUP", signal.SIGHUP), ("SIGINT", signal.SIGINT),
                    ("SIGTERM", signal.SIGTERM), ("SIGCHLD", signal.SIGCHLD)]
 

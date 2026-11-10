@@ -8,7 +8,8 @@ using AsteriaScale.Services;
 /// (no test commands) with real Core behind it: core.init refuses missing
 /// morphology and dictionaries, reports the bundled data and writes the macOS
 /// first-run settings; settings.update refuses what macOS cannot run and
-/// nothing else is coerced; a hover while translation is off is
+/// nothing else is coerced, and one whose save fails changes nothing in Core
+/// (values, revision, lifecycle); a hover while translation is off is
 /// hover_disabled, a dictionary hover answers bank → «берег» with the Apple
 /// Vision labels; history records only what hover.displayed reports;
 /// «Мой словарь» edits reach the next hover; a speaker gender is saved through
@@ -233,6 +234,7 @@ internal static class CoreHostCoreTests
         CoreHostFixtures.Check(unchanged["revision"]!.GetValue<long>() == 1 &&
                                unchanged["settings"]!.ToJsonString() == settings.ToJsonString(),
             "A refused settings.update changed the settings: " + unchanged.ToJsonString());
+        await VerifyFailedSaveChangesNothingAsync(client, session.UserData, settingsFile, settings);
 
         // Enabled in dictionary mode; the hover sent right behind the update
         // already sees it.
@@ -307,6 +309,48 @@ internal static class CoreHostCoreTests
             "translation-history.v1.json",
             "Dictionaries",
             Path.Combine("Dictionaries", "eng-rus-user.tsv"));
+    }
+
+    // settings.update is transactional: when settings.json cannot be written
+    // (here the user-data folder is read-only), the answer is
+    // settings_save_failed and Core keeps everything as it was: the values
+    // and the revision settings.get reports, the file, and the lifecycle
+    // (translation stays off, so a hover is still hover_disabled). The app
+    // keeps showing its previous snapshot after a refusal, so anything else
+    // would show the user a state CoreHost no longer has.
+    private static async Task VerifyFailedSaveChangesNothingAsync(
+        CoreHostClient client,
+        string userData,
+        string settingsFile,
+        JsonObject settings)
+    {
+        // The subset runs only on macOS; this guard is what the platform
+        // analyzer (CA1416, a build error) needs before the Unix file modes.
+        if (!OperatingSystem.IsMacOS())
+        {
+            throw new PlatformNotSupportedException("The CoreHost checks run only on macOS.");
+        }
+
+        byte[] before = await File.ReadAllBytesAsync(settingsFile);
+        UnixFileMode mode = File.GetUnixFileMode(userData);
+        File.SetUnixFileMode(userData, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            await RefuseUpdateAsync(client, "settings_save_failed", 1,
+                ("hoverEnabled", true), ("mode", "dictionary"), ("hoverDelayMs", 900));
+        }
+        finally
+        {
+            File.SetUnixFileMode(userData, mode);
+        }
+
+        JsonObject after = await client.ResultAsync(client.Send("settings.get"));
+        CoreHostFixtures.Check(after["revision"]!.GetValue<long>() == 1 &&
+                               after["settings"]!.ToJsonString() == settings.ToJsonString(),
+            "A settings.update whose save failed still changed Core's settings: " + after.ToJsonString());
+        CoreHostFixtures.Check((await File.ReadAllBytesAsync(settingsFile)).AsSpan().SequenceEqual(before),
+            "A settings.update whose save failed changed settings.json.");
+        await client.ErrorAsync(client.Send("hover.resolve", Hover(Sentence, "bank")), "hover_disabled");
     }
 
     private static async Task VerifyHistoryAsync(CoreHostClient client, long hoverId)
@@ -555,12 +599,14 @@ internal static class CoreHostCoreTests
             "The smart hover did not rank on ConSeC CPU: " + primary.ToJsonString());
 
         CheckLabelsAndStatuses(client);
+        // CoreHost's orderly exit itself must end the worker: checked before
+        // the harness kills the group, which would end it anyway.
         await session.ShutdownAsync(
+            [workerPid],
             "settings.json",
             "Dictionaries",
             "smart-dictionary-cache.v2.json",
             "glossbert-decisions.v1.json");
-        CoreHostFixtures.Check(!CoreHostProcess.IsAlive(workerPid), "The ConSeC worker outlived CoreHost's orderly exit.");
         MacSmoke.CoreHostSmartHover = "checked in place";
     }
 

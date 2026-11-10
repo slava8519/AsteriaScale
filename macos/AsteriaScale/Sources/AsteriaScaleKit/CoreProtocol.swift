@@ -165,6 +165,11 @@ public struct CoreError: Error, Sendable, Equatable, CustomStringConvertible {
 
     public static let notReady = CoreError(code: "not_ready", message: RU.errorText("not_ready"),
                                            detail: "the translation service is not ready")
+
+    /// The supervisor is failed or stopped: unlike not_ready, nothing will
+    /// restart the service until the user does.
+    public static let notRunning = CoreError(code: "not_running", message: RU.errorText("not_running"),
+                                             detail: "the translation service is failed or stopped; no restart is scheduled")
 }
 
 /// Splits a byte stream into lines: LF only, each bounded, a partial last

@@ -18,8 +18,9 @@ internal delegate void StatusSink(string area, string? state, string? code, stri
 /// is the anchor, and posted cards become hover.primary and hover.phrase
 /// events. CoreHost is also the only writer of settings.json: every change
 /// joins the settings queue when it is admitted and is applied in that
-/// arrival order (hovers, warm-ups and unloads admitted later wait for it),
-/// then saved before its terminal.
+/// arrival order (hovers, warm-ups and unloads admitted later wait for it)
+/// and saved before its terminal; a settings.update is saved first and
+/// reaches Core only once the write succeeded.
 /// </summary>
 [SupportedOSPlatform("macos")]
 internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHover>

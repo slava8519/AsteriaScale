@@ -26,9 +26,17 @@ enum Repo {
 /// spelled with escapes so that no source line contains it.
 let hostWord = "\u{044F}\u{0434}\u{0440}"
 
-/// Every process the suite starts runs /bin/sleep for this many seconds:
-/// tools/macos/test-swift.sh finds leftovers by it.
-let sleepMarker = "3141.59"
+/// This run's token: ten digits tools/macos/test-swift.sh passes as
+/// ASTERIA_TEST_RUN_TOKEN (anything else counts as none). The script finds
+/// this run's leftovers by it, so it never kills another run's processes.
+let runToken: String = {
+    let token = ProcessInfo.processInfo.environment["ASTERIA_TEST_RUN_TOKEN"] ?? ""
+    return token.count == 10 && token.allSatisfy({ $0.isASCII && $0.isNumber }) ? token : ""
+}()
+
+/// Every sleep the suite starts runs for this many seconds: the marker
+/// 3141.59 followed by the run's token (still a valid duration).
+let sleepMarker = "3141.59" + runToken
 
 /// The package's sleep(1) stand-in (Tests/AsteriaTestSleeper), which SwiftPM
 /// builds beside the test bundle. A test that needs an executable inside its
@@ -98,12 +106,13 @@ final class Scratch: @unchecked Sendable {
 /// The fake CoreHost (Fixtures/fake-corehost.py) under /usr/bin/python3,
 /// which the Command Line Tools always provide. -I isolates it from the
 /// user's site packages, -B keeps bytecode out of the repository, -u
-/// unbuffers its pipes.
+/// unbuffers its pipes, and -X asteria_run carries the run's token (into its
+/// command line and its own sleeps).
 enum Fake {
     static let python = "/usr/bin/python3"
 
     static func arguments(_ mode: String, _ extra: [String] = []) -> [String] {
-        ["-I", "-B", "-u", Repo.fakeCoreHost.path, mode] + extra
+        ["-I", "-B", "-u", "-X", "asteria_run=\(runToken)", Repo.fakeCoreHost.path, mode] + extra
     }
 
     static func environment(_ scratch: Scratch) -> [String: String] {

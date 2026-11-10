@@ -105,7 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hover = HoverClient(supervisor: supervisor)
         settingsClient = SettingsClient(supervisor: supervisor)
 
-        overlay = OverlayController()
+        let preferences = AppPreferences.load(from: paths.preferences, log: { log.write($0) })
+        let overlayLevel = preferences.resolvedOverlayLevel
+        if let note = overlayLevel.note { log.write(note) }
+        overlay = OverlayController(level: overlayLevel.level)
+        log.write("overlay level \(overlayLevel.level.rawValue) (\(overlay.panel.level.rawValue))")
         statusMenu = StatusMenuController(app: self)
         settingsWindow = SettingsWindowController(actions: SettingsActions(
             setHoverEnabled: { [weak self] in self?.updateSettings(SettingsPatch(hoverEnabled: $0)) },
@@ -118,7 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.translate(text, near: NSEvent.mouseLocation)
         }
         hotkeys = HotkeyCenter { [weak self] action in self?.hotkeyPressed(action) }
-        let preferences = AppPreferences.load(from: paths.preferences)
         for action in HotkeyAction.allCases {
             let spec = preferences.hotkeys[action] ?? action.defaultSpec
             if let problem = hotkeys.register(action, spec) {

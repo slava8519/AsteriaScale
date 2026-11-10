@@ -1,3 +1,4 @@
+using System.Reflection;
 using AsteriaScale.CoreHost.Protocol;
 using AsteriaScale.Models;
 using AsteriaScale.Services;
@@ -17,8 +18,11 @@ internal sealed partial class CoreSession
     // are admitted, on the reader thread, and run one at a time in that
     // arrival order, each after the previous one, under _settingsGate; the
     // gate also covers every save, so settings.json is never serialized while
-    // a change is half applied. The tail never faults, so a hover, warm-up or
-    // unload can wait for it whatever the change before it did.
+    // a change is half applied. Each change writes settings.json under the
+    // gate before its task ends; a settings.update writes its patched copy
+    // before Core changes at all, so a failed write leaves Core, the revision
+    // and the view as they were. The tail never faults, so a hover, warm-up
+    // or unload can wait for it whatever the change before it did.
     private readonly SemaphoreSlim _settingsGate = new(1, 1);
     private readonly object _applyLock = new();
     private readonly object _recentLock = new();
@@ -100,19 +104,25 @@ internal sealed partial class CoreSession
 
     /// <summary>
     /// Queues a validated settings.update behind the changes admitted before
-    /// it and returns once it is applied in memory (later hovers see it);
-    /// <see cref="SaveSettingsAsync"/> then makes it durable. Called at
+    /// it and returns once it is saved and applied (later hovers see it).
+    /// The change is transactional: settings.json is written first, from a
+    /// patched copy, and only a successful write lets the patch reach Core,
+    /// the revision and the view. A failed write (settings_save_failed)
+    /// leaves all of them, and the coordinator's lifecycle, as they were:
+    /// the app keeps showing its previous snapshot after a refusal, so
+    /// anything else would show a state CoreHost no longer has. Called at
     /// admission; <paramref name="holdBack"/> is zero except under
     /// test.delayNextWork.
     /// </summary>
     public Task<SettingsResult> QueueSettingsUpdate(long baseRevision, SettingsPatch patch, TimeSpan holdBack) =>
-        QueueSettingsChange(holdBack, () =>
+        QueueSettingsChange(holdBack, async () =>
         {
             if (baseRevision != _revision)
             {
                 throw new RequestErrorException(Errors.Conflict(_revision));
             }
 
+            await WriteSettingsAsync(Patched(_settings, patch)).ConfigureAwait(false);
             ApplyPatch(patch);
             SettingsView view = View(_settings);
             lock (_applyLock)
@@ -128,10 +138,14 @@ internal sealed partial class CoreSession
     /// (the alias for a corrected spelling included) and returns the speaker
     /// as it now resolves. The speaker editor that sends it arrives with 20.3.
     /// Queued at admission like a settings.update; speaker genders are not
-    /// part of the settings view, so the revision stays.
+    /// part of the settings view, so the revision stays. Core stores the
+    /// gender before settings.json is written (both under the gate), so a
+    /// failed write is settings_save_failed with the gender kept in memory
+    /// until the next successful save or restart; unlike settings.update it
+    /// is not rolled back, because Core has no call that removes a gender.
     /// </summary>
     public Task<SpeakerSetResult> QueueSpeakerChange(SpeakerSetPayload payload, TimeSpan holdBack) =>
-        QueueSettingsChange(holdBack, () =>
+        QueueSettingsChange(holdBack, async () =>
         {
             SpeakerGender gender = payload.Gender switch
             {
@@ -155,15 +169,18 @@ internal sealed partial class CoreSession
                 new HoverSpeakerTarget<CoreHostHover>(game, observed, CoreHostHover.Detached),
                 gender,
                 payload.Name);
+            await WriteSettingsAsync(_settings).ConfigureAwait(false);
             return new SpeakerSetResult { Speaker = ToSpeakerView(saved.Speaker) };
         });
 
-    /// <summary>Writes settings.json; a failure is settings_save_failed.</summary>
-    public async Task SaveSettingsAsync()
+    // A settings change's own write: the change holds _settingsGate, which is
+    // not reentrant, so this must not take it again. A failed write is
+    // settings_save_failed.
+    private async Task WriteSettingsAsync(AppSettings settings)
     {
         try
         {
-            await PersistSettingsAsync().ConfigureAwait(false);
+            await _settingsService.SaveAsync(settings).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -171,7 +188,8 @@ internal sealed partial class CoreSession
         }
     }
 
-    // Also the coordinator's save hook (a saved speaker gender).
+    // The coordinator's save hook (a saved speaker gender): it runs outside
+    // any change, so it takes the gate itself.
     private async Task PersistSettingsAsync()
     {
         await _settingsGate.WaitAsync().ConfigureAwait(false);
@@ -190,7 +208,7 @@ internal sealed partial class CoreSession
     // pool: the coordinator's lifecycle calls must never run on the reader
     // thread, which admits requests and never blocks. holdBack starts it late
     // the way a starved pool would (test.delayNextWork only).
-    private Task<T> QueueSettingsChange<T>(TimeSpan holdBack, Func<T> change)
+    private Task<T> QueueSettingsChange<T>(TimeSpan holdBack, Func<Task<T>> change)
     {
         lock (_applyLock)
         {
@@ -206,7 +224,7 @@ internal sealed partial class CoreSession
                 await _settingsGate.WaitAsync().ConfigureAwait(false);
                 try
                 {
-                    return change();
+                    return await change().ConfigureAwait(false);
                 }
                 finally
                 {
@@ -298,6 +316,64 @@ internal sealed partial class CoreSession
         {
             _coordinator.SetEnabled(true);
         }
+    }
+
+    // What ApplyPatch leaves in the settings, computed on a copy: the copy is
+    // what settings.update writes before Core sees the patch. Every value is
+    // the validated one, which ApplyPatch stores as it is (the stored ones
+    // were normalized when settings.json was read).
+    private static AppSettings Patched(AppSettings settings, SettingsPatch patch)
+    {
+        AppSettings patched = CopyOf(settings);
+        if (patch.HoverEnabled is bool enabled)
+        {
+            patched.HoverTranslationEnabled = enabled;
+        }
+
+        if (patch.HoverDelayMs is int delay)
+        {
+            patched.HoverTranslationDelayMs = delay;
+        }
+
+        if (patch.Mode is { } mode)
+        {
+            patched.HoverTranslationMode = HoverTranslationModes.NormalizeUserMode(mode);
+        }
+
+        if (patch.Sense is { } sense)
+        {
+            patched.SmartDictionaryBackend = sense.Backend ?? patched.SmartDictionaryBackend;
+            patched.SmartDictionaryRankerModel = sense.Model ?? patched.SmartDictionaryRankerModel;
+            patched.SmartDictionarySourceLanguage = sense.SourceLanguage ?? patched.SmartDictionarySourceLanguage;
+            patched.SmartDictionaryKeepWarm = sense.KeepWarm ?? patched.SmartDictionaryKeepWarm;
+        }
+
+        if (patch.Phrase?.Mode is { } phraseMode)
+        {
+            patched.SmartPhraseTranslationMode = phraseMode;
+        }
+
+        return patched;
+    }
+
+    // Every public property, so a property Core adds later is written too;
+    // reflection over the statically known type is what the trim and AOT
+    // analyzers accept here, a JSON round trip would need the reflection
+    // serializer they refuse in CoreHost's own code. The lists are shared,
+    // not copied: no settings.update changes them, and speaker.set, the only
+    // change that does, runs under the same gate.
+    private static AppSettings CopyOf(AppSettings settings)
+    {
+        AppSettings copy = new();
+        foreach (PropertyInfo property in typeof(AppSettings).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (property.CanRead && property.CanWrite)
+            {
+                property.SetValue(copy, property.GetValue(settings));
+            }
+        }
+
+        return copy;
     }
 
     private static SettingsView View(AppSettings settings) => new()

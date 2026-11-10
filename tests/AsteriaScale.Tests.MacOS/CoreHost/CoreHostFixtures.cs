@@ -177,9 +177,27 @@ internal sealed class CoreHostSession : IDisposable
     }
 
     /// <summary>Asks for core.shutdown and requires its single terminal, exit 0 and a clean end.</summary>
-    public async Task ShutdownAsync(params string[] testOwnedUserData)
+    public Task ShutdownAsync(params string[] testOwnedUserData) => ShutdownAsync([], testOwnedUserData);
+
+    /// <summary>
+    /// <see cref="ShutdownAsync(string[])"/>, and every process in
+    /// <paramref name="endedByExit"/> (a child CoreHost started) must be gone
+    /// within <see cref="CoreHostFixtures.OrderlyExitChildBound"/> of the
+    /// exit. That is checked after the core.shutdown terminal and the exit
+    /// but before FinishAsync, whose group kill would otherwise end a child
+    /// the orderly exit left running and hide it.
+    /// </summary>
+    public async Task ShutdownAsync(int[] endedByExit, params string[] testOwnedUserData)
     {
         await Client.ResultAsync(Client.Send("core.shutdown"), 15_000);
+        CoreHostExit exited = await Process.WaitExitAsync(TimeSpan.FromSeconds(15), "core.shutdown");
+        CoreHostFixtures.Check(exited == CoreHostExit.Exited(0), $"core.shutdown ended with {exited}.");
+        foreach (int pid in endedByExit)
+        {
+            await CoreHostFixtures.WaitGoneAsync(pid, CoreHostFixtures.OrderlyExitChildBound,
+                "a child of CoreHost after its orderly exit, before any group kill here,");
+        }
+
         CoreHostExit exit = await FinishAsync(15_000, testOwnedUserData);
         CoreHostFixtures.Check(exit == CoreHostExit.Exited(0), $"core.shutdown ended with {exit}.");
         CoreHostFixtures.Check(Client.Violation is null, Client.Violation ?? "");
@@ -289,6 +307,26 @@ internal static class CoreHostFixtures
 
     public static string GoldenPath(string fileName) =>
         Path.Combine(MacSmoke.FindRepositoryRoot(), "tests", "AsteriaScale.Tests.MacOS", "CoreHost", fileName);
+
+    /// <summary>
+    /// How long a child of CoreHost may outlive CoreHost's orderly exit: the
+    /// bound the DoD sets for an empty group after the parent goes away. A
+    /// child the exit SIGKILLed is a zombie until launchd reaps it, so the
+    /// bound also covers that reap.
+    /// </summary>
+    public static readonly TimeSpan OrderlyExitChildBound = TimeSpan.FromSeconds(1);
+
+    // A killed child of a living parent is a zombie until that parent reaps
+    // it, and kill(pid, 0) still finds a zombie; the bound covers the reap.
+    public static async Task WaitGoneAsync(int pid, TimeSpan bound, string what)
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        while (CoreHostProcess.IsAlive(pid))
+        {
+            Check(clock.Elapsed < bound, $"{what} (pid {pid}) is still alive after {clock.ElapsedMilliseconds} ms.");
+            await Task.Delay(5);
+        }
+    }
 
     public static void Check(bool condition, string message)
     {

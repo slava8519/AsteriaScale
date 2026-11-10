@@ -105,6 +105,12 @@ import Testing
                     == HoverReport(overlay: .message(RU.overlayUnavailable),
                                    diagnosticNote: "\(RU.errorText(code)) (\(code))"))
         }
+        // A failed or stopped service restarts only from the menu: no promise of a restart.
+        #expect(HoverReport.after(.rejected(CoreError.notRunning), shownPrimary: false)
+                == HoverReport(overlay: .message(RU.overlayNotRunning),
+                               diagnosticNote: "\(RU.errorText("not_running")) (not_running)"))
+        #expect(RU.overlayNotRunning == "Перевод недоступен — перезапустите перевод из меню")
+        #expect(!RU.overlayNotRunning.contains("перезапускается"))
         let other = CoreError(code: "bad_request", message: RU.errorText("bad_request"))
         #expect(HoverReport.after(.rejected(other), shownPrimary: false).overlay == .message(RU.overlayFailed))
     }

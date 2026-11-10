@@ -200,12 +200,66 @@ import Testing
         let scratch = try Scratch("prefs")
         defer { scratch.remove() }
         let url = scratch.root.appendingPathComponent("macos-app.json")
+        let lines = Box<[String]>([])
+        let log: (String) -> Void = { line in lines.mutate { $0.append(line) } }
         var preferences = AppPreferences()
         preferences.overlayLevel = "shielding"
         try preferences.save(to: url)
-        #expect(AppPreferences.load(from: url) == preferences)
-        #expect(AppPreferences.load(from: url.appendingPathExtension("missing")) == AppPreferences())
+        #expect(AppPreferences.load(from: url, log: log) == preferences)
+        // Written as a JSON object keyed by action name, the form people write.
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect((saved?["hotkeys"] as? [String: Any])?.keys.sorted() == ["showDiagnostic", "toggleHover", "translateClipboard"])
+        #expect(AppPreferences.load(from: url.appendingPathExtension("missing"), log: log) == AppPreferences())
         #expect(AppPreferences().hotkeys[.translateClipboard]?.display == "⌥V")
+        #expect(lines.get.isEmpty, "\(lines.get)")
+    }
+
+    /// macos-app.json as the owner writes it: a JSON object, either key
+    /// optional; the array form an earlier build's synthesized Codable wrote
+    /// still loads; a file that cannot be decoded is logged, not dropped
+    /// silently.
+    @Test func preferencesFromHandWrittenJSON() throws {
+        let scratch = try Scratch("prefs-json")
+        defer { scratch.remove() }
+        let url = scratch.root.appendingPathComponent("macos-app.json")
+        let lines = Box<[String]>([])
+        let log: (String) -> Void = { line in lines.mutate { $0.append(line) } }
+        func load(_ json: String) throws -> AppPreferences {
+            try Data(json.utf8).write(to: url)
+            return AppPreferences.load(from: url, log: log)
+        }
+        let remapped = HotkeySpec(keyCode: 9, modifiers: [.option, .command], keyLabel: "V")
+
+        let object = try load(#"{"hotkeys":{"translateClipboard":{"keyCode":9,"modifiers":2304,"keyLabel":"V"}},"overlayLevel":"screenSaver"}"#)
+        #expect(object.hotkeys == [.translateClipboard: remapped] && object.overlayLevel == "screenSaver")
+        #expect(object.hotkeys[.translateClipboard]?.display == "⌥⌘V")
+        #expect(try load(#"{"overlayLevel":"shielding"}"#) == AppPreferences(overlayLevel: "shielding"))
+        #expect(try load(#"{"hotkeys":{}}"#).hotkeys.isEmpty)
+        let array = try load(#"{"hotkeys":["translateClipboard",{"keyCode":9,"modifiers":2304,"keyLabel":"V"}],"overlayLevel":"screenSaver"}"#)
+        #expect(array.hotkeys == [.translateClipboard: remapped])
+        #expect(lines.get.isEmpty, "\(lines.get)")
+
+        let broken = [
+            (#"{"hotkeys":{"translateClipboardX":{"keyCode":9,"modifiers":2304,"keyLabel":"V"}}}"#, "unknown hotkey action"),
+            (#"{"hotkeys":{"translateClipboard":{"keyCode":9}}}"#, "modifiers"),
+            ("{not json", "dataCorrupted"),
+        ]
+        for (json, cause) in broken {
+            lines.set([])
+            #expect(try load(json) == AppPreferences())
+            #expect(lines.get.count == 1 && lines.get.first?.hasPrefix("preferences: cannot use \(url.path): ") == true
+                    && lines.get.first?.contains(cause) == true, "\(json): \(lines.get)")
+        }
+    }
+
+    @Test func overlayLevelPreference() {
+        let standard = AppPreferences().resolvedOverlayLevel
+        #expect(standard.level == .screenSaver && standard.note == nil)
+        let shielding = AppPreferences(overlayLevel: "shielding").resolvedOverlayLevel
+        #expect(shielding.level == .shielding && shielding.note == nil)
+        let unknown = AppPreferences(overlayLevel: "Shielding").resolvedOverlayLevel
+        #expect(unknown.level == .screenSaver)
+        #expect(unknown.note == "preferences: unknown overlayLevel \"Shielding\" (known: screenSaver, shielding); using screenSaver")
     }
 }
 
