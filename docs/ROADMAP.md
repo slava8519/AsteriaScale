@@ -2032,11 +2032,11 @@ Silicon)».
      - после коммита рабочее дерево чистое;
      - `tools/macos/check-windows-identity.sh HEAD~1 HEAD` прошёл все
        Windows-сборки и завершился кодом `1` (код `4` — ни разу);
-     - строки манифеста — в сообщении коммита: у переноса ожидается
-       `./Tests/AsteriaScale.Core.dll`, `./Tests/AsteriaScale.dll` и
-       `./Tests/AsteriaScale.Tests.dll`, у закрепления —
-       `./Tests/AsteriaScale.Tests.dll`; любая строка генератора
-       объяснена;
+     - строки манифеста — в сообщении коммита. У переноса прогон в режиме
+       ревизий на дереве `f6621a7` дал ровно `./Tests/AsteriaScale.Core.dll`,
+       `./Tests/AsteriaScale.Tests.dll` и `./Tests/AsteriaScale.dll` и ни
+       одной строки генератора; у закрепления ожидается
+       `./Tests/AsteriaScale.Tests.dll`; любая строка генератора объяснена;
      - `audit-verbatim-move.py regex --base HEAD~1` печатает
        `GeneratedRegex attributes: identical (<n>)`;
      - оба раздела `move` — для `WindowsAiOcrService.cs` →

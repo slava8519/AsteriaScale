@@ -2924,6 +2924,233 @@ try
             "An unrelated side control leaked into the dialogue sentence.");
         Assert(interleaved.CurrentSpeaker is null,
             "An unrelated UI control was mistaken for an OCR speaker nameplate.");
+
+        // OcrGeometry.SelectNearPoint, pinned on the Sakuya layout. Windows AI
+        // reports a box per word, and the fixture has only line boxes, so each
+        // line box is cut at the character positions of its space-separated
+        // words: the word on characters [start, end) of an n-character line
+        // spans Left + (Right - Left) * start / n to Left + (Right - Left) *
+        // end / n at the line's full height. Multiplying before dividing keeps
+        // every product an exact integer, so a line's word boxes unite to
+        // exactly its fixture box and the Smart path assembles the geometry the
+        // BuildSentenceContext check above uses. The second dialogue line is
+        // 1764 px for 56 characters (31.5 px each), so its word edges are exact
+        // halves and the cursors on it hit exact distances. Scale doubles
+        // every coordinate exactly, for the Q3 check at the end.
+        static OcrRecognition WithWordBoxes(OcrLineGeometry[] source, double scale)
+        {
+            OcrLineWords[] recognizedLines = new OcrLineWords[source.Length];
+            for (int lineIndex = 0; lineIndex < source.Length; lineIndex++)
+            {
+                OcrLineGeometry line = source[lineIndex];
+                double width = line.Right - line.Left;
+                List<OcrWordGeometry> lineWords = [];
+                int end = 0;
+                while (end < line.Text.Length)
+                {
+                    if (line.Text[end] == ' ')
+                    {
+                        end++;
+                        continue;
+                    }
+
+                    int start = end;
+                    while (end < line.Text.Length && line.Text[end] != ' ')
+                    {
+                        end++;
+                    }
+
+                    lineWords.Add(new OcrWordGeometry(
+                        line.Text[start..end],
+                        (line.Left + (width * start / line.Text.Length)) * scale,
+                        line.Top * scale,
+                        (line.Left + (width * end / line.Text.Length)) * scale,
+                        line.Bottom * scale,
+                        1));
+                }
+
+                recognizedLines[lineIndex] = new OcrLineWords(line.Text, lineWords.ToArray());
+            }
+
+            return new OcrRecognition(recognizedLines);
+        }
+
+        static string Shown(HoverOcrResult? selection) => selection?.ToString() ?? "null";
+
+        // Core passes the capture bounds through without reading them.
+        System.Drawing.Rectangle captureBounds = new(-1850, 80, 2400, 720);
+        HoverOcrResult? Near(OcrRecognition recognition, float x, float y, bool sentenceContext = false) =>
+            OcrGeometry.SelectNearPoint(recognition, x, y, captureBounds, sentenceContext);
+        OcrRecognition sakuya = WithWordBoxes(lines, 1);
+        const string firstLine = "\"That is of little significance. More importantly, you";
+        const string secondLine = "should be able to enter this establishment for no charge";
+        const string thirdLine = "with these people.\"";
+
+        // (520, 295) lies inside "able" (451-577) on the second line; the
+        // first line is 57 px above, the third 55 px below. The proportional
+        // estimate (520 - 136) / 1764 * 56 = 12.2 and the occurrence of "able"
+        // at 10 plus (520 - 451) / 126 * 4 = 2.2 both give index 12.
+        HoverOcrResult expectedAble = new(secondLine, "able", 12, captureBounds);
+        HoverOcrResult? dictionarySelection = Near(sakuya, 520, 295);
+        Assert(dictionarySelection == expectedAble,
+            $"Dictionary OCR did not return the whole nearest line and its word: {Shown(dictionarySelection)}");
+        // Smart mode hands the candidate lines to BuildSentenceContext: the
+        // second line starts at 55 in the merged block, so 12 becomes 67, and
+        // the sentence starts at 33 ("More"), so the index is 34 ("le"); the
+        // block does not reach the nameplate, which becomes the speaker.
+        HoverOcrResult expectedSentence = new(
+            "More importantly, you should be able to enter this establishment for no charge with these people.\"",
+            "able",
+            34,
+            captureBounds)
+        {
+            CurrentSpeaker = new CurrentSpeakerContext("Sakuya")
+        };
+        HoverOcrResult? smartSelection = Near(sakuya, 520, 295, sentenceContext: true);
+        Assert(smartSelection == expectedSentence,
+            $"Smart OCR did not return the sentence and nameplate around the nearest line: {Shown(smartSelection)}");
+
+        // 16 px below the first line and 16 px above the second weigh the same
+        // (16 * 16 * 1.6); MinBy keeps the first. "little" starts 5 px to the
+        // right, "of" ends 25.8 px to the left; the cursor's gap maps to 11
+        // proportionally, but the occurrence of "little" is 12.
+        HoverOcrResult? lineTie = Near(sakuya, 500, 254);
+        Assert(lineTie == new HoverOcrResult(firstLine, "little", 12, captureBounds),
+            $"Two lines at the same weighted distance did not select the first: {Shown(lineTie)}");
+
+        // The vertical distance weighs 1.6: (920, 380) is 60 px below the
+        // second line (3600 * 1.6 = 5760) and 70 px right of the third line's
+        // end (4900), nearer the second in a straight line but selecting the
+        // third; its last word, with the in-word offset clamped to 7 of 8.
+        HoverOcrResult? weighted = Near(sakuya, 920, 380);
+        Assert(weighted == new HoverOcrResult(thirdLine, "people.\"", 18, captureBounds),
+            $"The 1.6 vertical weight did not decide between a line above and a line beside the cursor: {Shown(weighted)}");
+
+        // The radius is 95 * 95 = 9025 squared pixels, and only a distance
+        // above it is out. Beside a line only the horizontal distance counts:
+        // 94 * 94 = 8836 and exactly 95 * 95 are in, 96 * 96 = 9216 out, on
+        // both sides of the second line (136-1900; every other line is
+        // farther). Right of it the word is "charge" (50) with the offset
+        // clamped to 5; left of it "should" (0) with offset 0.
+        HoverOcrResult? rightInside = Near(sakuya, 1994, 295);
+        Assert(rightInside == new HoverOcrResult(secondLine, "charge", 55, captureBounds),
+            $"A cursor 94 px right of a line did not select it: {Shown(rightInside)}");
+        HoverOcrResult? rightBoundary = Near(sakuya, 1995, 295);
+        Assert(rightBoundary == new HoverOcrResult(secondLine, "charge", 55, captureBounds),
+            $"A cursor exactly 95 px right of a line did not select it: {Shown(rightBoundary)}");
+        HoverOcrResult? rightOutside = Near(sakuya, 1996, 295);
+        Assert(rightOutside is null,
+            $"A cursor 96 px right of a line selected it: {Shown(rightOutside)}");
+        HoverOcrResult? leftInside = Near(sakuya, 42, 295);
+        Assert(leftInside == new HoverOcrResult(secondLine, "should", 0, captureBounds),
+            $"A cursor 94 px left of a line did not select it: {Shown(leftInside)}");
+        HoverOcrResult? leftBoundary = Near(sakuya, 41, 295);
+        Assert(leftBoundary == new HoverOcrResult(secondLine, "should", 0, captureBounds),
+            $"A cursor exactly 95 px left of a line did not select it: {Shown(leftBoundary)}");
+        HoverOcrResult? leftOutside = Near(sakuya, 40, 295);
+        Assert(leftOutside is null,
+            $"A cursor 96 px left of a line selected it: {Shown(leftOutside)}");
+        // Above or below a line the radius is 95 / sqrt(1.6) = 75.1 px:
+        // 75 * 75 * 1.6 = 9000 is in, 76 * 76 * 1.6 = 9241.6 out. At x = 1000
+        // the first line's word is "significance." (19); 28 = 19 + 9.
+        HoverOcrResult? aboveInside = Near(sakuya, 1000, 115);
+        Assert(aboveInside == new HoverOcrResult(firstLine, "significance.", 28, captureBounds),
+            $"A cursor 75 px above a line did not select it: {Shown(aboveInside)}");
+        HoverOcrResult? aboveOutside = Near(sakuya, 1000, 114);
+        Assert(aboveOutside is null,
+            $"A cursor 76 px above a line selected it: {Shown(aboveOutside)}");
+
+        // In the gap after "able" (ends at 577) and before "to" (starts at
+        // 608.5), 580 is nearer "able". The proportional estimate is 14 (the
+        // space); ResolveLineCharacterIndex finds "able" at 10 and clamps the
+        // offset past its box to 3, so the index is 13.
+        HoverOcrResult? gapSelection = Near(sakuya, 580, 295);
+        HoverOcrResult expectedGap = new(secondLine, "able", 13, captureBounds);
+        Assert(gapSelection == expectedGap,
+            $"The nearest word or its character index was not resolved in a word gap: {Shown(gapSelection)}");
+        // 435.25 is 15.75 px from the end of "be" (419.5) and from the start
+        // of "able" (451): the first word wins the tie (strict <), index 7
+        // plus the clamped offset 1.
+        HoverOcrResult? wordTie = Near(sakuya, 435.25f, 295);
+        HoverOcrResult expectedTie = new(secondLine, "be", 8, captureBounds);
+        Assert(wordTie == expectedTie,
+            $"Two words at the same distance did not select the first: {Shown(wordTie)}");
+        // The word distance counts the vertical gap too, which no check above
+        // reaches: there every word has its line's height. Real word boxes in
+        // a line differ in height, so here only "able" starts 30 px lower
+        // (Top 300; the line box stays 270-320 through the other words).
+        // (440, 275) is 20.5 px right of "be" and level with it (420.25) but
+        // 11 px left of "able" and 25 px above it (121 + 625 = 746), so "be"
+        // wins although "able" is nearer horizontally; index 7 plus the
+        // clamped offset 1.
+        OcrWordGeometry[] lowerAbleWords = sakuya.Lines[2].Words.ToArray();
+        lowerAbleWords[2] = lowerAbleWords[2] with { Top = 300 };
+        OcrLineWords[] lowerAbleLines = sakuya.Lines.ToArray();
+        lowerAbleLines[2] = lowerAbleLines[2] with { Words = lowerAbleWords };
+        HoverOcrResult? verticalWord = Near(new OcrRecognition(lowerAbleLines), 440, 275);
+        Assert(verticalWord == new HoverOcrResult(secondLine, "be", 8, captureBounds),
+            $"The vertical gap to a word box did not count toward the nearest word: {Shown(verticalWord)}");
+        // A line whose words all carry the line's box ties every word, so the
+        // first one wins wherever the cursor is; at 1800 the offset into
+        // "should" is (1800 - 136) / 1764 * 6 = 5.7, so 5.
+        OcrLineWords sameBoxes = sakuya.Lines[2] with
+        {
+            Words = sakuya.Lines[2].Words
+                .Select(word => word with { Left = 136, Right = 1900 })
+                .ToArray()
+        };
+        HoverOcrResult? sameBoxSelection = Near(new OcrRecognition(new[] { sameBoxes }), 1800, 295);
+        Assert(sameBoxSelection == new HoverOcrResult(secondLine, "should", 5, captureBounds),
+            $"Words with identical boxes did not select the line's first word: {Shown(sameBoxSelection)}");
+
+        // Nothing within the radius, or nothing recognized: no selection.
+        HoverOcrResult? emptySpace = Near(sakuya, 1000, 1000);
+        Assert(emptySpace is null,
+            $"A cursor in empty space selected a line: {Shown(emptySpace)}");
+        HoverOcrResult? noLines = Near(new OcrRecognition(Array.Empty<OcrLineWords>()), 520, 295);
+        Assert(noLines is null,
+            $"An empty recognition selected a line: {Shown(noLines)}");
+
+        // A line without letters is never a candidate: the page counter
+        // under (500, 430) loses to the third line 30 px above, whose word
+        // "these" (5) gives 5 + 4. Placed first, it also leaves the Smart
+        // path's line indices untouched; alone, it selects nothing.
+        OcrLineGeometry counter = new("3 / 12", 400, 415, 700, 450);
+        OcrRecognition withCounter = WithWordBoxes([counter, .. lines], 1);
+        HoverOcrResult? besideCounter = Near(withCounter, 500, 430);
+        Assert(besideCounter == new HoverOcrResult(thirdLine, "these", 9, captureBounds),
+            $"A line without letters competed with a translatable line: {Shown(besideCounter)}");
+        HoverOcrResult? smartWithCounter = Near(withCounter, 520, 295, sentenceContext: true);
+        Assert(smartWithCounter == expectedSentence,
+            $"A rejected line shifted the Smart sentence: {Shown(smartWithCounter)}");
+        HoverOcrResult? counterAlone = Near(WithWordBoxes([counter], 1), 500, 430);
+        Assert(counterAlone is null,
+            $"A line without letters was selected: {Shown(counterAlone)}");
+
+        // Q3 (docs/MACOS.md T18): selection only compares distances with each
+        // other, so the layout and the cursor doubled (pixels of a 2x display)
+        // select the same line, word and index, and the Smart sentence and
+        // speaker stay the same. The 95 px radius and BuildSentenceContext's
+        // pixel floors are absolute (T18 rescales none), so this holds only
+        // while the doubled distances stay inside the radius and the doubled
+        // heights and gaps above those floors, as they do here; the 94 px
+        // cursor doubled (188 px) selects nothing.
+        OcrRecognition doubled = WithWordBoxes(lines, 2);
+        HoverOcrResult? doubledDictionary = Near(doubled, 1040, 590);
+        Assert(doubledDictionary == expectedAble,
+            $"The doubled layout selected a different line or word: {Shown(doubledDictionary)}");
+        HoverOcrResult? doubledSmart = Near(doubled, 1040, 590, sentenceContext: true);
+        Assert(doubledSmart == expectedSentence,
+            $"The doubled layout assembled a different Smart sentence: {Shown(doubledSmart)}");
+        HoverOcrResult? doubledGap = Near(doubled, 1160, 590);
+        Assert(doubledGap == expectedGap,
+            $"The doubled layout resolved a different word or index in a gap: {Shown(doubledGap)}");
+        HoverOcrResult? doubledTie = Near(doubled, 870.5f, 590);
+        Assert(doubledTie == expectedTie,
+            $"The doubled layout broke the word tie differently: {Shown(doubledTie)}");
+        HoverOcrResult? doubledRadius = Near(doubled, 3988, 590);
+        Assert(doubledRadius is null,
+            $"The 95 px radius was rescaled with the layout: {Shown(doubledRadius)}");
         return Task.CompletedTask;
     });
 
