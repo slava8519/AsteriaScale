@@ -358,10 +358,14 @@ bash tools/macos/run-macos-subset.sh
 `tools/macos/run-macos-subset.sh` ничего не собирает. Каждый прогон он
 запускает в новом каталоге `W` из `mktemp -d` (вне клона): текущий каталог —
 `W/cwd`, `TMPDIR=W/tmp`, а `HOME` и `CFFIXED_USER_HOME` указывают на `W/home`
-с пустой `Library/Application Support`. .NET берёт LocalApplicationData из
-`HOME`, а код на CoreFoundation — из `CFFIXED_USER_HOME`, поэтому заданы оба и
-прогон не пишет в настоящую `~/Library`. После прогона скрипт перечисляет всё,
-что осталось в `cwd`, `home` (кроме двух созданных им пустых папок) и `tmp`;
+с пустой `Library/Application Support`. LocalApplicationData в .NET на
+macOS берётся не из `HOME`, а через NSSearchPath: из `CFFIXED_USER_HOME`, а
+когда она не задана, — из настоящего домашнего каталога учётной записи, что
+бы ни было в `HOME` (за `HOME` следует только `UserProfile`, как и
+POSIX-инструменты). Поэтому заданы обе переменные: один `HOME` .NET не
+изолирует, и только с обеими прогон не пишет в настоящую `~/Library`. После
+прогона скрипт перечисляет всё, что осталось в `cwd`, `home` (кроме двух
+созданных им пустых папок) и `tmp`;
 запись, которую не называет `--allow <путь относительно W>` (сама, папкой
 выше или папкой на пути к ней), даёт код `9`. До и после прогонов он
 перечисляет отчёты о сбоях владельца в `~/Library/Logs/DiagnosticReports`
@@ -1183,7 +1187,18 @@ bash tools/macos/build-app.sh --no-build --run-isolated --ranker-models src/Aste
 pid приложения и путь `app.log` и оставляет `W`; `--home W` запускает снова в
 том же каталоге (только в каталоге, созданном `--run-isolated`); выход —
 «Выход», ^C или `kill -TERM`. Прямой запуск регистрирует бандл в базе
-LaunchServices пользователя (по пути); запись пропадает вместе с бандлом.
+LaunchServices пользователя по его пути, и запись не пропадает вместе с
+бандлом: каждый `--self-test` или `--run-isolated` бандла по новому пути
+(другой `--output`, экспорт) добавляет ещё одну запись с bundle id M13, и
+она остаётся после удаления папки. База лежит вне `~/Library` (в
+`/private/var/folders`), поэтому проверка кода `12` её не видит. Посмотреть
+записи можно только для чтения: `lsregister -dump | grep -B8
+io.github.slava8519.AsteriaScale`, где `lsregister` —
+`/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister`.
+Устаревшие записи убирает владелец: `lsregister -u "<путь>/Asteria
+Scale.app"` — одну, `lsregister -gc` — все записи бандлов, которых больше
+нет. Агенты базу не чистят и перечисляют владельцу пути бандлов, которые
+они так запускали (как новые отчёты о сбоях).
 
 Самопроверка (`AsteriaScale --self-test`; ждёт не больше 90 с, сторож — на
 фоновой очереди) не читает буфер обмена, не активирует приложение и не

@@ -252,7 +252,9 @@ uses the real home: do not report such a run.
 
 Never start CoreHost (or any helper a test spawns) with the real home: the
 subset's CoreHost checks spawn it with `HOME`/`CFFIXED_USER_HOME` at a
-private home, a private `TMPDIR`, `DOTNET_EnableDiagnostics=0` (a killed .NET
+private home (both: .NET's LocalApplicationData on macOS ignores `HOME` and
+follows `CFFIXED_USER_HOME`, or the account's real home when that is unset),
+a private `TMPDIR`, `DOTNET_EnableDiagnostics=0` (a killed .NET
 process otherwise leaves debugger FIFOs in `TMPDIR`) and an empty cwd, and
 fail if anything is left there. No automated check may crash a process by
 abort or a fault signal (`Environment.FailFast`, an unhandled exception,
@@ -318,7 +320,11 @@ bundle. The app runs only by direct exec in a throwaway home (`HOME` and
 `kill -TERM` quits the app in order. Never launch the app in the real home
 (`open`, a copy in `~/Applications`, a double click): that, and copying the
 ConSeC bundle into `~/Library/Application Support/AsteriaScale/Models/Ranker`
-with `ditto`, are the owner's alone (docs/MACOS.md T9). A physical press of
+with `ditto`, are the owner's alone (docs/MACOS.md T9). Every direct launch
+also registers the bundle's path in the owner's LaunchServices database
+(outside `~/Library`, so exit 12 cannot see it), and the record outlives the
+bundle: never clean it (`lsregister -u <path>` or `-gc` is the owner's) and
+list the bundle paths you launched in your report. A physical press of
 ⌥T, ⌥D or ⌥V is an owner check too: the self-test proves registration and
 the handler, not that the window server delivers a real key. Exit 4 is a
 failed build or a warning (from `swift build` or either `dotnet publish`,

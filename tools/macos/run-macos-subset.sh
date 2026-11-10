@@ -11,9 +11,11 @@
 #
 # Each run gets a fresh work folder W from mktemp -d (outside the clone) and
 # starts the built apphost with cwd W/cwd, TMPDIR=W/tmp and both HOME and
-# CFFIXED_USER_HOME set to W/home. .NET resolves LocalApplicationData from
-# HOME, CoreFoundation-based code from CFFIXED_USER_HOME; setting only one of
-# them would let the other reach the real ~/Library. W/home has an empty
+# CFFIXED_USER_HOME set to W/home. .NET's LocalApplicationData on macOS
+# ignores HOME: it follows CFFIXED_USER_HOME (NSSearchPath) and, when that is
+# unset, the account's real home; only UserProfile and POSIX tools read HOME.
+# Both are set, because HOME alone would let .NET reach the real ~/Library.
+# W/home has an empty
 # Library/Application Support, as on a real account; with --empty-home it has
 # no Library at all, which is what a code path that assumes the folder exists
 # must survive.
