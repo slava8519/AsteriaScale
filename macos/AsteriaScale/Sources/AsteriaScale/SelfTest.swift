@@ -1,20 +1,25 @@
 import AppKit
 import AsteriaScaleKit
+import AsteriaScaleVision
 import Carbon.HIToolbox
 import Darwin
 
 /// `AsteriaScale --self-test` (run through tools/macos/build-app.sh
 /// --self-test): a scripted launch of the bundled app in a throwaway home that
-/// checks what the Swift suite cannot (the window server, Carbon, the bundled
-/// CoreHost and ranker worker, faults while a hover is in flight), prints one
+/// checks what the Swift suite cannot (the window server, Carbon, the real
+/// Apple Vision on a frame rendered in memory, the bundled CoreHost and ranker
+/// worker, faults while a hover is in flight), prints one
 /// `selftest <name>: ok|FAIL|note` line per check and exits 0 or 1. It never
 /// reads the pasteboard (hotkey presses are only recorded for the whole
 /// run), never activates the app and asks for no permission; the binary is
 /// started directly, not through open(1), so the terminal stays the
 /// responsible process. It ends the way launchd and `kill` end the app, with
 /// SIGTERM to itself, and makes its last checks once that quit has stopped
-/// CoreHost. A 90 s watchdog on a background queue (a hung main thread cannot
-/// stop it) ends a hung run with exit 1.
+/// CoreHost. A 120 s watchdog on a background queue (a hung main thread cannot
+/// stop it) ends a hung run with exit 1 (docs/MACOS.md T38): the Vision
+/// warm-up, the first step, compiles Vision's models in the fresh home, about
+/// 24 s on macOS 27 (T25; docs/DEVELOPMENT.md, «Проба Vision»).
+/// It never captures the screen: Vision reads only frames rendered here.
 @MainActor
 final class SelfTest {
     private let app: AppDelegate
@@ -26,6 +31,11 @@ final class SelfTest {
     private var realPresses: [HotkeyAction] = []
     /// Every text the overlay showed during the run.
     private var overlayTexts: Set<String> = []
+    /// The Vision warm-up, started before anything else and in parallel with
+    /// CoreHost's start (T38): its duration and what it read.
+    private var visionWarmUp: Task<(Duration, Result<[RecognizedLine], RecognitionFailure>), Never>?
+    /// The 2x fixture and what Vision read in it, for ocr.select.
+    private var recognizedFixture: (fixture: RenderedFixture, lines: [RecognizedLine])?
 
     /// The internal word for the host (M15), spelled with escapes so that no
     /// source line contains it; no visible text may contain it.
@@ -44,7 +54,17 @@ final class SelfTest {
             guard let self else { return }
             if self.synthesizing { self.synthesized.append(action) } else { self.realPresses.append(action) }
         }
-        Self.exitAfter(.seconds(90), "selftest watchdog: FAIL — not finished within 90 s")
+        let recognizer = VisionTextRecognizer()
+        visionWarmUp = Task.detached {
+            let started = ContinuousClock.now
+            do throws(RecognitionFailure) {
+                let lines = try await VisionFixture.warmUp(recognizer)
+                return (started.duration(to: .now), .success(lines))
+            } catch {
+                return (started.duration(to: .now), .failure(error))
+            }
+        }
+        Self.exitAfter(.seconds(120), "selftest watchdog: FAIL — not finished within 120 s")
         Task { @MainActor in
             await steps()
             await quitBySignal()
@@ -127,15 +147,103 @@ final class SelfTest {
     // MARK: Steps
 
     private func steps() async {
+        await visionChecks()
         launchChecks()
         await overlayChecks()
         hotkeyChecks()
         await windowChecks()
         guard let session = await serviceChecks() else { return }
+        await ocrSelectCheck()
         await hoverChecks(session)
         await senseChecks()
         await faultChecks()
         textChecks()
+    }
+
+    /// The real Apple Vision on frames rendered in memory (DoD 20.3 items 6
+    /// and 10): the warm-up, the configuration T23 requires, and the Latin
+    /// fixture at 2x and at 1x (the 1x frame takes the 2x upscale path, T24),
+    /// its lines and word boxes in frame pixels against the rendered layout.
+    private func visionChecks() async {
+        let (took, warmed) = await visionWarmUp?.value ?? (.zero, .failure(.cancelled))
+        let caches = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Caches")
+        let compiled = ((try? FileManager.default.contentsOfDirectory(atPath: caches.path)) ?? []).sorted()
+            .map { caches.appendingPathComponent($0).appendingPathComponent("com.apple.e5rt.e5bundlecache") }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }.map(\.path)
+        switch warmed {
+        case .success(let lines):
+            report("vision.warmup", lines.map(\.text) == [VisionFixture.warmUpLine],
+                   "\(Self.milliseconds(took)) in parallel with the translation service's start, read "
+                   + "\(lines.map(\.text)); Vision's compile cache: \(compiled.isEmpty ? "none" : compiled.joined(separator: ", "))")
+        case .failure(let failure):
+            report("vision.warmup", false, "\(Self.milliseconds(took)): \(failure.code): \(failure)")
+        }
+
+        let configuration = VisionTextRecognizer.configuration
+        let problems = configuration.problems()
+        report("vision.config", problems.isEmpty,
+               "\(configuration); supported revisions \(VisionTextRecognizer.supportedRevisions)"
+               + (problems.isEmpty ? "" : "; " + problems.joined(separator: "; ")))
+
+        let recognizer = VisionTextRecognizer()
+        var passed = true
+        var details: [String] = []
+        for density in [2.0, 1.0] {
+            let started = ContinuousClock.now
+            do throws(RecognitionFailure) {
+                let fixture = try VisionFixture.render(pixelsPerPoint: density)
+                let recognition = try await recognizer.recognition(fixture.frame, capturedAt: fixture.bounds)
+                let took = started.duration(to: .now)
+                let comparison = VisionFixture.compare(recognition.lines, with: fixture.layout)
+                // The size Vision was given, not the factor the code intends:
+                // the frame-pixel boxes are the same either way (T24).
+                let seenProblem = VisionFixture.seenProblem(recognition.seenSize, for: fixture.frame)
+                passed = passed && comparison.ok && seenProblem == nil
+                details.append("\(Int(density))x frame \(fixture.frame.size), Vision given \(recognition.seenSize), "
+                               + "in \(Self.milliseconds(took)): \(comparison.summary)"
+                               + (comparison.ok ? "" : "; " + comparison.problems.joined(separator: "; "))
+                               + (seenProblem.map { "; " + $0 } ?? ""))
+                if density == 2 { recognizedFixture = (fixture, recognition.lines) }
+            } catch {
+                passed = false
+                details.append("\(Int(density))x: \(error.code): \(error)")
+            }
+        }
+        report("vision.fixture", passed, details.joined(separator: "; "))
+    }
+
+    /// ocr.select on the bundled CoreHost with what Vision read in the 2x
+    /// fixture, the cursor on the middle of the rendered "bank": Core's
+    /// selection must be that word in its line, with the line's text.
+    private func ocrSelectCheck() async {
+        guard let recognized = recognizedFixture else {
+            report("ocr.select", false, "no recognized fixture (vision.fixture failed)")
+            return
+        }
+        let fingerprint = SHA256FrameFingerprinter().fingerprint(of: recognized.fixture.frame)
+        guard let source = VisionFixture.selectSource(recognized.fixture, recognized: recognized.lines,
+                                                      fingerprint: fingerprint),
+              let span = VisionFixture.hoveredSpan else {
+            report("ocr.select", false, "the fixture has no \(VisionFixture.hoveredWord)")
+            return
+        }
+        let line = VisionFixture.lines[VisionFixture.hoveredLine]
+        do {
+            let result = try await ObservationClient(core: app.supervisor).select(mode: .dictionary, source: source)
+            let selection = result.selection
+            report("ocr.select", selection?.hoveredWord == VisionFixture.hoveredWord && selection?.text == line
+                   && selection.map { span.contains($0.characterIndex) } == true
+                   && result.lines == recognized.lines.map(\.text),
+                   "cursor \(source.cursor) in frame \(fingerprint): «\(selection?.hoveredWord ?? "nothing")» at "
+                   + "\(selection?.characterIndex ?? -1) (span \(span)) in «\(selection?.text ?? "")»; \(result.lines.count) lines")
+        } catch {
+            report("ocr.select", false, "\(error)")
+        }
+    }
+
+    private static func milliseconds(_ duration: Duration) -> String {
+        let parts = duration.components
+        return String(format: "%.0f ms", Double(parts.seconds) * 1000 + Double(parts.attoseconds) / 1e15)
     }
 
     private func launchChecks() {

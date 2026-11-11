@@ -158,7 +158,28 @@ public struct HoverPhrase: Sendable, Equatable {
     }
 }
 
+/// The payload of a `hover.loading` event (observations hovers only, 20.3):
+/// what the Windows loading card shows, before hover.primary.
+public struct HoverLoading: Sendable, Equatable {
+    public let hoverId: Int64
+    /// The hovered word in smart mode, the recognized line in dictionary mode.
+    public let source: String
+    /// Russian, for the log only; the app never parses it.
+    public let engineLabel: String
+    public let speaker: HoverSpeaker?
+
+    public init(hoverId: Int64, payload: JSONValue) {
+        self.hoverId = hoverId
+        source = payload["source"]?.stringValue ?? ""
+        engineLabel = payload["engineLabel"]?.stringValue ?? ""
+        speaker = HoverSpeaker(payload["speaker"])
+    }
+}
+
 public enum HoverUpdate: Sendable, Equatable {
+    /// Only an observations hover gets it (ObservationClient); the
+    /// selection client passes the event over, as in 20.2.
+    case loading(HoverLoading)
     case primary(HoverPrimary)
     case phrase(HoverPhrase)
 }
@@ -172,6 +193,11 @@ public enum HoverOutcome: Sendable, Equatable {
     case superseded
     /// The caller cancelled; CoreHost got request.cancel.
     case cancelled
+    /// An observations hover with zero observations whose cached frame is
+    /// gone (stale_frame, «Кадр на экране изменился.»): the hover pipeline
+    /// that comes with the screen capture retries once with full
+    /// observations and shows nothing (DoD 20.3).
+    case staleFrame(CoreError)
     /// An error terminal (hover_disabled, not_ready, …) or a lost connection.
     case rejected(CoreError)
 }
@@ -189,6 +215,9 @@ public enum CoreDeadlines {
     public static let settings: Duration = .seconds(5)
     public static let warmUp: Duration = .seconds(130)         // llama-server start is 2 min (20.5)
     public static let hover: Duration = .seconds(95)           // ranker 60 s, llama-server 90 s, plus margin
+    /// ocr.plan waits for the settings changes admitted before it (a disk write each).
+    public static let plan: Duration = .seconds(10)
+    public static let select: Duration = .seconds(10)
 }
 
 /// Hover requests over the supervisor. CoreHost runs one hover at a time and
@@ -223,24 +252,9 @@ public struct HoverClient: Sendable {
                     default: break
                     }
                 })
-            switch result["outcome"]?.stringValue {
-            case "completed": return .completed
-            case "empty": return .empty
-            case "failed": return .failed
-            default:
-                return .rejected(CoreError(code: "bad_response", message: RU.errorText("bad_response"),
-                                           detail: "hover.resolve outcome \(String(describing: result["outcome"]))"))
-            }
-        } catch is CancellationError {
-            return .cancelled
-        } catch let error as CoreError {
-            switch error.code {
-            case "superseded": return .superseded
-            case "cancelled": return .cancelled
-            default: return .rejected(error)
-            }
+            return HoverOutcome(result: result)
         } catch {
-            return .rejected(CoreError(code: "unexpected", message: RU.errorText("unexpected"), detail: "\(error)"))
+            return HoverOutcome(error: error)
         }
     }
 
@@ -251,6 +265,36 @@ public struct HoverClient: Sendable {
             "hover.displayed", ["hoverId": .integer(hoverId), "part": .string(part.rawValue)],
             deadline: CoreDeadlines.control)
         return result?["recorded"]?.boolValue ?? false
+    }
+}
+
+extension HoverOutcome {
+    /// A hover.resolve terminal result.
+    init(result: JSONValue) {
+        switch result["outcome"]?.stringValue {
+        case "completed": self = .completed
+        case "empty": self = .empty
+        case "failed": self = .failed
+        default:
+            self = .rejected(CoreError(code: "bad_response", message: RU.errorText("bad_response"),
+                                       detail: "hover.resolve outcome \(String(describing: result["outcome"]))"))
+        }
+    }
+
+    /// A hover.resolve that threw: its error terminal, a cancel or a lost connection.
+    init(error: any Error) {
+        switch error {
+        case is CancellationError: self = .cancelled
+        case let error as CoreError:
+            switch error.code {
+            case "superseded": self = .superseded
+            case "cancelled": self = .cancelled
+            case "stale_frame": self = .staleFrame(error)
+            default: self = .rejected(error)
+            }
+        default:
+            self = .rejected(CoreError(code: "unexpected", message: RU.errorText("unexpected"), detail: "\(error)"))
+        }
     }
 }
 

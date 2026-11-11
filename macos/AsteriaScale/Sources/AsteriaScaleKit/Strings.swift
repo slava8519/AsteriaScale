@@ -77,6 +77,8 @@ public enum RU {
         case "request_too_large": return "Запрос к службе перевода слишком длинный."
         case "conflict": return "Настройки перевода изменились одновременно с запросом; повторите."
         case "bad_response": return "Служба перевода ответила в неверном формате."
+        case "observations_too_large": return "Слишком много текста в области распознавания."
+        case "stale_frame": return "Кадр на экране изменился."
         default: return "Ошибка службы перевода (\(code))."
         }
     }
@@ -102,6 +104,12 @@ public enum RU {
     public static let overlayFailed = "Перевод не выполнен — подробности в окне «Проверка перевода»"
     /// Shown for a moment by the app's self-test only.
     public static let overlaySelfTest = "Проверка оверлея"
+
+    // Text recognition (Apple Vision, 20.3).
+    /// The captured frame is not the size of its capture bounds (T24): the
+    /// boxes would not fit the screen, so nothing is recognized.
+    public static let recognitionFrameMismatch = "Не удалось сопоставить кадр с экраном."
+    public static func recognitionFailed(_ code: String) -> String { "Не удалось распознать текст (\(code))." }
 
     // Hotkeys (M14).
     public static let hotkeyToggleHover = "Включить или выключить перевод при наведении"
@@ -186,6 +194,7 @@ public enum RU {
             diagnosticTitle, diagnosticPrompt, diagnosticTranslate, diagnosticEmpty, diagnosticTooLong,
             diagnosticClipboardEmpty, diagnosticClipboardDenied, diagnosticHoverDisabled, diagnosticServiceMessages,
             settingsTitle, settingsTranslation, settingsDelay, settingsHotkeys, settingsService, settingsFolders,
+            recognitionFrameMismatch,
         ]
         let samples = [
             restartDetail(attempt: 2, delay: .milliseconds(500), reason: reasonNoAnswer),
@@ -198,9 +207,11 @@ public enum RU {
             diagnosticError(errorText("not_ready"), code: "not_ready"),
             diagnosticCard(source: "bank", translation: "берег", badge: provenance(.dictionary, found: true)),
             folderLine(folderLogs, "/x"),
+            recognitionFailed("recognizer_failed"),
         ]
         let errors = ["connection_lost", "timeout", "not_ready", "not_running", "cancelled", "superseded", "bad_request",
-                      "request_too_large", "conflict", "bad_response", "x"].map(errorText)
+                      "request_too_large", "conflict", "bad_response", "observations_too_large", "stale_frame",
+                      "x"].map(errorText)
         let badges = Provenance.allKnown.flatMap { [provenance($0, found: true), provenance($0, found: false)] }
         return fixed + samples + errors + badges
     }

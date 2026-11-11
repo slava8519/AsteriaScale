@@ -408,6 +408,7 @@ public actor CoreSupervisor {
     /// overlay or say why).
     public func request(_ command: String, _ payload: JSONValue? = nil, deadline: Duration,
                         cancelInHost: Bool = false,
+                        maxLineBytes: Int? = nil,
                         onSent: (@Sendable (Int64) -> Void)? = nil,
                         onEvent: CoreConnection.EventHandler? = nil) async throws -> JSONValue {
         guard state.isReady, let connection else {
@@ -417,6 +418,6 @@ public actor CoreSupervisor {
             }
         }
         return try await connection.request(command, payload, deadline: deadline, cancelInHost: cancelInHost,
-                                            onSent: onSent, onEvent: onEvent)
+                                            maxLineBytes: maxLineBytes, onSent: onSent, onEvent: onEvent)
     }
 }

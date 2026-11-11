@@ -163,6 +163,18 @@ public struct CoreError: Error, Sendable, Equatable, CustomStringConvertible {
                   detail: "\(command) would be a \(bytes)-byte frame, over \(CoreProtocol.maxRequestFrameBytes)")
     }
 
+    /// Observations over ObservationBudget or one of CoreHost's limits: the
+    /// app refuses them itself and never cuts them short (DoD 20.3).
+    public static func observationsTooLarge(_ command: String, bytes: Int, budget: Int) -> CoreError {
+        CoreError(code: "observations_too_large", message: RU.errorText("observations_too_large"),
+                  detail: "\(command) would be a \(bytes)-byte line, over the \(budget)-byte observations budget")
+    }
+
+    public static func observationsTooLarge(_ command: String, limit: String) -> CoreError {
+        CoreError(code: "observations_too_large", message: RU.errorText("observations_too_large"),
+                  detail: "\(command): \(limit)")
+    }
+
     public static let notReady = CoreError(code: "not_ready", message: RU.errorText("not_ready"),
                                            detail: "the translation service is not ready")
 

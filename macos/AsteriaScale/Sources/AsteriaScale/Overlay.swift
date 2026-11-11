@@ -77,9 +77,9 @@ extension OverlayLevel {
 /// a preference: "overlayLevel" in macos-app.json, "screenSaver" by default
 /// or "shielding" (one above such a bottle); an unknown name is logged and
 /// the default used. sharingType .none keeps the card out of other apps'
-/// window reads, but ScreenCaptureKit reportedly still captures such windows
-/// on macOS 15.4+, so 20.3/20.4 must also exclude our own windows in their
-/// SCContentFilter.
+/// window reads, but the system's screen capture reportedly still captures
+/// such windows on macOS 15.4+, so 20.3/20.4 must also exclude our own
+/// windows in their capture's content filter.
 ///
 /// It never stays on a loading or stale card: a hover's end always keeps a
 /// card, hides it or replaces it with a message, a card hides itself after
@@ -133,6 +133,10 @@ final class OverlayController {
     func apply(_ update: HoverUpdate, token: Int) {
         guard token == hoverToken else { return }
         switch update {
+        case .loading:
+            // The loading card is already up (beginHover); the observations
+            // hover, which alone gets hover.loading, comes with the capture.
+            return
         case .primary(let primary):
             model.loading = false
             model.message = nil

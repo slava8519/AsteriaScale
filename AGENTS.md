@@ -140,12 +140,36 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   user-facing string in `RU` (`Strings.swift`). Those strings are Russian and
   say «перевод»/«служба перевода», never the internal word for the host
   (M15); the Swift suite and the C# parity check scan the package for it.
+  Kit also holds the parts of Apple Vision (20.3) that need no Vision: the
+  frame and recognizer types (`Frame` in the dense BGRA layout
+  `frame-fingerprint-v1.txt` pins, the `TextRecognizer` protocol, the T23
+  `RecognizerConfiguration`), `CaptureGeometry` (Cocoa global points to the
+  display under the cursor and its whole pixels, capture bounds back to the
+  capture's points), `VisionGeometry` and `WordSplitter` (Vision's
+  normalized boxes to frame pixels, words with UTF-16 ranges), the frame
+  fingerprint's wire form behind the `FrameFingerprinting` seam, the typed
+  protocol-v1 observations with CoreHost's limits and the 900 KiB budget on
+  the encoded request line (`observations_too_large`, never truncated; a
+  recognized word CoreHost would refuse, a non-finite box or more than 256
+  UTF-16 units, is left out of its line instead), and
+  `ObservationClient` (`ocr.plan`, `ocr.select`, the observations hover with
+  `hover.loading` and `stale_frame`). `Sources/AsteriaScaleVision` is Apple
+  Vision itself, Foundation, Vision, CoreGraphics, CoreText, ImageIO and
+  CryptoKit only (no AppKit, no screen capture): `VisionTextRecognizer`
+  (T23; frames below 1.5 pixels per point reach Vision enlarged twice
+  through `PixelBuffer.visionImage`, T24, and the recognizer reports the
+  size Vision was given), the in-memory CoreText fixture
+  (`FixtureRenderer`, `VisionFixture`; no image is committed), `PixelBuffer`
+  and the CryptoKit `SHA256FrameFingerprinter` (T27).
   `Sources/AsteriaScale` is the menu-bar app (AppKit, SwiftUI, Carbon): the
   status item, the click-through overlay, the Carbon hotkeys, the settings
   and «Проверка перевода» windows and the scripted `--self-test`; CoreHost's
   free-text statuses appear only in «Проверка перевода» and `app.log`, never
   in the menu or the overlay. `Bundle/` holds the Info.plist template and
-  the entitlements `tools/macos/build-app.sh` signs with. No `#Preview` or
+  the entitlements `tools/macos/build-app.sh` signs with.
+  `Tests/AsteriaScaleVisionProbe` is the DoD 6 probe of 20.3 (docs/DEVELOPMENT.md,
+  «Проба Vision»): `test-swift.sh` builds it beside the test bundle, it is
+  never part of the app and the suite never runs it. No `#Preview` or
   other Xcode-only macros (the Command Line Tools ship no PreviewsMacros
   plugin) and no XCTest (they have none): tests are Swift Testing only,
   through `tools/macos/test-swift.sh`.
@@ -294,8 +318,11 @@ a private `TMPDIR`, `DOTNET_EnableDiagnostics=0` (a killed .NET
 process otherwise leaves debugger FIFOs in `TMPDIR`) and an empty cwd, and
 fail if anything is left there. No automated check may crash a process by
 abort or a fault signal (`Environment.FailFast`, an unhandled exception,
-SIGABRT, SIGSEGV): ReportCrash then writes into the owner's real
-`~/Library/Logs/DiagnosticReports` whatever `HOME` was. A sudden death is
+SIGABRT, SIGSEGV, a Swift trap such as an index out of range): ReportCrash
+then writes into the owner's real `~/Library/Logs/DiagnosticReports`
+whatever `HOME` was, so a Swift test checks a size with `#require` before it
+indexes, and a regressed or mutated build fails the test instead of
+trapping `swiftpm-testing-helper`. A sudden death is
 simulated with `_exit` (CoreHost's `test.exit`) or SIGKILL, which leave no
 report. Never copy a system binary (`/bin/sleep`, anything under `/usr/bin`)
 out of place and run it: outside the sealed system volume it is no longer a
@@ -396,8 +423,22 @@ or anything else that can raise a privacy (TCC) prompt (Screen Recording,
 Accessibility, Input Monitoring): a real capture and the first grant are
 owner checks, and the app turns capture on only when the owner launches it
 through LaunchServices (docs/MACOS.md T22). The real Vision recognizer runs
-only inside the app self-test's throwaway home; the Swift suite and the
-macOS subset use synthetic observations (T26). Agents sign ad hoc only: the
+only in the app self-test and in the DoD 6 probe, both only in a throwaway
+home: the probe is a copy of `AsteriaScaleVisionProbe` re-signed with
+`codesign -s - -o runtime -f` (no entitlements) and started by direct exec
+with `HOME`/`CFFIXED_USER_HOME`, `TMPDIR` and an empty cwd in a `mktemp -d`
+folder outside the clone, with the crash reports listed before and after
+(docs/DEVELOPMENT.md, «Проба Vision», has the commands). Vision's first call
+there compiles its models into that home's `Library/Caches/<process name or
+bundle id>/com.apple.e5rt.e5bundlecache` (about 24 s, again for a rebuilt
+binary in the same home). It also updates entries outside every throwaway
+home, in `getconf DARWIN_USER_CACHE_DIR`: `com.apple.metal/<n>` (the
+probe) and `io.github.slava8519.AsteriaScale/com.apple.metal/<n>` (the
+app), attributed by timing; list them in your report, never delete them
+(T35's depth-2 listing names the app's folder only when it is new). The
+Swift suite and the macOS subset use synthetic observations and never
+render text (T26).
+Agents sign ad hoc only: the
 owner's Apple Development identity (`--sign`, `ASTERIA_SIGN_IDENTITY`, M16)
 is for the owner's builds, and using it can raise a keychain dialog, so pass
 `--sign -` whenever `ASTERIA_SIGN_IDENTITY` is set. `build-app.sh --install
@@ -649,7 +690,28 @@ certificate creation, `Add-AppxPackage`.
   is launched only by `realCoreHostReachesHello`, with `AppPaths` arguments
   in a throwaway home. A change to CoreHost's arguments or wire bytes
   updates the Swift side in the same commit: `launchArgumentsMatchGolden`
-  and the golden-transcript tests read the same two files as the C# checks.
+  and the golden-transcript tests read the same two files as the C# checks,
+  and `FrameFingerprintTests` reads `frame-fingerprint-v1.txt` beside them.
+  No test runs Vision or renders text (fonts may write caches into the
+  run's home, which `test-swift.sh` refuses): `SourceScanTests` walks the
+  package and fails on a test import other than Testing, Foundation,
+  Darwin, CoreGraphics, Carbon and the package's modules (any form:
+  attributes, an access modifier, `;`; Vision, CoreText and AppKit even
+  after a comment), on a Vision type, a text-recognition request or
+  handler, `FixtureRenderer`, `VisionFixture` or a CoreText, CoreGraphics or
+  HIToolbox font or text-drawing call in a test, on a Kit import other than
+  Foundation and Darwin, on an AsteriaScaleVision import outside DoD 6's
+  list, and on a screen-capture or permission (TCC) API outside its
+  allow-list. That list holds exactly one line, 20.2's
+  `overlay.windowServer` window-list read in `SelfTest.swift`; the capture
+  commit moves it into `Sources/AsteriaScale/ScreenSource.swift`, which then
+  becomes the list's only file (DoD 8, T22). Event taps, global NSEvent
+  monitors, `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
+  `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
+  `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,
+  `CGDisplayStream`, `AVCaptureScreenInput`) may appear nowhere. The scans
+  are pure functions over lines, and `theScansFlagEveryForbiddenSpelling`
+  feeds them planted lines, so a scan that stops seeing a spelling fails.
 - Keep a generic class such as `Task<T>` at its own type in shared tests:
   declaring it as `Task` or `object`, assigning it to a property or field of
   that type, passing it to a test-assembly method that takes that type, or

@@ -120,21 +120,26 @@ import Testing
     @Test func noSourceNamesTheHost() throws {
         let package = Repo.root.appendingPathComponent("macos/AsteriaScale")
         let enumerator = try #require(FileManager.default.enumerator(atPath: package.path))
-        var scanned = 0
+        var scanned: [String] = []
         while let relative = enumerator.nextObject() as? String {
             if [".build", ".swiftpm"].contains((relative as NSString).lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
             }
             guard ["swift", "strings", "stringsdict", "xcstrings"].contains((relative as NSString).pathExtension) else { continue }
-            scanned += 1
+            scanned.append(relative)
             let text = try String(contentsOf: package.appendingPathComponent(relative), encoding: .utf8)
             for (number, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
             where line.lowercased().contains(hostWord) {
                 Issue.record("M15: \(relative):\(number + 1)")
             }
         }
-        #expect(scanned >= 10)
+        #expect(scanned.count >= 10)
+        // The walk reaches every target folder, the Vision target and the probe included.
+        for folder in ["Sources/AsteriaScaleKit/", "Sources/AsteriaScale/", "Sources/AsteriaScaleVision/",
+                       "Tests/AsteriaScaleKitTests/", "Tests/AsteriaTestSleeper/", "Tests/AsteriaScaleVisionProbe/"] {
+            #expect(scanned.contains { $0.hasPrefix(folder) }, "nothing scanned in \(folder)")
+        }
     }
 }
 

@@ -87,7 +87,7 @@ struct PixelBounds: Equatable, CustomStringConvertible {
 extension ProcessSuites {
     /// ocr.select, ocr.plan, the observations hover, hover.loading and
     /// stale_frame against the fake CoreHost, through the plain connection
-    /// (the typed client comes with the capture pipeline). The fake mirrors
+    /// (ObservationClientTests pins the typed client on top). The fake mirrors
     /// CoreHost's shapes, refusals, Russian messages and labels, its line
     /// and word choice, its agreement rule and which observation it caches:
     /// when they were written, the observation requests here got the same

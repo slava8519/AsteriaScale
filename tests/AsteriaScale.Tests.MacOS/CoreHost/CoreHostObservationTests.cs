@@ -200,8 +200,8 @@ internal static class CoreHostObservationTests
     /// frame-fingerprint-v1.txt: Core's ComputeFrameFingerprint of each
     /// pattern is the pinned value, and the wire digits are the first 8
     /// SHA-256 bytes in reverse order (the little-endian ulong as x16), as the
-    /// file's header says. The Swift FrameFingerprint test that comes with the
-    /// app's screen capture is to read the same file.
+    /// file's header says. The Swift suite's FrameFingerprintTests reads the
+    /// same file.
     /// </summary>
     public static void VerifyFrameFingerprintFixture()
     {

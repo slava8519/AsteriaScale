@@ -37,6 +37,12 @@ public struct HoverReport: Sendable, Equatable {
             return HoverReport(overlay: .message(RU.overlayFailed), diagnosticNote: RU.diagnosticFailed)
         case .superseded, .cancelled:
             return HoverReport(overlay: .keep, diagnosticNote: nil)
+        case .staleFrame(let error):
+            // The hover pipeline that comes with the screen capture retries
+            // once with full observations before a hover ends here; CoreHost's
+            // «Кадр на экране изменился.» is never shown on the overlay (DoD
+            // 20.3), only noted in the diagnostic window.
+            return HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticError(error.message, code: error.code))
         case .rejected(let error):
             switch error.code {
             case "hover_disabled":
@@ -44,6 +50,10 @@ public struct HoverReport: Sendable, Equatable {
             case "not_ready", "connection_lost", "timeout", "shutting_down":
                 // The service is restarting (or stopping); its state line says why.
                 return HoverReport(overlay: .message(RU.overlayUnavailable),
+                                   diagnosticNote: RU.diagnosticError(error.message, code: error.code))
+            case "observations_too_large":
+                // The app's own refusal: its Russian text says what happened.
+                return HoverReport(overlay: .message(RU.errorText(error.code)),
                                    diagnosticNote: RU.diagnosticError(error.message, code: error.code))
             case "not_running":
                 // Failed or stopped: nothing restarts it on its own, so the

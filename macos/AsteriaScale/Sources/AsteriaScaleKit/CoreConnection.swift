@@ -175,8 +175,14 @@ public actor CoreConnection {
     /// `cancelInHost` CoreHost also gets request.cancel for it. The deadline
     /// stays armed after abandoning: a request that never ends cannot be
     /// drained, so its helper is killed.
+    ///
+    /// - Parameter maxLineBytes: a tighter limit on the encoded line than
+    ///   CoreHost's 1 MiB (observations: ObservationBudget). A longer line is
+    ///   refused with `observations_too_large` before anything is sent and
+    ///   before the request takes an id.
     public func request(_ command: String, _ payload: JSONValue? = nil, deadline: Duration,
                         cancelInHost: Bool = false,
+                        maxLineBytes: Int? = nil,
                         onSent: (@Sendable (Int64) -> Void)? = nil,
                         onEvent: EventHandler? = nil) async throws -> JSONValue {
         if let closeReason { throw CoreError.connectionLost(closeReason.description) }
@@ -187,6 +193,9 @@ public actor CoreConnection {
             line = try CoreRequestLine(id: id, command: command, payload: payload).encodedLine()
         } catch {
             throw CoreError(code: "bad_request", message: RU.errorText("bad_request"), detail: error.reason)
+        }
+        if let maxLineBytes, line.count > maxLineBytes {
+            throw CoreError.observationsTooLarge(command, bytes: line.count, budget: maxLineBytes)
         }
         guard line.count <= CoreProtocol.maxRequestFrameBytes else {
             throw CoreError.requestTooLarge(command, bytes: line.count)

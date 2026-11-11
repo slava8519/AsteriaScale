@@ -947,7 +947,7 @@ if [[ $mode != none ]]; then
     app_pid=$!
     echo "  app pid $app_pid"
     if [[ $mode == self-test ]]; then
-        # The app's own watchdog ends a hung self-test after 90 s; this one
+        # The app's own watchdog ends a hung self-test after 120 s; this one
         # covers an app that hangs before its watchdog starts. Its sleep is
         # killed with it, so nothing outlives the script.
         (

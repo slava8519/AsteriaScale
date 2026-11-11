@@ -26,6 +26,24 @@ let package = Package(
             name: "AsteriaScaleKit",
             path: "Sources/AsteriaScaleKit"
         ),
+        // Apple Vision behind Kit's TextRecognizer (roadmap 20.3, docs/MACOS.md
+        // T14, T23-T27): the recognizer, the in-memory CoreText fixture, the
+        // CGImage <-> BGRA frame layout and the CryptoKit frame fingerprint.
+        // Foundation, Vision, CoreGraphics, CoreText and CryptoKit only (DoD
+        // 20.3 also allows ImageIO): no window server, no screen capture, so
+        // nothing here can raise a privacy prompt. Only the app and the DoD 6 probe run the real
+        // recognizer (T26); the suite links it for PixelBuffer and the
+        // fingerprint and never calls Vision.
+        .target(
+            name: "AsteriaScaleVision",
+            dependencies: ["AsteriaScaleKit"],
+            path: "Sources/AsteriaScaleVision",
+            linkerSettings: [
+                .linkedFramework("CoreGraphics"),
+                .linkedFramework("CoreText"),
+                .linkedFramework("Vision"),
+            ]
+        ),
         // The menu-bar app (AppKit, SwiftUI, Carbon): status item, overlay
         // panel, global hotkeys, the settings and «Проверка перевода» windows
         // and the scripted --self-test. tools/macos/build-app.sh puts its
@@ -33,7 +51,7 @@ let package = Package(
         // worker and the data; `swift run` alone finds no CoreHost.
         .executableTarget(
             name: "AsteriaScale",
-            dependencies: ["AsteriaScaleKit"],
+            dependencies: ["AsteriaScaleKit", "AsteriaScaleVision"],
             path: "Sources/AsteriaScale",
             linkerSettings: [
                 .linkedFramework("AppKit"),
@@ -49,11 +67,24 @@ let package = Package(
             name: "AsteriaTestSleeper",
             path: "Tests/AsteriaTestSleeper"
         ),
+        // The DoD 6 probe of roadmap 20.3: the real Vision on the Latin
+        // fixture, printed with its timings (docs/DEVELOPMENT.md, «Проба
+        // Vision»). `swift build --build-tests` puts it beside the test
+        // bundle; it is never part of the app and the suite never runs it.
+        // Only a copy re-signed ad hoc with the hardened runtime runs, by
+        // direct exec in a throwaway home.
+        .executableTarget(
+            name: "AsteriaScaleVisionProbe",
+            dependencies: ["AsteriaScaleKit", "AsteriaScaleVision"],
+            path: "Tests/AsteriaScaleVisionProbe"
+        ),
         // Swift Testing only. Fixtures/ holds the fake CoreHost (stdlib
-        // python3), which is data, not a source.
+        // python3), which is data, not a source. AsteriaScaleVision is linked
+        // for PixelBuffer and the fingerprint only: no test may run Vision or
+        // render text (fonts may write caches into the run's home).
         .testTarget(
             name: "AsteriaScaleKitTests",
-            dependencies: ["AsteriaScaleKit", "AsteriaTestSleeper"],
+            dependencies: ["AsteriaScaleKit", "AsteriaScaleVision", "AsteriaTestSleeper"],
             path: "Tests/AsteriaScaleKitTests",
             exclude: ["Fixtures"]
         ),
