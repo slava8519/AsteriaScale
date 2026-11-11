@@ -487,7 +487,8 @@ and `obj/` stay as they are, and stops with exit 3 on any model file in the
 bundle. The app runs only by direct exec in a throwaway home (`HOME` and
 `CFFIXED_USER_HOME` at `W/home`, its own `TMPDIR`, an empty cwd);
 `--run-isolated` prints `W` and keeps it, `--home W` reuses it, and ^C or
-`kill -TERM` quits the app in order. Never launch the app in the real home
+`kill -TERM` to the script reaches the app, which quits in order (a
+`--self-test` stopped that way ends with 130 or 143 and keeps its folder). Never launch the app in the real home
 (`open`, a copy in `~/Applications`, a double click): that, and copying the
 ConSeC bundle into `~/Library/Application Support/AsteriaScale/Models/Ranker`
 with `ditto`, are the owner's alone (docs/MACOS.md T9). Every direct launch

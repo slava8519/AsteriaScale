@@ -20,7 +20,8 @@
 #                       always pass --sign -; no effect with --no-build
 #   --no-build          reuse the .app already in --output (it is verified
 #                       again and keeps its signature)
-#   --self-test         run the app's scripted self-test (AsteriaScale --self-test)
+#   --self-test         run the app's scripted self-test (AsteriaScale --self-test;
+#                       ^C or kill -TERM reach the app, then exit 130, 143)
 #   --run-isolated      run the app until it quits (^C or kill -TERM quit it in
 #                       order); prints the throwaway folder and keeps it
 #   --home DIR          with --run-isolated: reuse a folder an earlier
@@ -957,25 +958,44 @@ if [[ $mode != none ]]; then
             wait "$sleeper" && kill -KILL "$app_pid" 2>/dev/null
         ) &
         watchdog=$!
+        # ^C and kill -TERM reach the app, which quits in order, and the run
+        # waits for it: the global traps would exit here and leave the app
+        # running as an orphan of launchd until its own watchdog.
+        interrupted=0
+        trap 'interrupted=130; kill -INT "$app_pid" 2>/dev/null || true' INT
+        trap 'interrupted=143; kill -TERM "$app_pid" 2>/dev/null || true' TERM
         app_status=0
         wait "$app_pid" || app_status=$?
+        while kill -0 "$app_pid" 2>/dev/null; do wait "$app_pid" || app_status=$?; done
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
         kill "$watchdog" 2>/dev/null || true
         wait "$watchdog" 2>/dev/null || true
         cat "$selftest_log"
         # Exit 0 alone is not a pass: the summary line must say so.
         summary=$(grep -E '^SELFTEST (PASS|FAIL) [0-9]+/[0-9]+' "$selftest_log" || true)
         rm -f "$selftest_log"
-        if [[ $app_status -ne 0 || $summary != "SELFTEST PASS "* ]]; then
+        if [[ $interrupted -ne 0 ]]; then
+            echo "build-app: the self-test was interrupted (signal forwarded to the app, which exited with" \
+                "$app_status)" >&2
+            status=$interrupted
+        elif [[ $app_status -ne 0 || $summary != "SELFTEST PASS "* ]]; then
             echo "build-app: the self-test failed (exit $app_status, ${summary:-no summary line}); app log:" \
                 "$run/home/Library/Logs/AsteriaScale/app.log" >&2
             status=6
         fi
     else
+        # ^C and kill -TERM to this script reach the app, which quits in
+        # order; the run then ends as after «Выход». Without the TERM line a
+        # kill -TERM ended the script at once and left the app and CoreHost
+        # running as orphans of launchd.
         trap 'kill -INT "$app_pid" 2>/dev/null || true' INT
+        trap 'kill -TERM "$app_pid" 2>/dev/null || true' TERM
         app_status=0
         wait "$app_pid" || app_status=$?
         while kill -0 "$app_pid" 2>/dev/null; do wait "$app_pid" || app_status=$?; done
         trap 'exit 130' INT
+        trap 'exit 143' TERM
         echo "  the app exited with $app_status"
     fi
 
