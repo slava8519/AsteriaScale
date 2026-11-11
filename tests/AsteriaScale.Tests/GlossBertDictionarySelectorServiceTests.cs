@@ -24,6 +24,7 @@ internal static class GlossBertDictionarySelectorServiceTests
         await VerifyProfileSwitchAfterResponseDoesNotInvalidateSelectionAsync(tempRoot);
         await VerifyResponseDeadlineKillsWorkerAsync(tempRoot);
         await VerifyLastErrorCodeAsync(tempRoot);
+        await VerifyRequestScopedRefusalKeepsWorkerAsync(tempRoot);
     }
 
     private static void VerifyProtocolV2Shape()
@@ -1039,6 +1040,268 @@ internal static class GlossBertDictionarySelectorServiceTests
         Check(service.LastErrorCode is null && service.IsWorkerRunning && Volatile.Read(ref starts) == 2,
             $"A successful transaction after the failure left '{service.LastErrorCode}' " +
             $"after {Volatile.Read(ref starts)} worker starts.");
+    }
+
+    // A well-formed target_not_in_context reply to one select concerns only
+    // that request: the worker drained it in sync and keeps serving, so the
+    // next ranked hover must not pay for a cold start and the model status must
+    // not name a working model as failed, even when an earlier worker's failure
+    // is still recorded. Every other refusal of a select, the same code in reply
+    // to warm, and the same code in a reply that fails validation (a stale
+    // requestId is a protocol violation) still stop the worker. The fake
+    // refuses a select by its target and, on its second start only, refuses
+    // warm.
+    private static async Task VerifyRequestScopedRefusalKeepsWorkerAsync(string tempRoot)
+    {
+        string root = Path.Combine(tempRoot, "ranker-request-scoped-refusal");
+        string rankerDirectory = Path.Combine(root, "Ranker");
+        Directory.CreateDirectory(Path.Combine(rankerDirectory, "Models"));
+        File.WriteAllBytes(
+            Path.Combine(rankerDirectory, "AsteriaScale.RankerWorker.exe"),
+            []);
+        string model = GlossBertDictionarySelectorService.CpuModelCacheId + ":pipeline-cross";
+        const int selectedGroupId = 7;
+
+#if WINDOWS
+        string powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        Check(File.Exists(powershell),
+            "The refusal fixture requires the inbox Windows PowerShell executable.");
+#else
+        // The same contract in python3, as the profile-race fake above.
+        const string workerScript = """
+            import json, sys
+            model, version, provider, group, mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
+            for line in sys.stdin:
+                request = json.loads(line)
+                response = {"version": version, "requestId": str(request.get("requestId")), "ok": True,
+                            "index": None, "abstained": False, "margin": None, "score": None,
+                            "confidence": None, "provider": provider, "device": "CPU",
+                            "modelVersion": model, "pipeline": "cross", "errorCode": None, "error": None}
+                command = request.get("command")
+                if command == "warm" and mode == "refuse-warm":
+                    response.update(ok=False, errorCode="target_not_in_context", error="fixture refusal")
+                elif command == "select" and request.get("target") == "refused":
+                    response.update(ok=False, errorCode="target_not_in_context", error="fixture refusal")
+                elif command == "select" and request.get("target") == "broken":
+                    response.update(ok=False, errorCode="internal_error", error="fixture failure")
+                elif command == "select" and request.get("target") == "desync":
+                    response.update(ok=False, requestId="stale", errorCode="target_not_in_context", error="fixture desync")
+                elif command == "select":
+                    response.update(index=group, margin=0.5, score=0.9, confidence=0.9)
+                sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
+                sys.stdout.flush()
+                if command == "shutdown":
+                    break
+            """;
+#endif
+
+        int starts = 0;
+        Func<GlossBertRankerProvider, ProcessStartInfo> factory = _ =>
+        {
+            bool refuseWarm = Interlocked.Increment(ref starts) == 2;
+#if WINDOWS
+            ProcessStartInfo startInfo = new(powershell);
+            startInfo.ArgumentList.Add("-NoLogo");
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(
+                "$refuseWarm = $" + (refuseWarm ? "true" : "false") + "; " +
+                "while (($line = [Console]::In.ReadLine()) -ne $null) { " +
+                "$request = $line | ConvertFrom-Json; " +
+                "$response = [ordered]@{ " +
+                "version = '" + RankerProtocolV2.Version + "'; " +
+                "requestId = [string]$request.requestId; ok = $true; " +
+                "index = $null; abstained = $false; margin = $null; " +
+                "score = $null; confidence = $null; " +
+                "provider = '" +
+                GlossBertDictionarySelectorService.CpuExecutionProvider +
+                "'; device = 'CPU'; modelVersion = '" + model + "'; pipeline = 'cross'; " +
+                "errorCode = $null; error = $null }; " +
+                "if ($request.command -eq '" + RankerProtocolV2.Warm + "') { " +
+                "if ($refuseWarm) { $response.ok = $false; " +
+                "$response.errorCode = 'target_not_in_context'; " +
+                "$response.error = 'fixture refusal' } } " +
+                "elseif ($request.command -eq '" + RankerProtocolV2.Select + "') { " +
+                "if ($request.target -eq 'refused') { $response.ok = $false; " +
+                "$response.errorCode = 'target_not_in_context'; " +
+                "$response.error = 'fixture refusal' } " +
+                "elseif ($request.target -eq 'broken') { $response.ok = $false; " +
+                "$response.errorCode = 'internal_error'; " +
+                "$response.error = 'fixture failure' } " +
+                "elseif ($request.target -eq 'desync') { $response.ok = $false; " +
+                "$response.requestId = 'stale'; " +
+                "$response.errorCode = 'target_not_in_context'; " +
+                "$response.error = 'fixture desync' } " +
+                "else { $response.index = " + selectedGroupId + "; " +
+                "$response.margin = 0.5; $response.score = 0.9; " +
+                "$response.confidence = 0.9 } }; " +
+                "[Console]::Out.WriteLine(($response | ConvertTo-Json -Compress)); " +
+                "[Console]::Out.Flush(); " +
+                "if ($request.command -eq 'shutdown') { break } }");
+#else
+            ProcessStartInfo startInfo = new("python3");
+            startInfo.ArgumentList.Add("-I");
+            startInfo.ArgumentList.Add("-c");
+            startInfo.ArgumentList.Add(workerScript);
+            startInfo.ArgumentList.Add(model);
+            startInfo.ArgumentList.Add(RankerProtocolV2.Version);
+            startInfo.ArgumentList.Add(GlossBertDictionarySelectorService.CpuExecutionProvider);
+            startInfo.ArgumentList.Add(
+                selectedGroupId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            startInfo.ArgumentList.Add(refuseWarm ? "refuse-warm" : "answer");
+#endif
+            return startInfo;
+        };
+
+        await using (GlossBertDictionarySelectorService service = new(
+                         root,
+                         TimeSpan.FromMinutes(1),
+                         TimeSpan.FromSeconds(30),
+                         factory))
+        {
+            string refusedCode = await SelectRefusalCodeAsync(service, "refused", selectedGroupId);
+            int? workerProcessId = service.WorkerProcessId;
+            Check(refusedCode == "target_not_in_context",
+                $"The worker's target_not_in_context reply reached the caller as '{refusedCode}'.");
+            Check(service.IsWorkerRunning && workerProcessId is not null &&
+                  service.LastErrorCode is null && Volatile.Read(ref starts) == 1,
+                "A request-scoped refusal stopped the worker or was reported as the " +
+                $"model's error: running {service.IsWorkerRunning}, last error " +
+                $"'{service.LastErrorCode}', {Volatile.Read(ref starts)} worker starts.");
+
+            GlossBertDictionarySelection selection = await service.SelectAsync(
+                "He sat on the bank.",
+                "bank",
+                14,
+                ["financial institution", "land beside water"],
+                [selectedGroupId, 9],
+                "English",
+                GlossBertRankerProvider.Cpu);
+            Check(selection.Index == selectedGroupId &&
+                  service.WorkerProcessId == workerProcessId &&
+                  service.LastErrorCode is null &&
+                  Volatile.Read(ref starts) == 1,
+                "The select after a request-scoped refusal did not reuse the same worker: " +
+                $"{Volatile.Read(ref starts)} starts, last error '{service.LastErrorCode}'.");
+
+            string brokenCode = await SelectRefusalCodeAsync(service, "broken", selectedGroupId);
+            Check(brokenCode == "internal_error" &&
+                  !service.IsWorkerRunning &&
+                  service.LastErrorCode == "internal_error",
+                "A select refusal outside the allow-list kept the worker or lost its code: " +
+                $"'{brokenCode}', running {service.IsWorkerRunning}, " +
+                $"last error '{service.LastErrorCode}'.");
+
+            string warmCode;
+            try
+            {
+                await service.WarmUpAsync(GlossBertRankerProvider.Cpu);
+                warmCode = "accepted";
+            }
+            catch (GlossBertRankerException ex)
+            {
+                warmCode = ex.ErrorCode;
+            }
+
+            Check(warmCode == "target_not_in_context" &&
+                  !service.IsWorkerRunning &&
+                  service.LastErrorCode == "target_not_in_context" &&
+                  Volatile.Read(ref starts) == 2,
+                "A warm refusal with an allow-listed code did not stop the worker: " +
+                $"'{warmCode}', running {service.IsWorkerRunning}, " +
+                $"last error '{service.LastErrorCode}'.");
+
+            selection = await service.SelectAsync(
+                "He sat on the bank.",
+                "bank",
+                14,
+                ["financial institution", "land beside water"],
+                [selectedGroupId, 9],
+                "English",
+                GlossBertRankerProvider.Cpu);
+            Check(selection.Index == selectedGroupId &&
+                  service.IsWorkerRunning &&
+                  service.LastErrorCode is null &&
+                  Volatile.Read(ref starts) == 3,
+                "A fresh worker after the warm refusal did not answer: " +
+                $"{Volatile.Read(ref starts)} starts, last error '{service.LastErrorCode}'.");
+
+            // A kept refusal clears a failure an earlier worker left recorded:
+            // the status then describes the worker that is running.
+            brokenCode = await SelectRefusalCodeAsync(service, "broken", selectedGroupId);
+            Check(brokenCode == "internal_error" && service.LastErrorCode == "internal_error",
+                $"The coded failure before the refusal was '{brokenCode}', " +
+                $"last error '{service.LastErrorCode}'.");
+            refusedCode = await SelectRefusalCodeAsync(service, "refused", selectedGroupId);
+            Check(refusedCode == "target_not_in_context" &&
+                  service.IsWorkerRunning &&
+                  service.LastErrorCode is null &&
+                  Volatile.Read(ref starts) == 4,
+                "A request-scoped refusal after a coded failure kept the old code or the " +
+                $"wrong worker: '{refusedCode}', running {service.IsWorkerRunning}, " +
+                $"last error '{service.LastErrorCode}', {Volatile.Read(ref starts)} starts.");
+
+            // The allow-listed code does not excuse a reply that fails
+            // validation: a stale requestId means the stream is out of step.
+            string desyncCode = await SelectRefusalCodeAsync(service, "desync", selectedGroupId);
+            Check(desyncCode == "protocol_violation" &&
+                  !service.IsWorkerRunning &&
+                  service.LastErrorCode == "protocol_violation",
+                "A select reply with an allow-listed code and a stale requestId kept the " +
+                $"worker: '{desyncCode}', running {service.IsWorkerRunning}, " +
+                $"last error '{service.LastErrorCode}'.");
+        }
+
+        // The worker that outlives a refusal must still unload when idle; the
+        // refusal path otherwise left the idle timer disabled.
+        Interlocked.Exchange(ref starts, 0);
+        await using GlossBertDictionarySelectorService idle = new(
+            root,
+            TimeSpan.FromMilliseconds(300),
+            TimeSpan.FromSeconds(30),
+            factory);
+        idle.ConfigureKeepWarm(false);
+        string idleCode = await SelectRefusalCodeAsync(idle, "refused", selectedGroupId);
+        Stopwatch idleWait = Stopwatch.StartNew();
+        while (idle.IsWorkerRunning && idleWait.Elapsed < TimeSpan.FromSeconds(15))
+        {
+            await Task.Delay(50);
+        }
+
+        Check(idleCode == "target_not_in_context" &&
+              !idle.IsWorkerRunning &&
+              Volatile.Read(ref starts) == 1,
+            "A worker kept after a request-scoped refusal was never unloaded when idle: " +
+            $"'{idleCode}', running {idle.IsWorkerRunning} after {idleWait.Elapsed}.");
+    }
+
+    private static async Task<string> SelectRefusalCodeAsync(
+        GlossBertDictionarySelectorService service,
+        string target,
+        int selectedGroupId)
+    {
+        try
+        {
+            GlossBertDictionarySelection selection = await service.SelectAsync(
+                "He sat on the bank.",
+                target,
+                14,
+                ["financial institution", "land beside water"],
+                [selectedGroupId, 9],
+                "English",
+                GlossBertRankerProvider.Cpu);
+            return "accepted index " +
+                (selection.Index?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none");
+        }
+        catch (GlossBertRankerException ex)
+        {
+            return ex.ErrorCode;
+        }
     }
 
     private static RankerResponse Success(

@@ -64,6 +64,15 @@ public sealed class GlossBertRankerException : InvalidOperationException
     }
 
     public string ErrorCode { get; }
+
+    /// <summary>
+    /// The command the worker itself refused with a well-formed coded reply
+    /// (ok:false after the version, request id, provider, device and model
+    /// checks passed), or null for every other failure: transport, parsing,
+    /// a protocol violation or a failed start. The code alone cannot tell
+    /// them apart, because the host raises coded failures of its own.
+    /// </summary>
+    internal string? RefusedCommand { get; init; }
 }
 
 /// <summary>
@@ -293,9 +302,11 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
     /// <summary>
     /// The <see cref="GlossBertRankerException.ErrorCode"/> of the last worker
     /// transaction that failed with one (worker_missing, consec_bundle_missing,
-    /// worker_error…), or null once a later transaction succeeded. Read-only, for
-    /// a host's status line: the request that failed still throws as before,
-    /// and a cancelled caller's abandoned transaction counts too.
+    /// worker_error…), or null once a later transaction succeeded or the worker
+    /// refused only a select's content (target_not_in_context), which leaves it
+    /// running. Read-only, for a host's status line: the request that failed
+    /// still throws as before, and a cancelled caller's abandoned transaction
+    /// counts too.
     /// </summary>
     internal string? LastErrorCode => _lastErrorCode;
 
@@ -521,7 +532,30 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             _ = ObserveAbandonedTransactionAsync(transaction);
             throw;
         }
+        catch (GlossBertRankerException refusal) when (IsRequestScopedRefusal(refusal))
+        {
+            // The worker outlives this refusal, so its idle unload is rearmed
+            // exactly as after a success.
+            ScheduleIdleUnload();
+            throw;
+        }
     }
+
+    // Worker refusals of a select that concern only that request's content
+    // (the target is not a standalone token of its context), never the
+    // worker, its model or the stream. Any other code, a refusal of warm or
+    // hello, and every host-side failure still stop the worker.
+    private static readonly string[] RequestScopedSelectErrorCodes =
+    [
+        "target_not_in_context"
+    ];
+
+    private static bool IsRequestScopedRefusal(GlossBertRankerException exception) =>
+        string.Equals(
+            exception.RefusedCommand,
+            RankerProtocolV2.Select,
+            StringComparison.Ordinal) &&
+        RequestScopedSelectErrorCodes.Contains(exception.ErrorCode, StringComparer.Ordinal);
 
     private async Task<RankerTransactionResult> ExecuteTransactionAsync(
         RankerRequest request,
@@ -559,6 +593,16 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         catch (OperationCanceledException) when (startCancellationToken.IsCancellationRequested)
         {
             // No application request has entered the stream in this path.
+            throw;
+        }
+        catch (GlossBertRankerException refusal) when (IsRequestScopedRefusal(refusal))
+        {
+            // The worker drained this request, answered it in sync with a
+            // validated identity and refused only its content, so the stream
+            // and the model are healthy (rule 6 still holds). Killing it would
+            // charge the next ranked hover a cold start and report a working
+            // model as failed; the caller still gets the refusal.
+            _lastErrorCode = null;
             throw;
         }
         catch (Exception exception)
@@ -800,7 +844,10 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
             string message = string.IsNullOrWhiteSpace(response.Error)
                 ? "GlossBERT worker rejected the request."
                 : response.Error;
-            throw new GlossBertRankerException(errorCode, message);
+            throw new GlossBertRankerException(errorCode, message)
+            {
+                RefusedCommand = expectedCommand
+            };
         }
 
         if (requireLoadedIdentity &&
@@ -1158,8 +1205,9 @@ public sealed class GlossBertDictionarySelectorService : IAsyncDisposable
         }
         catch
         {
-            // ExecuteTransactionAsync already kills a failed worker. Observation
-            // here only prevents an unobserved background task exception.
+            // ExecuteTransactionAsync already kills a failed worker (and keeps
+            // one that only refused a select's content). Observation here only
+            // prevents an unobserved background task exception.
         }
         finally
         {

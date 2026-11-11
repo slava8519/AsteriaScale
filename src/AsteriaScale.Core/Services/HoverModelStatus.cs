@@ -44,7 +44,9 @@ internal sealed record HoverDictionaryStatus(
 /// <param name="LastErrorCode">
 /// The code of the selector's last failed worker transaction (a
 /// <see cref="GlossBertRankerException.ErrorCode"/> such as worker_missing or
-/// consec_bundle_missing), or null once a later transaction succeeded.
+/// consec_bundle_missing), or null once a later transaction succeeded or the
+/// worker refused only a select's content (target_not_in_context) and kept
+/// running.
 /// </param>
 internal sealed record HoverSenseStatus(
     bool InUse,

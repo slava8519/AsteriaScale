@@ -8,6 +8,7 @@ internal static class RankerWorkerRegressionTests
         VerifyNpuNeverUsesCpuPrefilter();
         VerifyMissingGlossFailsOpen();
         VerifyClosestTargetOccurrenceIsMarked();
+        VerifyQuoteAndDashEdgesAreBoundaries();
         VerifyQuotedTargetMarker();
         VerifyCpuModelOptionIsFailClosed();
         VerifyPinnedManifestIntegrityIsFailClosed();
@@ -326,6 +327,74 @@ internal static class RankerWorkerRegressionTests
             3);
         Check(selected == -1,
             "An astral Unicode letter was treated as a token boundary.");
+    }
+
+    // The dictionary lookup tokenizer joins only ', ’ and U+002D, and only
+    // between word characters, so a quote or dash glued to a word's edge is
+    // not part of the target it hands over. The worker must anchor exactly
+    // those targets, or the hover shows the ranker as unavailable. Every
+    // failing row is collected so one run shows the whole class.
+    private static void VerifyQuoteAndDashEdgesAreBoundaries()
+    {
+        (string Context, string Target, int Cursor, int Expected)[] cases =
+        [
+            // An opening ASCII quote mid-sentence, as Vision reads it.
+            ("She only told me 'don't go there' and left.", "don't", 20, 18),
+            ("'Pitcher threw a fast ball past him.", "Pitcher", 3, 1),
+            ("He threw it to the pitcher' quickly.", "pitcher", 21, 19),
+            ("The ‘pitcher’ threw a fast ball past him.", "pitcher", 7, 5),
+            ("The 'pitcher' threw a fast ball past him.", "pitcher", 7, 5),
+            ("The pitchers’ arms were sore.", "pitchers", 6, 4),
+            ("The pitchers' arms were sore.", "pitchers", 6, 4),
+            ("The pitcher—threw a fast ball past him.", "pitcher", 6, 4),
+            ("The pitcher–threw a fast ball past him.", "pitcher", 6, 4),
+            ("The pitcher- threw a fast ball past him.", "pitcher", 6, 4),
+            ("I don't— I can't remember.", "don't", 3, 2),
+            ("I don’t— I can’t remember.", "don’t", 3, 2),
+            ("Wait—don't you see?", "don't", 7, 5),
+            ("You don't—", "don't", 6, 4),
+            ("You don't-- no.", "don't", 6, 4),
+            ("It was nothin' at all.", "nothin", 9, 7),
+            ("Music in '90s style.", "90s", 10, 10),
+            // U+2010 is not a joiner, so "well" is a token of its own here (a
+            // dictionary with a "well known" phrase hands over the whole span).
+            ("A well‐known fact.", "well", 3, 2),
+            // The hovered second occurrence used to fall back to the first.
+            ("Don't say 'don't' to me.", "don't", 13, 11),
+            // Guards: a joiner between word characters still glues.
+            ("Don't say 'don't' to me.", "don't", 2, 0),
+            ("I don't know.", "don", 3, -1),
+            ("I don’t know.", "don", 3, -1),
+            ("A well-known fact.", "well", 3, -1),
+            ("A well-known fact.", "known", 8, -1),
+            ("Meet me at six o'clock.", "clock", 18, -1),
+            ("Meet me at six o’clock.", "clock", 18, -1),
+            ("Play rock'n'roll now.", "n", 10, -1),
+            // The one known exception to the lookup parity, pinned on purpose:
+            // a supplementary-plane letter is a word character for the anchor
+            // (see the astral check above), while the lookup's UTF-16 regex
+            // sees two surrogates and cuts there, so it hands over "bank" and
+            // this hover still gets target_not_in_context. The row also reads
+            // the scalar beyond a joiner across a surrogate pair.
+            ("\U00010400'bank and bank'\U00010400", "bank", 4, -1)
+        ];
+
+        List<string> failures = [];
+        foreach ((string context, string target, int cursor, int expected) in cases)
+        {
+            int selected = RankerSelectionLogic.FindClosestTargetOccurrence(
+                context,
+                target,
+                cursor);
+            if (selected != expected)
+            {
+                failures.Add($"'{target}' in \"{context}\": {selected}, expected {expected}");
+            }
+        }
+
+        Check(failures.Count == 0,
+            "A quote or dash at a target edge was misread: " +
+            string.Join("; ", failures));
     }
 
     private static void Check(bool condition, string message)

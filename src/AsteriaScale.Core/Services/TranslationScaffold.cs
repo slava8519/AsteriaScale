@@ -467,6 +467,7 @@ internal sealed class TranslationScaffoldBuilder
                         NeuralSelectionAttempt neural = await TrySelectWithNeuralRankerAsync(
                             sentence,
                             lookup.Source,
+                            lookup.AnchorSource,
                             token.Index,
                             plan,
                             effectiveNeuralSession,
@@ -710,9 +711,15 @@ internal sealed class TranslationScaffoldBuilder
             plan);
     }
 
+    // The request takes the lookup's anchor source: the ranker and the
+    // shared decision cache find it in the sentence again, exactly as the
+    // hover does, so both paths key one verdict on the same span. The sense
+    // hint and the diagnostics name the term by its Source, as the glossary,
+    // the prompt and the phrase-cache fingerprint do.
     private async Task<NeuralSelectionAttempt> TrySelectWithNeuralRankerAsync(
         string sentence,
         string target,
+        string rankerTarget,
         int characterIndex,
         SmartDictionaryRankerPlan plan,
         TranslationScaffoldNeuralSession neuralSession,
@@ -724,7 +731,7 @@ internal sealed class TranslationScaffoldBuilder
             TranslationScaffoldNeuralResult result = await _neuralRanker!(
                 new TranslationScaffoldNeuralRequest(
                     sentence,
-                    target,
+                    rankerTarget,
                     characterIndex,
                     plan),
                 cancellationToken);

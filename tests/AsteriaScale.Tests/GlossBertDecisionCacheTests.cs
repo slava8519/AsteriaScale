@@ -23,6 +23,7 @@ internal static class GlossBertDecisionCacheTests
         VerifyBertCleanTextParity();
         VerifyExactTextFingerprint();
         VerifyConsecExactFingerprint();
+        VerifyQuotedRepeatedTargetKeys();
         VerifyStorageFingerprintFollowsResponseIdentity();
         VerifyFingerprintSeparation();
         await VerifyRoundTripAndPersistenceAsync(root);
@@ -269,6 +270,62 @@ internal static class GlossBertDecisionCacheTests
                 "dictionary-v1",
                 "abstain-margin=0.18"),
             "ConSeC abstention threshold did not participate in the cache key.");
+    }
+
+    /// <summary>
+    /// A quoted repeat of the target is a standalone occurrence of its own. If
+    /// the anchor skipped it, a hover on the quoted word scored and cached the
+    /// first occurrence instead, and both cursors shared that verdict.
+    /// </summary>
+    private static void VerifyQuotedRepeatedTargetKeys()
+    {
+        SmartDictionaryRankerPlan plan = CreatePlan();
+        const string quoted = "Don't say 'don't' to me.";
+        const string target = "don't";
+        int second = quoted.LastIndexOf(target, StringComparison.Ordinal);
+        List<string> failures = [];
+
+        string consecFirst = ConsecFingerprint(quoted, target, 2, plan);
+        string consecSecond = ConsecFingerprint(quoted, target, second + 2, plan);
+        if (consecFirst == consecSecond)
+        {
+            failures.Add("ConSeC keys of the two occurrences are equal");
+        }
+
+        string pairFirst = GlossBertDecisionCache.CreateFingerprint(
+            quoted,
+            target,
+            2,
+            plan,
+            GlossBertRankerProvider.Cpu,
+            GlossBertModelIdentity,
+            "dictionary-v1",
+            RankerAbstention.CacheTag);
+        for (int offset = 0; offset <= target.Length; offset++)
+        {
+            string pairSecond = GlossBertDecisionCache.CreateFingerprint(
+                quoted,
+                target,
+                second + offset,
+                plan,
+                GlossBertRankerProvider.Cpu,
+                GlossBertModelIdentity,
+                "dictionary-v1",
+                RankerAbstention.CacheTag);
+            if (pairSecond == pairFirst)
+            {
+                failures.Add($"GlossBERT key at offset {offset} of the quoted occurrence equals the first");
+            }
+
+            if (ConsecFingerprint(quoted, target, second + offset, plan) != consecSecond)
+            {
+                failures.Add($"ConSeC key at offset {offset} of the quoted occurrence moved");
+            }
+        }
+
+        Check(failures.Count == 0,
+            "A quoted repeat of the target reused another occurrence's key: " +
+            string.Join("; ", failures));
     }
 
     private static void VerifyStorageFingerprintFollowsResponseIdentity()

@@ -98,11 +98,66 @@ public static class RankerTargetAnchor
         return closest;
     }
 
+    // The anchor must accept every target the dictionary lookup tokenizer
+    // produces (LocalDictionaryService.EnglishLookupTokenRegex): a token is a
+    // run of letters, marks and digits, and only ', ’ and U+002D join two such
+    // runs. A quote or hyphen-minus at a target edge is therefore part of the
+    // word only when a word character lies beyond it ("don" in "don't",
+    // "known" in "well-known", "clock" in "o'clock"). Every other dash, and a
+    // quote that opens or closes a quotation, is a boundary: "don't" inside
+    // 'don't go there', "pitchers" before a closing ’, "don't" after "Wait—"
+    // and "pitcher" before "--" are whole targets. Counting those characters
+    // as letters made the worker reject a lookup target as absent from its
+    // own context. U+02BC is a modifier letter and already counts as one.
+    // One mismatch remains on purpose: a letter outside the BMP is a word
+    // character here, while the lookup's UTF-16 regex sees two surrogates and
+    // cuts before it, so a target glued to such a letter is still refused.
     private static bool IsTokenCharacterBefore(string value, int index)
+    {
+        int scalarStart = ScalarStartBefore(value, index);
+        if (scalarStart < 0 ||
+            !Rune.TryGetRuneAt(value, scalarStart, out Rune rune))
+        {
+            return false;
+        }
+
+        if (IsWordCharacter(rune))
+        {
+            return true;
+        }
+
+        int beyond = ScalarStartBefore(value, scalarStart);
+        return IsJoiner(rune) &&
+               beyond >= 0 &&
+               Rune.TryGetRuneAt(value, beyond, out Rune beyondRune) &&
+               IsWordCharacter(beyondRune);
+    }
+
+    private static bool IsTokenCharacterAt(string value, int index)
+    {
+        if (index >= value.Length ||
+            !Rune.TryGetRuneAt(value, index, out Rune rune))
+        {
+            return false;
+        }
+
+        if (IsWordCharacter(rune))
+        {
+            return true;
+        }
+
+        int beyond = index + rune.Utf16SequenceLength;
+        return IsJoiner(rune) &&
+               beyond < value.Length &&
+               Rune.TryGetRuneAt(value, beyond, out Rune beyondRune) &&
+               IsWordCharacter(beyondRune);
+    }
+
+    private static int ScalarStartBefore(string value, int index)
     {
         if (index <= 0)
         {
-            return false;
+            return -1;
         }
 
         int scalarStart = index - 1;
@@ -113,23 +168,18 @@ public static class RankerTargetAnchor
             scalarStart--;
         }
 
-        return Rune.TryGetRuneAt(value, scalarStart, out Rune rune) &&
-               IsTokenCharacter(rune);
+        return scalarStart;
     }
 
-    private static bool IsTokenCharacterAt(string value, int index) =>
-        index < value.Length &&
-        Rune.TryGetRuneAt(value, index, out Rune rune) &&
-        IsTokenCharacter(rune);
-
-    private static bool IsTokenCharacter(Rune value)
+    private static bool IsWordCharacter(Rune value)
     {
         UnicodeCategory category = Rune.GetUnicodeCategory(value);
         return Rune.IsLetterOrDigit(value) ||
                category is UnicodeCategory.NonSpacingMark or
                    UnicodeCategory.SpacingCombiningMark or
-                   UnicodeCategory.EnclosingMark or
-                   UnicodeCategory.DashPunctuation ||
-               value.Value is '\'' or '’' or 'ʼ';
+                   UnicodeCategory.EnclosingMark;
     }
+
+    private static bool IsJoiner(Rune value) =>
+        value.Value is '\'' or '’' or '-';
 }

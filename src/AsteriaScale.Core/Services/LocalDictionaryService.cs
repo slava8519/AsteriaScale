@@ -21,6 +21,24 @@ public sealed record DictionaryLookupResult(
     public bool IsTrustedPhrase { get; init; }
     public bool HasMultipleMeanings { get; init; }
     internal string MatchedEnglishKey { get; init; } = string.Empty;
+
+    private readonly string? _anchorSource;
+
+    /// <summary>
+    /// The matched words exactly as the line spells them, for every consumer
+    /// that finds the target in its line again: the sense ranker's target,
+    /// the decision-cache and result-cache keys, the ranker context and the
+    /// translation scaffold's ranker request. It differs from
+    /// <see cref="Source"/> only for a phrase matched through its space-joined
+    /// or lemma key whose words do not stand one space apart ("give... up" for
+    /// "give up"); the card, the history and the scaffold's glossary term,
+    /// sense hint and diagnostics keep <see cref="Source"/>.
+    /// </summary>
+    internal string AnchorSource
+    {
+        get => _anchorSource ?? Source;
+        init => _anchorSource = value;
+    }
 }
 
 public sealed record DictionarySenseCandidate(
@@ -1535,8 +1553,12 @@ public sealed partial class LocalDictionaryService
                          length <= MaximumLexicalPhraseTokens &&
                          _lexicalEnglishPhrases.Contains(lookupKey)))
                     {
+                        bool rawMatch = string.Equals(
+                            lookupKey,
+                            rawKey,
+                            StringComparison.Ordinal);
                         return Found(
-                            string.Equals(lookupKey, rawKey, StringComparison.Ordinal)
+                            rawMatch
                                 ? TrimEnglishDisplayPunctuation(rawPhrase)
                                 : phrase,
                             translation,
@@ -1544,7 +1566,10 @@ public sealed partial class LocalDictionaryService
                             "EN",
                             lookupKey,
                             includeSenseMetadata,
-                            dialogueTranslation);
+                            dialogueTranslation,
+                            rawMatch
+                                ? null
+                                : ExtractEnglishTokenSpan(text, tokens, start, length));
                     }
                 }
 
@@ -1574,7 +1599,8 @@ public sealed partial class LocalDictionaryService
                         "EN",
                         canonicalKey,
                         includeSenseMetadata,
-                        dialogueTranslation);
+                        dialogueTranslation,
+                        ExtractEnglishTokenSpan(text, tokens, start, length));
                 }
             }
         }
@@ -1694,6 +1720,23 @@ public sealed partial class LocalDictionaryService
         int nextToken = start + length;
         int end = nextToken < tokens.Count ? tokens[nextToken].Index : text.Length;
         return text[first..end].TrimEnd();
+    }
+
+    // The anchor source of a phrase matched through its space-joined or lemma
+    // key: the text from its first token to its last, exactly as it stands in
+    // the line. The sense ranker, its cache keys and its context window find
+    // their target in that line again, and the joined form ("give up" for
+    // "give... up", "took off" for "took— off") is not there, so the worker
+    // refused the hover. The displayed and stored Source stays the joined
+    // phrase. Tokens separated by one space give the joined form byte for byte.
+    private static string ExtractEnglishTokenSpan(
+        string text,
+        MatchCollection tokens,
+        int start,
+        int length)
+    {
+        Match last = tokens[start + length - 1];
+        return text[tokens[start].Index..(last.Index + last.Length)];
     }
 
     private static string TrimEnglishDisplayPunctuation(string value) =>
@@ -2148,7 +2191,8 @@ public sealed partial class LocalDictionaryService
         string language,
         string? matchedEnglishKey = null,
         bool includeSenseMetadata = false,
-        string? contextTranslation = null)
+        string? contextTranslation = null,
+        string? anchorSource = null)
     {
         IReadOnlyList<DictionarySenseCandidate> senses =
             includeSenseMetadata &&
@@ -2173,7 +2217,8 @@ public sealed partial class LocalDictionaryService
                               _preferredEnglishSurfaceForms.Contains(matchedEnglishKey),
             HasMultipleMeanings =
                 DictionaryMeaningParser.SplitMeanings(translation).Length > 1,
-            MatchedEnglishKey = matchedEnglishKey ?? string.Empty
+            MatchedEnglishKey = matchedEnglishKey ?? string.Empty,
+            AnchorSource = anchorSource ?? source
         };
     }
 

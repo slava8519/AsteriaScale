@@ -670,7 +670,12 @@ certificate creation, `Add-AppxPackage`.
 2. **GroupId == index.** Ranker plan outcomes, `visibleTranslations` and the
    result cache rely on sequential GroupIds and three coherent normalizations
    (resolver / cache / worker). Do not add or change deduplication in one place
-   only.
+   only. The worker's target, both cache keys, the ranker context window and
+   the scaffold's and the ranker benchmarks' requests take one value, the
+   lookup's internal `AnchorSource` (a phrase as the line spells it,
+   `give... up`); the card, the history and the scaffold's glossary term,
+   sense hint and diagnostics keep its `Source` (`give up`, owner decision
+   M21).
 3. **No silent provider fallback.** An NPU request runs on NPU or fails loudly.
    The host validates the worker's reported provider/device/model version. Both
    consumers share one `GlossBertDecisionCache`; a cache hit may skip inference
@@ -706,7 +711,11 @@ certificate creation, `Add-AppxPackage`.
    `docs/RESEARCH.md`.
 6. **IPC discipline.** After a request line is written to the ranker worker's
    stdin, exactly one response line must be drained even on cancellation; a
-   protocol violation kills the whole worker tree. stderr never shares stdout.
+   protocol violation kills the whole worker tree. A well-formed refusal of
+   one `select` whose code is on the selector's `RequestScopedSelectErrorCodes`
+   (only `target_not_in_context`) is not a violation and keeps the worker;
+   a refused `warm`, any other code and every host-side failure still kill
+   it. stderr never shares stdout.
 7. **POS inference stays duplicated on purpose.** `SmartDictionaryHeuristicRanker`
    picks final answers (narrow); `SmartDictionarySenseResolver` only filters for
    the neural ranker (wider, fail-open). Shared primitives live in

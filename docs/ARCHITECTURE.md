@@ -224,7 +224,7 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
 | Строка и история игры | `TextHookService` (TextractorCLI), лимиты `PreviousContextLimits` | хост; лимиты — ядро |
 | Режим `Dictionary` | `LocalDictionaryService.LookupAsync` | ядро |
 | Режим `Smart`, шаги 1–11 ниже | `SmartHoverPipeline.ResolveSmartHoverAsync` → `LocalDictionaryService`, `SmartDictionaryHeuristicRanker`, `SmartDictionarySenseResolver`, `SmartDictionaryResultCache`, `GlossBertDecisionCache` | ядро |
-| IPC с ranker-воркером; код последней ошибки воркера для строки состояния (`LastErrorCode`, сбрасывается успешным запросом) | `GlossBertDictionarySelectorService`; путь воркера и каталог моделей — `RankerWorkerLocation` | ядро |
+| IPC с ranker-воркером; код последней ошибки воркера для строки состояния (`LastErrorCode`, сбрасывается успешным запросом и корректным отказом одному `select` с `target_not_in_context`, после которого воркер продолжает работу) | `GlossBertDictionarySelectorService`; путь воркера и каталог моделей — `RankerWorkerLocation` | ядро |
 | Выбор смысла GlossBERT / ConSeC | `RankerEngine` | `AsteriaScale.RankerWorker`, отдельный процесс |
 | Вторая строка, шаг 12 ниже | `SmartHoverPipeline.TranslatePhraseLineAsync` → `SmartPhraseContextBuilder`, `SmartPhraseIdiomRewriter`, `TranslationScaffoldBuilder`, `SemanticSenseEvidenceFactory`, `SensePreservationGate`, `SmartPhraseTranslationGuard`, `SmartPhraseTranslationCache` | ядро |
 | Генерация через `llama-server` | `TranslateGemmaTranslationService` | ядро |
@@ -265,6 +265,28 @@ NPU вне Windows: первая проверка внутри `EnsureLoadedAsyn
    `characterIndex` приводится к началу того вхождения цели, которое привязал бы
    воркер (`RankerTargetAnchor` в общей protocol-сборке), поэтому позиция
    курсора из hover и начало токена из каркаса попадают в одну запись.
+   Вхождение считается отдельным словом по правилу словарного токенизатора
+   (`EnglishLookupTokenRegex`): символ на краю цели продолжает слово, только
+   если это буква, цифра или знак либо `'`, `’` или U+002D, за которым идёт
+   буква, цифра или знак. Остальные тире и кавычка у края — граница, поэтому
+   любая цель, выданная словарём, привязывается в своей строке (`don't` в
+   `'don't go there'`, `pitchers` в `pitchers’`, `don't` в `Wait—don't`), а
+   `don` в `don't` и `well` в `well-known` — нет. Исключение одно: буква вне
+   BMP, вплотную прилипшая к слову, для привязки — буква, а регулярное
+   выражение словаря в UTF-16 режет перед суррогатной парой, поэтому такая
+   цель по-прежнему получает `target_not_in_context`. У фразы, найденной по
+   ключу из слов через пробел или по лемме, два написания: `Source` — слова
+   строки через один пробел (`give up`; `took off` при ключе `take off`), его
+   видят карточка, история и её экспорт для Anki, «Мой словарь», термин,
+   подсказка смысла и диагностика каркаса TranslateGemma; внутреннее
+   `DictionaryLookupResult.AnchorSource` — участок строки от первого слова до
+   последнего (`give... up`, `took— off`). Цель воркера, ключи обоих кэшей и
+   окно `TargetCenteredContextBuilder` в `SmartHoverPipeline`, запрос каркаса к
+   ранжировщику и запросы бенчмарков `--ranker-benchmark` и
+   `--register-benchmark` берут `AnchorSource` (решение владельца M21: без
+   видимых изменений); план и эвристики читают только слова цели, одинаковые в
+   обоих написаниях, и остаются на `Source`. У слова и при одном пробеле между
+   словами оба написания совпадают.
    Для pair-профилей контекст — результат `TargetCenteredContextBuilder`:
    реплика длиннее `MaximumWords` обрезается **симметрично вокруг цели**, а не
    справа. Это защищает от LongestFirst-обрезки в `PairTokenizer`, которая на
@@ -516,7 +538,7 @@ Sense-метаданные (`eng-rus*-senses.tsv.gz`) — ленивый sidecar
 3. **Никакого тихого fallback провайдера.** Запрос NPU исполняется на NPU или падает с ошибкой; воркер обязан вернуть заявленные provider/device/model, хост валидирует (`ValidateResponse`). Несовместимый драйвер → словарный результат, выбор CPU — только явный. На macOS NPU-провайдера нет: запрос NPU — явная ошибка `npu_provider_unavailable`.
 4. **Воздержание только по margin.** Порог `0.25` заморожен по dev-набору; менять его или критерии принятия решения можно только после прогона `--ranker-benchmark` (см. [RESEARCH.md](RESEARCH.md)). Значение объявлено один раз в `RankerAbstention.MarginThreshold` (общая protocol-сборка) и входит в ключи обоих кэшей решений: перекалибровка обязана инвалидировать сохранённые вердикты, иначе воздержания, которые новый порог превратил бы в решения, продолжат читаться с диска.
 5. **Fail-open POS-фильтр.** Фильтр не применяется, если оставляет < 2 групп или не меняет состав; неполные метаданные не могут стереть все смыслы.
-6. **Дисциплина IPC.** После записи запроса в stdin воркера транзакция не отменяется: ровно один ответ вычитывается из stdout, иначе следующий запрос получит чужой ответ. Ошибка протокола → kill всего дерева процесса. stderr дренируется отдельно и никогда не смешивается с JSONL.
+6. **Дисциплина IPC.** После записи запроса в stdin воркера транзакция не отменяется: ровно один ответ вычитывается из stdout, иначе следующий запрос получит чужой ответ. Ошибка протокола → kill всего дерева процесса. Корректный отказ воркера одному `select` с кодом из списка `RequestScopedSelectErrorCodes` селектора (сейчас только `target_not_in_context`) — не ошибка протокола: ответ вычитан в лад, воркер продолжает работу; отказ `warm`, любой другой код и любая ошибка хоста по-прежнему убивают дерево. stderr дренируется отдельно и никогда не смешивается с JSONL.
 7. **Замороженные наборы.** `ranker-holdout*.json` не используются при подборе модели, порога, промтов или группировки — только для финального подтверждения; каждое открытие фиксируется в RESEARCH.md.
 8. **Хеши артефактов.** Размеры и SHA-256 модели закреплены в `RankerEngine.cs` и `assets/Ranker/README.md` (бандл ConSeC — в `ConsecArtifactBundle.cs`, TranslateGemma и runner llama.cpp — в `TranslateGemmaTranslationService.cs`); и воркер, и `TranslateGemmaTranslationService` отказываются работать с несовпадающими файлами.
 

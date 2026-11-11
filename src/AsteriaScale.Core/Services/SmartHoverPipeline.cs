@@ -202,6 +202,14 @@ internal sealed class SmartHoverPipeline : IDisposable
                 recognized.CharacterIndex);
         string displaySource = targetSpan.Source;
         bool displayIsPhrase = lookup.IsPhrase || targetSpan.IsPhrase;
+        // The worker, both cache keys and the ranker context find the target in
+        // the line again, so they take the matched words as the line spells
+        // them ("give... up"); the card, the history and the sense hints keep
+        // the dictionary's phrase ("give up"). One local, so every
+        // anchor-keyed path sees the same span. The plan and the heuristics
+        // read only the target's words, which both spellings share, so they
+        // keep the Source they always had.
+        string rankerTarget = lookup.AnchorSource;
         bool englishLookup =
             string.Equals(lookup.Language, "EN", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(
@@ -391,7 +399,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 modelVersion);
             SmartDictionaryCacheRequest cacheRequest = CreateSmartCacheRequest(
                 recognized.Text,
-                lookup.Source,
+                rankerTarget,
                 recognized.CharacterIndex,
                 labelledTranslations,
                 "English",
@@ -445,7 +453,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             // same text.
             TargetCenteredContext rankerContext = TargetCenteredContextBuilder.BuildForRanker(
                 recognized.Text,
-                lookup.Source,
+                rankerTarget,
                 recognized.CharacterIndex,
                 provider,
                 modelProfile);
@@ -455,7 +463,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                 plan.GlossesFor(provider.Traits().EnrichedGlosses);
             string decisionKey = CreateDecisionKey(
                 rankerContext.Text,
-                lookup.Source,
+                rankerTarget,
                 rankerContext.CharacterIndex,
                 plan,
                 provider,
@@ -490,7 +498,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     // verdict, exactly as the non-cached path below does.
                     CreateSmartCacheRequest(
                         recognized.Text,
-                        lookup.Source,
+                        rankerTarget,
                         recognized.CharacterIndex,
                         labelledTranslations,
                         "English",
@@ -516,7 +524,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             GlossBertDictionarySelection ranked = sharedDecision is null
                 ? await _glossBertSelector.SelectAsync(
                     rankerContext.Text,
-                    lookup.Source,
+                    rankerTarget,
                     rankerContext.CharacterIndex,
                     rankerGlosses,
                     plan.CandidateGroupIds,
@@ -549,7 +557,7 @@ internal sealed class SmartHoverPipeline : IDisposable
                     ranked.ModelVersion,
                     resultModelIdentity => CreateDecisionKey(
                         rankerContext.Text,
-                        lookup.Source,
+                        rankerTarget,
                         rankerContext.CharacterIndex,
                         plan,
                         provider,
@@ -569,7 +577,7 @@ internal sealed class SmartHoverPipeline : IDisposable
             }
             cacheRequest = CreateSmartCacheRequest(
                 recognized.Text,
-                lookup.Source,
+                rankerTarget,
                 recognized.CharacterIndex,
                 labelledTranslations,
                 "English",

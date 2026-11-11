@@ -1,3 +1,4 @@
+using AsteriaScale.RankerProtocol;
 using AsteriaScale.Services;
 
 /// <summary>
@@ -294,6 +295,289 @@ internal static class LocalDictionaryNormalizationTests
         await VerifyTranslationScaffoldAsync(root);
         await dictionary.UnloadAsync();
         await VerifyManagedMemoryReleaseIntentAsync(root);
+        await VerifyLookupTargetsAnchorInContextAsync(root);
+    }
+
+    // The sense ranker receives the lookup's AnchorSource as its target and
+    // anchors it in the same text with RankerTargetAnchor; a target it cannot
+    // anchor comes back as target_not_in_context, which the hover shows as an
+    // unavailable ranker. So every word or phrase the lookup finds, under
+    // every cursor position, must anchor on the span under that cursor,
+    // however quotes and dashes cling to a word and whatever punctuation
+    // stands between a phrase's words. The Source the card, the history and
+    // the scaffold show stays the dictionary's phrase (owner decision M21).
+    private static async Task VerifyLookupTargetsAnchorInContextAsync(string root)
+    {
+        string bundled = Path.Combine(root, "anchor-coverage", "bundled");
+        string user = Path.Combine(root, "anchor-coverage", "user");
+        Directory.CreateDirectory(bundled);
+        Directory.CreateDirectory(user);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus.tsv"),
+            [
+                "don't\tне",
+                "can't\tне могу",
+                "pitcher\tпитчер; кувшин",
+                "threw\tбросил",
+                "arm\tрука",
+                "sore\tбольной",
+                "wait\tждать",
+                "see\tвидеть",
+                "say\tсказать",
+                "go\tидти",
+                "there\tтам",
+                "told\tсказал",
+                "left\tушёл",
+                "quickly\tбыстро",
+                "nothin\tничего",
+                "90s\tдевяностые",
+                "style\tстиль",
+                "well-known\tизвестный",
+                "o'clock\tчас",
+                "rock'n'roll\tрок-н-ролл",
+                "remember\tпомнить",
+                "give up\tсдаваться; отказываться",
+                "go on\tпродолжать; идти дальше",
+                "come on\tдавай; ну же",
+                "break down\tломаться; разрушать",
+                "take off\tснимать; взлетать"
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "eng-rus-senses.tsv"),
+            [
+                "give up\tсдаваться\tto stop trying and admit defeat\tcommon\tverb",
+                "give up\tотказываться\tto stop doing or having something\tcommon\tverb"
+            ]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(bundled, "jpn-rus.tsv"),
+            ["鳥\tптица"]);
+        LocalDictionaryService dictionary = new(bundled, user);
+        await dictionary.LoadAsync();
+
+        // A phrase whose words stand one space apart has one spelling. Any
+        // other separator gives two: the card's Source keeps the dictionary's
+        // phrase, the anchor source keeps the line's spelling, through the
+        // joined key ("give up") and the lemma key ("take off").
+        (string Text, string Hovered, string Source, string Anchor)[] phrases =
+        [
+            ("Go on, tell me.", "Go", "Go on", "Go on"),
+            ("He took off his coat.", "took", "took off", "took off"),
+            ("Go... on, tell me.", "Go", "Go on", "Go... on"),
+            ("Come, on, let's go.", "Come", "Come on", "Come, on"),
+            ("I will never give... up on you.", "give", "give up", "give... up"),
+            ("The car will break—down soon.", "break", "break down", "break—down"),
+            ("He took— off his coat.", "took", "took off", "took— off")
+        ];
+        List<string> failures = [];
+        foreach ((string text, string hoveredWord, string source, string anchor) in phrases)
+        {
+            DictionaryLookupResult phrase = await dictionary.LookupAsync(
+                text,
+                hoveredWord,
+                text.IndexOf(hoveredWord, StringComparison.Ordinal) + 1);
+            if (!phrase.Found || !phrase.IsPhrase ||
+                !string.Equals(phrase.Source, source, StringComparison.Ordinal) ||
+                !string.Equals(phrase.AnchorSource, anchor, StringComparison.Ordinal))
+            {
+                failures.Add(
+                    $"\"{text}\": found {phrase.Found}, phrase {phrase.IsPhrase}, " +
+                    $"source '{phrase.Source}' anchor '{phrase.AnchorSource}', " +
+                    $"expected '{source}' and '{anchor}'");
+            }
+        }
+
+        string[] texts =
+        [
+            "She only told me 'don't go there' and left.",
+            "'Pitcher threw a fast ball past him.",
+            "He threw it to the pitcher' quickly.",
+            "The ‘pitcher’ threw it, the 'pitcher' threw it.",
+            "The pitchers’ arms were sore, the pitchers' too.",
+            "The pitcher—threw it; the pitcher–threw it; the pitcher- threw it.",
+            "I don't— I can’t remember. Wait—don't you see?",
+            "You don't-- no. You don’t—",
+            "Don't say 'don't' to me.",
+            "It was nothin' at all, in '90s style.",
+            "A well-known pitcher at six o'clock, rock'n'roll.",
+            "Go... on, tell me. Go on, then.",
+            "Come, on, let's go.",
+            "I will never give... up on you.",
+            "The car will break—down soon; he took— off his coat."
+        ];
+        int anchored = 0;
+        foreach (string text in texts)
+        {
+            System.Text.RegularExpressions.Match[] tokens = dictionary
+                .CreateEnglishLookupContext(text)
+                .Tokens
+                .ToArray();
+            for (int cursor = 0; cursor < text.Length; cursor++)
+            {
+                if (char.IsWhiteSpace(text[cursor]))
+                {
+                    continue;
+                }
+
+                int chunkStart = cursor;
+                while (chunkStart > 0 && !char.IsWhiteSpace(text[chunkStart - 1]))
+                {
+                    chunkStart--;
+                }
+
+                int chunkEnd = cursor;
+                while (chunkEnd < text.Length && !char.IsWhiteSpace(text[chunkEnd]))
+                {
+                    chunkEnd++;
+                }
+
+                DictionaryLookupResult lookup = await dictionary.LookupAsync(
+                    text,
+                    text[chunkStart..chunkEnd],
+                    cursor);
+                if (!lookup.Found)
+                {
+                    continue;
+                }
+
+                // A word has one spelling: what the card shows is what the
+                // ranker anchors.
+                if (!lookup.IsPhrase &&
+                    !string.Equals(lookup.AnchorSource, lookup.Source, StringComparison.Ordinal))
+                {
+                    failures.Add(
+                        $"word '{lookup.Source}' at {cursor} in \"{text}\" " +
+                        $"anchors as '{lookup.AnchorSource}'");
+                }
+
+                // The worker receives the trimmed target. When the cursor is
+                // inside a lookup token, the anchored span must cover that
+                // token, not another occurrence of the same word or phrase.
+                string target = lookup.AnchorSource.Trim();
+                int start = RankerTargetAnchor.FindClosestOccurrence(text, target, cursor);
+                System.Text.RegularExpressions.Match? hovered = tokens.FirstOrDefault(
+                    token => token.Index <= cursor && cursor < token.Index + token.Length);
+                bool misplaced = hovered is not null &&
+                                 (start > hovered.Index ||
+                                  start + target.Length < hovered.Index + hovered.Length);
+                if (start < 0 || misplaced)
+                {
+                    failures.Add($"'{target}' at {cursor} in \"{text}\": anchor {start}");
+                }
+                else
+                {
+                    anchored++;
+                }
+            }
+        }
+
+        // The full-text scaffold asks the ranker about the same phrase: the
+        // request carries the line's spelling, which the ranker and the shared
+        // decision cache anchor, while the sense hint the phrase model reads
+        // keeps the dictionary's phrase.
+        const string scaffoldLine = "I will never give... up on you.";
+        List<TranslationScaffoldNeuralRequest> scaffoldRequests = [];
+        TranslationScaffoldBuilder scaffoldBuilder = new(
+            dictionary,
+            (request, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                scaffoldRequests.Add(request);
+                SmartDictionaryRankerOutcome selected = request.Plan.Outcomes.Single(
+                    outcome => outcome.Translation == "сдаваться");
+                return Task.FromResult(new TranslationScaffoldNeuralResult(
+                    selected.GroupId,
+                    Abstained: false,
+                    Margin: 0.42,
+                    Score: 0.81,
+                    Confidence: 0.81,
+                    GlossBertRankerProvider.Cpu,
+                    GlossBertDictionarySelectorService.CpuExecutionProvider,
+                    "CPU",
+                    GlossBertDictionarySelectorService.CpuModelCacheId + ":test",
+                    "cross",
+                    ElapsedMilliseconds: 3));
+            });
+        TranslationScaffold scaffold = await scaffoldBuilder.BuildAsync(scaffoldLine);
+        string scaffoldTargets = string.Join(
+            ", ",
+            scaffoldRequests.Select(request =>
+                $"'{request.Target}' at {request.CharacterIndex} anchors at " +
+                RankerTargetAnchor.FindClosestOccurrence(
+                    request.Sentence,
+                    request.Target,
+                    request.CharacterIndex)));
+        Check(scaffoldRequests is [{ Target: "give... up" } scaffoldRequest] &&
+              RankerTargetAnchor.FindClosestOccurrence(
+                  scaffoldRequest.Sentence,
+                  scaffoldRequest.Target,
+                  scaffoldRequest.CharacterIndex) ==
+              scaffoldLine.IndexOf("give", StringComparison.Ordinal) &&
+              scaffold.SenseHints is [{ Source: "give up", SelectedTranslation: "сдаваться" }] &&
+              scaffold.NeuralDecisions.Any(decision =>
+                  decision is
+                  {
+                      Target: "give up",
+                      Status: TranslationScaffoldNeuralStatus.Selected
+                  }),
+            "The scaffold ranker did not get the line's spelling of a phrase, or its " +
+            $"hint lost the dictionary's: requests {scaffoldTargets}; hints " +
+            string.Join(", ", scaffold.SenseHints.Select(hint => $"'{hint.Source}'")) +
+            "; decisions " +
+            string.Join(", ", scaffold.NeuralDecisions.Select(
+                decision => $"'{decision.Target}' {decision.Status}")));
+
+        // A phrase the scaffold settles without the ranker becomes a glossary
+        // term of the TranslateGemma prompt, which names it as the card does:
+        // the line's words one space apart, through the joined key and the
+        // lemma key alike. A user entry is the one-meaning phrase the scaffold
+        // trusts; its own folders keep it out of the lookups above.
+        string termBundled = Path.Combine(root, "anchor-coverage", "term-bundled");
+        string termUser = Path.Combine(root, "anchor-coverage", "term-user");
+        Directory.CreateDirectory(termBundled);
+        Directory.CreateDirectory(termUser);
+        await File.WriteAllLinesAsync(
+            Path.Combine(termBundled, "eng-rus.tsv"),
+            ["soon\tскоро"]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(termBundled, "jpn-rus.tsv"),
+            ["鳥\tптица"]);
+        await File.WriteAllLinesAsync(
+            Path.Combine(termUser, "eng-rus-user.tsv"),
+            ["break down\tломаться", "take off\tснимать"]);
+        LocalDictionaryService termDictionary = new(termBundled, termUser);
+        TranslationScaffoldBuilder termBuilder = new(termDictionary);
+        (string Line, string Term, string Translation)[] termLines =
+        [
+            ("The car will break—down soon.", "break down", "ломаться"),
+            ("He took... off his hat.", "took off", "снимать")
+        ];
+        List<string> termFailures = [];
+        foreach ((string termLine, string expectedTerm, string expectedTranslation) in termLines)
+        {
+            TranslationScaffold terms = await termBuilder.BuildAsync(termLine);
+            if (!terms.Terms.Any(term =>
+                    term.Source == expectedTerm && term.Translation == expectedTranslation) ||
+                terms.Terms.Any(term => term.Source.Contains('—') || term.Source.Contains("...")))
+            {
+                termFailures.Add(
+                    $"\"{termLine}\" gave " +
+                    string.Join(", ", terms.Terms.Select(term =>
+                        $"'{term.Source}' {term.Translation}")) +
+                    $", expected '{expectedTerm}'");
+            }
+        }
+
+        await termDictionary.UnloadAsync();
+        Check(termFailures.Count == 0,
+            "A scaffold glossary term took the line's spelling of a phrase instead of the " +
+            "card's: " + string.Join("; ", termFailures));
+
+        Check(failures.Count == 0,
+            "A dictionary target did not anchor under the cursor, or a phrase lost its " +
+            "dictionary Source or its line spelling: " +
+            string.Join("; ", failures.Distinct(StringComparer.Ordinal)));
+        Check(anchored > 100,
+            $"The anchor coverage fixture found only {anchored} dictionary targets.");
     }
 
     private static async Task VerifyManagedMemoryReleaseIntentAsync(string root)

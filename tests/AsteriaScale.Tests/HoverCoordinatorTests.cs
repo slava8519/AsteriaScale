@@ -42,6 +42,7 @@ internal static class HoverCoordinatorTests
         await VerifyDisposeDrainsAsync(Path.Combine(root, "dispose"));
         await VerifyDisposeOrderAsync(Path.Combine(root, "dispose-order"));
         await VerifyPrimaryBeforeResultCacheStoreAsync(Path.Combine(root, "cache-store"));
+        await VerifyPhraseSpellingAsync(Path.Combine(root, "phrase-spelling"));
         await VerifyLoadingEnginesAsync(Path.Combine(root, "loading"));
         await VerifyWarmUpStatusesAsync(Path.Combine(root, "warm-up"));
     }
@@ -375,6 +376,102 @@ internal static class HoverCoordinatorTests
             $"{string.Join(", ", countsAtPrimary)} entries at the primary card, {countAfterHover} after the hover.");
     }
 
+    // A phrase found through its space-joined key while the line spells it
+    // otherwise ("give... up"): the ranker must get a target it can find in
+    // the line, and the card and the history must keep the dictionary's
+    // phrase. The fake refuses a target that does not occur in its context,
+    // as the real worker does, so a joined target shows as an unavailable
+    // ranker and a line-spelled card heading shows as a wrong Source.
+    private static async Task VerifyPhraseSpellingAsync(string root)
+    {
+        (string Context, string Name)[] lines =
+        [
+            ("I will never give... up on you.", "ellipsis"),
+            ("I will never give up on you.", "one-space")
+        ];
+        foreach ((string context, string name) in lines)
+        {
+            await using Fixture fixture = new(
+                Path.Combine(root, name),
+                HoverTranslationModes.Smart,
+                fakeRankerWorker: true,
+                ambiguousPhrase: true);
+            fixture.Host.Recognized = Recognized(context, "give");
+            Check(fixture.Coordinator.TryBeginProcessing(), "Gate unavailable.");
+            await fixture.Coordinator.StartHover("p1", CancellationToken.None);
+
+            Check(fixture.Host.Cards is
+                [{ Source: "give up", Engine: "NPU OCR  •  CPU-СМЫСЛ", PhraseLine: null }],
+                $"The phrase in \"{context}\" did not reach the ranker under its " +
+                "dictionary spelling: " +
+                string.Join(" | ", fixture.Host.Cards.Select(card =>
+                    $"'{card.Source}' {card.Engine}: {card.Translation}")) +
+                " / " + string.Join(" | ", fixture.Statuses));
+            fixture.Coordinator.RecordShown(fixture.Host.Cards[0]);
+            IReadOnlyList<TranslationHistoryEntry> history =
+                fixture.Coordinator.History.Snapshot();
+            Check(history is [{ Source: "give up", Context: var recorded }] &&
+                  recorded == context,
+                $"The history of \"{context}\" did not keep the dictionary's phrase: " +
+                string.Join(" | ", history.Select(entry => $"'{entry.Source}'")));
+
+            // A repeat reads the verdict the first hover stored in the result
+            // cache, which is written and read under the same target. The
+            // decision cache would answer a miss with the same label, so it is
+            // emptied first.
+            await fixture.DecisionCache.ClearAsync();
+            await HoverPhraseAgainAsync(
+                fixture,
+                context,
+                "p2",
+                "NPU OCR  •  SMART-CACHE",
+                "repeated hover");
+
+            // A hover that misses the result cache but finds the decision
+            // promotes that verdict into the result cache, again under the same
+            // target: the ranker fills both caches once more (p3), the promotion
+            // refills the emptied result cache (p4), and with the decision cache
+            // emptied the promoted entry alone answers (p5).
+            await fixture.ResultCache.ClearAsync();
+            await HoverPhraseAgainAsync(
+                fixture,
+                context,
+                "p3",
+                "NPU OCR  •  CPU-СМЫСЛ",
+                "ranked hover");
+            await fixture.ResultCache.ClearAsync();
+            await HoverPhraseAgainAsync(
+                fixture,
+                context,
+                "p4",
+                "NPU OCR  •  SMART-CACHE",
+                "hover the decision cache answers");
+            await fixture.DecisionCache.ClearAsync();
+            await HoverPhraseAgainAsync(
+                fixture,
+                context,
+                "p5",
+                "NPU OCR  •  SMART-CACHE",
+                "hover the promoted verdict answers");
+        }
+    }
+
+    private static async Task HoverPhraseAgainAsync(
+        Fixture fixture,
+        string context,
+        string id,
+        string engine,
+        string step)
+    {
+        fixture.Host.Clear();
+        Check(fixture.Coordinator.TryBeginProcessing(), "Gate unavailable.");
+        await fixture.Coordinator.StartHover(id, CancellationToken.None);
+        Check(fixture.Host.Cards is [{ Source: "give up" } card] && card.Engine == engine,
+            $"The {step} of \"{context}\" did not show 'give up' from {engine}: " +
+            string.Join(" | ", fixture.Host.Cards.Select(shown =>
+                $"'{shown.Source}' {shown.Engine}: {shown.Translation}")));
+    }
+
     private static async Task VerifyLoadingEnginesAsync(string root)
     {
         (string Mode, string Backend, string Source, string Engine)[] cases =
@@ -541,21 +638,41 @@ internal static class HoverCoordinatorTests
             TimeSpan? historyFlushDelay = null,
             string backend = SmartDictionaryBackends.Cpu,
             string sourceLanguage = SmartDictionarySourceLanguages.English,
-            bool fakeRankerWorker = false)
+            bool fakeRankerWorker = false,
+            bool ambiguousPhrase = false)
         {
             string bundled = Path.Combine(root, "bundled");
             string user = Path.Combine(root, "user");
             Directory.CreateDirectory(bundled);
             Directory.CreateDirectory(user);
+            // The ambiguous phrase is opt-in: the warm-up statuses count the
+            // fixture's entries.
             WriteGzip(
                 Path.Combine(bundled, "eng-rus.tsv.gz"),
-                ["amber\tянтарь; сигнал", "placeholder\tзаполнитель", "river\tрека"]);
+                ambiguousPhrase
+                    ?
+                    [
+                        "amber\tянтарь; сигнал",
+                        "give up\tсдаваться; бросать",
+                        "placeholder\tзаполнитель",
+                        "river\tрека"
+                    ]
+                    : ["amber\tянтарь; сигнал", "placeholder\tзаполнитель", "river\tрека"]);
             WriteGzip(
                 Path.Combine(bundled, "eng-rus-senses.tsv.gz"),
-                [
-                    "amber\tянтарь\tfossilized tree resin\tcommon\tnoun",
-                    "amber\tсигнал\ta yellow warning signal\tcommon\tnoun"
-                ]);
+                ambiguousPhrase
+                    ?
+                    [
+                        "amber\tянтарь\tfossilized tree resin\tcommon\tnoun",
+                        "amber\tсигнал\ta yellow warning signal\tcommon\tnoun",
+                        "give up\tсдаваться\tto stop trying and admit defeat\tcommon\tverb",
+                        "give up\tбросать\tto stop doing something as a habit\tcommon\tverb"
+                    ]
+                    :
+                    [
+                        "amber\tянтарь\tfossilized tree resin\tcommon\tnoun",
+                        "amber\tсигнал\ta yellow warning signal\tcommon\tnoun"
+                    ]);
             WriteGzip(Path.Combine(bundled, "jpn-rus.tsv.gz"), ["仮\tвременный"]);
             Settings = new AppSettings
             {
@@ -571,12 +688,13 @@ internal static class HoverCoordinatorTests
             };
             HistoryFile = Path.Combine(root, "history.json");
             ResultCache = new SmartDictionaryResultCache(Path.Combine(root, "result-cache.json"));
+            DecisionCache = new GlossBertDecisionCache(Path.Combine(root, "decision-cache.json"));
             PhraseModel = phrase ?? new FakePhraseModel();
             HoverCoreServices services = new()
             {
                 ResultCache = ResultCache,
                 PhraseCache = new SmartPhraseTranslationCache(Path.Combine(root, "phrase-cache.json")),
-                DecisionCache = new GlossBertDecisionCache(Path.Combine(root, "decision-cache.json")),
+                DecisionCache = DecisionCache,
                 History = new TranslationHistoryService(
                     HistoryFile,
                     flushDelay: historyFlushDelay ?? TimeSpan.FromMilliseconds(10)),
@@ -610,6 +728,8 @@ internal static class HoverCoordinatorTests
         public string HistoryFile { get; }
 
         public SmartDictionaryResultCache ResultCache { get; }
+
+        public GlossBertDecisionCache DecisionCache { get; }
 
         public FakePhraseModel PhraseModel { get; }
 
@@ -833,7 +953,10 @@ internal static class HoverCoordinatorTests
 
     // The JSONL ranker protocol answered by a script: hello, warm and shutdown
     // with the requested provider's execution provider, device and pinned
-    // GlossBERT identity, and select with the first candidate group.
+    // GlossBERT identity, and select with the first candidate group. Like the
+    // real worker, it refuses a select whose target does not occur in its
+    // context with target_not_in_context (a substring test, which is enough
+    // for the ASCII lines these tests hover).
     private static ProcessStartInfo CreateFakeWorker(GlossBertRankerProvider provider)
     {
         RankerProviderTraits traits = provider.Traits();
@@ -865,8 +988,11 @@ internal static class HoverCoordinatorTests
             "modelVersion = '" + model + "'; pipeline = 'cross'; " +
             "errorCode = $null; error = $null }; " +
             "if ($request.command -eq 'select') { " +
+            "if (([string]$request.context).Contains([string]$request.target)) { " +
             "$response.index = [int]($request.candidateGroupIds[0]); " +
-            "$response.margin = 0.5; $response.score = 0.9; $response.confidence = 0.9 }; " +
+            "$response.margin = 0.5; $response.score = 0.9; $response.confidence = 0.9 } " +
+            "else { $response.ok = $false; $response.errorCode = 'target_not_in_context'; " +
+            "$response.error = 'The selected target does not occur in the source context.' } }; " +
             "[Console]::Out.WriteLine(($response | ConvertTo-Json -Compress)); " +
             "[Console]::Out.Flush(); " +
             "if ($request.command -eq 'shutdown') { break } }");
@@ -884,8 +1010,12 @@ internal static class HoverCoordinatorTests
                             "confidence": None, "provider": provider, "device": device,
                             "modelVersion": model, "pipeline": "cross", "errorCode": None, "error": None}
                 if request.get("command") == "select":
-                    response.update(index=request["candidateGroupIds"][0],
-                                    margin=0.5, score=0.9, confidence=0.9)
+                    if request["target"] in request["context"]:
+                        response.update(index=request["candidateGroupIds"][0],
+                                        margin=0.5, score=0.9, confidence=0.9)
+                    else:
+                        response.update(ok=False, errorCode="target_not_in_context",
+                                        error="The selected target does not occur in the source context.")
                 sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")
                 sys.stdout.flush()
                 if request.get("command") == "shutdown":

@@ -267,10 +267,13 @@ internal static class RankerCalibrationBenchmark
                     continue;
                 }
 
+                // The worker finds its target in the line again, so it gets
+                // the lookup's anchor source, exactly as the hover sends it;
+                // the plan above keeps Source, as the hover's does.
                 System.Diagnostics.Stopwatch selectTimer = System.Diagnostics.Stopwatch.StartNew();
                 GlossBertDictionarySelection selection = await selector.SelectAsync(
                     benchmarkCase.Context,
-                    lookup.Source,
+                    lookup.AnchorSource,
                     benchmarkCase.CharacterIndex,
                     plan.GlossesFor(provider.Traits().EnrichedGlosses),
                     plan.CandidateGroupIds,

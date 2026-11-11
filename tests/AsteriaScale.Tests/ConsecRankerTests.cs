@@ -240,6 +240,57 @@ internal static class ConsecRankerTests
                 ["A", "state-of-the-art", "assay", "was", "re-run", "."]) &&
             resolved.TargetIndex == 1,
             "ConSeC did not preserve an explicitly selected hyphenated target.");
+
+        // A quote or dash glued to the target's edge is its own context token,
+        // even where ContextTokenPattern alone would join the run
+        // ("Wait—don't"); the target the lookup handed over stays whole.
+        (string Context, string Target, int Cursor, string[] Tokens, int TargetIndex)[] glued =
+        [
+            (
+                "She only told me 'don't go there' and left.",
+                "don't",
+                20,
+                ["She", "only", "told", "me", "'", "don't", "go", "there", "'", "and", "left", "."],
+                5
+            ),
+            (
+                "Wait—don't you see?",
+                "don't",
+                7,
+                ["Wait", "—", "don't", "you", "see", "?"],
+                2
+            ),
+            (
+                "The pitchers’ arms were sore.",
+                "pitchers",
+                6,
+                ["The", "pitchers", "’", "arms", "were", "sore", "."],
+                1
+            )
+        ];
+        List<string> failures = [];
+        foreach ((string gluedContext, string target, int cursor, string[] tokens, int targetIndex) in glued)
+        {
+            try
+            {
+                resolved = ConsecInputBuilder.ResolveContext(gluedContext, target, cursor);
+                if (!resolved.Tokens.SequenceEqual(tokens) ||
+                    resolved.TargetIndex != targetIndex)
+                {
+                    failures.Add(
+                        $"\"{gluedContext}\": [{string.Join(", ", resolved.Tokens)}] " +
+                        $"target {resolved.TargetIndex}");
+                }
+            }
+            catch (RankerException ex)
+            {
+                failures.Add($"\"{gluedContext}\": {ex.ErrorCode}");
+            }
+        }
+
+        Check(failures.Count == 0,
+            "ConSeC rejected or split a target with a glued quote or dash: " +
+            string.Join("; ", failures));
     }
 
     private static void VerifySequenceOverflowIsExplicit()

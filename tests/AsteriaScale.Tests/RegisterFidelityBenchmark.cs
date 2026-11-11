@@ -183,15 +183,18 @@ internal static class RegisterFidelityBenchmark
         }
         else
         {
+            // The window and the worker find the target in the line again, so
+            // they get the lookup's anchor source, exactly as the hover sends
+            // it; the plan above keeps Source, as the hover's does.
             TargetCenteredContext rankerContext = TargetCenteredContextBuilder.BuildForRanker(
                 benchmarkCase.Context,
-                lookup.Source,
+                lookup.AnchorSource,
                 benchmarkCase.CharacterIndex,
                 provider,
                 selector.CpuModelProfile);
             GlossBertDictionarySelection ranked = await selector.SelectAsync(
                 rankerContext.Text,
-                lookup.Source,
+                lookup.AnchorSource,
                 rankerContext.CharacterIndex,
                 plan.GlossesFor(provider.Traits().EnrichedGlosses),
                 plan.CandidateGroupIds,
