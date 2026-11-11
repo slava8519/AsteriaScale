@@ -215,13 +215,49 @@ import Testing
 
     @Test func wineIsKnownByItsLoaderOrCrossOver() {
         for path in ["/usr/local/bin/wine", "/opt/wine/bin/wine64", "/x/lib/wine/x86_64-unix/wineloader", Self.loader,
-                     "/x/WINE64-PRELOADER", "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart"] {
+                     "/x/WINE64-PRELOADER", "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart",
+                     Self.crossOverCopy, "/private/var/folders/x/T/winetemp-1-2-3-0/Steam", "/x/y/Setup.EXE"] {
             #expect(GameIdentity.isWine(path), "\(path)")
         }
         for path in ["/Applications/Vampire Crawlers.app/Contents/MacOS/VampireCrawlers", "/usr/bin/swine-dir/game",
-                     "/Applications/CrossOverlay.app/Contents/MacOS/CrossOverlay"] {
+                     "/Applications/CrossOverlay.app/Contents/MacOS/CrossOverlay", "/usr/local/bin/exe-runner",
+                     "/x/notwinetemp-1/game", "/x/game.exe.d/run"] {
             #expect(!GameIdentity.isWine(path), "\(path)")
         }
+    }
+
+    /// CrossOver 25.1.1's loader copy, as proc_pidpath names every process
+    /// of a bottle (measured, T29).
+    static let crossOverCopy = "/private/var/folders/c_/x/T/winetemp-544816-33792-1757665044-0/Game.exe"
+
+    /// The layout measured on CrossOver 25.1.1 (T29): the executable is the
+    /// loader copy, argc 2, argv[0] the game's Windows path as Wine
+    /// lower-cased its drive and folders, argv[1] empty, then the NULs of
+    /// Wine's rewrite before the environment. The game is the .exe in the
+    /// bottle, spelled as argv[0] spells it.
+    @Test func crossOverRunsTheGameFromALoaderCopy() throws {
+        let windowsPath = #"c:\program files (x86)\steam\steamapps\common\CHAOS;HEAD NOAH\Game.exe"#
+        let prefix = "/Users/x/Library/Application Support/CrossOver/Bottles/Steam"
+        var record: [UInt8] = [2, 0, 0, 0] + Array(Self.crossOverCopy.utf8) + [0, 0, 0, 0]
+        record += Array(windowsPath.utf8) + [0] + [UInt8](repeating: 0, count: 6)
+        for text in ["HOME=/Users/x", "WINEPREFIX=" + prefix] { record += Array(text.utf8) + [0] }
+        record.append(0)
+        let parsed = try #require(ProcessArguments.parse(record))
+        #expect(parsed.arguments.first == windowsPath && parsed.environmentValue("WINEPREFIX") == prefix)
+        let game = GameIdentity.game(executablePath: Self.crossOverCopy, processArguments: record, readLink: { _ in nil })
+        #expect(game == HoverGame(key: "path:" + prefix + "/drive_c/program files (x86)/steam/steamapps/common/CHAOS;HEAD NOAH/Game.exe",
+                                  displayName: "Game.exe"))
+        #expect(Self.coreHostAccepts(game))
+        // The full-screen bottle's window (layer 26, measured) is the game's,
+        // not CrossOver's own window at layer 0 behind it.
+        let windows = [GameIdentity.WindowRecord(ownerPid: 80, layer: 26, bounds: PointRect(x: 0, y: 0, width: 1920, height: 1080)),
+                       GameIdentity.WindowRecord(ownerPid: 20, layer: 20, bounds: PointRect(x: 0, y: 0, width: 1920, height: 1080)),
+                       GameIdentity.WindowRecord(ownerPid: 48, layer: 0, bounds: PointRect(x: 525, y: 309, width: 1215, height: 700))]
+        let paths: [Int32: String] = [80: Self.crossOverCopy, 20: "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock",
+                                      48: "/Applications/CrossOver.app/Contents/MacOS/CrossOver"]
+        let owner = GameIdentity.windowOwner(at: GlobalPoint(x: 733, y: 212), windows: windows, ownPid: 1,
+                                             primaryHeight: 1080, isWine: { paths[$0].map(GameIdentity.isWine) ?? false })
+        #expect(owner == 80)
     }
 
     /// A native program: `path:` its executable, named after its bundle.

@@ -170,13 +170,21 @@ public enum GameIdentity {
     }
 
     /// Whether `executablePath` is Wine's: a file whose name starts with
-    /// "wine" (wine, wine64, wineloader, wine64-preloader, …) or anything
-    /// inside CrossOver.app. Its own path names Wine, never the game, so it
-    /// is never a key; a native program whose name starts with "wine" is
-    /// taken for Wine too and gets a game only if its arguments name an .exe.
+    /// "wine" (wine, wine64, wineloader, wine64-preloader, …) or ends in
+    /// ".exe", anything inside CrossOver.app, or anything in a folder whose
+    /// name starts with "winetemp-". CrossOver 25.1.1 runs every process of
+    /// a bottle (Steam, its helpers and the game) from one copy of its
+    /// loader named after the first program, in $TMPDIR/winetemp-…/Game.exe
+    /// (measured with the owner's Steam bottle, 2026-11-11), so
+    /// proc_pidpath names neither "wine" nor CrossOver.app there; no macOS
+    /// program is an .exe. Its own path names Wine, never the game, so it
+    /// is never a key; a native program caught by these rules gets a game
+    /// only if its arguments name an .exe.
     public static func isWine(_ executablePath: String) -> Bool {
         let name = String(decoding: lastComponent(Array(executablePath.utf8)), as: UTF8.self).lowercased()
-        return name.hasPrefix("wine") || executablePath.lowercased().contains("/crossover.app/")
+        let lowered = executablePath.lowercased()
+        return name.hasPrefix("wine") || name.hasSuffix(".exe") || lowered.contains("/crossover.app/")
+            || lowered.hasPrefix("winetemp-") || lowered.contains("/winetemp-")
     }
 
     /// The game of the process with this executable (proc_pidpath's path).

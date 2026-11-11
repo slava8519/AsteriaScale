@@ -198,10 +198,13 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   as many environment entries into the arguments) and
   `GameIdentity` takes the frontmost window of another process under the
   cursor that is layer 0, or above it when its owner is Wine (a full-screen
-  bottle's level is unmeasured; any other window above 0 is passed over,
+  bottle measured at layer 26 on CrossOver 25.1.1; any other window above 0
+  is passed over,
   the desktop never taken), from the window list's owner pid, layer and
   bounds, and names `path:` its
-  executable, or for Wine (`wine*`, anything inside CrossOver.app) the Unix
+  executable, or for Wine (`wine*`, `*.exe`, anything inside CrossOver.app
+  or a `winetemp-*` folder, where CrossOver 25.1.1 runs every process of a
+  bottle from a loader copy named after the first program) the Unix
   path of the first fully qualified .exe in its arguments outside Wine's own
   programs, C: as `<WINEPREFIX>/drive_c` and other letters through the
   text of the link `<WINEPREFIX>/dosdevices/<x>:`, read with readlink and
