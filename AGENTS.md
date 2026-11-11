@@ -166,8 +166,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   SwiftPM's state under `.build/swiftpm-state`, failing on anything left
   behind.
 - `tools/macos/build-app.sh` — builds, assembles, signs (inside out, hardened
-  runtime, ad-hoc by default) and verifies `Asteria Scale.app`, and runs it
-  only in a throwaway home (`--self-test`, `--run-isolated`).
+  runtime, ad-hoc by default) and verifies `Asteria Scale.app`, runs it
+  only in a throwaway home (`--self-test`, `--run-isolated`) and installs a
+  verified copy in place (`--install [DIR]`, docs/MACOS.md T34). Both scripts
+  end with a report of the cache entries outside the run's home that are
+  newer than the run, whoever wrote them (T35).
 
 A macOS-motivated edit to a shared source goes under `#if !WINDOWS` or into an
 `#else` branch by default (the SDK defines `WINDOWS` only for the
@@ -330,8 +333,16 @@ processes are never touched), nothing may be newer than the run in the real
 `~/Library/Caches/org.swift.swiftpm`, `~/Library/org.swift.swiftpm` or
 `~/.swiftpm` (exit 12), and no new crash report of the run's processes may
 appear (exit 10, the G-crash listing above); exit 3 is a failed CoreHost
-build, 2 a usage error or missing Command Line Tools frameworks, any other
-code `swift test`'s own.
+build, 2 a usage error, missing Command Line Tools frameworks or a
+crash-report folder that cannot be listed, any other code `swift test`'s
+own. It then prints, as a report and never a failure
+(docs/MACOS.md T35), the entries of `getconf DARWIN_USER_CACHE_DIR` (to
+depth 2) and of the real `~/Library/Caches/com.apple.e5rt.e5bundlecache`
+(to depth 3) newer than the run's start, whoever wrote them, at most 40
+lines per folder (also when the run stops after its builds started: its
+EXIT trap prints it and removes the marker): that cache folder belongs to
+the account, not to `HOME`, so no throwaway home covers it. List new
+entries in your report; never delete them (removal is the owner's).
 
 Build the app and run its self-test only through the script; read the
 owner's ConSeC bundle in place, never copy it:
@@ -389,22 +400,52 @@ only inside the app self-test's throwaway home; the Swift suite and the
 macOS subset use synthetic observations (T26). Agents sign ad hoc only: the
 owner's Apple Development identity (`--sign`, `ASTERIA_SIGN_IDENTITY`, M16)
 is for the owner's builds, and using it can raise a keychain dialog, so pass
-`--sign -` whenever `ASTERIA_SIGN_IDENTITY` is set. `build-app.sh --install`
-(T34) goes only into a folder inside `mktemp -d`; its default
-`~/Applications` is the owner's. Exit 4 is a
+`--sign -` whenever `ASTERIA_SIGN_IDENTITY` is set. `build-app.sh --install
+DIR` (T34) goes only into a folder inside `mktemp -d`, always with an
+explicit DIR and in a full build with its own `--output` (`--sign` does
+nothing with `--no-build`, whose copy keeps the bundle's signature), and
+never combines with `--run-isolated`. Without DIR it means `~/Applications`,
+the owner's alone, and it refuses (exit 2) to go there with the identity
+`-`, so an unquoted empty `$dir` never reaches it. It installs only after
+every check of the run passed (with `--self-test`, after the self-test),
+copies with `ditto` into a temporary `DIR/.asteria-install.*`, compares the
+bytes, verifies the copy with `codesign`, re-checks the target and swaps it
+in with one atomic `renamex_np` (the earlier copy of this app found before
+the build is replaced in place), verifies the installed copy and prints its
+two `codesign` lines; it never launches the copy and never calls
+`lsregister`. Before anything is created it refuses (exit 2) a DIR in a
+File Provider domain or with the other `--output` path faults, a DIR that
+is or lies in the output folder (or holds the output in its bundle), a
+`DIR/Asteria Scale.app` that is a link, a file, a bundle of another id (a
+foreign bundle is never replaced) or stored under another spelling, and any
+process running from it, found by the executable path the kernel reports
+(`proc_pidpath`, however the copy was started, compared ignoring case) and
+by `pgrep -i -f`. At the swap (exit 7) it refuses a process that started
+from the target during the run and a target that appeared, went or changed
+since the check before the build; a failed mkdir, copy, comparison or
+rename is exit 8, all three with nothing replaced. From that late re-check
+to the end of the run INT and TERM are ignored, so the install completes
+or is undone; a ^C or `kill -TERM` before it ends the run with 130 or 143
+and nothing replaced. The crash reports are listed again after the install
+(exit 10, the install stands). A fake running copy in a check is a copy of
+`AsteriaTestSleeper`. Like `test-swift.sh`, it ends with the T35 cache
+report (also printed when the run stops early). Exit 4 is a
 failed build or a warning (from `swift build` or either `dotnet publish`,
 which runs at `-v minimal` so MSBuild prints its warnings), 5 signing or
 verification (on codesign's "detritus" or "Disallowed xattr" it also names
 the extended attributes on the bundle and marks the likely culprits), 6 a
 failed self-test, 9 a file left in the run's cwd, 10 a new crash report (the
-G-crash listing) or a listing that fails after the build, 11 a process left
+G-crash listing, also after the install) or a listing that fails after the
+build, 11 a process left
 running (killed when the run started it, only listed otherwise), 12 a new
-entry in the real `~/Library` named after the app or SwiftPM, 2 a usage
-error, an `--output` inside a File Provider domain (or with `.` or `..` in
-its missing part, or a file or a link to no folder on its way), a
-`TMPDIR` inside the clone, a bad `--home`, `--no-build` without a bundle,
-an unreadable crash-report folder or a process already running from the
-bundle. Every exit 2 comes before the output folder is
+entry in the real `~/Library` named after the app or SwiftPM, 7 and 8 the
+`--install` failures above, 2 a usage error, an `--output` or `--install`
+DIR inside a File Provider domain (or with `.` or `..` in its missing part,
+or a file or a link to no folder on its way), a `TMPDIR` inside the clone,
+a bad `--home`, `--no-build` without a bundle, an unreadable crash-report
+folder, a process already running from the bundle, `--install` without DIR
+with the identity `-` or an install target refused above. Every exit 2
+comes before the output folder is
 created, so none leaves it behind, not even empty: the script has built,
 created, replaced and killed nothing, and an owner's running copy keeps its
 bundle and its CoreHost.

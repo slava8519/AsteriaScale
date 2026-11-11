@@ -39,6 +39,23 @@
 #     appends them to its own sleeps. The leftover check afterwards matches
 #     only those and the work folder W, so two runs at once (another clone,
 #     an export) never kill each other's processes.
+#  6. Report only (docs/MACOS.md T35), never a failure and never a
+#     deletion: the entries of $(getconf DARWIN_USER_CACHE_DIR) (to depth 2)
+#     and of the real ~/Library/Caches/com.apple.e5rt.e5bundlecache (to
+#     depth 3) newer than the run's marker (the one the check of SwiftPM's
+#     state in the real home uses), at most 40 lines per folder plus how
+#     many were left out, "none" when there are none; a missing or
+#     unreadable folder is a printed note. The user cache folder is per
+#     account, not per HOME, so the throwaway home does not cover it, and
+#     other processes write there all the time: depth 2 names the writer
+#     and the kind of cache, deeper levels are per-file churn. A folder's
+#     mtime changes only when an entry directly in it is added, removed or
+#     renamed, so a rewrite below the listed depth does not show. Any
+#     process may have written what it lists. Printed once in every run
+#     that reached its swift builds, whatever they found: after the checks,
+#     or by the EXIT trap when the run stopped earlier (a crash-report
+#     listing that failed after the run, a failed --show-bin-path, ^C); not
+#     after an exit 2 or 3 before them. The marker goes on every exit.
 #
 # With the Command Line Tools, plain `swift test` fails with "no such module
 # 'Testing'": the CLT keep Testing.framework and lib_TestingInterop.dylib
@@ -55,8 +72,9 @@
 #
 # Exit codes:
 #   0   build and suite passed, nothing left behind
-#   2   usage error, not Apple Silicon macOS, no Testing.framework, or the
-#       work folder would lie inside the clone
+#   2   usage error, not Apple Silicon macOS, no Testing.framework, the
+#       work folder would lie inside the clone, or the crash reports could
+#       not be listed (before or after the run)
 #   3   the CoreHost build or its version query failed
 #   4   a Swift build failed or printed a warning
 #   9   the run left an entry in W/test outside the rules above
@@ -141,9 +159,61 @@ state_flags=(--package-path "$pkg" --cache-path "$state/cache" --config-path "$s
 crashes_before=$(crash_reports)
 echo "test-swift: crash reports of the checks' processes in $reports: $(count_lines "$crashes_before")"
 
+# Step 6: a report, never a failure and never a deletion.
+cache_report_folder() {
+    local folder=$1 depth=$2 listing total limit=40
+    if [[ ! -e $folder ]]; then
+        echo "  $folder: missing, nothing to list"
+        return 0
+    fi
+    if [[ ! -d $folder || ! -r $folder || ! -x $folder ]]; then
+        echo "  $folder: not a readable folder, not listed"
+        return 0
+    fi
+    # Subfolders other processes keep private (sandbox containers) are
+    # skipped silently; find then exits 1, which says nothing about the rest.
+    listing=$(cd "$folder" && find . -mindepth 1 -maxdepth "$depth" -newer "$swiftpm_marker" 2>/dev/null |
+        sed 's|^\./||' | LC_ALL=C sort) || true
+    total=$(count_lines "$listing")
+    if [[ $total -eq 0 ]]; then
+        echo "  $folder (depth $depth): none"
+        return 0
+    fi
+    echo "  $folder (depth $depth): $total"
+    head -n "$limit" <<<"$listing" | sed 's/^/    /'
+    if [[ $total -gt $limit ]]; then echo "    ... and $((total - limit)) more, not shown"; fi
+    return 0
+}
+cache_reported=0
+cache_report() {
+    local user_cache
+    user_cache=$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null) || user_cache=""
+    echo "test-swift: caches newer than this run's start (docs/MACOS.md T35; a report, not a failure; removal is" \
+        "the owner's):"
+    if [[ -n $user_cache ]]; then
+        cache_report_folder "${user_cache%/}" 2
+    else
+        echo "  getconf DARWIN_USER_CACHE_DIR printed nothing, not listed"
+    fi
+    cache_report_folder "$real_home/Library/Caches/com.apple.e5rt.e5bundlecache" 3
+    cache_reported=1
+}
+
 # SwiftPM's state in the real home is compared by modification time.
 swiftpm_marker=$(mktemp "${TMPDIR:-/tmp}/asteria-swiftpm-marker.XXXXXX")
 swiftpm_homes=("$real_home/Library/Caches/org.swift.swiftpm" "$real_home/Library/org.swift.swiftpm" "$real_home/.swiftpm")
+# The marker goes on every exit, and a run that reached its swift builds
+# prints the report (step 6) once, here when it stopped before the end (a
+# crash listing that failed after the run, a failed --show-bin-path, ^C).
+# INT and TERM are ignored inside, and every command ends in "|| true", so
+# the trap neither stops halfway nor changes the exit status.
+reached_builds=0
+on_exit() {
+    trap '' INT TERM
+    if [[ $reached_builds -eq 1 && $cache_reported -eq 0 ]]; then cache_report || true; fi
+    rm -f "$swiftpm_marker" || true
+}
+trap on_exit EXIT
 
 echo "test-swift: dotnet build $corehost_project -c Release"
 # --disable-build-servers: no MSBuild node or VBCSCompiler outlives the run.
@@ -186,6 +256,7 @@ isolated() {
 
 status=0
 build_log="$work/build.log"
+reached_builds=1
 for build in release tests; do
     if [[ $build == release ]]; then
         args=(swift build -c release "${state_flags[@]}")
@@ -273,7 +344,6 @@ for folder in "${swiftpm_homes[@]}"; do
         while IFS= read -r path; do new_state+=("$path"); done < <(find "$folder" -newer "$swiftpm_marker" 2>/dev/null)
     fi
 done
-rm -f "$swiftpm_marker"
 if [[ ${#new_state[@]} -gt 0 ]]; then
     echo "test-swift: SwiftPM wrote into the real home:" >&2
     printf '  %s\n' "${new_state[@]}" >&2
@@ -291,6 +361,10 @@ if [[ -n $crashes_new ]]; then
     sed 's/^/  /' <<<"$crashes_new" >&2
     [[ $status -eq 0 ]] && status=10
 fi
+
+# Step 6: a report, never a failure and never a deletion.
+cache_report
+rm -f "$swiftpm_marker"
 
 if [[ $status -eq 0 && $keep -eq 0 ]]; then
     rm -rf "$work"

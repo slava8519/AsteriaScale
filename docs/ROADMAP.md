@@ -1814,10 +1814,12 @@ Silicon)».
   с `CaptureDisplaysForFullscreen` его меряют в 20.3–20.4 (Q3), а до того его
   можно поднять ключом `"overlayLevel": "shielding"` в `macos-app.json`
   (DEVELOPMENT.md, «Оверлей»).
-- **Постоянная подпись (M13, T15).** В 20.2 подпись ad-hoc: designated
-  requirement — cdhash, и он меняется с каждой сборкой. Постоянная подпись и
-  `build-app.sh --install` выбираются до первого разрешения «Запись экрана»
-  в 20.3.
+- **Постоянная подпись (M13, T15).** Решено в 20.3: в 20.2 подпись ad-hoc
+  (designated requirement — cdhash, и он меняется с каждой сборкой); сборки
+  владельца подписывает сертификат Apple Development (M16), а
+  `build-app.sh --install` реализован по T34. Сохраняется ли разрешение
+  «Запись экрана» после пересборки и `--install`, проверяет владелец (DoD
+  20.3, пункты 12.1–12.2).
 - **Клон в домене File Provider (10 ноября 2026).** В `~/Documents` даже под
   `.nosync` новая папка `.app` получает `com.apple.FinderInfo`, и подпись с
   `--output` по умолчанию падала (код `5`); теперь `build-app.sh` отказывает
