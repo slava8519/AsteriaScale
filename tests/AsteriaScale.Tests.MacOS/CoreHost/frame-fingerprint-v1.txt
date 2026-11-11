@@ -1,0 +1,25 @@
+# Pinned frame fingerprints (docs/MACOS.md T27), read by the macOS CoreHost
+# protocol check; the Swift FrameFingerprint test that comes with the app's
+# screen capture is to read it too.
+#
+# A frame's fingerprint is OcrTextRules.ComputeFrameFingerprint of its pixel
+# bytes (the intended layout, from the 20.3 design, is the one
+# WindowsAiOcrService.ReadBgraPixels reads: dense BGRA rows, top to bottom,
+# 4 bytes per pixel, no row padding): the SHA-256 of the bytes, its first 8
+# bytes read as a little-endian ulong. On the wire (an observation's
+# fingerprint, source.cachedFingerprint, ocr.plan's cachedFingerprint) that
+# ulong is written as exactly 16 lowercase hex digits, ToString("x16"), so the
+# digits are the first 8 digest bytes in reverse order: the empty input's
+# digest starts e3b0c44298fc1c14, its fingerprint is 141cfc9842c4b0e3.
+#
+# Each line: <name> <byte count> <rule> <fingerprint>, separated by one space.
+# The rule gives byte i of the input (i counts from 0):
+#   zero    0
+#   ramp    i mod 256
+#   opaque  0, 0, 0, 255 repeated (opaque black BGRA pixels; the count is a multiple of 4)
+#   mix     (i * 31 + 7) mod 251
+empty 0 zero 141cfc9842c4b0e3
+ramp-4x2 32 ramp 6633c46629cd0d63
+mix-30x30 3600 mix 05739dfdc03be9b1
+opaque-900x340 1224000 opaque d5d6759b13904da2
+mix-2400x720 6912000 mix b2379c75f11b21ff

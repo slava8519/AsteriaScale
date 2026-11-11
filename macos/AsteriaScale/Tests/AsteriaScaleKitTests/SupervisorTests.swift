@@ -301,6 +301,31 @@ extension ProcessSuites {
             #expect(error.code == "hover_disabled" && error.message == "Перевод текста выключен — включите его в меню.")
             await supervisor.stop()
         }
+
+        /// CoreHost sends hover.loading only for an observations hover; the
+        /// fake also sends it before a selection hover on "loading", and the
+        /// selection client, which has no use for it yet, passes it over.
+        @Test func eventItDoesNotUseLeavesASelectionHoverIntact() async throws {
+            let scratch = try Scratch("loading")
+            defer { scratch.remove() }
+            let supervisor = CoreSupervisor(Fake.config("normal", scratch))
+            await supervisor.start()
+            let hover = HoverClient(supervisor: supervisor)
+            let updates = Box<[HoverUpdate]>([])
+            let outcome = await hover.resolve(try DiagnosticSelection.parse("a [loading] card"),
+                                              onUpdate: { update in updates.mutate { $0.append(update) } })
+            #expect(outcome == .completed)
+            guard updates.get.count == 2, case .primary(let primary) = updates.get[0], case .phrase = updates.get[1] else {
+                Issue.record("expected primary then phrase, got \(updates.get)")
+                await supervisor.stop()
+                return
+            }
+            #expect(primary.source == "loading")
+            let connection = try #require(await supervisor.connection)
+            let counters = await connection.counters
+            #expect(counters.eventsDelivered == 3 && counters.eventsDropped == 0, "hover.loading reached the request")
+            await supervisor.stop()
+        }
     }
 
     /// The CoreHost tools/macos/test-swift.sh builds, launched exactly as the

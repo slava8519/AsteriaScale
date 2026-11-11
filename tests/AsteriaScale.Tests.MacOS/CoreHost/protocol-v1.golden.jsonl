@@ -1,21 +1,21 @@
 {"version":1,"id":1,"command":"core.ping"}
 {"version":1,"id":1,"ok":false,"error":{"code":"hello_required","message":"Служба перевода ещё не начала сеанс.","detail":"core.hello must be the first request"}}
 {"version":1,"id":2,"command":"core.hello","payload":{"client":"golden","protocolMin":1,"protocolMax":1}}
-{"version":1,"id":2,"ok":true,"result":{"protocol":1,"coreHostVersion":"0.0.0","coreVersion":"0.0.0","build":"golden","runtime":".NET","aot":false,"pid":4242,"pgid":4242,"processGroupLeader":true,"platform":"macos","testCommands":true,"blockedSignals":[],"paths":{"dataRoot":"/golden/data-root","userData":"/golden/user-data","logDir":"/golden/logs"},"capabilities":{"hoverModes":["dictionary","smart"],"hoverSources":["selection"],"senseProviders":["cpu"],"senseModels":["glossbert","consec"],"phraseBackends":[],"phraseVariants":[]}}}
+{"version":1,"id":2,"ok":true,"result":{"protocol":1,"coreHostVersion":"0.0.0","coreVersion":"0.0.0","build":"golden","runtime":".NET","aot":false,"pid":4242,"pgid":4242,"processGroupLeader":true,"platform":"macos","testCommands":true,"blockedSignals":[],"paths":{"dataRoot":"/golden/data-root","userData":"/golden/user-data","logDir":"/golden/logs"},"capabilities":{"hoverModes":["dictionary","smart"],"hoverSources":["selection","observations"],"senseProviders":["cpu"],"senseModels":["glossbert","consec"],"phraseBackends":[],"phraseVariants":[]}}}
 {"version":1,"id":3,"command":"core.ping"}
 {"version":1,"id":3,"ok":true,"result":{"uptimeMs":0,"outstanding":0,"gcHeapBytes":0,"workingSetBytes":0}}
 {"version":1,"id":4,"command":"no.such"}
 {"version":1,"id":4,"ok":false,"error":{"code":"unknown_command","message":"Служба перевода не знает такой команды.","detail":"no.such"}}
-{"version":1,"id":5,"command":"ocr.select"}
-{"version":1,"id":5,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"ocr.select is reserved for 20.3"}}
+{"version":1,"id":5,"command":"ocr.select","payload":{"mode":"dictionary","source":{"kind":"observations","display":{"id":1,"width":1200,"height":400},"captureBounds":{"x":0,"y":0,"width":1200,"height":400},"cursor":{"x":420,"y":165},"observations":[{"fingerprint":"0123456789abcdef","lines":[{"text":"He sat on the bank of the river.","confidence":1,"words":[{"text":"He","left":100,"top":150,"right":140,"bottom":180},{"text":"sat","left":160,"top":150,"right":220,"bottom":180},{"text":"on","left":240,"top":150,"right":280,"bottom":180},{"text":"the","left":300,"top":150,"right":360,"bottom":180},{"text":"bank","left":380,"top":150,"right":460,"bottom":180},{"text":"of","left":480,"top":150,"right":520,"bottom":180},{"text":"the","left":540,"top":150,"right":600,"bottom":180},{"text":"river.","left":620,"top":150,"right":740,"bottom":180}]}]}]}}}
+{"version":1,"id":5,"ok":true,"result":{"selection":{"text":"He sat on the bank of the river.","hoveredWord":"bank","characterIndex":16,"sentenceStable":true},"lines":["He sat on the bank of the river."]}}
 {"version":1,"id":6,"command":"models.install"}
 {"version":1,"id":6,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"models.install is reserved for 20.5"}}
 {"version":1,"id":7,"command":"models.verify"}
 {"version":1,"id":7,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"models.verify is reserved for 20.5"}}
 {"version":1,"id":8,"command":"phrase.variants"}
 {"version":1,"id":8,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"phrase.variants is reserved for 20.5"}}
-{"version":1,"id":9,"command":"hover.resolve","payload":{"source":{"kind":"observations"}}}
-{"version":1,"id":9,"ok":false,"error":{"code":"not_implemented","message":"Эта возможность пока недоступна.","detail":"hover.resolve source.kind observations is reserved for 20.3"}}
+{"version":1,"id":9,"command":"hover.resolve","payload":{"mode":"dictionary","source":{"kind":"observations","display":{"id":1,"width":1200,"height":400},"captureBounds":{"x":0,"y":0,"width":1200,"height":400},"cursor":{"x":420,"y":165},"observations":[{"fingerprint":"0123456789abcdef","lines":[{"text":"bank","confidence":1,"words":[{"text":"bank","left":380,"top":150,"right":460,"bottom":180}]}]}]}}}
+{"version":1,"id":9,"ok":false,"error":{"code":"not_ready","message":"Служба перевода ещё не готова.","detail":"the hover engine is not ready"}}
 {"version":1,"id":10,"command":"hover.resolve","payload":{"source":{"kind":"selection","text":"He sat on the bank of the river.","hoveredWord":"bank","characterIndex":14}}}
 {"version":1,"id":10,"ok":false,"error":{"code":"not_ready","message":"Служба перевода ещё не готова.","detail":"the hover engine is not ready"}}
 {"version":1,"id":11,"command":"request.cancel","payload":{"target":3,"reason":"x"}}

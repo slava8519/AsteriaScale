@@ -22,8 +22,8 @@ internal sealed partial class CoreSession
     // gate before its task ends, and writes its changed copy before Core
     // changes at all, so a failed write leaves Core (the speaker genders
     // included), the revision and the view as they were. The tail never
-    // faults, so a hover, warm-up or unload can wait for it whatever the
-    // change before it did.
+    // faults, so a hover, capture plan, warm-up or unload can wait for it
+    // whatever the change before it did.
     private readonly SemaphoreSlim _settingsGate = new(1, 1);
     private readonly object _applyLock = new();
     private readonly object _recentLock = new();
@@ -167,9 +167,7 @@ internal sealed partial class CoreSession
             };
             SpeakerGameIdentity game = new(payload.Game.Key, payload.Game.DisplayName);
             string observedName = SpeakerGenderPreferences.NormalizeSpeakerName(payload.ObservedName);
-            // Resolve only normalizes the game key here (Core keeps that
-            // normalization private); its name is not used.
-            string gameKey = SpeakerGenderPreferences.Resolve(_settings, game, observedName).GameKey;
+            (string gameKey, bool stableKey) = NormalizeGameKey(game.GameKey, game.DisplayName);
             if (gameKey.Length == 0 || observedName.Length == 0 ||
                 SpeakerGenderPreferences.NormalizeSpeakerName(payload.Name).Length == 0)
             {
@@ -179,14 +177,11 @@ internal sealed partial class CoreSession
             }
 
             // Core normalizes a stored game key again on every pass, and some
-            // keys change on the second one (process:x.exe.exe loses one
-            // ".exe" per pass; a quoted path: key ending in a space loses the
-            // space). Such a key never resolves, and Core's own call after
-            // the swap would add the choice to the live list again and queue
-            // a save of its own, so it is refused like a key Core drops.
-            string storedKey = SpeakerGenderPreferences.Resolve(
-                _settings, new SpeakerGameIdentity(gameKey, game.DisplayName), observedName).GameKey;
-            if (!string.Equals(storedKey, gameKey, StringComparison.Ordinal))
+            // keys change on the second one (NormalizeGameKey). Such a key
+            // never resolves, and Core's own call after the swap would add
+            // the choice to the live list again and queue a save of its own,
+            // so it is refused like a key Core drops.
+            if (!stableKey)
             {
                 throw new RequestErrorException(Errors.BadRequest(
                     $"game.key must keep its normalized form when normalized again, got '{payload.Game.Key}'"));

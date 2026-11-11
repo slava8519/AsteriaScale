@@ -92,16 +92,25 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   commands exist only with `--enable-test-commands`. After `core.init` it
   serves hovers, settings, model status, history, «Мой словарь» and speaker
   genders through Core's `HoverCoordinator` (Apple Vision labels, no phrase
-  model before 20.5); it is the only writer of `settings.json`, writes the
-  macOS first-run settings (ConSeC on the CPU, docs/MACOS.md T7) instead of
-  changing the shared `AppSettings` defaults, and shows a sense-ranker error
-  as Russian text naming the code (`Host/RankerErrorText.cs`; paths only in
-  `detail`). A settings change (`settings.update`, `speaker.set`) joins
-  Core's settings queue when it is admitted, on the reader thread, never from
-  its pool work, so a hover, warm-up, unload or change admitted after it sees
-  it however late the pool runs; the Core-backed check pins this with the
-  test command `test.delayNextWork`. Both changes write a changed copy of
-  the settings first and reach Core only after the write succeeded:
+  model before 20.5). A hover's text is the app's selection or its Apple
+  Vision observations, which CoreHost selects in with Core's `OcrGeometry`
+  and `OcrTextRules` (`ocr.plan` gives the capture bounds; the one-entry
+  frame cache and the copy of `ExtractRecognition`'s filters stay in
+  CoreHost, docs/MACOS.md T27 and T28, and a CoreHost check fails when that
+  method or the 900x340 dictionary capture changes in
+  `WindowsAiOcrService`); `ocr.select` is the same selection without state and
+  needs only `core.hello`, and `frame-fingerprint-v1.txt` beside the golden
+  pins the frame fingerprint's wire form. It is the only writer of
+  `settings.json`, writes the macOS first-run settings (ConSeC on the CPU,
+  docs/MACOS.md T7) instead of changing the shared `AppSettings` defaults,
+  and shows a sense-ranker error as Russian text naming the code
+  (`Host/RankerErrorText.cs`; paths only in `detail`). A settings change
+  (`settings.update`, `speaker.set`) joins Core's settings queue when it is
+  admitted, on the reader thread, never from its pool work, so a hover,
+  `ocr.plan`, warm-up, unload or change admitted after it sees it however
+  late the pool runs; the Core-backed check pins this with the test command
+  `test.delayNextWork`. Both changes write a changed copy of the settings
+  first and reach Core only after the write succeeded:
   `speaker.set` changes a copied speaker list by Core's alias rule (mirrored
   in `StoreSpeakerGender`) and refuses a `game.key` whose normalization
   changes again on a second pass, so Core's own `SaveSpeakerGender` after

@@ -2,8 +2,18 @@ using AsteriaScale.CoreHost.Protocol;
 
 namespace AsteriaScale.CoreHost.Host;
 
-/// <summary>One validated hover.resolve request as an engine sees it.</summary>
-internal sealed record HoverJob(long Id, string? Mode, SelectionSource Source, GameIdentity? Game);
+/// <summary>
+/// One validated hover.resolve request as an engine sees it: exactly one of
+/// <paramref name="Selection"/> (text the app read itself) and
+/// <paramref name="Observations"/> (what Apple Vision read in the app's
+/// captures) is set.
+/// </summary>
+internal sealed record HoverJob(
+    long Id,
+    string? Mode,
+    SelectionSource? Selection,
+    ObservationsSource? Observations,
+    GameIdentity? Game);
 
 /// <summary>
 /// Where an engine posts the cards of one hover. Posting never blocks, and a
@@ -12,6 +22,9 @@ internal sealed record HoverJob(long Id, string? Mode, SelectionSource Source, G
 /// </summary>
 internal interface IHoverEvents
 {
+    /// <summary>hover.loading, only for an observations hover, before its primary card.</summary>
+    void Loading(HoverLoadingEvent card);
+
     void Primary(HoverPrimaryEvent card);
 
     void Phrase(HoverPhraseEvent line);
@@ -24,8 +37,8 @@ internal interface IHoverEvents
 /// previous call returned, which is what Core's ModelActivityGate expects.
 /// Returns the wire outcome (completed, empty or failed); throwing
 /// OperationCanceledException means the hover was cancelled, a
-/// RequestErrorException is answered as that error (hover_disabled), and any
-/// other exception is a failed hover, never a dead host.
+/// RequestErrorException is answered as that error (hover_disabled,
+/// stale_frame), and any other exception is a failed hover, never a dead host.
 /// </summary>
 internal interface IHoverEngine : IAsyncDisposable
 {

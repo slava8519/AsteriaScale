@@ -11,7 +11,11 @@ using System.Text.RegularExpressions;
 /// the four cancel outcomes, the ordering guarantees G1-G4, busy at 32
 /// outstanding requests, written = terminals, and the golden transcript
 /// byte for byte with volatile fields normalized. Hovers run against the
-/// fake hover engine of the test commands, so no Core data is read.
+/// fake hover engine of the test commands, so no Core data is read. The
+/// Apple Vision observations without Core (ocr.select, the decoder, schema
+/// refusals, the guards of what CoreHost copies from WindowsAiOcrService and
+/// the pinned frame fingerprints) are CoreHostObservationTests' stateless
+/// part.
 /// </summary>
 internal static class CoreHostProtocolTests
 {
@@ -20,6 +24,8 @@ internal static class CoreHostProtocolTests
 
     public static async Task RunAsync(string tempRoot)
     {
+        CoreHostObservationTests.VerifyWindowsCopies();
+        CoreHostObservationTests.VerifyFrameFingerprintFixture();
         await VerifyLaunchArgumentsAsync(tempRoot);
         await VerifyRequestsAsync(tempRoot);
         await VerifyGoldenTranscriptAsync(tempRoot);
@@ -212,7 +218,7 @@ internal static class CoreHostProtocolTests
         JsonObject capabilities = hello["capabilities"]!.AsObject();
         CoreHostFixtures.Check(
             capabilities["senseProviders"]!.ToJsonString() == "[\"cpu\"]" &&
-            capabilities["hoverSources"]!.ToJsonString() == "[\"selection\"]" &&
+            capabilities["hoverSources"]!.ToJsonString() == "[\"selection\",\"observations\"]" &&
             capabilities["phraseBackends"]!.ToJsonString() == "[]",
             "hello lists capabilities this platform cannot run (rule 3): " + capabilities.ToJsonString());
         await client.ErrorAsync(client.Send("core.hello", CoreHostFixtures.Payload(
@@ -222,7 +228,6 @@ internal static class CoreHostProtocolTests
         await client.ErrorAsync(client.Send("no.such"), "unknown_command");
         foreach ((string command, string stage) in new[]
                  {
-                     ("ocr.select", "20.3"),
                      ("models.install", "20.5"),
                      ("models.verify", "20.5"),
                      ("phrase.variants", "20.5"),
@@ -233,10 +238,10 @@ internal static class CoreHostProtocolTests
                 $"{command} does not name its stage {stage}: {error.ToJsonString()}");
         }
 
-        JsonObject observations = await client.ErrorAsync(client.Send("hover.resolve", CoreHostFixtures.Payload(
-            ("source", CoreHostFixtures.Payload(("kind", "observations"), ("boxes", new JsonArray()))))), "not_implemented");
-        CoreHostFixtures.Check(observations["detail"]!.GetValue<string>().EndsWith("20.3", StringComparison.Ordinal),
-            "An observations hover does not name stage 20.3.");
+        // An observations source has its own strict type.
+        await client.ErrorAsync(client.Send("hover.resolve", CoreHostFixtures.Payload(
+            ("mode", "smart"),
+            ("source", CoreHostFixtures.Payload(("kind", "observations"), ("boxes", new JsonArray()))))), "bad_request");
         await client.ErrorAsync(client.Send("hover.resolve", Hover("bank")), "not_ready");
 
         // Unmapped, missing, mistyped and null members are request errors.
@@ -257,6 +262,7 @@ internal static class CoreHostProtocolTests
         JsonObject outside = Hover("bank");
         outside["source"]!["characterIndex"] = Sentence.Length + 1;
         await client.ErrorAsync(client.Send("hover.resolve", outside), "bad_request");
+        await CoreHostObservationTests.VerifyStatelessAsync(client);
 
         await VerifyCancelAsync(client);
         await VerifyEventsAsync(client);
@@ -387,10 +393,20 @@ internal static class CoreHostProtocolTests
                 frame["payload"]!["code"]?.GetValue<string>() == "hover_failed"),
             "A failing hover emitted no hover status.");
         await client.ResultAsync(client.Send("core.ping"));
+        await CoreHostObservationTests.VerifyFakeEngineAsync(client);
     }
 
     private static async Task VerifyBusyAsync(CoreHostClient client)
     {
+        // ocr.select needs no core.init but runs on the work lane, so it is
+        // counted: held back on the pool, it is the one outstanding request.
+        await client.ResultAsync(client.Send("test.delayNextWork", CoreHostFixtures.Payload(("ms", 1_000))));
+        CoreHostClient.Pending held = client.Send("ocr.select", CoreHostObservationTests.SelectPayload());
+        JsonObject during = await client.ResultAsync(client.Send("core.ping"));
+        CoreHostFixtures.Check(during["outstanding"]!.GetValue<int>() == 1 && !held.Terminal.Task.IsCompleted,
+            "A held-back ocr.select is not the one outstanding request: " + during.ToJsonString());
+        await client.ResultAsync(held);
+
         List<CoreHostClient.Pending> sleeping = [];
         for (int index = 0; index < 32; index++)
         {
@@ -398,6 +414,8 @@ internal static class CoreHostProtocolTests
         }
 
         await client.ErrorAsync(client.Send("test.sleep", CoreHostFixtures.Payload(("ms", 1))), "busy");
+        // At the limit ocr.select is refused like any other work.
+        await client.ErrorAsync(client.Send("ocr.select", CoreHostObservationTests.SelectPayload()), "busy");
         // The control lane is not counted: ping and cancel still work.
         JsonObject ping = await client.ResultAsync(client.Send("core.ping"));
         CoreHostFixtures.Check(ping["outstanding"]!.GetValue<int>() == 32,

@@ -65,6 +65,11 @@ internal static class ErrorCodes
     public const string InvalidEntry = "invalid_entry";
     public const string IoError = "io_error";
 
+    // Request-level terminal of an observations hover with zero observations
+    // whose frame CoreHost no longer holds; the app retries once with full
+    // observations and shows nothing.
+    public const string StaleFrame = "stale_frame";
+
     // Lifecycle faults.
     public const string ShutdownTimeout = "shutdown_timeout";
     public const string HoverFailed = "hover_failed";
@@ -167,6 +172,129 @@ internal sealed class GameIdentity
 {
     [JsonRequired] public string Key { get; set; } = "";
     [JsonRequired] public string DisplayName { get; set; } = "";
+}
+
+// ---- Apple Vision observations (20.3) -------------------------------------
+//
+// Units (docs/MACOS.md T18): display, cursor and captureBounds are whole
+// pixels of the display under the cursor, origin at its top-left corner, y
+// down; word boxes are pixels of the captured frame, which is captureBounds
+// 1:1, origin at the frame's top-left corner, y down. A fingerprint is the
+// 64-bit value of OcrTextRules.ComputeFrameFingerprint (the first 8 bytes of
+// the SHA-256 of the frame's pixels read little-endian) written as exactly 16
+// lowercase hex digits of that ulong (ToString("x16")): a JSON number cannot
+// hold a ulong. tests/AsteriaScale.Tests.MacOS/CoreHost/frame-fingerprint-v1.txt
+// pins it for given bytes.
+
+/// <summary>hover.resolve with source.kind observations; mode is required.</summary>
+internal sealed class HoverObservationsPayload
+{
+    public string? Mode { get; set; }
+    [JsonRequired] public ObservationsSource Source { get; set; } = new();
+    public GameIdentity? Game { get; set; }
+}
+
+internal sealed class ObservationsSource
+{
+    [JsonRequired] public string Kind { get; set; } = "";
+    [JsonRequired] public DisplayInfo Display { get; set; } = new();
+    [JsonRequired] public PixelRectangle CaptureBounds { get; set; } = new();
+    [JsonRequired] public PixelPoint Cursor { get; set; } = new();
+    [JsonRequired] public ObservedFrame[] Observations { get; set; } = [];
+    public string? CachedFingerprint { get; set; }
+}
+
+internal sealed class DisplayInfo
+{
+    // CGDirectDisplayID, 0..4294967295.
+    [JsonRequired] public long Id { get; set; }
+    [JsonRequired] public int Width { get; set; }
+    [JsonRequired] public int Height { get; set; }
+}
+
+internal sealed class PixelRectangle
+{
+    [JsonRequired] public int X { get; set; }
+    [JsonRequired] public int Y { get; set; }
+    [JsonRequired] public int Width { get; set; }
+    [JsonRequired] public int Height { get; set; }
+}
+
+internal sealed class PixelPoint
+{
+    [JsonRequired] public int X { get; set; }
+    [JsonRequired] public int Y { get; set; }
+}
+
+/// <summary>One recognized frame: what Vision read, and the frame's fingerprint.</summary>
+internal sealed class ObservedFrame
+{
+    [JsonRequired] public string Fingerprint { get; set; } = "";
+    [JsonRequired] public ObservedLine[] Lines { get; set; } = [];
+}
+
+internal sealed class ObservedLine
+{
+    [JsonRequired] public string Text { get; set; } = "";
+    [JsonRequired] public double Confidence { get; set; }
+    [JsonRequired] public ObservedWord[] Words { get; set; } = [];
+}
+
+internal sealed class ObservedWord
+{
+    [JsonRequired] public string Text { get; set; } = "";
+    [JsonRequired] public double Left { get; set; }
+    [JsonRequired] public double Top { get; set; }
+    [JsonRequired] public double Right { get; set; }
+    [JsonRequired] public double Bottom { get; set; }
+}
+
+/// <summary>hover.loading: what the Windows loading card shows, before hover.primary.</summary>
+internal sealed class HoverLoadingEvent
+{
+    // The hovered word in smart mode, the recognized line in dictionary mode.
+    public string Source { get; set; } = "";
+    public string EngineLabel { get; set; } = "";
+    public SpeakerView? Speaker { get; set; }
+}
+
+internal sealed class OcrPlanPayload
+{
+    [JsonRequired] public DisplayInfo Display { get; set; } = new();
+    [JsonRequired] public PixelPoint Cursor { get; set; } = new();
+}
+
+internal sealed class OcrPlanResult
+{
+    public string Mode { get; set; } = "";
+    public PixelRectangle CaptureBounds { get; set; } = new();
+    public int Observations { get; set; }
+    public string? CachedFingerprint { get; set; }
+}
+
+internal sealed class OcrSelectPayload
+{
+    public string? Mode { get; set; }
+    [JsonRequired] public ObservationsSource Source { get; set; } = new();
+}
+
+internal sealed class OcrSelectResult
+{
+    // Written as null when nothing near the cursor was selected.
+    [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+    public OcrSelection? Selection { get; set; }
+
+    // The decoded lines of observation 1, in order.
+    public string[] Lines { get; set; } = [];
+}
+
+internal sealed class OcrSelection
+{
+    public string Text { get; set; } = "";
+    public string HoveredWord { get; set; } = "";
+    public int CharacterIndex { get; set; }
+    public bool SentenceStable { get; set; }
+    public string? SpeakerName { get; set; }
 }
 
 internal sealed class HoverResolveResult
@@ -567,6 +695,12 @@ internal sealed class TestChildResult
 [JsonSerializable(typeof(HoverResolveResult))]
 [JsonSerializable(typeof(HoverPrimaryEvent))]
 [JsonSerializable(typeof(HoverPhraseEvent))]
+[JsonSerializable(typeof(HoverObservationsPayload))]
+[JsonSerializable(typeof(HoverLoadingEvent))]
+[JsonSerializable(typeof(OcrPlanPayload))]
+[JsonSerializable(typeof(OcrPlanResult))]
+[JsonSerializable(typeof(OcrSelectPayload))]
+[JsonSerializable(typeof(OcrSelectResult))]
 [JsonSerializable(typeof(StatusEvent))]
 [JsonSerializable(typeof(FaultEvent))]
 [JsonSerializable(typeof(InitResult))]

@@ -83,6 +83,13 @@ internal static class Errors
     public static ErrorBody IoError(string detail) =>
         Create(ErrorCodes.IoError, "Не удалось прочитать или записать данные перевода.", detail);
 
+    /// <summary>
+    /// A hover with zero observations whose frame CoreHost no longer holds.
+    /// The app retries once with full observations and never shows the text.
+    /// </summary>
+    public static ErrorBody StaleFrame(string detail) =>
+        Create(ErrorCodes.StaleFrame, "Кадр на экране изменился.", detail);
+
     /// <summary>The Russian text of a connection-fatal fault.</summary>
     public static string FaultMessage(string code) => code switch
     {

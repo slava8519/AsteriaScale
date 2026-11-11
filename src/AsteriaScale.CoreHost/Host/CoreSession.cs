@@ -14,13 +14,16 @@ internal delegate void StatusSink(string area, string? state, string? code, stri
 /// with the macOS labels (Apple Vision, docs/MACOS.md T4), no phrase model
 /// before 20.5, every data path from the configured <see cref="CoreDataLayout"/>
 /// and the ranker worker the arguments name. CoreHost is the coordinator's
-/// host: the selection a request carries is the recognized text, the request
-/// is the anchor, and posted cards become hover.primary and hover.phrase
-/// events. CoreHost is also the only writer of settings.json: every change
-/// joins the settings queue when it is admitted and is applied in that
-/// arrival order (hovers, warm-ups and unloads admitted later wait for it)
-/// and saved before its terminal; a settings.update or speaker.set is saved
-/// first, from a copy, and reaches Core only once the write succeeded.
+/// host: the recognized text is the selection a request carries, or what
+/// Core's OCR geometry selects in the Apple Vision observations it carries
+/// (CoreSession.Observations.cs, with the frame cache), the request is the
+/// anchor, and posted cards become hover.loading (observations only),
+/// hover.primary and hover.phrase events. CoreHost is also the only writer
+/// of settings.json: every change joins the settings queue when it is
+/// admitted and is applied in that arrival order (hovers, capture plans,
+/// warm-ups and unloads admitted later wait for it) and saved before its
+/// terminal; a settings.update or speaker.set is saved first, from a copy,
+/// and reaches Core only once the write succeeded.
 /// </summary>
 [SupportedOSPlatform("macos")]
 internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHover>
@@ -249,7 +252,13 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
                 $"hover.resolve asked for mode {mode}, the active mode is {activeMode}; change it with settings.update"));
         }
 
-        CoreHostHover anchor = new(job.Id, job.Source, job.Game, events, cancellationToken);
+        // A hover with zero observations needs its cached frame, found here,
+        // before Core and before the processing gate below: only Core's hover
+        // releases that gate, so nothing may fail between winning it and
+        // StartHover.
+        CoreHostHover anchor = job.Observations is { } observations
+            ? new(job.Id, observations, PinFrame(observations), job.Game, events, cancellationToken)
+            : new(job.Id, job.Selection!, job.Game, events, cancellationToken);
         // One hover in Core at a time, and none during an unload pass: wait
         // for the gate as the Windows tracker retries on its next tick.
         while (!_coordinator.TryBeginProcessing())
@@ -273,8 +282,9 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
                 return HoverOutcomes.Failed;
             case HoverOutcome.AnchorLost:
                 cancellationToken.ThrowIfCancellationRequested();
-                // A selection never moves away; only switching hover
-                // translation off meanwhile ends a hover this way.
+                // IsAnchorCurrent fails only for a cancelled request (the app
+                // cancels a hover the cursor left), handled above, so only
+                // switching hover translation off meanwhile ends one this way.
                 throw new RequestErrorException(Errors.HoverDisabled());
             default:
                 cancellationToken.ThrowIfCancellationRequested();
@@ -287,14 +297,17 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
     // The speaker editor and its hotkey arrive with 20.3 (docs/MACOS.md T17).
     bool IHoverHost<CoreHostHover>.SpeakerEditorSupported => false;
 
-    // The selection is already text; Apple Vision arrives with 20.3.
+    // A selection is already text, and the app prepares Apple Vision itself
+    // before it sends observations.
     Task IHoverHost<CoreHostHover>.EnsureTextSourceReadyAsync() => Task.CompletedTask;
 
     Task<HoverOcrResult?> IHoverHost<CoreHostHover>.RecognizeAsync(
         CoreHostHover anchor,
         bool sentenceContext,
         CancellationToken cancellationToken) =>
-        Task.FromResult(SelectionText.Recognize(anchor.Selection, sentenceContext));
+        Task.FromResult(anchor.Observations is { } observations
+            ? RecognizeObservations(anchor, observations, sentenceContext)
+            : SelectionText.Recognize(anchor.Selection!, sentenceContext));
 
     // The last look at the speaker name before the coordinator resolves it
     // (ApplySpeakerPreference): a corrected spelling then shows its display
@@ -316,10 +329,26 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
     bool IHoverHost<CoreHostHover>.IsAnchorCurrent(CoreHostHover anchor) =>
         !anchor.CancellationToken.IsCancellationRequested;
 
-    // protocol v1 has no loading event: the app shows its own loading card
-    // from the moment it sends hover.resolve.
+    // hover.loading, only for an observations hover: during capture and
+    // recognition the app shows nothing, as Windows shows nothing during OCR,
+    // and this is the card Windows shows once the text is known. A selection
+    // hover keeps 20.2's events (the app knows its word from the start). A
+    // card of a hidden or replaced display generation is stale.
     void IHoverHost<CoreHostHover>.ShowLoading(HoverLoadingCard<CoreHostHover> card)
     {
+        if (card.Anchor.Observations is null ||
+            card.Anchor.Events is not { } events ||
+            !_coordinator.IsCurrentDisplay(card.DisplayGeneration))
+        {
+            return;
+        }
+
+        events.Loading(new HoverLoadingEvent
+        {
+            Source = card.Source,
+            EngineLabel = card.Engine,
+            Speaker = card.CurrentSpeaker is { } speaker ? ToSpeakerView(speaker, card.Anchor.ObservedSpeakerName) : null,
+        });
     }
 
     void IHoverHost<CoreHostHover>.ShowTranslation(HoverCard<CoreHostHover> card)
@@ -370,9 +399,15 @@ internal sealed partial class CoreSession : IHoverEngine, IHoverHost<CoreHostHov
 
     /// <summary>
     /// Disposes the coordinator in Core's order: hovers drain, the history is
-    /// flushed, the ranker worker is shut down and the caches are written.
+    /// flushed, the ranker worker is shut down and the caches are written;
+    /// then the frame cache is dropped, as WindowsAiOcrService.Dispose drops
+    /// its own.
     /// </summary>
-    public ValueTask DisposeAsync() => _coordinator.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        await _coordinator.DisposeAsync().ConfigureAwait(false);
+        ClearFrameCache();
+    }
 
     private static HoverPrimaryEvent PrimaryEvent(HoverCard<CoreHostHover> card)
     {

@@ -128,6 +128,17 @@ import Testing
         #expect(HelloCheck.problems(hello, spawnedPid: 4242, expectedBuild: "golden", allowTestCommands: true).isEmpty)
         #expect(HelloCheck.problems(hello, spawnedPid: 4242, expectedBuild: "golden", allowTestCommands: false)
                 == ["test commands are enabled"])
+        #expect(hello.raw["capabilities"]?["hoverSources"] == ["selection", "observations"])
+
+        // ocr.select answers before core.init with Core's selection: the
+        // character under the cursor (16), not the word's start (14).
+        let select = try #require(try? terminals[5]?.get())
+        #expect(select["selection"]?["text"] == "He sat on the bank of the river.")
+        #expect(select["selection"]?["hoveredWord"] == "bank" && select["selection"]?["characterIndex"] == 16)
+        #expect(select["selection"]?["sentenceStable"] == true && select["selection"]?["speakerName"] == nil)
+        #expect(select["lines"] == ["He sat on the bank of the river."])
+        guard case .failure(let observationsHover)? = terminals[9] else { Issue.record("#9 must fail"); return }
+        #expect(observationsHover.code == "not_ready")
 
         let primary = HoverPrimary(hoverId: 18, payload: events[0].payload)
         #expect(events[0].ref == 18 && primary.source == "river" && primary.found)

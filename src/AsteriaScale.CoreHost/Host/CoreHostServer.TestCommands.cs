@@ -253,7 +253,11 @@ internal sealed partial class CoreHostServer
     /// primaryDelaysMs waits that long before its primary card (others do not
     /// wait), then posts no phrase line, a final one, or a provisional one
     /// followed by the final one after phraseDelayMs. Calls counts the hovers
-    /// that reached it, so a check can wait until one is inside.
+    /// that reached it, so a check can wait until one is inside. An
+    /// observations hover is keyed by the first word of the first line of
+    /// its first observation (its text is that line's) and posts
+    /// hover.loading before its primary card; with zero observations it is
+    /// stale_frame, since this engine keeps no frame cache.
     /// </summary>
     private sealed class FakeHoverEngine(TestFakeCorePayload config) : IHoverEngine
     {
@@ -272,8 +276,14 @@ internal sealed partial class CoreHostServer
         public async Task<string> ResolveAsync(HoverJob job, IHoverEvents events, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
+            if (job.Observations is { Observations.Length: 0 })
+            {
+                throw new RequestErrorException(Errors.StaleFrame("the fake hover engine keeps no frame cache"));
+            }
+
+            string word = HoveredWord(job);
             CancellationToken token = config.IgnoreCancel ? CancellationToken.None : cancellationToken;
-            if (config.PrimaryDelaysMs?.GetValueOrDefault(job.Source.HoveredWord) is > 0 and int delay)
+            if (config.PrimaryDelaysMs?.GetValueOrDefault(word) is > 0 and int delay)
             {
                 await Task.Delay(delay, token).ConfigureAwait(false);
             }
@@ -283,10 +293,15 @@ internal sealed partial class CoreHostServer
                 throw new InvalidOperationException("the fake hover engine was told to fail");
             }
 
+            if (job.Observations is not null)
+            {
+                events.Loading(new HoverLoadingEvent { Source = word, EngineLabel = "ПРОВЕРКА" });
+            }
+
             events.Primary(new HoverPrimaryEvent
             {
-                Source = job.Source.HoveredWord,
-                Translation = "проверка: " + job.Source.HoveredWord,
+                Source = word,
+                Translation = "проверка: " + word,
                 Language = "en",
                 IsPhrase = false,
                 Found = true,
@@ -313,9 +328,19 @@ internal sealed partial class CoreHostServer
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
+        private static string HoveredWord(HoverJob job) =>
+            job.Selection?.HoveredWord ??
+            job.Observations!.Observations[0].Lines.FirstOrDefault()?.Words[0].Text ??
+            "";
+
+        private static string Text(HoverJob job) =>
+            job.Selection?.Text ??
+            job.Observations!.Observations[0].Lines.FirstOrDefault()?.Text ??
+            "";
+
         private static HoverPhraseEvent Phrase(HoverJob job, string translation, bool provisional) => new()
         {
-            Source = job.Source.Text,
+            Source = Text(job),
             Translation = translation,
             Status = "translated",
             Provisional = provisional,

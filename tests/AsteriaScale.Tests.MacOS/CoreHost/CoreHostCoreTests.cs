@@ -19,11 +19,15 @@ using AsteriaScale.Services;
 /// the spelling the card carried as observedName; ranker errors carry their code
 /// in Russian without a path; and with
 /// the owner's ConSeC bundle read in place a smart hover ranks on ConSeC CPU
-/// with the exact pinned identity. One more launch, with test commands only
+/// with the exact pinned identity. A launch of its own runs Apple Vision
+/// observations through Core (CoreHostObservationTests: ocr.plan, both
+/// modes, the frame cache, stale_frame). One more launch, with test commands
 /// for test.delayNextWork (the pool starts the next work-lane request late),
 /// pins the admission order: what the app sends right behind a settings
-/// change sees it. After every run nothing is left outside the configured
-/// roots, and inside them only the files Core is meant to keep.
+/// change sees it, ocr.plan included; at its end test.fakeCore holds a hover,
+/// and ocr.plan must not wait for it. After every run nothing is
+/// left outside the configured roots, and inside them only the files Core is
+/// meant to keep.
 /// </summary>
 internal static class CoreHostCoreTests
 {
@@ -60,6 +64,7 @@ internal static class CoreHostCoreTests
             VerifyModelDirectoryErrorsAsync(tempRoot));
         await VerifyHoverSettingsAndHistoryAsync(tempRoot);
         await VerifySpeakerAsync(tempRoot);
+        await CoreHostObservationTests.VerifyThroughCoreAsync(tempRoot, InitDeadlineMs, HoverDeadlineMs);
         await VerifyConsecInPlaceAsync(tempRoot);
     }
 
@@ -733,6 +738,12 @@ internal static class CoreHostCoreTests
             saved.HoverTranslationDelayMs == 600 &&
             saved.SpeakerGenders.Any(preference => preference.GameKey == "process:asteria-order" && preference.Gender == "feminine"),
             "settings.json does not hold every change in arrival order.");
+
+        // ocr.plan right behind a held-back switch to dictionary mode, and
+        // beside a hover held in the test engine (last: it replaces Core's
+        // hover engine for the rest of this launch).
+        await CoreHostObservationTests.VerifyPlanBehindSettingsAsync(client, 6, HoldBackNextWorkAsync);
+        await CoreHostObservationTests.VerifyPlanBesideHoverAsync(client);
         await session.ShutdownAsync("settings.json", "Dictionaries");
     }
 

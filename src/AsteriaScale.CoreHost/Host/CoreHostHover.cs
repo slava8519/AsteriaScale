@@ -7,9 +7,10 @@ namespace AsteriaScale.CoreHost.Host;
 
 /// <summary>
 /// One hover.resolve request as Core's coordinator sees it (its opaque
-/// anchor): the selection the app sent, the game it names, where the cards go
-/// and the request's cancellation. The hover stays current until its request
-/// is cancelled or superseded; there is no cursor to move away.
+/// anchor): the selection or the observations the app sent, the game it
+/// names, where the cards go and the request's cancellation. The hover stays
+/// current until its request is cancelled or superseded; the app, which
+/// tracks the cursor, cancels it when the cursor moves away.
 /// </summary>
 internal sealed class CoreHostHover
 {
@@ -38,9 +39,37 @@ internal sealed class CoreHostHover
         CancellationToken = cancellationToken;
     }
 
+    /// <summary>
+    /// An observations hover. <paramref name="pinnedFrame"/> is the frame
+    /// cache entry a hover with zero observations was admitted against: it is
+    /// looked up before the hover reaches Core and kept here, so its expiry
+    /// between that lookup and the recognition cannot take it away.
+    /// </summary>
+    public CoreHostHover(
+        long id,
+        ObservationsSource observations,
+        FrameCacheEntry? pinnedFrame,
+        GameIdentity? game,
+        IHoverEvents? events,
+        CancellationToken cancellationToken)
+    {
+        Id = id;
+        Observations = observations;
+        PinnedFrame = pinnedFrame;
+        Game = game;
+        Events = events;
+        CancellationToken = cancellationToken;
+    }
+
     public long Id { get; }
 
-    public SelectionSource Selection { get; }
+    /// <summary>The text the app read itself; null for an observations hover.</summary>
+    public SelectionSource? Selection { get; }
+
+    /// <summary>What Apple Vision read in the app's captures; null for a selection hover.</summary>
+    public ObservationsSource? Observations { get; }
+
+    public FrameCacheEntry? PinnedFrame { get; }
 
     public GameIdentity? Game { get; }
 

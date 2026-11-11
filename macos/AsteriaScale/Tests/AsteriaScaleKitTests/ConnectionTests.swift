@@ -382,8 +382,10 @@ extension ProcessSuites {
             #expect(outcomes[1] == "error hello_required")
             #expect(outcomes[2] == "ok " && outcomes[3] == "ok ")
             #expect(outcomes[4] == "error unknown_command")
-            #expect((5...10).map { outcomes[Int64($0)] } == ["error not_implemented", "error not_implemented",
-                     "error not_implemented", "error not_implemented", "error not_implemented", "error not_ready"])
+            // #5 ocr.select needs no core.init; #9 (observations) and #10
+            // (selection) are hovers before it.
+            #expect((5...10).map { outcomes[Int64($0)] } == ["ok ", "error not_implemented",
+                     "error not_implemented", "error not_implemented", "error not_ready", "error not_ready"])
             #expect(outcomes[11] == "error bad_request" && outcomes[12] == "error bad_request" && outcomes[13] == "ok ")
             #expect(outcomes[14] == "error cancelled" && outcomes[15] == "ok ")
             #expect(outcomes[17] == "error superseded" && outcomes[18] == "ok completed")

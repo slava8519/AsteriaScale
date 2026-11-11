@@ -5,10 +5,12 @@ using AsteriaScale.CoreHost.Protocol;
 namespace AsteriaScale.CoreHost.Host;
 
 // The Core-backed commands of protocol v1. core.init builds the Core session
-// once; before it finishes every other command here answers not_ready. Reads
-// of in-memory snapshots (settings.get, models.status) are answered on the
-// control lane; everything else runs on the work lane with the cancel mode its
-// side effects allow: reads are Immediate, the warm-up is Cooperative, and
+// once; before it finishes every other command here answers not_ready
+// (ocr.select, which needs no Core session, is admitted in CoreHostServer.cs).
+// Reads of in-memory snapshots (settings.get, models.status) are answered on
+// the control lane; everything else runs on the work lane with the cancel mode
+// its side effects allow: reads (ocr.plan among them) are Immediate, the
+// warm-up is Cooperative, and
 // anything that writes (settings, «Мой словарь», history, unload) is
 // NotCancellable, so a cancel can never misreport whether it happened. A
 // settings change is queued in Core at admission (AdmitSettingsChange), so
@@ -55,6 +57,17 @@ internal sealed partial class CoreHostServer
                         request,
                         await core.UnloadAsync().ConfigureAwait(false),
                         J.ModelsStatusResult));
+                return true;
+            case "ocr.plan":
+                // Waits for the settings changes admitted before it (not for
+                // the hover queue), so its mode is the one the following
+                // hover.resolve is checked against.
+                AdmitCoreWork(envelope, J.OcrPlanPayload, CancelMode.Immediate,
+                    payload => ObservationRules.ValidatePlan(payload) is { } problem ? Errors.BadRequest(problem) : null,
+                    async (core, request, payload) => Respond(
+                        request,
+                        await core.PlanCaptureAsync(payload, request.Cancellation.Token).ConfigureAwait(false),
+                        J.OcrPlanResult));
                 return true;
             case "hover.displayed":
                 AdmitCoreWork(envelope, J.HoverDisplayedPayload, CancelMode.NotCancellable,
@@ -169,9 +182,9 @@ internal sealed partial class CoreHostServer
     // settings.update and speaker.set. The change joins Core's settings queue
     // here, at admission on the reader thread, and not in the work task: the
     // reader's order is the arrival order, while the pool may start a work
-    // task arbitrarily late. A hover, warm-up, unload or later change admitted
-    // after this one therefore always finds the change queued and waits for
-    // it. Queuing never blocks (a lock and a pool task); the queued task ends
+    // task arbitrarily late. A hover, capture plan, warm-up, unload or later
+    // change admitted after this one therefore always finds the change queued
+    // and waits for it. Queuing never blocks (a lock and a pool task); the queued task ends
     // once settings.json holds the change (each change writes it before Core
     // changes, so a failed write changes nothing), and the work task only
     // awaits it and answers.

@@ -170,6 +170,9 @@ internal sealed partial class CoreHostServer
             case Commands.HoverResolve:
                 AdmitHover(envelope);
                 return;
+            case Commands.OcrSelect:
+                AdmitOcrSelect(envelope);
+                return;
         }
 
         if (AdmitCore(envelope))
@@ -263,12 +266,13 @@ internal sealed partial class CoreHostServer
                 RankerWorker = _options.RankerWorker,
                 RankerModels = _options.RankerModels,
             },
-            // Only what this platform can run (rule 3): no NPU, no phrase
-            // model before 20.5, no OCR source before 20.3.
+            // Only what this platform can run (rule 3): no NPU and no phrase
+            // model before 20.5; the text is the app's selection or what
+            // Apple Vision read in its captures.
             Capabilities = new Capabilities
             {
                 HoverModes = ["dictionary", "smart"],
-                HoverSources = ["selection"],
+                HoverSources = ["selection", "observations"],
                 SenseProviders = ["cpu"],
                 SenseModels = ["glossbert", "consec"],
                 PhraseBackends = [],
@@ -349,8 +353,9 @@ internal sealed partial class CoreHostServer
 
     private void AdmitHover(RequestEnvelope envelope)
     {
-        // A 20.3 source has its own shape, which the strict selection payload
-        // would reject as bad_request; it is answered by kind first.
+        // Each source kind has its own strict type: the kind is read first,
+        // and the selection type and its bytes stay as they were in 20.2.
+        HoverJob job;
         if (envelope.Payload.ValueKind == JsonValueKind.Object &&
             envelope.Payload.TryGetProperty("source", out JsonElement source) &&
             source.ValueKind == JsonValueKind.Object &&
@@ -358,19 +363,33 @@ internal sealed partial class CoreHostServer
             kind.ValueKind == JsonValueKind.String &&
             kind.ValueEquals("observations"))
         {
-            _writer.FailUnadmitted(envelope.Id, Errors.NotImplemented("hover.resolve source.kind observations", "20.3"));
-            return;
-        }
+            if (!TryPayload(envelope, J.HoverObservationsPayload, out HoverObservationsPayload? observed))
+            {
+                return;
+            }
 
-        if (!TryPayload(envelope, J.HoverResolvePayload, out HoverResolvePayload? payload))
-        {
-            return;
-        }
+            if ((ObservationRules.ValidateHover(observed.Mode, observed.Source) ?? ValidateGame(observed.Game)) is { } invalid)
+            {
+                _writer.FailUnadmitted(envelope.Id, Errors.BadRequest(invalid));
+                return;
+            }
 
-        if (ValidateHover(payload) is { } problem)
+            job = new HoverJob(envelope.Id, observed.Mode, Selection: null, observed.Source, observed.Game);
+        }
+        else
         {
-            _writer.FailUnadmitted(envelope.Id, Errors.BadRequest(problem));
-            return;
+            if (!TryPayload(envelope, J.HoverResolvePayload, out HoverResolvePayload? payload))
+            {
+                return;
+            }
+
+            if (ValidateHover(payload) is { } problem)
+            {
+                _writer.FailUnadmitted(envelope.Id, Errors.BadRequest(problem));
+                return;
+            }
+
+            job = new HoverJob(envelope.Id, payload.Mode, payload.Source, Observations: null, payload.Game);
         }
 
         IHoverEngine? engine = Volatile.Read(ref _hoverEngine);
@@ -386,7 +405,6 @@ internal sealed partial class CoreHostServer
         }
 
         RequestState request = Register(envelope, Lane.Hover, CancelMode.Immediate);
-        HoverJob job = new(request.Id, payload.Mode, payload.Source, payload.Game);
         lock (_hoverLock)
         {
             RequestState? previous = _hoverCurrent;
@@ -437,13 +455,59 @@ internal sealed partial class CoreHostServer
             return "source.characterIndex must lie within source.text";
         }
 
-        if (source.SpeakerName is { Length: > MaxNameLength } ||
-            payload.Game is { } game && (game.Key.Length is 0 or > MaxNameLength || game.DisplayName.Length > MaxNameLength))
+        return source.SpeakerName is { Length: > MaxNameLength }
+            ? $"speaker and game names must hold at most {MaxNameLength} characters"
+            : ValidateGame(payload.Game);
+    }
+
+    // Both source kinds (docs/MACOS.md T32): a game key Core drops, or one
+    // its normalization changes again on a second pass, would silently lose
+    // the speaker's gender, so it is refused as speaker.set refuses it.
+    private static string? ValidateGame(GameIdentity? game)
+    {
+        if (game is null)
+        {
+            return null;
+        }
+
+        if (game.Key.Length is 0 or > MaxNameLength || game.DisplayName.Length > MaxNameLength)
         {
             return $"speaker and game names must hold at most {MaxNameLength} characters";
         }
 
-        return null;
+        (string key, bool stable) = CoreSession.NormalizeGameKey(game.Key, game.DisplayName);
+        return key.Length == 0 || !stable
+            ? $"game.key must start with path: or process: and keep its normalized form when normalized again, got '{game.Key}'"
+            : null;
+    }
+
+    // ocr.select: stateless and without translation, so it needs core.hello
+    // but not core.init (the one exception from not_ready); it runs on the
+    // work lane and counts toward busy.
+    private void AdmitOcrSelect(RequestEnvelope envelope)
+    {
+        if (!TryPayload(envelope, J.OcrSelectPayload, out OcrSelectPayload? payload))
+        {
+            return;
+        }
+
+        if (ObservationRules.ValidateSelect(payload) is { } problem)
+        {
+            _writer.FailUnadmitted(envelope.Id, Errors.BadRequest(problem));
+            return;
+        }
+
+        if (!TryReserve(envelope))
+        {
+            return;
+        }
+
+        RequestState request = Register(envelope, Lane.Work, CancelMode.Immediate);
+        StartWork(request, state =>
+        {
+            Respond(state, ObservationSelection.Select(payload.Mode!, payload.Source), J.OcrSelectResult);
+            return Task.CompletedTask;
+        });
     }
 
     private async Task RunHoverAsync(RequestState request, HoverJob job, Task previous, IHoverEngine engine)
@@ -522,6 +586,9 @@ internal sealed partial class CoreHostServer
                 _timings.QueuedMs = Elapsed();
             }
         }
+
+        public void Loading(HoverLoadingEvent card) =>
+            server._writer.Event(request, Events.HoverLoading, card, J.HoverLoadingEvent);
 
         public void Primary(HoverPrimaryEvent card)
         {
@@ -910,12 +977,12 @@ internal sealed partial class CoreHostServer
         public const string Cancel = "request.cancel";
         public const string Shutdown = "core.shutdown";
         public const string HoverResolve = "hover.resolve";
+        public const string OcrSelect = "ocr.select";
 
         // Named in v1 so a client sees a clear not_implemented instead of
         // unknown_command; each answers with its stage in detail.
         public static string? ReservedStage(string command) => command switch
         {
-            "ocr.select" => "20.3",
             "models.install" or "models.verify" or "phrase.variants" => "20.5",
             _ => null,
         };
@@ -923,6 +990,7 @@ internal sealed partial class CoreHostServer
 
     private static class Events
     {
+        public const string HoverLoading = "hover.loading";
         public const string HoverPrimary = "hover.primary";
         public const string HoverPhrase = "hover.phrase";
         public const string Status = "status";
