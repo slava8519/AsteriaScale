@@ -492,7 +492,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌃⌥G: the editor on the card of a hover over the screen that shows
     /// now; without a speaker or a game on it, the Russian reason on the
-    /// overlay. Opening hides the card, keeps every later card of a screen
+    /// overlay as a notice, which takes no hover's token: a hover in flight
+    /// still shows what comes after it (on Windows the refusal goes to the
+    /// status line). Opening hides the card, keeps every later card of a screen
     /// hover off the overlay and pauses the tracking (which cancels the
     /// hover in flight) until the editor closes. `takeKeyboard` false (the
     /// self-test) shows the editor without making it key, so nothing of the
@@ -508,7 +510,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .failure(let refusal):
             log.write("speaker editor: not opened (\(refusal))")
             let point = shown.map { NSPoint(x: $0.point.x, y: $0.point.y) } ?? NSEvent.mouseLocation
-            overlay.showMessage(refusal.russian, near: point)
+            overlay.showNotice(refusal.russian, near: point)
             return refusal
         case .success(let editor):
             guard let shown else { return .noSpeaker }

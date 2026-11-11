@@ -159,11 +159,17 @@ import Testing
     ///   window-record read are instance members (the shape rule above), so
     ///   only a process whose capture is on reads one, and no test and no
     ///   self-test reads a real process's arguments or environment. Read as
-    ///   code (comments and strings blanked), so the docs may name it.
+    ///   code (comments and strings blanked), so the docs may name it; its
+    ///   sysctl name (lower case, dotted after `kern`: the spelling that
+    ///   `sysctlbyname` and `sysctlnametomib` take, `processRecordName`)
+    ///   appears on no line of any source, the capture file's included,
+    ///   which reads through the constant. The bare number behind the
+    ///   constant is beyond a name scan.
     static let windowKeyPrefix = ["kCGWin", "dow"].joined()
     static let allowedWindowKeys = Set(["OwnerPID", "Layer", "Bounds", "SharingState", "IsOnscreen"]
         .map { windowKeyPrefix + $0 })
     static let processRecord = ["KERN_PROC", "ARGS"].joined()
+    static let processRecordName = ["kern.proc", "args"].joined()
     static let gameReadIssue = "the game read"
 
     static func gameReadIssues(_ sources: [Source]) throws -> [String] {
@@ -173,6 +179,9 @@ import Testing
             for (number, line) in source.lines.enumerated() {
                 for match in line.matches(of: key) where !allowedWindowKeys.contains(String(match.output)) {
                     issues.append("\(gameReadIssue): \(match.output) in \(source.path):\(number + 1)")
+                }
+                if line.contains(processRecordName) {
+                    issues.append("\(gameReadIssue): \(processRecordName) in \(source.path):\(number + 1)")
                 }
             }
             let read = codeOnly(source.lines.joined(separator: "\n"))
@@ -225,6 +234,13 @@ import Testing
                     == ["\(Self.gameReadIssue): \(Self.processRecord) in the code of \(path)"], "\(path)")
         }
         #expect(try issues(captureFile, "var mib: [Int32] = [CTL_KERN, \(record), pid]").isEmpty)
+        let recordName = ["kern.proca", "rgs2"].joined()
+        #expect(Self.processRecordName + "2" == recordName)
+        for (path, line) in [(kitFile, "sysctlbyname(\"\(recordName)\", &buffer, &size, nil, 0)"),
+                             (captureFile, "sysctlnametomib(\"\(recordName)\", &mib, &count)"),
+                             ("Sources/AsteriaScale/SelfTest.swift", "let name = \"\(recordName)\"")] {
+            #expect(try issues(path, line) == ["\(Self.gameReadIssue): \(Self.processRecordName) in \(path):1"], "\(path)")
+        }
         for line in ["/// the \(record) record", "let note = \"\(record)\"",
                      "let pid = info[\(Self.windowKeyPrefix)OwnerPID as String]",
                      "let layer = info[\(Self.windowKeyPrefix)Layer as String]"] {
@@ -235,13 +251,40 @@ import Testing
     /// How the capture file reads for the game (T29), pinned as code with
     /// white space made one space, since no check runs it (the Swift suite
     /// does not link the app, and no self-test builds a ScreenSource): the
-    /// window list of on-screen windows without the desktop, read on one
-    /// line; another process's arguments-and-environment record read in one
-    /// member, called once and only for Wine (any other program's
-    /// environment may hold secrets, and GameIdentity would not look at it).
+    /// whole of `game(at:)`, so each of its steps is what review left it:
+    /// the window list of on-screen windows without the desktop, read on one
+    /// line; the owner Kit picks, with the one Wine check a window above
+    /// layer 0 may pass (the executable's path through GameIdentity.isWine,
+    /// no owner Wine's when it has none); another process's
+    /// arguments-and-environment record read only for Wine (any other
+    /// program's environment may hold secrets, and GameIdentity would not
+    /// look at it); a drive's `dosdevices` link read, never followed. Beside
+    /// it the record's reader is named three times in the file and nowhere
+    /// else (its declaration, the guarded call, the argument label), so no
+    /// call, stored reference or function value reads a record elsewhere;
+    /// the reader is pinned whole too, and the record's constant is named
+    /// once, so the one read of a record is that body's (a wrapper over a
+    /// helper that another member calls is no reader); Kit's window rule is
+    /// called once.
     static let gameWindowList = ["let list = ", "CGWin", "dowList", "CopyWindowInfo([.optionOnScreenOnly, ",
                                  ".excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]"].joined()
+    static let wineOwner = "let isWine: (Int32) -> Bool = { pid in ProcessTable.executablePath(pid).map(GameIdentity.isWine) "
+        + "?? false } guard let owner = GameIdentity.windowOwner(at: point, windows: windows, ownPid: getpid(), "
+        + "primaryHeight: Double(primary.height), isWine: isWine), let path = ProcessTable.executablePath(owner) "
+        + "else { return nil }"
     static let wineOnlyRecord = "let record = GameIdentity.isWine(path) ? processArguments(owner) : nil"
+    static let gameReturn = "return GameIdentity.game(executablePath: path, processArguments: record, "
+        + "readLink: GameIdentity.readLink)"
+    static let gameRead = ["func game(at point: GlobalPoint) async -> HoverGame? {", gameWindowList,
+                           "let windows = (list ?? []).compactMap { windowRecord($0) }",
+                           "let primary = CGDisplayBounds(CGMainDisplayID())", wineOwner, wineOnlyRecord, gameReturn, "}"]
+        .joined(separator: " ")
+    static let recordReader = ["private func processArguments(_ pid: pid_t) -> [UInt8]? {",
+                               "var mib: [Int32] = [CTL_KERN, \(processRecord)2, pid]", "var size = 0",
+                               "guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, (1...(4 << 20)).contains(size) else { return nil }",
+                               "var buffer = [UInt8](repeating: 0, count: size)",
+                               "guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size <= buffer.count else { return nil }",
+                               "return Array(buffer.prefix(size))", "}"].joined(separator: " ")
     static let recordReadIssue = "another process's record is read"
 
     static func processRecordIssues(_ sources: [Source]) throws -> [String] {
@@ -251,13 +294,15 @@ import Testing
         let read = collapsedCode(file.lines.joined(separator: "\n"))
         guard read.complete else { return ["\(captureFile) \(unreadIssue): a comment or a string literal is left open"] }
         let code = read.code
-        let lists = code.ranges(of: gameWindowList).count
-        let guards = code.ranges(of: wineOnlyRecord).count
-        let mentions = code.matches(of: try regex(#"\bprocessArguments\s*\("#)).count
+        let reads = code.ranges(of: gameRead).count
+        let readers = code.ranges(of: recordReader).count
+        let mentions = code.matches(of: try regex(#"\bprocessArguments\b"#)).count
+        let owners = code.matches(of: try regex(#"\bwindowOwner\s*\("#)).count
         let records = code.ranges(of: processRecord).count
-        guard lists == 1, guards == 1, mentions == 2, records == 1 else {
-            return ["\(recordReadIssue) otherwise than once, for Wine only, from on-screen windows: window lists "
-                    + "\(lists), Wine-only reads \(guards), processArguments( \(mentions), \(processRecord) \(records)"]
+        guard reads == 1, readers == 1, mentions == 3, owners == 1, records == 1 else {
+            return ["\(recordReadIssue) otherwise than in the pinned game read, once and for Wine only: game reads "
+                    + "\(reads), pinned readers \(readers), processArguments \(mentions), windowOwner( \(owners), "
+                    + "\(processRecord) \(records)"]
         }
         return []
     }
@@ -266,29 +311,71 @@ import Testing
         for issue in try Self.processRecordIssues(try Self.swiftSources("Sources")) { Issue.record("\(issue)") }
 
         // Planted capture files: the game read as it is, and each way it
-        // could stop being Wine-only or once.
+        // could stop being Wine-only, once, from on-screen windows, with
+        // the app's Wine check, or a reader of the link alone.
         let captureFile = ["Sources/AsteriaScale/Screen", "Source.swift"].joined()
         let record = ["KERN_PROCA", "RGS2"].joined()
-        let declaration = "    private func processArguments(_ pid: pid_t) -> [UInt8]? {\n"
-            + "        var mib: [Int32] = [CTL_KERN, \(record), pid]\n        return nil\n    }"
-        let body = ["        \(Self.gameWindowList)", "        // owner and path", "        \(Self.wineOnlyRecord)"]
+        let readerBody = ["        var mib: [Int32] = [CTL_KERN, \(record), pid]", "        var size = 0",
+                          "        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, (1...(4 << 20)).contains(size) else { return nil }",
+                          "        var buffer = [UInt8](repeating: 0, count: size)",
+                          "        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size <= buffer.count else { return nil }",
+                          "        return Array(buffer.prefix(size))", "    }"]
+        let declaration = (["    private func processArguments(_ pid: pid_t) -> [UInt8]? {"] + readerBody).joined(separator: "\n")
+        // The same read behind a one-line wrapper, in a helper another
+        // member calls too.
+        let helper = (["    private func processArguments(_ pid: pid_t) -> [UInt8]? { record(of: pid) }",
+                       "    private func record(of pid: pid_t) -> [UInt8]? {"] + readerBody
+                      + ["    private func probe(_ owners: [Int32]) -> [[UInt8]] { owners.compactMap { record(of: $0) } }"])
+            .joined(separator: "\n")
+        let wineCheck = "        let isWine: (Int32) -> Bool = { pid in ProcessTable.executablePath(pid).map(GameIdentity.isWine) ?? false }"
+        let body = ["    func game(at point: GlobalPoint) async -> HoverGame? {", "        \(Self.gameWindowList)",
+                    "        let windows = (list ?? []).compactMap { windowRecord($0) }",
+                    "        let primary = CGDisplayBounds(CGMainDisplayID())", "        // the owner, Wine above layer 0", wineCheck,
+                    "        guard let owner = GameIdentity.windowOwner(at: point, windows: windows, ownPid: getpid(),",
+                    "                                                   primaryHeight: Double(primary.height), isWine: isWine),",
+                    "              let path = ProcessTable.executablePath(owner) else { return nil }",
+                    "        \(Self.wineOnlyRecord)", "        \(Self.gameReturn)", "    }"]
         func issues(_ lines: [String], _ tail: String = declaration) throws -> [String] {
             try Self.processRecordIssues([(captureFile, Self.lines((lines + [tail]).joined(separator: "\n")))])
                 .map { $0.hasPrefix(Self.recordReadIssue) ? Self.recordReadIssue : $0 }
         }
+        func replacing(_ old: String, _ new: String) -> [String] { body.map { $0.replacingOccurrences(of: old, with: new) } }
         #expect(try issues(body).isEmpty)
-        #expect(try issues(body.map { $0.replacingOccurrences(of: "? processArguments(owner) : nil",
-                                                               with: "?\n            processArguments(owner) : nil") })
+        #expect(try issues(replacing("? processArguments(owner) : nil", "?\n            processArguments(owner) : nil"))
                 .isEmpty, "the guard over two lines")
+        #expect(try issues(replacing("= { pid in ", "= {\n            pid in ")).isEmpty, "the Wine check over two lines")
+        let member = "\n    private func probe(_ owners: [Int32]) -> [[UInt8]] { "
         let reverted: [(String, [String], String)] = [
-            ("read for every program", body.map { $0.replacingOccurrences(of: "GameIdentity.isWine(path) ? ", with: "")
-                .replacingOccurrences(of: " : nil", with: "") }, declaration),
-            ("the guard inverted", body.map { $0.replacingOccurrences(of: "GameIdentity.isWine(path)",
-                                                                      with: "!GameIdentity.isWine(path)") }, declaration),
+            ("read for every program", replacing("GameIdentity.isWine(path) ? ", "").map {
+                $0.replacingOccurrences(of: "(owner) : nil", with: "(owner)") }, declaration),
+            ("the guard inverted", replacing("= GameIdentity.isWine(path)", "= !GameIdentity.isWine(path)"), declaration),
             ("a second read", body + ["        let all = processArguments(owner)"], declaration),
             ("a second record", body, declaration + "\n    let other: [Int32] = [CTL_KERN, \(record), 1]"),
-            ("every window", body.map { $0.replacingOccurrences(of: ".optionOnScreenOnly, ", with: "") }, declaration),
-            ("no window list", Array(body.dropFirst()), declaration),
+            ("every window", replacing(".optionOnScreenOnly, ", ""), declaration),
+            ("no window list", body.filter { !$0.contains("let list") }, declaration),
+            ("read point-free", body, declaration + member + "owners.compactMap(processArguments) }"),
+            ("a stored reader", body, declaration + "\n    private lazy var reader = processArguments"),
+            ("a parenthesized call", body, declaration + member + "[(processArguments)(1)].compactMap { $0 } }"),
+            ("a function value", body, declaration + member + "owners.compactMap(self.processArguments) }"),
+            ("every owner above 0 Wine's", replacing("{ pid in ProcessTable.executablePath(pid).map(GameIdentity.isWine) ?? false }",
+                                                     "{ _ in true }"), declaration),
+            ("no owner above 0 Wine's", replacing("{ pid in ProcessTable.executablePath(pid).map(GameIdentity.isWine) ?? false }",
+                                                  "{ _ in false }"), declaration),
+            ("an owner without a path Wine's", replacing("?? false }", "?? true }"), declaration),
+            ("a literal check at the call", replacing("isWine: isWine)", "isWine: { _ in true })"), declaration),
+            ("no Wine at the call", replacing("isWine: isWine)", "isWine: { _ in false })"), declaration),
+            ("a second window rule", body, declaration + "\n    private func other(_ windows: [GameIdentity.WindowRecord]) "
+                + "-> Int32? { GameIdentity.windowOwner(at: GlobalPoint(x: 0, y: 0), windows: windows, ownPid: 1, "
+                + "primaryHeight: 900, isWine: { _ in true }) }"),
+            ("the link followed", replacing("readLink: GameIdentity.readLink)", "readLink: { ProcessTable.realPath($0) })"),
+             declaration),
+            ("another body", replacing("let primary = CGDisplayBounds(CGMainDisplayID())",
+                                       "let primary = CGDisplayBounds(CGMainDisplayID())\n        if point.x < 0 { return nil }"),
+             declaration),
+            ("the read moved to a helper", body, helper),
+            ("the reader keeps a copy", body, declaration.replacingOccurrences(
+                of: "        return Array(buffer.prefix(size))",
+                with: "        lastRecord = buffer\n        return Array(buffer.prefix(size))")),
         ]
         for (name, lines, tail) in reverted {
             #expect(try issues(lines, tail) == [Self.recordReadIssue], "\(name)")
@@ -303,16 +390,20 @@ import Testing
     /// (DoD 20.3 item 5, T31): the tracking decision takes the editor's
     /// state, opening re-decides right after the editor opens and closing
     /// right after the overlay resumes, and nothing else starts or stops the
-    /// tracking. Pinned as code with white space made one space: the
-    /// self-test never tracks (no screen source exists in it) and the Swift
-    /// suite does not link the app, so no run would see the pause go.
+    /// tracking. Every close goes that way: the editor is closed in two
+    /// places only, that one and the quit (right before the tracking stops
+    /// for good), and the overlay resumes in that one alone, so a save or a
+    /// cancel cannot close the editor and leave the tracking off. Pinned as
+    /// code with white space made one space: the self-test never tracks (no
+    /// screen source exists in it) and the Swift suite does not link the
+    /// app, so no run would see the pause go.
     static let appDelegateFile = "Sources/AsteriaScale/AppDelegate.swift"
     static let editorTracking = "let track = status.tracks(hoverEnabled: enabled, editorOpen: speakerEditor.isOpen) "
         + "hoverDriver.setTracking(track, pipeline: track ? screenPipeline() : nil)"
     static let editorOpens = "overlay.suspend() speakerEditor.open(editor, target: shown, takeKeyboard: takeKeyboard) "
         + "updateRecognition()"
     static let editorCloses = "speakerEditor.close() overlay.resume() updateRecognition()"
-    static let shutdownStops = "hoverDriver.setTracking(false, pipeline: nil)"
+    static let shutdownStops = "speakerEditor.close() hoverDriver.setTracking(false, pipeline: nil)"
     static let pauseIssue = "the tracking pauses for the speaker editor"
 
     static func editorPauseIssues(_ sources: [Source]) throws -> [String] {
@@ -325,10 +416,14 @@ import Testing
         let pinned = [editorTracking, editorOpens, editorCloses, shutdownStops].map { code.ranges(of: $0).count }
         let decisions = code.matches(of: try regex(#"\.\s*tracks\s*\("#)).count
         let switches = code.matches(of: try regex(#"\.\s*setTracking\s*\("#)).count
-        let opens = code.matches(of: try regex(#"\bspeakerEditor\s*\.\s*open\s*\("#)).count
-        guard pinned == [1, 1, 1, 1], decisions == 1, switches == 2, opens == 1 else {
+        let opens = code.matches(of: try regex(#"\bspeakerEditor\s*[?!]?\s*\.\s*open\s*\("#)).count
+        let closes = code.matches(of: try regex(#"\bspeakerEditor\s*[?!]?\s*\.\s*close\s*\("#)).count
+        // Qualified: a continuation's resume() is no overlay's.
+        let resumes = code.matches(of: try regex(#"\boverlay\s*[?!]?\s*\.\s*resume\s*\("#)).count
+        guard pinned == [1, 1, 1, 1], decisions == 1, switches == 2, opens == 1, closes == 2, resumes == 1 else {
             return ["\(pauseIssue) otherwise than through the editor's state on open and close: pinned \(pinned), "
-                    + "decisions \(decisions), tracking switches \(switches), opens \(opens)"]
+                    + "decisions \(decisions), tracking switches \(switches), opens \(opens), closes \(closes), "
+                    + "overlay resumes \(resumes)"]
         }
         return []
     }
@@ -367,12 +462,196 @@ import Testing
             ("tracking started elsewhere", [update, open, close, quit,
                                             ["        hoverDriver.setTracking(true, pipeline: screenPipeline())"]]),
             ("a second decision", [update, open, close, quit, ["        let again = status.tracks(hoverEnabled: true, editorOpen: false)"]]),
+            ("the save closes on its own", [update, open, close, quit,
+                                            ["        self.speakerEditor.close()", "        self.overlay.resume()"]]),
+            ("the save closes without resuming", [update, open, close, quit, ["        self.speakerEditor.close()"]]),
+            ("the cancel closes on its own", [update, open, close, quit,
+                                              ["        speakerEditor.onCancel = { [weak self] in self?.speakerEditor.close(); "
+                                               + "self?.overlay.resume() }"]]),
+            ("the quit's close moved to the save", [update, open, close, Array(quit.dropFirst()),
+                                                    ["        self.speakerEditor.close()"]]),
+            ("resumed elsewhere", [update, open, close, quit, ["        overlay?.resume()"]]),
         ]
         for (name, parts) in reverted {
             #expect(try issues(parts) == [Self.pauseIssue], "\(name)")
         }
         #expect(try Self.editorPauseIssues([(Self.hoverDriverFile, Self.lines("let a = 1"))])
                 == ["\(Self.pauseIssue) nowhere: no \(appDelegate)"])
+    }
+
+    // MARK: The speaker editor's panel and card
+
+    /// What the speaker editor's panel decides that no run executes (T31):
+    /// the self-test shows the panel without the keyboard and presses keys
+    /// through the controller's handler, so whether the name field is being
+    /// edited (a digit then is text) and the panel's key path are pinned as
+    /// code. «Отмена»'s action and the controller's key handler are pinned
+    /// whole, so a cancel by either only calls onCancel (AppDelegate's
+    /// closeSpeakerEditor); `close()` is pinned whole, and of the window
+    /// calls that close or hide a panel (`close`, `orderOut`,
+    /// `performClose`, `setIsVisible`) the file names only that declaration
+    /// and its one `orderOut` (AppDelegate's two calls of `close()` are
+    /// editorPauseIssues'). A hide by another spelling (the alpha value, a
+    /// frame off screen) is beyond these names.
+    static let editorPanelFile = "Sources/AsteriaScale/SpeakerEditorPanel.swift"
+    static let editingName = "var isEditingName: Bool { firstResponder is NSText }"
+    static let panelKeys = "override func sendEvent(_ event: NSEvent) { if event.type == .keyDown, let onKey, "
+        + "onKey(event.keyCode, isEditingName) { return } super.sendEvent(event) }"
+    static let editorKeys = "func keyPressed(keyCode: UInt16, editingName: Bool) -> Bool { guard isOpen, let command = "
+        + "SpeakerEditor.command(keyCode: keyCode, editingName: editingName) else { return false } guard !busy else "
+        + "{ return true } switch command { case .choose(let choice): choose(choice) case .cancel: onCancel?() } return true }"
+    static let cancelAction = "@objc private func cancelClicked() { guard !busy else { return } onCancel?() }"
+    static let editorClose = "func close() { let reactivate = SpeakerEditor.appToReactivate(tookKeyboard: tookKeyboard, "
+        + "appIsActive: NSApp.isActive, previousPid: previousApp?.processIdentifier, ownPid: getpid()) let previous = "
+        + "previousApp editor = nil target = nil busy = false tookKeyboard = false previousApp = nil panel.orderOut(nil) "
+        + "if let reactivate, let previous, previous.processIdentifier == reactivate, !previous.isTerminated { "
+        + "NSApp.yieldActivation(to: previous) _ = previous.activate() } }"
+    static let panelIssue = "the speaker editor's panel"
+
+    static func editorPanelIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == editorPanelFile }) else {
+            return ["\(panelIssue) nowhere: no \(editorPanelFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(editorPanelFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let code = read.code
+        let pinned = [editingName, panelKeys, editorKeys, cancelAction, editorClose].map { code.ranges(of: $0).count }
+        let editing = code.matches(of: try regex(#"\bisEditingName\b"#)).count
+        let hides = code.matches(of: try regex(#"\b(?:close|orderOut|performClose|setIsVisible)\s*\("#)).count
+        guard pinned == [1, 1, 1, 1, 1], editing == 2, hides == 2 else {
+            return ["\(panelIssue) decides otherwise: pinned \(pinned), isEditingName \(editing), closes and hides \(hides)"]
+        }
+        return []
+    }
+
+    /// What HoverDriver hands the speaker editor when a card of a hover over
+    /// the screen shows (T31): that card's speaker, the game its hover sent,
+    /// its point and its token, right after the card is recorded as shown,
+    /// and nowhere else. The self-test's hover.observations checks the game,
+    /// the point and that the token is the shown card's on a card without a
+    /// speaker («Словарь»); the speaker itself only this pin sees.
+    static let shownCardTarget = "app.cardShown(primary) app.speakerCardShown(SpeakerTarget(speaker: primary.speaker, "
+        + "game: state.value.game, point: state.value.point), token: token)"
+    static let targetIssue = "the speaker editor's card is recorded"
+    /// A refused ⌃⌥G goes up as a notice, which supersedes no hover in
+    /// flight (OverlayState.notice, T31): the one notice of AppDelegate.swift.
+    static let refusalNotice = "overlay.showNotice(refusal.russian, near: point) return refusal"
+    static let noticeIssue = "a refused speaker editor shows"
+
+    static func speakerTargetIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == hoverDriverFile }) else {
+            return ["\(targetIssue) nowhere: no \(hoverDriverFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(hoverDriverFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let pinned = read.code.ranges(of: shownCardTarget).count
+        let records = read.code.matches(of: try regex(#"\bspeakerCardShown\s*\("#)).count
+        guard pinned == 1, records == 1 else {
+            return ["\(targetIssue) otherwise than from the shown card: pinned \(pinned), records \(records)"]
+        }
+        return []
+    }
+
+    static func refusalNoticeIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == appDelegateFile }) else {
+            return ["\(noticeIssue) nowhere: no \(appDelegateFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(appDelegateFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let pinned = read.code.ranges(of: refusalNotice).count
+        let notices = read.code.matches(of: try regex(#"\bshowNotice\s*\("#)).count
+        guard pinned == 1, notices == 1 else {
+            return ["\(noticeIssue) otherwise than as a notice: pinned \(pinned), notices \(notices)"]
+        }
+        return []
+    }
+
+    @Test func theEditorGetsTheShownCardAndClosesOneWay() throws {
+        let sources = try Self.swiftSources("Sources")
+        for issue in try Self.editorPanelIssues(sources) + Self.speakerTargetIssues(sources)
+            + Self.refusalNoticeIssues(sources) { Issue.record("\(issue)") }
+
+        let panelFile = ["Sources/AsteriaScale/SpeakerEditor", "Panel.swift"].joined()
+        let hoverDriver = ["Sources/AsteriaScale/Hover", "Driver.swift"].joined()
+        #expect(Self.editorPanelFile == panelFile && Self.hoverDriverFile == hoverDriver)
+        let panel = ["    var isEditingName: Bool { firstResponder is NSText }",
+                     "    override func sendEvent(_ event: NSEvent) {",
+                     "        if event.type == .keyDown, let onKey, onKey(event.keyCode, isEditingName) { return }",
+                     "        super.sendEvent(event)", "    }",
+                     "    func keyPressed(keyCode: UInt16, editingName: Bool) -> Bool {",
+                     "        guard isOpen, let command = SpeakerEditor.command(keyCode: keyCode, editingName: editingName) else {",
+                     "            return false", "        }", "        guard !busy else { return true }", "        switch command {",
+                     "        case .choose(let choice): choose(choice)", "        case .cancel: onCancel?()", "        }",
+                     "        return true", "    }",
+                     "    @objc private func cancelClicked() {", "        guard !busy else { return }", "        onCancel?()", "    }",
+                     "    func close() {",
+                     "        let reactivate = SpeakerEditor.appToReactivate(tookKeyboard: tookKeyboard, appIsActive: NSApp.isActive,",
+                     "                                                       previousPid: previousApp?.processIdentifier, ownPid: getpid())",
+                     "        let previous = previousApp", "        editor = nil", "        target = nil", "        busy = false",
+                     "        tookKeyboard = false", "        previousApp = nil", "        panel.orderOut(nil)",
+                     "        if let reactivate, let previous, previous.processIdentifier == reactivate, !previous.isTerminated {",
+                     "            NSApp.yieldActivation(to: previous)", "            _ = previous.activate()", "        }", "    }"]
+        func panelIssues(_ lines: [String]) throws -> [String] {
+            try Self.editorPanelIssues([(panelFile, Self.lines(lines.joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.panelIssue) ? Self.panelIssue : $0 }
+        }
+        func panelReplacing(_ old: String, _ new: String) -> [String] { panel.map { $0.replacingOccurrences(of: old, with: new) } }
+        #expect(try panelIssues(panel).isEmpty)
+        let panels: [(String, [String])] = [
+            ("never editing the name", panelReplacing("{ firstResponder is NSText }", "{ false }")),
+            ("always editing the name", panelReplacing("{ firstResponder is NSText }", "{ true }")),
+            ("the key path without the field's state", panelReplacing("onKey(event.keyCode, isEditingName)",
+                                                                       "onKey(event.keyCode, false)")),
+            ("«Отмена» closes on its own", panelReplacing("        onCancel?()", "        close()")),
+            ("«Отмена» hides on its own", panelReplacing("        onCancel?()", "        panel.orderOut(nil)")),
+            ("the window closed", panel + ["    func dismiss() { panel.performClose(nil) }"]),
+            ("«Отмена» makes the panel invisible", panelReplacing("        onCancel?()", "        panel.setIsVisible(false)")),
+            ("Esc makes the panel invisible", panelReplacing("case .cancel: onCancel?()", "case .cancel: panel.setIsVisible(false)")),
+            ("the hide moved from close() to «Отмена»", panel.filter { $0 != "        panel.orderOut(nil)" }.map {
+                $0 == "        onCancel?()" ? "        panel.orderOut(nil)\n        onCancel?()" : $0 }),
+            ("the hide moved out of close()", panel.filter { $0 != "        panel.orderOut(nil)" }
+                + ["    func dismiss() { panel.orderOut(nil) }"]),
+            ("the handler without the field's state", panelReplacing("editingName: editingName)", "editingName: false)")),
+        ]
+        for (name, lines) in panels {
+            #expect(try panelIssues(lines) == [Self.panelIssue], "\(name)")
+        }
+
+        let shown = ["            app.cardShown(primary)", "            // What ⌃⌥G opens the editor on.",
+                     "            app.speakerCardShown(SpeakerTarget(speaker: primary.speaker, game: state.value.game,",
+                     "                                               point: state.value.point),",
+                     "                                 token: token)"]
+        func targetIssues(_ lines: [String]) throws -> [String] {
+            try Self.speakerTargetIssues([(hoverDriver, Self.lines(lines.joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.targetIssue) ? Self.targetIssue : $0 }
+        }
+        func shownReplacing(_ old: String, _ new: String) -> [String] { shown.map { $0.replacingOccurrences(of: old, with: new) } }
+        #expect(try targetIssues(shown).isEmpty)
+        let targets: [(String, [String])] = [
+            ("no speaker", shownReplacing("speaker: primary.speaker", "speaker: nil")),
+            ("no game", shownReplacing("game: state.value.game", "game: nil")),
+            ("another token", shownReplacing("token: token)", "token: app.overlay.hoverToken)")),
+            ("before the card is recorded", Array(shown.dropFirst()) + Array(shown.prefix(1))),
+            ("a second record", shown + ["            app.speakerCardShown(SpeakerTarget(speaker: nil, game: nil, "
+                                         + "point: state.value.point), token: token)"]),
+        ]
+        for (name, lines) in targets {
+            #expect(try targetIssues(lines) == [Self.targetIssue], "\(name)")
+        }
+
+        let appDelegate = ["Sources/AsteriaScale/App", "Delegate.swift"].joined()
+        let refused = ["            overlay.showNotice(refusal.russian,", "                               near: point)",
+                       "            return refusal"]
+        func noticeIssues(_ lines: [String]) throws -> [String] {
+            try Self.refusalNoticeIssues([(appDelegate, Self.lines(lines.joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.noticeIssue) ? Self.noticeIssue : $0 }
+        }
+        #expect(try noticeIssues(refused).isEmpty)
+        for (name, lines) in [("a message that supersedes the hover", refused.map {
+                                  $0.replacingOccurrences(of: "showNotice", with: "showMessage") }),
+                              ("a second notice", refused + ["        overlay.showNotice(RU.speakerNone, near: point)"])] {
+            #expect(try noticeIssues(lines) == [Self.noticeIssue], "\(name)")
+        }
     }
 
     // MARK: Where the screen source is built

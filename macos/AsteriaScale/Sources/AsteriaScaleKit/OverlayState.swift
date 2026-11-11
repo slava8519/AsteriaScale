@@ -22,7 +22,8 @@ public struct OverlayState: Sendable, Equatable {
 
     /// What the panel shows and whose it is.
     public struct Shown: Sendable, Equatable {
-        /// The hover whose content it is (a message has a token of its own).
+        /// The hover whose content it is (a message has a token of its own,
+        /// a notice `noticeToken`).
         public let token: Int
         public let content: Content
         /// Put up by a hover over the screen (its loading card, card or end
@@ -200,5 +201,27 @@ public struct OverlayState: Sendable, Equatable {
         tokenIsScreen = false
         revoked = false
         shown = Shown(token: token, content: .message, screen: false)
+    }
+
+    /// What a notice shows under: no hover's token (they start at 1), so a
+    /// hover's end never takes a notice for its own content.
+    public static let noticeToken = 0
+
+    /// A notice of the app's own that is no hover's end and supersedes no
+    /// hover: a refused ⌃⌥G (T31). It takes the panel but not the token, so
+    /// a hover in flight still shows what comes after it, which replaces
+    /// the notice: a screen hover that has shown nothing yet its loading
+    /// card and its card; a hover whose loading card the notice covers (a
+    /// ⌥V one, whose loading card went up when it started, or a screen
+    /// hover whose hover.loading came) its card only, as that loading card
+    /// does not come again. On Windows the refusal goes to the status line
+    /// and leaves the overlay and the hover alone.
+    /// That hover's end without a card of its own leaves the notice to its
+    /// timer, as does the cursor tracker's hide (a notice is no screen
+    /// hover's). A phrase line joins no card the notice covered: the card
+    /// is gone from the panel.
+    public mutating func notice() {
+        cardToken = nil
+        shown = Shown(token: Self.noticeToken, content: .message, screen: false)
     }
 }

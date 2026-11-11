@@ -159,9 +159,12 @@ final class ScreenSource: FrameSource, CapturePermission, GameResolver, @uncheck
     /// only, its KERN_PROCARGS2 record (arguments and environment; readable
     /// for a process of the same user, and never read for any other
     /// program, whose environment may hold secrets). GameIdentity decides
-    /// the rest; nil when nothing names a game. An instance member like the
-    /// capture: only a process whose capture is on reads the window list
-    /// for it or another process's record.
+    /// the rest, reading a drive's `dosdevices` link but never its target
+    /// (readlink, T29); nil when nothing names a game. An instance member
+    /// like the capture: only a process whose capture is on reads the window
+    /// list for it or another process's record. No run executes it, so
+    /// SourceScanTests pins this whole body as code, the Wine-owner check it
+    /// hands Kit included.
     func game(at point: GlobalPoint) async -> HoverGame? {
         let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
         let windows = (list ?? []).compactMap { windowRecord($0) }
@@ -171,7 +174,7 @@ final class ScreenSource: FrameSource, CapturePermission, GameResolver, @uncheck
                                                    primaryHeight: Double(primary.height), isWine: isWine),
               let path = ProcessTable.executablePath(owner) else { return nil }
         let record = GameIdentity.isWine(path) ? processArguments(owner) : nil
-        return GameIdentity.game(executablePath: path, processArguments: record, resolveLink: GameIdentity.realPath)
+        return GameIdentity.game(executablePath: path, processArguments: record, readLink: GameIdentity.readLink)
     }
 
     /// One window-list entry as Kit takes it: owner pid, layer, bounds.

@@ -36,6 +36,39 @@ import Testing
                 == ProcessArguments(executablePath: "/x", arguments: [], environment: []))
     }
 
+    /// An empty first argument is a NUL like the padding before it, and
+    /// parse takes it for padding (the documented limit): the arguments
+    /// start one string later and end with the first environment entry,
+    /// which the environment then lacks, whatever the padding; two empty
+    /// ones at the start shift them by two; with nothing after it the
+    /// record is not one.
+    @Test func anEmptyFirstArgumentReadsAsPadding() throws {
+        let game = #"C:\Games\Novel.exe"#
+        for padding in [0, 1, 3, 8] {
+            let bytes = ProcessArguments.encode(executablePath: "/x/wine", arguments: ["", game],
+                                                environment: ["HOME=/Users/x", "WINEPREFIX=/B/One"], padding: padding)
+            let parsed = try #require(ProcessArguments.parse(bytes), "padding \(padding)")
+            #expect(parsed.arguments == [game, "HOME=/Users/x"] && parsed.environment == ["WINEPREFIX=/B/One"],
+                    "padding \(padding): \(parsed)")
+            // Every empty argument at the start goes with the padding.
+            let two = ProcessArguments.encode(executablePath: "/x/wine", arguments: ["", "", game],
+                                              environment: ["HOME=/Users/x", "LANG=C", "WINEPREFIX=/B/One"],
+                                              padding: padding)
+            let both = try #require(ProcessArguments.parse(two), "two empty, padding \(padding)")
+            #expect(both.arguments == [game, "HOME=/Users/x", "LANG=C"] && both.environment == ["WINEPREFIX=/B/One"],
+                    "two empty, padding \(padding): \(both)")
+        }
+        // WINEPREFIX first: it becomes an argument, and the game is lost.
+        let first = ProcessArguments.encode(executablePath: GameIdentityTests.loader, arguments: ["", game],
+                                            environment: ["WINEPREFIX=/B/One", "HOME=/Users/x"])
+        let parsed = try #require(ProcessArguments.parse(first))
+        #expect(parsed.arguments == [game, "WINEPREFIX=/B/One"] && parsed.environmentValue("WINEPREFIX") == nil)
+        #expect(GameIdentity.game(executablePath: GameIdentityTests.loader, processArguments: first, readLink: { _ in nil })
+                == nil)
+        #expect(ProcessArguments.parse(ProcessArguments.encode(executablePath: "/x/wine", arguments: [""], environment: []))
+                == nil)
+    }
+
     /// The first entry wins, the name must match up to its `=`, and the
     /// arguments are never taken for the environment.
     @Test func theEnvironmentIsLookedUpByItsWholeName() throws {
@@ -141,10 +174,10 @@ import Testing
     static let loader = ProcessArgumentsTests.loader
 
     static func wine(_ arguments: [String], prefix: String? = "/B/One", executable: String = loader,
-                     resolve: (String) -> String? = { _ in nil }) -> HoverGame? {
+                     readLink: (String) -> String? = { _ in nil }) -> HoverGame? {
         let environment = ["HOME=/Users/x"] + (prefix.map { ["WINEPREFIX=\($0)"] } ?? [])
         let record = ProcessArguments.encode(executablePath: executable, arguments: arguments, environment: environment)
-        return GameIdentity.game(executablePath: executable, processArguments: record, resolveLink: resolve)
+        return GameIdentity.game(executablePath: executable, processArguments: record, readLink: readLink)
     }
 
     /// Core's key normalization (SpeakerGenderPreferences.NormalizeGameKey),
@@ -194,14 +227,14 @@ import Testing
     /// A native program: `path:` its executable, named after its bundle.
     @Test func aNativeGameIsItsExecutable() throws {
         let bundle = "/Applications/Vampire Crawlers.app/Contents/MacOS/VampireCrawlers"
-        let game = try #require(GameIdentity.game(executablePath: bundle, processArguments: nil, resolveLink: { _ in nil }))
+        let game = try #require(GameIdentity.game(executablePath: bundle, processArguments: nil, readLink: { _ in nil }))
         #expect(game == HoverGame(key: "path:" + bundle, displayName: "Vampire Crawlers") && Self.coreHostAccepts(game))
-        #expect(GameIdentity.game(executablePath: "/usr/local/games/novel", processArguments: nil, resolveLink: { _ in nil })
+        #expect(GameIdentity.game(executablePath: "/usr/local/games/novel", processArguments: nil, readLink: { _ in nil })
                 == HoverGame(key: "path:/usr/local/games/novel", displayName: "novel"))
         // Core's form: NFC, no empty or dot components.
         let decomposed = "/Applications/Cafe\u{301}.app//Contents/./MacOS/x/../Cafe\u{301}"
         let canonical = try #require(GameIdentity.game(executablePath: decomposed, processArguments: nil,
-                                                       resolveLink: { _ in nil }))
+                                                       readLink: { _ in nil }))
         #expect(canonical == HoverGame(key: "path:/Applications/Caf\u{E9}.app/Contents/MacOS/Caf\u{E9}", displayName: "Caf\u{E9}"))
         #expect(Self.coreHostAccepts(canonical) && canonical.key.unicodeScalars.count == canonical.key.count)
     }
@@ -212,10 +245,10 @@ import Testing
         let refused = ["relative/game", "", "/Games/Novel ", "/Games/Novel\u{A0}", "/Games/Novel\"", "/Games/No\u{0}vel",
                        "/" + String(repeating: "a", count: 251)]
         for path in refused {
-            #expect(GameIdentity.game(executablePath: path, processArguments: nil, resolveLink: { _ in nil }) == nil, "\(path)")
+            #expect(GameIdentity.game(executablePath: path, processArguments: nil, readLink: { _ in nil }) == nil, "\(path)")
         }
         let longest = "/" + String(repeating: "a", count: 250)
-        let game = GameIdentity.game(executablePath: longest, processArguments: nil, resolveLink: { _ in nil })
+        let game = GameIdentity.game(executablePath: longest, processArguments: nil, readLink: { _ in nil })
         #expect(game?.key.utf16.count == 256 && Self.coreHostAccepts(game))
         // The reference agrees that each refused one would not stay itself.
         for path in ["/Games/Novel ", "/Games/Novel\"", "/Games//Novel", "/Games/./Novel"] {
@@ -269,7 +302,7 @@ import Testing
                                     ([Self.loader, wineloader, #"C:\Games\Novel\Novel.exe"#], 2)] {
             let record = ProcessArgumentsTests.shifted(executablePath: wineloader, arguments: arguments,
                                                        environment: ["HOME=/Users/x", "WINEPREFIX=/B/One"], shifts: shifts)
-            let game = GameIdentity.game(executablePath: wineloader, processArguments: record, resolveLink: { _ in nil })
+            let game = GameIdentity.game(executablePath: wineloader, processArguments: record, readLink: { _ in nil })
             #expect(game == novel && Self.coreHostAccepts(game), "\(arguments.count) arguments, \(shifts) shifts")
         }
     }
@@ -281,49 +314,104 @@ import Testing
         #expect(Self.wine([#"C:\Games\Novel\Novel.exe"#], prefix: nil) == nil)
         #expect(Self.wine([#"C:\Games\Novel\Novel.exe"#], prefix: "bottles/one") == nil)
         #expect(Self.wine(["/Users/x/Games/Novel.exe"], prefix: nil)?.key == "path:/Users/x/Games/Novel.exe")
-        #expect(GameIdentity.game(executablePath: Self.loader, processArguments: nil, resolveLink: { _ in "/" }) == nil)
-        #expect(GameIdentity.game(executablePath: Self.loader, processArguments: [1, 2, 3], resolveLink: { _ in "/" }) == nil)
+        #expect(GameIdentity.game(executablePath: Self.loader, processArguments: nil, readLink: { _ in "/" }) == nil)
+        #expect(GameIdentity.game(executablePath: Self.loader, processArguments: [1, 2, 3], readLink: { _ in "/" }) == nil)
     }
 
-    /// Other letters go through the bottle's dosdevices links, resolved by
-    /// realpath on a folder tree made under the test's scratch folder (the
-    /// links point inside it); a letter without a link is no game, and the
-    /// resolver is asked for exactly `<prefix>/dosdevices/<letter>:`.
-    @Test func otherDrivesFollowTheBottlesLinks() throws {
+    /// Other letters go through the text of the bottle's dosdevices link
+    /// (T29), joined by name and never followed: an absolute text as it
+    /// is, a relative one from the `dosdevices` folder, `..` never above
+    /// the root; the reader is asked for exactly `<prefix>/dosdevices/<x>:`
+    /// and C: never asks. A folder on the way may end in a space or a quote
+    /// (only the key's end is Core's to trim, T32); no text, or an empty
+    /// one, is no game. Stubs on short paths, so every key is a real one.
+    @Test func otherDrivesGoThroughTheirLinksText() {
+        let links: [String: String] = [
+            "/B/One/dosdevices/d:": "../drive_d", "/B/One/dosdevices/z:": "/",
+            "/B/One/dosdevices/e:": "/Volumes/GAMES ", "/B/One/dosdevices/f:": "../../../../x/./y/..",
+            "/B/One/dosdevices/g:": "/B/One/dosdevices/g:", "/B/One/dosdevices/i:": "",
+        ]
+        let asked = Box<[String]>([])
+        let read: (String) -> String? = { link in
+            asked.mutate { $0.append(link) }
+            return links[link]
+        }
+        let cases: [(String, String?)] = [
+            (#"D:\Games\Novel.exe"#, "path:/B/One/drive_d/Games/Novel.exe"),
+            (#"Z:\Users\x\Novel.exe"#, "path:/Users/x/Novel.exe"),
+            (#"E:\Games\Novel.exe"#, "path:/Volumes/GAMES /Games/Novel.exe"),
+            (#"F:\Novel.exe"#, "path:/x/Novel.exe"),
+            (#"G:\Novel.exe"#, "path:/B/One/dosdevices/g:/Novel.exe"),
+            (#"H:\Novel.exe"#, nil),
+            (#"I:\Novel.exe"#, nil),
+        ]
+        for (argument, key) in cases {
+            let game = Self.wine([argument], readLink: read)
+            #expect(game?.key == key, "\(argument): \(String(describing: game))")
+            if key != nil { #expect(game?.displayName == "Novel.exe" && Self.coreHostAccepts(game), "\(argument)") }
+        }
+        #expect(asked.get == ["d:", "z:", "e:", "f:", "g:", "h:", "i:"].map { "/B/One/dosdevices/" + $0 })
+        asked.set([])
+        #expect(Self.wine([#"C:\Novel.exe"#], readLink: read)?.key == "path:/B/One/drive_c/Novel.exe" && asked.get.isEmpty,
+                "C: is the bottle's drive_c, no link read")
+        // A bottle at the root.
+        #expect(Self.wine([#"D:\Novel.exe"#], prefix: "/", readLink: { $0 == "/dosdevices/d:" ? "../drive_d" : nil })?.key
+                == "path:/drive_d/Novel.exe")
+    }
+
+    /// A bottle or drive folder whose name ends in a space or a quote still
+    /// places the game: only the key's own end is what Core trims (T32), and
+    /// Core keeps such a key as it is; a key that ends in one is still none.
+    @Test func aFolderOnTheWayMayEndInASpaceOrAQuote() {
+        for prefix in ["/B/One ", "/B/One\"", "/B/One\u{A0}"] {
+            let game = Self.wine([#"C:\Games\Novel\Novel.exe"#], prefix: prefix)
+            #expect(game?.key == "path:\(prefix)/drive_c/Games/Novel/Novel.exe" && Self.coreHostAccepts(game), "«\(prefix)»")
+        }
+        let onE = Self.wine([#"E:\Games\Novel.exe"#], readLink: { _ in "/Volumes/GAMES\"" })
+        #expect(onE?.key == "path:/Volumes/GAMES\"/Games/Novel.exe" && Self.coreHostAccepts(onE))
+        #expect(GameIdentity.game(executablePath: "/B/One /novel ", processArguments: nil, readLink: { _ in nil }) == nil,
+                "the key's own end still refuses")
+    }
+
+    /// The real reader on links made under the test's scratch folder (T29):
+    /// it gives a link's own text, relative or absolute, never what the link
+    /// resolves to, so a missing target and a link to a link still give
+    /// their text (realpath would give nothing, or the last link's target);
+    /// a folder in place of a link gives its own path, and no entry is
+    /// nothing. `bottlePath` then places the game in what the text names,
+    /// by name (the scratch path may hold `//`, so the expected paths go
+    /// through the same lexical rule).
+    @Test func theDriveLinkIsReadNeverFollowed() throws {
         let scratch = try Scratch("game")
         defer { scratch.remove() }
         let bottle = try scratch.folder("b")
         let games = try scratch.folder("d/Games")
-        let root = try scratch.folder("z")
         let devices = try scratch.folder("b/dosdevices")
-        try FileManager.default.createSymbolicLink(atPath: devices.appendingPathComponent("d:").path,
-                                                   withDestinationPath: "../../d")
-        try FileManager.default.createSymbolicLink(at: devices.appendingPathComponent("z:"), withDestinationURL: root)
-        let realD = try #require(GameIdentity.realPath(games.deletingLastPathComponent().path))
-        let realZ = try #require(GameIdentity.realPath(root.path))
-        func expected(_ path: String) -> HoverGame? {
-            let key = "path:" + path
-            return key.utf16.count <= 256 ? HoverGame(key: key, displayName: "Novel.exe") : nil
+        let folder = try scratch.folder("b/dosdevices/f:")
+        let missing = scratch.root.appendingPathComponent("missing/E").path
+        let alias = scratch.root.appendingPathComponent("alias").path
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: devices.appendingPathComponent("d:").path, withDestinationPath: "../../d")
+        try manager.createSymbolicLink(atPath: devices.appendingPathComponent("e:").path, withDestinationPath: missing)
+        try manager.createSymbolicLink(atPath: alias, withDestinationPath: games.deletingLastPathComponent().path)
+        try manager.createSymbolicLink(atPath: devices.appendingPathComponent("y:").path, withDestinationPath: alias)
+        func link(_ letter: String) -> String { devices.appendingPathComponent(letter + ":").path }
+        #expect(GameIdentity.readLink(link("d")) == "../../d")
+        #expect(GameIdentity.readLink(link("e")) == missing, "a missing target still gives the text")
+        #expect(GameIdentity.readLink(link("y")) == alias, "a link to a link gives the first text")
+        #expect(GameIdentity.readLink(folder.path) == folder.path, "a folder in place of a link is itself")
+        #expect(GameIdentity.readLink(link("x")) == nil, "no entry")
+        func placed(_ letter: Character) -> String? {
+            guard let drive = letter.asciiValue else { return nil }
+            return GameIdentity.bottlePath(drive: drive, components: ["Games", "Novel.exe"], prefix: bottle.path,
+                                           readLink: GameIdentity.readLink)
         }
-        let asked = Box<[String]>([])
-        let resolve: (String) -> String? = { link in
-            asked.mutate { $0.append(link) }
-            return GameIdentity.realPath(link)
-        }
-        let onD = Self.wine([#"D:\Games\Novel.exe"#], prefix: bottle.path, resolve: resolve)
-        #expect(onD == expected(realD + "/Games/Novel.exe") && (onD == nil || Self.coreHostAccepts(onD)))
-        let onZ = Self.wine(["Z:/Novel.exe"], prefix: bottle.path, resolve: resolve)
-        #expect(onZ == expected(realZ + "/Novel.exe"))
-        #expect(Self.wine([#"E:\Novel.exe"#], prefix: bottle.path, resolve: resolve) == nil, "no link for E:")
-        #expect(asked.get == ["d:", "z:", "e:"].map { bottle.path + "/dosdevices/" + $0 })
-        // C: never asks: it is the bottle's drive_c.
-        asked.set([])
-        #expect(Self.wine([#"C:\Novel.exe"#], prefix: bottle.path, resolve: resolve)
-                == expected(bottle.path + "/drive_c/Novel.exe"))
-        #expect(asked.get.isEmpty)
-        // A drive mapped to the root.
-        #expect(Self.wine([#"Z:\Users\x\Novel.exe"#], resolve: { _ in "/" })?.key == "path:/Users/x/Novel.exe")
-        #expect(GameIdentity.realPath(scratch.root.appendingPathComponent("missing").path) == nil)
+        func lexical(_ path: String) throws -> String { try #require(GameIdentity.lexicalPath(path), "\(path)") }
+        #expect(try placed("d") == lexical(games.path + "/Novel.exe"))
+        #expect(try placed("e") == lexical(missing + "/Games/Novel.exe"), "a missing target is still placed")
+        #expect(try placed("y") == lexical(alias + "/Games/Novel.exe"), "the first link's text, not its target's")
+        #expect(try placed("f") == lexical(folder.path + "/Games/Novel.exe"))
+        #expect(try placed("x") == nil && placed("c") == lexical(bottle.path + "/drive_c/Games/Novel.exe"))
     }
 
     /// The window under the cursor: front to back, the first window of

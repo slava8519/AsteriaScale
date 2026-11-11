@@ -202,4 +202,55 @@ import Testing
         let shown = state.primary(after)
         #expect(!state.suspended && shown == .hoverPoint && state.shown == Shown(token: after, content: .card, screen: true))
     }
+
+    /// A refused ⌃⌥G is a notice: it takes the panel but no hover's token
+    /// (T31; on Windows the refusal leaves the overlay and the hover alone),
+    /// so a hover in flight still shows what comes after it: a screen hover
+    /// that has shown nothing yet its loading card and its card, a hover
+    /// whose loading card the notice covers (a ⌥V one, whose loading card
+    /// goes up when it starts, or a screen hover's, whose hover.loading
+    /// comes once) its card, each replacing the notice; its end without a
+    /// card, and the tracker's hide, leave the notice to its timer; a phrase
+    /// line joins no card the notice covered. A message of the app's own
+    /// still supersedes the hover.
+    @Test func aRefusalNoticeSupersedesNoHover() {
+        let notice = Shown(token: OverlayState.noticeToken, content: .message, screen: false)
+        for screen in [true, false] {
+            var state = OverlayState()
+            let older = state.beginScreen()
+            _ = state.primary(older)
+            let hover = screen ? state.beginScreen() : state.beginSelection()
+            state.notice()
+            #expect(state.token == hover && state.tokenIsScreen == screen && state.shown == notice,
+                    "screen \(screen): the notice took the panel, not the token")
+            var ended = state
+            for directive in [OverlayDirective.keep, .hide] {
+                let ending = ended.finish(directive, token: hover)
+                #expect(ending == Ending.unchanged && ended.shown == notice, "screen \(screen): \(directive)")
+            }
+            let hid = ended.trackerHide()
+            #expect(!hid && ended.shown == notice, "screen \(screen): the tracker leaves a notice")
+            if screen {
+                // Only a screen hover's loading card comes after it starts
+                // (the app's showLoading); a ⌥V hover's was up at its start.
+                let loading = state.loading(hover)
+                #expect(loading == .hoverPoint && state.shown == Shown(token: hover, content: .loading, screen: true),
+                        "its loading card replaces the notice")
+                state.notice()
+            }
+            let card = state.primary(hover)
+            #expect(card == .hoverPoint && state.shown == Shown(token: hover, content: .card, screen: screen),
+                    "screen \(screen): its card replaces the notice over its loading card")
+            state.notice()
+            let phrase = state.phrase(hover)
+            #expect(phrase == nil && state.shown == notice, "screen \(screen): no phrase for a covered card")
+            let message = state.finish(.message("x"), token: hover)
+            #expect(message == Ending.message && state.token == hover + 1, "screen \(screen): its end message still shows")
+        }
+        var state = OverlayState()
+        let screen = state.beginScreen()
+        state.message()
+        let late = state.primary(screen)
+        #expect(late == nil && state.token == screen + 1, "a message of the app's own still supersedes the hover")
+    }
 }

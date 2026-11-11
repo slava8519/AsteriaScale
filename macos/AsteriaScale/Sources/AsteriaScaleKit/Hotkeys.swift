@@ -100,7 +100,8 @@ public enum OverlayLevel: String, CaseIterable, Sendable {
 /// {"hotkeys": {"translateClipboard": {"keyCode": 9, "modifiers": 2304, "keyLabel": "V"}},
 ///  "overlayLevel": "screenSaver"}
 /// Either key may be missing (its default is used), and an action missing
-/// from "hotkeys" keeps its M14 default.
+/// from "hotkeys" keeps its default (`defaultSpec`: M14 for ⌥T, ⌥D and ⌥V,
+/// M20 for editSpeaker's ⌃⌥G).
 public struct AppPreferences: Codable, Sendable, Equatable {
     public static let defaultHotkeys = Dictionary(uniqueKeysWithValues: HotkeyAction.allCases.map { ($0, $0.defaultSpec) })
     public static let defaultOverlayLevel = OverlayLevel.screenSaver.rawValue

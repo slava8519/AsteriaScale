@@ -228,6 +228,14 @@ final class OverlayController {
         presentMessage(text, near: point)
     }
 
+    /// A refused ⌃⌥G: shown without taking the overlay from a hover in
+    /// flight, whose card replaces it, and so does the loading card of a
+    /// screen hover that has shown nothing yet (OverlayState.notice).
+    func showNotice(_ text: String, near point: NSPoint) {
+        state.notice()
+        presentMessage(text, near: point)
+    }
+
     private func presentMessage(_ text: String, near point: NSPoint) {
         model.message = text
         model.loading = false

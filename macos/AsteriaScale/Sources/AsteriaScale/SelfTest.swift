@@ -31,7 +31,7 @@ private struct SyntheticGameResolver: GameResolver {
         let record = ProcessArguments.encode(executablePath: Self.loader,
                                              arguments: [Self.loader, #"C:\Games\Novel\Novel.exe"#],
                                              environment: ["WINEPREFIX=\(Self.bottle)", "WINEDEBUG=-all"])
-        return GameIdentity.game(executablePath: Self.loader, processArguments: record, resolveLink: { _ in nil })
+        return GameIdentity.game(executablePath: Self.loader, processArguments: record, readLink: { _ in nil })
     }
 }
 
@@ -493,7 +493,10 @@ final class SelfTest {
     /// withheld, and hover.afterRestart's «door» card, which such a hover
     /// never owned, stays (T37). Then a hover whose permission says no: with
     /// the cursor gone its end message is not shown, with the cursor there it
-    /// is (HoverDriver's re-check before an end message).
+    /// is (HoverDriver's re-check before an end message). The shown hover's
+    /// card is what HoverDriver hands the speaker editor: the game the hover
+    /// sent, its point, no speaker in «Словарь», and the token of the card
+    /// the overlay shows.
     private func observationsHoverCheck() async {
         guard let display = DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 1000, height: 600),
                                                pixelWidth: 2000, pixelHeight: 1200) else {
@@ -558,6 +561,9 @@ final class SelfTest {
         let started = ContinuousClock.now
         let shown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { true }).value
         let took = started.duration(to: .now)
+        // Read before anything else reaches the overlay: ⌃⌥G opens the
+        // editor only on the card it shows.
+        let targetShows = app.speakerTarget.map { app.overlay.showsCard(of: $0.token) } == true
         noteOverlay()
         var history: [JSONValue] = []
         _ = await waitUntil(.seconds(3)) {
@@ -568,7 +574,10 @@ final class SelfTest {
         let loading = shown.loading, primary = shown.primary
         let target = app.speakerTarget?.target
         let targetOK = target?.point == point && target?.speaker == nil
-            && target?.game?.key == SyntheticGameResolver.expectedKey
+            && target?.game?.key == SyntheticGameResolver.expectedKey && targetShows
+        let targetNote = "game \(target?.game?.key ?? "none"), speaker \(target?.speaker?.name ?? "none"), card "
+            + (targetShows ? "shown" : "not the shown one")
+            + (targetOK ? "" : " (expected the hover's game, no speaker, the shown card)")
         let vision = "APPLE VISION"
         report("hover.observations", unshownOK && refusedOK && shown.result.outcome == .completed
                && shown.order == ["loading", "primary"]
@@ -582,10 +591,8 @@ final class SelfTest {
                + "\(shown.loadingTexts); card «\(primary?.source ?? "")» → «\(primary?.translation.prefix(30) ?? "")» "
                + "[\(primary?.provenance.wire ?? "?")] \(primary?.engineLabel ?? "none"); history "
                + (entry.map { "«\($0["source"]?.stringValue ?? "")» [\($0["engine"]?.stringValue ?? "")]" } ?? "none")
-               + "; speaker editor's card: game \(target?.game?.key ?? "none"), speaker "
-               + "\(target?.speaker?.name ?? "none")\(targetOK ? "" : " (expected the hover's game, no speaker)")"
-               + "; outcome \(shown.result.outcome); with the cursor gone: \(unshown.result.outcome), shown "
-               + "\(unshown.order), «door» card \(doorKept ? "kept" : "not kept"), editor's card "
+               + "; speaker editor's card: \(targetNote); outcome \(shown.result.outcome); with the cursor gone: "
+               + "\(unshown.result.outcome), shown \(unshown.order), «door» card \(doorKept ? "kept" : "not kept"), editor's card "
                + "\(targetKept ? "kept" : "replaced"), note «\(unshownNote ?? "")», history "
                + (unshownRecorded ? "recorded" : "none") + "; refused: \(refusedGone.result.outcome) with the cursor gone, "
                + "message «\(goneMessage ?? "none")»; with it there «\(hereMessage ?? "none")»")
@@ -694,8 +701,10 @@ final class SelfTest {
     /// selection hovers that name the speaker «Kotorl» (a misread «Kotori»)
     /// and send that game, each shown on the overlay as a hover over the
     /// screen shows it, and ⌃⌥G's own path opens the editor on it, with
-    /// the keys going through the panel's own key path. Checked: no card and
-    /// a card without a game give their Russian messages and open nothing;
+    /// the keys going through the panel's own key handler. Checked: no card
+    /// and a card without a game give their Russian messages and open
+    /// nothing, the second while a screen hover is in flight, which keeps the
+    /// overlay (its token stays the newest and its card still shows, T31);
     /// opening hides the card and keeps a screen hover's card off the
     /// overlay (the tracking is never on in a self-test, so its pause is
     /// pinned by SourceScanTests instead); the name corrected to «Kotori» and 2
@@ -703,7 +712,9 @@ final class SelfTest {
     /// throwaway home, with the status card «Kotori: женский род для
     /// Novel.exe»; the next card shows «Kotori», and the re-edit with 1
     /// reaches the record under «Kotorl», the spelling the card carried as
-    /// observedName; a digit while the name is edited is text, and Esc sends
+    /// observedName; the handler takes no digit when told the name is being
+    /// edited (whether the panel's field is being edited is the owner's
+    /// check, DoD 20.3 item 12.6, pinned by SourceScanTests), and Esc sends
     /// nothing. The editor never becomes key, and the app never becomes
     /// active or frontmost. The frontmost app's pid before and after is
     /// printed, not compared: the owner may switch apps during the run.
@@ -778,11 +789,17 @@ final class SelfTest {
             return
         }
         showAsScreenCard(seen, game: nil)
+        // A screen hover in flight that has shown nothing yet: the refusal
+        // must not take the overlay from it (T31).
+        let inFlight = overlay.beginObservationsHover(near: near)
         let noGame = app.editSpeaker(takeKeyboard: false)
         let noGameMessage = overlay.model.message
         noteOverlay()
-        expect(noGame == .noGame && noGameMessage == RU.speakerNoGame && !editor.isOpen,
-               "no game: \(String(describing: noGame)), «\(noGameMessage ?? "none")»")
+        let stillNewest = overlay.hoverToken == inFlight
+        let inFlightShown = overlay.apply(.primary(seen), token: inFlight)
+        expect(noGame == .noGame && noGameMessage == RU.speakerNoGame && !editor.isOpen && stillNewest && inFlightShown,
+               "no game: \(String(describing: noGame)), «\(noGameMessage ?? "none")», the hover in flight "
+               + "\(stillNewest ? "still newest" : "superseded"), its card \(inFlightShown ? "shown" : "dropped")")
 
         // Open, correct the name, 2.
         showAsScreenCard(seen, game: game)

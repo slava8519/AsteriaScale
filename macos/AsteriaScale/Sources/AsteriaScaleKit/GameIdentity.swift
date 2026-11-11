@@ -5,7 +5,7 @@ import Foundation
 // the cursor, and for a Wine process the Unix path of the game's .exe inside
 // its bottle. Everything here is pure over values the app reads (the window
 // list's records, the owner's executable path, its KERN_PROCARGS2 bytes) and
-// a link resolver, so every rule is tested on synthetic bytes and synthetic
+// a link reader, so every rule is tested on synthetic bytes and synthetic
 // folders; the app's screen source makes the one real read, and only while
 // capture is on (T22).
 
@@ -21,7 +21,12 @@ import Foundation
 /// tail), while argc stays the count the process was started with: its
 /// last arguments then read as empty strings and the rest of that tail as
 /// NULs before the environment. Whatever the kernel appends after the
-/// environment reads as more entries, which no lookup here names.
+/// environment reads as more entries, which no lookup here names. Empty
+/// arguments at the start cannot be told from the padding before them:
+/// `parse` skips them with it (argv[0], and the next ones while they stay
+/// empty), so the arguments start that many strings later and end that
+/// many strings into the environment, which loses those entries (`encode`
+/// writes such a record all the same; it does not read back).
 public struct ProcessArguments: Sendable, Equatable {
     public let executablePath: String
     public let arguments: [String]
@@ -52,9 +57,17 @@ public struct ProcessArguments: Sendable, Equatable {
     /// without its NUL. Every read is bounds-checked and nothing is
     /// allocated from argc, so a truncated buffer, one without a NUL or an
     /// argc of two billion ends in nil, never in a trap (a trap leaves a
-    /// crash report). An empty argument inside the list is an argument; a
-    /// run of NULs is skipped twice: the padding right after the executable
-    /// path, and whatever Wine's argv rewrite left after the arguments.
+    /// crash report). An empty argument after a non-empty one is an
+    /// argument; a run of NULs is skipped twice: the padding right after the
+    /// executable path, and whatever Wine's argv rewrite left after the
+    /// arguments. The first skip also takes every empty argument at the
+    /// start (argv[0], and the next ones while they stay empty), each a NUL
+    /// like the padding: the arguments then start at the first non-empty
+    /// one and end that many strings into the environment, which loses
+    /// those entries. A process Wine
+    /// starts begins with its loader's path; where its rewrite moves an
+    /// empty string to the front, the NULs it leaves at the end of the argv
+    /// area take that string's place, so the environment is still whole.
     public static func parse(_ bytes: [UInt8]) -> ProcessArguments? {
         guard bytes.count >= 4 else { return nil }
         let raw = UInt32(bytes[0]) | UInt32(bytes[1]) << 8 | UInt32(bytes[2]) << 16 | UInt32(bytes[3]) << 24
@@ -91,7 +104,10 @@ public struct ProcessArguments: Sendable, Equatable {
     /// A record laid out as `parse` reads it, with `padding` NULs after the
     /// executable path and an empty entry after the environment. The one
     /// place that spells the layout for the tests and for the self-test's
-    /// synthetic game; nothing here reads a real process.
+    /// synthetic game; nothing here reads a real process. Empty arguments
+    /// at the start are written as the kernel would write them, and `parse`
+    /// reads them back as padding (see `parse`): such a record does not
+    /// read back.
     public static func encode(executablePath: String, arguments: [String], environment: [String],
                               padding: Int = 3) -> [UInt8] {
         let argc = UInt32(truncatingIfNeeded: arguments.count)
@@ -169,13 +185,14 @@ public enum GameIdentity {
     /// game's .exe in its bottle, from its KERN_PROCARGS2 bytes: the first
     /// argument that is a fully qualified .exe outside Wine's own programs,
     /// a Windows path mapped through WINEPREFIX (C: is `drive_c`, another
-    /// letter what `dosdevices/<letter>:` resolves to through `resolveLink`)
-    /// or an absolute Unix path as it is; named after the .exe. Nil when
-    /// any of it cannot be had, and nil rather than a key Core would store
-    /// under another spelling or CoreHost would refuse (T32): no game then,
-    /// never Wine's own path and never a `process:` key for Wine.
+    /// letter the text of the link `dosdevices/<letter>:` as `readLink`
+    /// gives it, see `bottlePath`) or an absolute Unix path as it is; named
+    /// after the .exe. Nil when any of it cannot be had, and nil rather than
+    /// a key Core would store under another spelling or CoreHost would
+    /// refuse (T32): no game then, never Wine's own path and never a
+    /// `process:` key for Wine.
     public static func game(executablePath: String, processArguments: [UInt8]?,
-                            resolveLink: (String) -> String?) -> HoverGame? {
+                            readLink: (String) -> String?) -> HoverGame? {
         guard isWine(executablePath) else {
             guard let path = canonicalPath(executablePath), let key = key(forPath: path),
                   let name = displayName(nativeName(path)) else { return nil }
@@ -189,7 +206,7 @@ public enum GameIdentity {
             unixPath = path
         case .windows(let drive, let components):
             guard let prefix = process.environmentValue("WINEPREFIX") else { return nil }
-            unixPath = bottlePath(drive: drive, components: components, prefix: prefix, resolveLink: resolveLink)
+            unixPath = bottlePath(drive: drive, components: components, prefix: prefix, readLink: readLink)
         }
         guard let unixPath, let path = canonicalPath(unixPath), let key = key(forPath: path),
               let name = displayName(String(decoding: lastComponent(Array(path.utf8)), as: UTF8.self)) else { return nil }
@@ -241,28 +258,53 @@ public enum GameIdentity {
     }
 
     /// The Unix path of a Windows path in the bottle at `prefix` (Wine's
-    /// layout): C: is `<prefix>/drive_c`, any other letter what
-    /// `<prefix>/dosdevices/<letter>:` resolves to (realpath, injected).
+    /// layout), lexical only: C: is `<prefix>/drive_c`; any other letter is
+    /// what `readLink` gives for `<prefix>/dosdevices/<letter>:` (the
+    /// link's own text, injected): an absolute one as it is, a relative one
+    /// (Wine's `../drive_c` style) taken from the `dosdevices` folder, each
+    /// with `.` and `..` applied by name. No link inside the target is
+    /// followed, so its folders are never looked up (a drive mapped into
+    /// Documents or onto a removable volume would otherwise be touched on
+    /// every hover). As `..` goes by name, a relative link that climbs
+    /// above the bottle names another folder than the kernel would when the
+    /// bottle's folder is reached through a link, and so does any relative
+    /// link when `dosdevices` is itself one (Wine's own, `../drive_c`, stays
+    /// in the bottle, and Wine makes `dosdevices` a folder); the key is
+    /// still one per letter. The end-of-path rule of `canonicalPath` is the final
+    /// key's alone: a bottle or drive folder whose name ends in a space or a
+    /// quote still gives a key Core keeps as it is.
     static func bottlePath(drive: UInt8, components: [String], prefix: String,
-                           resolveLink: (String) -> String?) -> String? {
-        guard let root = canonicalPath(prefix) else { return nil }
+                           readLink: (String) -> String?) -> String? {
+        guard let root = lexicalPath(prefix) else { return nil }
         let base: String
         if drive == UInt8(ascii: "c") {
             base = root == "/" ? "/drive_c" : root + "/drive_c"
         } else {
-            let link = (root == "/" ? "" : root) + "/dosdevices/" + String(decoding: [drive], as: UTF8.self) + ":"
-            guard let resolved = resolveLink(link), let target = canonicalPath(resolved) else { return nil }
+            let devices = (root == "/" ? "" : root) + "/dosdevices/"
+            guard let text = readLink(devices + String(decoding: [drive], as: UTF8.self) + ":"), !text.isEmpty,
+                  let target = lexicalPath(text.utf8.first == UInt8(ascii: "/") ? text : devices + text) else { return nil }
             base = target
         }
         return (base == "/" ? "" : base) + "/" + components.joined(separator: "/")
     }
 
-    /// realpath(3): `path` with every link resolved, or nil when it does not
-    /// resolve (a missing `dosdevices` entry).
-    public static func realPath(_ path: String) -> String? {
-        guard let resolved = Darwin.realpath(path, nil) else { return nil }
-        defer { free(resolved) }
-        return String(cString: resolved)
+    /// What a `dosdevices` entry names, read with readlink(2) alone (T29):
+    /// the link's own text, relative or absolute as Wine wrote it, and
+    /// nothing of its target, which may lie in a folder macOS guards
+    /// (Documents, Downloads, a removable or network volume) and would then
+    /// raise a privacy prompt in the middle of a hover; `path` itself when
+    /// the entry is not a link (EINVAL: a folder, which a bottle may hold in
+    /// place of a link; realpath kept it too); nil when there is no entry or
+    /// it cannot be read (ENOENT, EACCES, …) and when the text is empty or
+    /// fills the buffer (it may be cut). The text is decoded from exactly
+    /// the bytes readlink wrote: it adds no NUL.
+    public static func readLink(_ path: String) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) + 1)
+        let count = Darwin.readlink(path, &buffer, buffer.count)
+        let error = errno
+        guard count >= 0 else { return error == EINVAL ? path : nil }
+        guard count > 0, count < buffer.count else { return nil }
+        return String(decoding: buffer[0..<count].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// hover.resolve's game.key for an absolute path, nil when it is longer
@@ -278,14 +320,21 @@ public enum GameIdentity {
     /// is the one the app sent and a second normalization changes nothing.
     /// Nil for what Core would change in another way or refuse: a path that
     /// is not absolute, holds a NUL, or ends in white space or a quote,
-    /// which Core trims off the key (T32).
+    /// which Core trims off the key (T32). Only for a key's whole path: a
+    /// folder on the way to it goes through `lexicalPath`.
     static func canonicalPath(_ path: String) -> String? {
-        let text = path.precomposedStringWithCanonicalMapping
-        let bytes = Array(text.utf8)
-        guard bytes.first == UInt8(ascii: "/"), !bytes.contains(0) else { return nil }
-        let result = "/" + components(bytes, separators: [UInt8(ascii: "/")]).joined(separator: "/")
-        guard let last = result.unicodeScalars.last, !last.properties.isWhitespace, last != "\"" else { return nil }
+        guard let result = lexicalPath(path), let last = result.unicodeScalars.last,
+              !last.properties.isWhitespace, last != "\"" else { return nil }
         return result
+    }
+
+    /// `path` in NFC with empty and `.` components dropped and `..` applied
+    /// by name, never above the root, as GetFullPath does on Unix; nil when
+    /// it is not absolute or holds a NUL. No file is read.
+    static func lexicalPath(_ path: String) -> String? {
+        let bytes = Array(path.precomposedStringWithCanonicalMapping.utf8)
+        guard bytes.first == UInt8(ascii: "/"), !bytes.contains(0) else { return nil }
+        return "/" + components(bytes, separators: [UInt8(ascii: "/")]).joined(separator: "/")
     }
 
     /// A game's display name: NFC, trimmed, 1...256 UTF-16 units.

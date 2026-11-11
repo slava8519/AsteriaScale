@@ -192,7 +192,10 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   and holds the speaker editor's model (20.3, DoD 5, docs/MACOS.md T29-T32):
   `ProcessArguments` parses a KERN_PROCARGS2 record from bytes (any byte
   string ends in a record or nil, never a trap; the run of NULs Wine's
-  in-place argv rewrite leaves after the arguments is skipped) and
+  in-place argv rewrite leaves after the arguments is skipped; empty
+  arguments at the start, an empty argv[0] and the empty ones right after
+  it, cannot be told from the padding and are skipped with it, shifting
+  as many environment entries into the arguments) and
   `GameIdentity` takes the frontmost window of another process under the
   cursor that is layer 0, or above it when its owner is Wine (a full-screen
   bottle's level is unmeasured; any other window above 0 is passed over,
@@ -200,14 +203,17 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   bounds, and names `path:` its
   executable, or for Wine (`wine*`, anything inside CrossOver.app) the Unix
   path of the first fully qualified .exe in its arguments outside Wine's own
-  programs, C: as `<WINEPREFIX>/drive_c` and other letters through
-  `<WINEPREFIX>/dosdevices/<x>:` resolved by realpath (which reads the
-  bottle and the link's target; no prompt for a protected folder there is
-  owner check 12.4); never Wine's own
-  path or `process:`, and no game rather than a key Core would store under
-  another spelling or CoreHost would refuse (T32). `SpeakerEditor` opens
+  programs, C: as `<WINEPREFIX>/drive_c` and other letters through the
+  text of the link `<WINEPREFIX>/dosdevices/<x>:`, read with readlink and
+  joined by name, never followed (its target is never looked up; no
+  prompt for a bottle in a protected folder is owner check 12.4); never
+  Wine's own path or `process:`, and no game rather than a key Core would
+  store under another spelling or CoreHost would refuse (T32: the key's
+  own end only, a bottle or drive folder may end in a space or a quote).
+  `SpeakerEditor` opens
   only on a shown card of a screen hover with a speaker and a game (else
-  «Под курсором нет имени говорящего» or «Не удалось определить игру…»),
+  «Под курсором нет имени говорящего» or «Не удалось определить игру…»,
+  shown as an `OverlayState.notice`, which supersedes no hover in flight),
   maps keys 1, 2, 3 and Esc, and sends speaker.set with the hover's game,
   the card's observedName as it is and the name as Core keeps it;
   `SpeakerClient` sends it, and `OverlayState.suspend` keeps every screen
@@ -813,7 +819,8 @@ certificate creation, `Add-AppxPackage`.
   `kCGWindowSharingState` and `kCGWindowIsOnscreen` appear on any line of
   any source (never the window's name, T29), and another process's
   arguments record (`KERN_PROCARGS…`) is named in code only in
-  `ScreenSource.swift`. A construction of `ScreenSource`, in any spelling the scan
+  `ScreenSource.swift`, and its lower-case sysctl name on no line. A
+  construction of `ScreenSource`, in any spelling the scan
   knows (`ScreenSource(`, `ScreenSource.init`, `.init(permit:`), appears in
   the package's sources only on the one line of `AppDelegate.swift` that
   unwraps `CaptureGate`'s permit, besides the initializer's declaration in
@@ -860,12 +867,24 @@ certificate creation, `Add-AppxPackage`.
   `screenHoverEnded`, then `overlay.finish`, and carries out the tracker's
   hideCard only through `overlay.trackerHide()` (no plain hide there), and
   a card clears an earlier card's phrase line in `Overlay.swift` (the
-  suite does not link the app, so the calls are pinned). The capture file
-  lists only on-screen windows without the desktop for the game and reads
-  another process's record in one member, called once and only for Wine,
-  and `AppDelegate.swift` decides the tracking from the speaker editor's
-  state, deciding again right after the editor opens and right after the
-  overlay resumes on close (pinned too: the self-test never tracks). Event taps, global NSEvent monitors,
+  suite does not link the app, so the calls are pinned). The capture
+  file's whole `game(at:)` is pinned (only on-screen windows without the
+  desktop, Kit's window rule with the app's Wine check of the owner,
+  another process's record read only for Wine, the `dosdevices` link read
+  and never followed), and that record's reader, pinned whole and the
+  only place naming the record's constant, is named only in its
+  declaration, that call and the argument label. `AppDelegate.swift`
+  decides the tracking from the speaker editor's state, deciding again
+  right after the editor opens and right after the overlay resumes on
+  close, closes the editor only there and at the quit, resumes the overlay
+  only there and shows a refused ⌃⌥G only as a notice; `HoverDriver.swift`
+  hands the editor the shown card's speaker, game, point and token right
+  after recording the card; `SpeakerEditorPanel.swift`'s name-field state
+  and key path, «Отмена»'s action and the key handler (a cancel only calls
+  `onCancel`) and `close()` are pinned whole, and of `close`, `orderOut`,
+  `performClose` and `setIsVisible` it names only `close()`'s declaration
+  and the one `orderOut` in it (pinned too: the self-test never tracks and
+  never types). Event taps, global NSEvent monitors,
   `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
   `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,
