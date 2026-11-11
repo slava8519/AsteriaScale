@@ -263,8 +263,8 @@ public struct OcrSelectResult: Sendable, Hashable {
     }
 }
 
-/// The game a hover belongs to, as hover.resolve's `game` (the host names it,
-/// docs/MACOS.md T29; the resolver comes with the speaker editor).
+/// The game a hover belongs to, as hover.resolve's `game` and speaker.set's
+/// (the host names it, docs/MACOS.md T29; GameIdentity makes it).
 public struct HoverGame: Sendable, Hashable {
     public let key: String
     public let displayName: String

@@ -6,9 +6,10 @@ import CoreVideo
 import Darwin
 import ScreenCaptureKit
 
-/// The screen capture (roadmap 20.3 DoD 7 and 8; docs/MACOS.md T21, T22):
-/// the only file of the package that names ScreenCaptureKit, the Screen
-/// Recording preflight and request, and the window-list API
+/// The screen capture (roadmap 20.3 DoD 7 and 8; docs/MACOS.md T21, T22)
+/// and the game under the cursor (DoD 5, T29): the only file of the package
+/// that names ScreenCaptureKit, the Screen Recording preflight and request,
+/// the window-list API and another process's KERN_PROCARGS2 record
 /// (SourceScanTests holds every other file to that).
 ///
 /// An instance exists only in a process whose CaptureGate decision is on: its
@@ -26,7 +27,7 @@ import ScreenCaptureKit
 /// permission is granted: `capture` checks it first, and only the menu item
 /// «Разрешить запись экрана…» calls `requestPermission`, the one call that may
 /// show the system's prompt.
-final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
+final class ScreenSource: FrameSource, CapturePermission, GameResolver, @unchecked Sendable {
     private let lock = NSLock()
     /// The shareable content (displays and applications), kept until the
     /// screens change: asking for it costs a round trip to the window server
@@ -146,6 +147,53 @@ final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
         if error is CancellationError { return .cancelled }
         let error = error as NSError
         return CaptureFailure.from(domain: error.domain, code: error.code, isCaptureDomain: error.domain == SCStreamErrorDomain)
+    }
+
+    // MARK: The game under the cursor
+
+    /// The game under `point` (T29): the owner of the frontmost window there
+    /// that is not this app's and is ordinary (layer 0) or Wine's above
+    /// that, found in the window list by its owner's pid, its layer and its
+    /// bounds only (a window's name needs Screen Recording and is never
+    /// read), then that process's executable (proc_pidpath) and, for Wine
+    /// only, its KERN_PROCARGS2 record (arguments and environment; readable
+    /// for a process of the same user, and never read for any other
+    /// program, whose environment may hold secrets). GameIdentity decides
+    /// the rest; nil when nothing names a game. An instance member like the
+    /// capture: only a process whose capture is on reads the window list
+    /// for it or another process's record.
+    func game(at point: GlobalPoint) async -> HoverGame? {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        let windows = (list ?? []).compactMap { windowRecord($0) }
+        let primary = CGDisplayBounds(CGMainDisplayID())
+        let isWine: (Int32) -> Bool = { pid in ProcessTable.executablePath(pid).map(GameIdentity.isWine) ?? false }
+        guard let owner = GameIdentity.windowOwner(at: point, windows: windows, ownPid: getpid(),
+                                                   primaryHeight: Double(primary.height), isWine: isWine),
+              let path = ProcessTable.executablePath(owner) else { return nil }
+        let record = GameIdentity.isWine(path) ? processArguments(owner) : nil
+        return GameIdentity.game(executablePath: path, processArguments: record, resolveLink: GameIdentity.realPath)
+    }
+
+    /// One window-list entry as Kit takes it: owner pid, layer, bounds.
+    private func windowRecord(_ info: [String: Any]) -> GameIdentity.WindowRecord? {
+        guard let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
+        return GameIdentity.WindowRecord(ownerPid: pid, layer: layer,
+                                         bounds: PointRect(x: Double(rect.minX), y: Double(rect.minY),
+                                                           width: Double(rect.width), height: Double(rect.height)))
+    }
+
+    /// The KERN_PROCARGS2 bytes of `pid` (its executable path, arguments
+    /// and environment), at most 4 MiB; nil when the kernel refuses.
+    private func processArguments(_ pid: pid_t) -> [UInt8]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, (1...(4 << 20)).contains(size) else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size <= buffer.count else { return nil }
+        return Array(buffer.prefix(size))
     }
 
     // MARK: The window server's record of an own window

@@ -39,26 +39,34 @@ public enum HotkeyAction: String, CaseIterable, Sendable, Codable {
     case toggleHover
     case showDiagnostic
     case translateClipboard
+    /// The speaker editor (T17, T31). Last on purpose: `carbonId` is the
+    /// position in `allCases`, so a new action always goes at the end.
+    case editSpeaker
 
     public var russianTitle: String {
         switch self {
         case .toggleHover: return RU.hotkeyToggleHover
         case .showDiagnostic: return RU.hotkeyShowDiagnostic
         case .translateClipboard: return RU.hotkeyTranslateClipboard
+        case .editSpeaker: return RU.hotkeyEditSpeaker
         }
     }
 
-    /// Owner decision M14: ⌥T, ⌥D and ⌥V. The owner accepts that these
-    /// system-wide hotkeys stop † ∂ √ from being typed in other apps. Option-
-    /// only combinations were reported broken on macOS 15; RegisterEventHotKey
-    /// accepted all three (status 0) on macOS 27.0.1 when 20.2 was built, and
-    /// a registration failure is shown as Russian text, never answered by
-    /// silently picking other keys. Key codes are Carbon's kVK_ANSI_*.
+    /// Owner decisions M14 and M20: ⌥T, ⌥D and ⌥V (M14), and ⌃⌥G for the
+    /// speaker editor (M20, T40), which types no character in any layout
+    /// and is not Option-only. The owner accepts that the first three stop
+    /// † ∂ √ from being typed in other apps. Option-only combinations were
+    /// reported broken on macOS 15; RegisterEventHotKey accepted ⌥T, ⌥D and
+    /// ⌥V (status 0) on macOS 27.0.1 when 20.2 was built, and all four in
+    /// 20.3's self-test, and a registration failure is shown as Russian
+    /// text, never answered by silently picking other keys. Key codes are
+    /// Carbon's kVK_ANSI_*.
     public var defaultSpec: HotkeySpec {
         switch self {
         case .toggleHover: return HotkeySpec(keyCode: 0x11, modifiers: [.option], keyLabel: "T")
         case .showDiagnostic: return HotkeySpec(keyCode: 0x02, modifiers: [.option], keyLabel: "D")
         case .translateClipboard: return HotkeySpec(keyCode: 0x09, modifiers: [.option], keyLabel: "V")
+        case .editSpeaker: return HotkeySpec(keyCode: 0x05, modifiers: [.control, .option], keyLabel: "G")
         }
     }
 

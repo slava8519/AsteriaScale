@@ -132,7 +132,9 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   reaped), the single-instance `InstanceLock`, the `OrphanSweep` of a group a
   killed app left behind, `AppPaths` (CoreHost's arguments exactly per
   `launch-args-v1.txt`, its environment with `DOTNET_EnableDiagnostics=0` and
-  a private `TMPDIR`), the default hotkeys ⌥T, ⌥D and ⌥V (M14), the
+  a private `TMPDIR`), the default hotkeys ⌥T, ⌥D, ⌥V and ⌃⌥G (M14, M20;
+  the speaker editor's `editSpeaker` is the last `HotkeyAction`, whose
+  order gives the Carbon ids), the
   settings and model status the app reads (`SettingsClient`, the only path
   to `settings.json`, which CoreHost alone writes; `ModelsStatus`), how a
   hover's end is shown (`HoverReport`), the app log, the bundle id
@@ -162,8 +164,11 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   `stale_frame`, one new plan when CoreHost refuses a hover as
   `bad_request` and the mode turns out changed, `frame_mismatch`, the
   budget, a cancellation at any step) over `FrameSource`,
-  `CapturePermission`, `TextRecognizer` and `GameResolver` (`NoGameResolver`
-  until the speaker editor), `HoverTracker` (a pure state machine on an
+  `CapturePermission`, `TextRecognizer` and `GameResolver` (the screen
+  source's instance, so only with capture on, where screen hovers exist at
+  all; `NoGameResolver` stands in only in the self-test's refused hover;
+  the game it names reaches the
+  app before any hover.resolve), `HoverTracker` (a pure state machine on an
   injected `MonotonicClock`: 90 ms polls, 15 display pixels, the settings'
   delay clamped to 350..1500 ms, an own window only hides the card, a hover
   takes the cursor of the poll that starts it and its cards, a phrase line
@@ -182,7 +187,31 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   its `Permit` is made only in `decide`, its initializer fileprivate),
   `CaptureFailure` (-3801 is the permission message) and `RecognitionStatus`
   (the menu's recognition line; a tracked hover's refused capture brings
-  back the permission line and item and stops tracking until a relaunch). `Sources/AsteriaScaleVision` is Apple
+  back the permission line and item and stops tracking until a relaunch;
+  no tracking while the speaker editor is open). Kit also names the game
+  and holds the speaker editor's model (20.3, DoD 5, docs/MACOS.md T29-T32):
+  `ProcessArguments` parses a KERN_PROCARGS2 record from bytes (any byte
+  string ends in a record or nil, never a trap; the run of NULs Wine's
+  in-place argv rewrite leaves after the arguments is skipped) and
+  `GameIdentity` takes the frontmost window of another process under the
+  cursor that is layer 0, or above it when its owner is Wine (a full-screen
+  bottle's level is unmeasured; any other window above 0 is passed over,
+  the desktop never taken), from the window list's owner pid, layer and
+  bounds, and names `path:` its
+  executable, or for Wine (`wine*`, anything inside CrossOver.app) the Unix
+  path of the first fully qualified .exe in its arguments outside Wine's own
+  programs, C: as `<WINEPREFIX>/drive_c` and other letters through
+  `<WINEPREFIX>/dosdevices/<x>:` resolved by realpath (which reads the
+  bottle and the link's target; no prompt for a protected folder there is
+  owner check 12.4); never Wine's own
+  path or `process:`, and no game rather than a key Core would store under
+  another spelling or CoreHost would refuse (T32). `SpeakerEditor` opens
+  only on a shown card of a screen hover with a speaker and a game (else
+  «Под курсором нет имени говорящего» or «Не удалось определить игру…»),
+  maps keys 1, 2, 3 and Esc, and sends speaker.set with the hover's game,
+  the card's observedName as it is and the name as Core keeps it;
+  `SpeakerClient` sends it, and `OverlayState.suspend` keeps every screen
+  hover off the overlay while the editor is open. `Sources/AsteriaScaleVision` is Apple
   Vision itself, Foundation, Vision, CoreGraphics, CoreText, ImageIO and
   CryptoKit only (no AppKit, no screen capture): `VisionTextRecognizer`
   (T23; frames below 1.5 pixels per point reach Vision enlarged twice
@@ -197,12 +226,17 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   while capture is on and not permitted or a tracked hover's capture was
   refused, «Разрешить запись экрана…»), the
   click-through overlay, the Carbon hotkeys, the settings and «Проверка
-  перевода» windows, `HoverDriver` (the glue from the tracker through the
+  перевода» windows, the speaker editor «Род говорящего»
+  (`SpeakerEditorPanel.swift`: ⌃⌥G on a shown card opens a non-activating
+  panel near it, the card hides and the tracking pauses until it closes;
+  the cursor is never moved, T31), `HoverDriver` (the glue from the tracker through the
   pipeline to the overlay), `ScreenSource.swift` (the screen capture,
   constructed once at launch only when `CaptureGate` says on; the only file
-  that names ScreenCaptureKit, the Screen Recording preflight and request
-  and the window-list API; the preflight, the request and the capture are
-  instance members, and the window-list read is its one static) and
+  that names ScreenCaptureKit, the Screen Recording preflight and request,
+  the window-list API and another process's KERN_PROCARGS2 record; the
+  preflight, the request, the capture and the game read (`GameResolver`)
+  are instance members, and the self-test's window-list read is its one
+  static) and
   the scripted `--self-test`; CoreHost's
   free-text statuses appear only in «Проверка перевода» and `app.log`, never
   in the menu or the overlay. `Bundle/` holds the Info.plist template and
@@ -455,15 +489,20 @@ also registers the bundle's path in the owner's LaunchServices database
 (outside `~/Library`, so exit 12 cannot see it), and the record outlives the
 bundle: never clean it (`lsregister -u <path>` or `-gc` is the owner's) and
 list the bundle paths you launched in your report. A physical press of
-⌥T, ⌥D or ⌥V is an owner check too: the self-test proves registration and
+⌥T, ⌥D, ⌥V or ⌃⌥G is an owner check too: the self-test proves registration and
 the handler, not that the window server delivers a real key. Stage 20.3
 (Apple Vision and screen capture) adds four rules. No agent run calls
 ScreenCaptureKit, `CGPreflightScreenCaptureAccess`,
 `CGRequestScreenCaptureAccess` or anything else that can raise a privacy
 (TCC) prompt (Screen Recording, Accessibility, Input Monitoring), and no
-test, probe or script creates a `ScreenSource` or calls its capture or
-permission members: that code is compiled and scanned, never run; only
-its static `ownWindowRecord` (one window-list read of the app's own panel,
+test, probe or script creates a `ScreenSource` or calls its capture,
+permission or game members (the window list, another process's
+arguments and environment): that code is compiled and scanned, never run;
+`GameIdentity` is tested on synthetic bytes and folders only, and the
+self-test's speaker editor takes its game from a stub resolver and is
+driven without making it key, activating the app or changing the active
+app; only
+`ScreenSource`'s static `ownWindowRecord` (one window-list read of the app's own panel,
 no ScreenCaptureKit, no permission) runs, in the self-test's
 `overlay.windowServer`. A real capture, the cursor tracking and the first grant
 are owner checks, and the app turns capture on only when the owner
@@ -726,7 +765,9 @@ certificate creation, `Add-AppxPackage`.
 - The Swift suite (`macos/AsteriaScale/Tests/AsteriaScaleKitTests`) is Swift
   Testing only. Every suite that starts a process is nested in the
   serialized `ProcessSuites`; a test puts its folders under `Scratch` (the
-  script's `ASTERIA_TEST_TMPDIR`) and removes them, gives every child it
+  script's `ASTERIA_TEST_TMPDIR`) and removes them (the only symbolic
+  links the suite makes are `GameIdentityTests`' bottle `dosdevices` links,
+  inside its scratch folder and pointing inside it), gives every child it
   spawns its own home and `TMPDIR`, and marks every `/bin/sleep` it starts
   with the duration `sleepMarker` (`3141.59` followed by the run's ten-digit
   `ASTERIA_TEST_RUN_TOKEN`; the fake gets the token as `-X asteria_run=…`),
@@ -764,10 +805,15 @@ certificate creation, `Add-AppxPackage`.
   every `CGWindowList*` name and the Swift `CGImage(windowListFrom…)`).
   That file may hold ScreenCaptureKit, its three types the capture uses and
   the two Screen Recording calls on any line, and of the window-list API
-  only the one line of the allow-list: `CGWindowListCopyWindowInfo` in the
+  only the two lines of the allow-list: `CGWindowListCopyWindowInfo` in the
   static helper through which 20.2's `overlay.windowServer` self-test check
   reads its own panel's record, which needs no instance and asks for no
-  permission. A construction of `ScreenSource`, in any spelling the scan
+  permission, and in the instance's game read. Of the window list's keys
+  only `kCGWindowOwnerPID`, `kCGWindowLayer`, `kCGWindowBounds`,
+  `kCGWindowSharingState` and `kCGWindowIsOnscreen` appear on any line of
+  any source (never the window's name, T29), and another process's
+  arguments record (`KERN_PROCARGS…`) is named in code only in
+  `ScreenSource.swift`. A construction of `ScreenSource`, in any spelling the scan
   knows (`ScreenSource(`, `ScreenSource.init`, `.init(permit:`), appears in
   the package's sources only on the one line of `AppDelegate.swift` that
   unwraps `CaptureGate`'s permit, besides the initializer's declaration in
@@ -807,14 +853,19 @@ certificate creation, `Add-AppxPackage`.
   static or class member but `ownWindowRecord`, whose whole text is
   pinned (its body reads that one window record and nothing else), and no
   extension header in any source names the class and no typealias stands
-  for it, so the preflight, the request and the capture need an
-  instance.
+  for it, so the preflight, the request, the capture and the game read
+  need an instance.
   `HoverDriver.swift` ends a screen hover through one
   `HoverReport.afterScreenHover` with the fresh `mayShow()` re-check, then
   `screenHoverEnded`, then `overlay.finish`, and carries out the tracker's
   hideCard only through `overlay.trackerHide()` (no plain hide there), and
   a card clears an earlier card's phrase line in `Overlay.swift` (the
-  suite does not link the app, so the calls are pinned). Event taps, global NSEvent monitors,
+  suite does not link the app, so the calls are pinned). The capture file
+  lists only on-screen windows without the desktop for the game and reads
+  another process's record in one member, called once and only for Wine,
+  and `AppDelegate.swift` decides the tracking from the speaker editor's
+  state, deciding again right after the editor opens and right after the
+  overlay resumes on close (pinned too: the self-test never tracks). Event taps, global NSEvent monitors,
   `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
   `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,

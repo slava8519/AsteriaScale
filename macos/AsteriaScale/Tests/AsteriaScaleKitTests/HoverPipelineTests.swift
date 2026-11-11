@@ -229,6 +229,36 @@ actor ScriptedCore: CoreRequesting {
         #expect(HoverReport.after(result.outcome, shownPrimary: false).overlay == .message(RU.captureNoPermission))
     }
 
+    /// The game the resolver names reaches onGame once, before anything is
+    /// captured or sent, and goes out as hover.resolve's game; with none,
+    /// onGame says so and the hover carries no game (T29).
+    @Test func theResolvedGameIsReportedFirstAndSent() async throws {
+        let display = try #require(PipelineFixtures.display)
+        let named = HoverGame(key: "path:/B/One/drive_c/Games/Novel/Novel.exe", displayName: "Novel.exe")
+        for game in [named, nil] as [HoverGame?] {
+            let log = Box<[String]>([])
+            let payloads = Box<[JSONValue]>([])
+            let core = ScriptedCore { command, payload, _ in
+                if command == "ocr.plan" { return ScriptedCore.plan(.dictionary) }
+                log.mutate { $0.append("→ \(command)") }
+                if let payload { payloads.mutate { $0.append(payload) } }
+                return ["outcome": "completed"]
+            }
+            var games = StubGames(log: log)
+            games.game = game
+            let pipeline = HoverPipeline(client: ObservationClient(core: core), frames: StubFrames(log: log, tags: [0xa1]),
+                                         recognizer: StubRecognizer(log: log), fingerprinter: TagFingerprinter(),
+                                         games: games, permission: StubPermission(granted: true))
+            let result = await pipeline.run(at: PipelineFixtures.point, on: [display],
+                                            onGame: { named in log.mutate { $0.append("onGame \(named?.key ?? "none")") } },
+                                            onUpdate: { _ in })
+            #expect(result.outcome == .completed)
+            #expect(log.get == ["game", "onGame \(game?.key ?? "none")", "capture 900x340", "recognize 00000000000000a1",
+                                "→ hover.resolve"], "\(log.get)")
+            #expect(payloads.get.count == 1 && payloads.get.first?["game"] == game?.json)
+        }
+    }
+
     @Test func noDisplayUnderTheCursorIsNoHover() async throws {
         let display = try #require(PipelineFixtures.display)
         let core = ScriptedCore { _, _, _ in ScriptedCore.plan(.dictionary) }

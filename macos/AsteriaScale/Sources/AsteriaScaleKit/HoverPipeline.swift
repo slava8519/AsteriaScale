@@ -103,13 +103,17 @@ public struct HoverPipeline: Sendable {
     ///
     /// - Parameters:
     ///   - onPlan: each plan the hover follows (the first, and a changed one).
+    ///   - onGame: the game the resolver named (nil for none), once, before
+    ///     any hover.resolve is sent: the speaker editor stores a choice made
+    ///     on this hover's card under it (T29).
     ///   - onSent: each hover.resolve's request id, once written.
     ///   - onUpdate: the hover's updates in CoreHost's order.
     public func run(at point: GlobalPoint, on displays: [DisplayDescription],
                     onPlan: (@Sendable (CapturePlan) -> Void)? = nil,
+                    onGame: (@Sendable (HoverGame?) -> Void)? = nil,
                     onSent: (@Sendable (Int64) -> Void)? = nil,
                     onUpdate: @escaping @Sendable (HoverUpdate) -> Void) async -> Result {
-        let run = Run(pipeline: self, onPlan: onPlan, onSent: onSent, onUpdate: onUpdate)
+        let run = Run(pipeline: self, onPlan: onPlan, onGame: onGame, onSent: onSent, onUpdate: onUpdate)
         let outcome = await run.hover(at: point, on: displays)
         return Result(outcome: outcome, steps: run.steps)
     }
@@ -124,6 +128,7 @@ private struct Stopped: Error {
 private final class Run {
     let pipeline: HoverPipeline
     let onPlan: (@Sendable (CapturePlan) -> Void)?
+    let onGame: (@Sendable (HoverGame?) -> Void)?
     let onSent: (@Sendable (Int64) -> Void)?
     let onUpdate: @Sendable (HoverUpdate) -> Void
     private(set) var steps: [HoverPipeline.Step] = []
@@ -131,10 +136,11 @@ private final class Run {
     /// stale_frame retry (or a new plan) frames are always recognized.
     private var mayUseCachedFrame = true
 
-    init(pipeline: HoverPipeline, onPlan: (@Sendable (CapturePlan) -> Void)?, onSent: (@Sendable (Int64) -> Void)?,
-         onUpdate: @escaping @Sendable (HoverUpdate) -> Void) {
+    init(pipeline: HoverPipeline, onPlan: (@Sendable (CapturePlan) -> Void)?, onGame: (@Sendable (HoverGame?) -> Void)?,
+         onSent: (@Sendable (Int64) -> Void)?, onUpdate: @escaping @Sendable (HoverUpdate) -> Void) {
         self.pipeline = pipeline
         self.onPlan = onPlan
+        self.onGame = onGame
         self.onSent = onSent
         self.onUpdate = onUpdate
     }
@@ -162,6 +168,7 @@ private final class Run {
         let game = await pipeline.games.game(at: point)
         steps.append(.game(game?.key))
         try checkCancellation()
+        onGame?(game)
 
         var replanned = false
         while true {

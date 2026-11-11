@@ -128,10 +128,14 @@ final class HoverDriver {
         let overlay = app.overlay!
         let near = NSPoint(x: point.x, y: point.y)
         let token = overlay.beginObservationsHover(near: near)
-        let state = Box(ShownState())
+        let state = Box(ShownState(point: point))
         return Task { [weak self] in
             let result = await pipeline.run(at: point, on: displays, onPlan: { plan in
                 DispatchQueue.main.async { state.value.smart = plan.mode == .smart }
+            }, onGame: { game in
+                // Queued before any update of this hover (FIFO): its card
+                // finds the game the hover sent.
+                DispatchQueue.main.async { state.value.game = game }
             }, onSent: { id in
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.app?.hoverSent(id) } }
             }, onUpdate: { update in
@@ -166,6 +170,10 @@ final class HoverDriver {
     }
 
     private struct ShownState {
+        /// Where the hover is (Cocoa global points).
+        let point: GlobalPoint
+        /// The game the hover sent (the speaker editor stores a choice under it).
+        var game: HoverGame?
         var smart = false
         var loading: HoverLoading?
         var loadingTexts: [String] = []
@@ -196,6 +204,9 @@ final class HoverDriver {
             state.value.primary = primary
             state.value.order.append("primary")
             app.cardShown(primary)
+            // What ⌃⌥G opens the speaker editor on while this card shows.
+            app.speakerCardShown(SpeakerTarget(speaker: primary.speaker, game: state.value.game, point: state.value.point),
+                                 token: token)
         case .phrase:
             // Only while the cursor is still there (Windows posts every card
             // of a hover with RequireAnchorCurrent), and only under this

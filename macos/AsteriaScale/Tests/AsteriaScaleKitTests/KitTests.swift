@@ -152,17 +152,22 @@ import Testing
         #expect(HotkeyAction.toggleHover.defaultSpec.keyCode == UInt32(kVK_ANSI_T))
         #expect(HotkeyAction.showDiagnostic.defaultSpec.keyCode == UInt32(kVK_ANSI_D))
         #expect(HotkeyAction.translateClipboard.defaultSpec.keyCode == UInt32(kVK_ANSI_V))
+        #expect(HotkeyAction.editSpeaker.defaultSpec.keyCode == UInt32(kVK_ANSI_G))
     }
 
-    /// Owner decision M14: Option-only ⌥T, ⌥D and ⌥V.
-    @Test func defaultsAreTheOwnersOptionKeys() {
-        #expect(HotkeyAction.allCases.map(\.defaultSpec.display) == ["⌥T", "⌥D", "⌥V"])
+    /// Owner decisions M14 (Option-only ⌥T, ⌥D and ⌥V) and M20 (⌃⌥G for
+    /// the speaker editor, T40), the fourth action at the end: carbonId is
+    /// the position in allCases, so the first three keep their ids.
+    @Test func defaultsAreTheOwnersKeys() {
+        #expect(HotkeyAction.allCases.map(\.defaultSpec.display) == ["⌥T", "⌥D", "⌥V", "⌃⌥G"])
+        #expect(HotkeyAction.allCases.map(\.defaultSpec.modifiers) == [[.option], [.option], [.option], [.control, .option]])
+        #expect(HotkeyAction.allCases.map(\.carbonId) == [1, 2, 3, 4])
+        #expect(HotkeyAction.allCases.last == .editSpeaker && HotkeyAction.editSpeaker.rawValue == "editSpeaker")
         for action in HotkeyAction.allCases {
-            #expect(action.defaultSpec.modifiers == [.option])
             #expect(HotkeyAction(carbonId: action.carbonId) == action)
         }
         #expect(HotkeySpec(keyCode: 0x11, modifiers: [.control, .option, .shift, .command], keyLabel: "T").display == "⌃⌥⇧⌘T")
-        #expect(HotkeyAction(carbonId: 0) == nil && HotkeyAction(carbonId: 4) == nil)
+        #expect(HotkeyAction(carbonId: 0) == nil && HotkeyAction(carbonId: 5) == nil)
     }
 }
 
@@ -213,7 +218,8 @@ import Testing
         #expect(AppPreferences.load(from: url, log: log) == preferences)
         // Written as a JSON object keyed by action name, the form people write.
         let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        #expect((saved?["hotkeys"] as? [String: Any])?.keys.sorted() == ["showDiagnostic", "toggleHover", "translateClipboard"])
+        #expect((saved?["hotkeys"] as? [String: Any])?.keys.sorted()
+                == ["editSpeaker", "showDiagnostic", "toggleHover", "translateClipboard"])
         #expect(AppPreferences.load(from: url.appendingPathExtension("missing"), log: log) == AppPreferences())
         #expect(AppPreferences().hotkeys[.translateClipboard]?.display == "⌥V")
         #expect(lines.get.isEmpty, "\(lines.get)")

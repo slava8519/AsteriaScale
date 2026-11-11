@@ -1,25 +1,35 @@
 import Foundation
 
 /// The `source` of hover.resolve for the 20.2 diagnostic window:
-/// {"kind":"selection", text, hoveredWord, characterIndex, sentenceStable}.
-/// Apple Vision observations replace it in 20.3.
+/// {"kind":"selection", text, hoveredWord, characterIndex, sentenceStable,
+/// speakerName?}. Apple Vision observations replace it in 20.3; the
+/// self-test's speaker.editor names a speaker with it (Core puts a speaker on
+/// the card in «Умный словарь» only).
 public struct HoverSelection: Sendable, Equatable {
     public let text: String
     public let hoveredWord: String
     /// UTF-16 code units, because Core indexes .NET strings.
     public let characterIndex: Int
     public let sentenceStable: Bool
+    /// Who says the text, as a nameplate would name them; nil for none.
+    public let speakerName: String?
 
-    public init(text: String, hoveredWord: String, characterIndex: Int, sentenceStable: Bool = true) {
+    public init(text: String, hoveredWord: String, characterIndex: Int, sentenceStable: Bool = true,
+                speakerName: String? = nil) {
         self.text = text
         self.hoveredWord = hoveredWord
         self.characterIndex = characterIndex
         self.sentenceStable = sentenceStable
+        self.speakerName = speakerName
     }
 
     public var payload: JSONValue {
-        ["kind": "selection", "text": .string(text), "hoveredWord": .string(hoveredWord),
-         "characterIndex": .integer(Int64(characterIndex)), "sentenceStable": .bool(sentenceStable)]
+        var payload: [String: JSONValue] = [
+            "kind": "selection", "text": .string(text), "hoveredWord": .string(hoveredWord),
+            "characterIndex": .integer(Int64(characterIndex)), "sentenceStable": .bool(sentenceStable),
+        ]
+        if let speakerName { payload["speakerName"] = .string(speakerName) }
+        return .object(payload)
     }
 }
 
@@ -128,10 +138,10 @@ public struct HoverSpeaker: Sendable, Equatable {
         observedName = value["observedName"]?.stringValue
     }
 
-    /// The speaker.set payload for a choice made on this card (the speaker
-    /// editor, 20.3): the card's observedName goes back unchanged, whatever
-    /// name the user enters. Nil when the card carries no observedName,
-    /// which the editor shows as no speaker.
+    /// The speaker.set payload for a choice made on this card: the card's
+    /// observedName goes back unchanged, whatever name the user enters. Nil
+    /// when the card carries no observedName, which the editor shows as no
+    /// speaker (SpeakerEditor builds the editor's own payload the same way).
     public func choice(gameKey: String, gameDisplayName: String, name: String, gender: String) -> JSONValue? {
         guard let observedName else { return nil }
         return ["game": ["key": .string(gameKey), "displayName": .string(gameDisplayName)],
@@ -230,12 +240,15 @@ public struct HoverClient: Sendable {
 
     public init(supervisor: CoreSupervisor) { self.supervisor = supervisor }
 
-    /// - Parameter onSent: called with the request id once hover.resolve is written.
-    public func resolve(_ selection: HoverSelection, mode: String? = nil,
+    /// - Parameters:
+    ///   - game: hover.resolve's game (T29), for a speaker's gender.
+    ///   - onSent: called with the request id once hover.resolve is written.
+    public func resolve(_ selection: HoverSelection, mode: String? = nil, game: HoverGame? = nil,
                         onSent: (@Sendable (Int64) -> Void)? = nil,
                         onUpdate: @escaping @Sendable (HoverUpdate) -> Void) async -> HoverOutcome {
         var payload: [String: JSONValue] = ["source": selection.payload]
         if let mode { payload["mode"] = .string(mode) }
+        if let game { payload["game"] = game.json }
         let hoverId = Locked<Int64>(0)
         do {
             let result = try await supervisor.request(

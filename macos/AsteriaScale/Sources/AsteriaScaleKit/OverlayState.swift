@@ -67,6 +67,11 @@ public struct OverlayState: Sendable, Equatable {
     /// of it shows, as Windows' HideOverlay bumps the display generation
     /// that every later card of the hover is checked against.
     private var revoked = false
+    /// The speaker editor is open (T31): nothing of a hover over the screen
+    /// shows, whatever its cursor re-check says, as Windows' ShowLoading and
+    /// ShowTranslation check that the editor is closed. A selection hover
+    /// («Проверка перевода», ⌥V) is the user's own request and still shows.
+    public private(set) var suspended = false
 
     public init() {}
 
@@ -98,7 +103,8 @@ public struct OverlayState: Sendable, Equatable {
     /// it goes, or nil when it is not shown (an older hover's, one whose
     /// card already shows, or one the tracker took down).
     public mutating func loading(_ token: Int) -> Placement? {
-        guard token == self.token, !revoked, !(shown?.token == token && shown?.content == .card) else { return nil }
+        guard token == self.token, !revoked, !screenSuspended,
+              !(shown?.token == token && shown?.content == .card) else { return nil }
         shown = Shown(token: token, content: .loading, screen: tokenIsScreen)
         return .hoverPoint
     }
@@ -106,7 +112,7 @@ public struct OverlayState: Sendable, Equatable {
     /// hover.primary of `token`: where the card goes, or nil when it is not
     /// shown (an older hover's, or one the tracker took down).
     public mutating func primary(_ token: Int) -> Placement? {
-        guard token == self.token, !revoked else { return nil }
+        guard token == self.token, !revoked, !screenSuspended else { return nil }
         let placement = place(token)
         shown = Shown(token: token, content: .card, screen: tokenIsScreen)
         cardToken = token
@@ -118,13 +124,29 @@ public struct OverlayState: Sendable, Equatable {
     /// after its 8 s comes back with the line, as the WPF card, which has no
     /// timer, would still show it.
     public mutating func phrase(_ token: Int) -> Placement? {
-        guard token == self.token, !revoked, cardToken == token else { return nil }
+        guard token == self.token, !revoked, !screenSuspended, cardToken == token else { return nil }
         let placement = place(token)
         shown = Shown(token: token, content: .card, screen: tokenIsScreen)
         return placement
     }
 
     private func place(_ token: Int) -> Placement { shown?.token == token ? .inPlace : .hoverPoint }
+
+    /// The newest hover is one over the screen and the editor is open.
+    private var screenSuspended: Bool { suspended && tokenIsScreen }
+
+    /// The speaker editor opens: the panel hides, whatever it showed (Windows
+    /// hides the overlay), and nothing of a hover over the screen shows until
+    /// `resume`.
+    public mutating func suspend() {
+        suspended = true
+        shown = nil
+    }
+
+    /// The speaker editor closed.
+    public mutating func resume() {
+        suspended = false
+    }
 
     /// The cursor tracker's hideCard: whether the panel hides (only what a
     /// screen hover put up); the newest screen hover shows nothing more.
@@ -156,6 +178,8 @@ public struct OverlayState: Sendable, Equatable {
             }
             return hideLoading()
         case .message:
+            // While the editor is open a screen hover's end shows nothing.
+            if screenSuspended { return hideLoading() }
             self.token += 1
             shown = Shown(token: self.token, content: .message, screen: tokenIsScreen)
             return .message

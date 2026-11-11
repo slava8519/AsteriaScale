@@ -31,6 +31,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it never exists in a self-test, a direct exec or any agent run.
     private(set) var screenSource: ScreenSource?
     private(set) var hoverDriver: HoverDriver!
+    /// «Род говорящего» (⌃⌥G, T31).
+    private(set) var speakerEditor: SpeakerEditorController!
+    /// The card ⌃⌥G opens the editor on: the last card of a hover over the
+    /// screen, with the game that hover sent, while the overlay still shows
+    /// it (the token says which card).
+    private(set) var speakerTarget: (target: SpeakerTarget, token: Int)?
+    /// The speaker.set of the open editor: true once saved.
+    private(set) var speakerSave: Task<Bool, Never>?
     /// The app's Vision warm-up (T25): only with capture on, once hover
     /// translation is on (the self-test warms Vision as its own first step).
     private(set) var visionWarmUp: VisionWarmUp = .notStarted
@@ -141,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let note = overlayLevel.note { log.write(note) }
         overlay = OverlayController(level: overlayLevel.level)
         log.write("overlay level \(overlayLevel.level.rawValue) (\(overlay.panel.level.rawValue))")
+        speakerEditor = SpeakerEditorController(level: overlay.panel.level)
+        speakerEditor.onChoose = { [weak self] editor, choice, name in self?.speakerChosen(editor, choice, name: name) }
+        speakerEditor.onCancel = { [weak self] in self?.closeSpeakerEditor(reason: "cancelled") }
         hoverDriver = HoverDriver(app: self)
         statusMenu = StatusMenuController(app: self)
         updateRecognition()
@@ -250,18 +261,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if status != recognition { log.write("recognition: \(status.menuLine ?? "idle")") }
         recognition = status
         statusMenu.update(recognition: status)
-        let track = status.allowsTracking && enabled
+        // Paused while the speaker editor is open: stopping cancels the
+        // hover in flight and forgets the anchor (T31; pinned by
+        // SourceScanTests, as no run of the self-test tracks).
+        let track = status.tracks(hoverEnabled: enabled, editorOpen: speakerEditor.isOpen)
         hoverDriver.setTracking(track, pipeline: track ? screenPipeline() : nil)
     }
 
-    /// The hover over the screen: ScreenSource for frames and the
-    /// permission, the real Vision, CryptoKit's fingerprint and, until the
-    /// speaker editor brings the real one, no game.
+    /// The hover over the screen: ScreenSource for frames, the permission
+    /// and the game under the cursor (T29), the real Vision and CryptoKit's
+    /// fingerprint. Only with capture on: no other process resolves a game.
     private func screenPipeline() -> HoverPipeline? {
         guard let screenSource else { return nil }
         return HoverPipeline(client: ObservationClient(core: supervisor), frames: screenSource,
                              recognizer: VisionTextRecognizer(), fingerprinter: SHA256FrameFingerprinter(),
-                             games: NoGameResolver(), permission: screenSource)
+                             games: screenSource, permission: screenSource)
     }
 
     /// Vision compiles its models on its first call in a home (about 24 s,
@@ -349,6 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .toggleHover: toggleHover()
         case .showDiagnostic: showDiagnostic()
         case .translateClipboard: translateClipboard()
+        case .editSpeaker: editSpeaker()
         }
     }
 
@@ -467,6 +482,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The request id of a hover.resolve just written.
     func hoverSent(_ id: Int64) { lastHoverRequestId = id }
 
+    // MARK: The speaker editor (20.3, T17, T29-T31)
+
+    /// A hover over the screen showed its card (HoverDriver): ⌃⌥G opens the
+    /// editor on it while the overlay still shows it.
+    func speakerCardShown(_ target: SpeakerTarget, token: Int) {
+        speakerTarget = (target, token)
+    }
+
+    /// ⌃⌥G: the editor on the card of a hover over the screen that shows
+    /// now; without a speaker or a game on it, the Russian reason on the
+    /// overlay. Opening hides the card, keeps every later card of a screen
+    /// hover off the overlay and pauses the tracking (which cancels the
+    /// hover in flight) until the editor closes. `takeKeyboard` false (the
+    /// self-test) shows the editor without making it key, so nothing of the
+    /// owner's session changes. Returns why it did not open, if it did not.
+    @discardableResult
+    func editSpeaker(takeKeyboard: Bool = true) -> SpeakerEditor.Refusal? {
+        if speakerEditor.isOpen {
+            speakerEditor.bringToFront(takeKeyboard: takeKeyboard)
+            return nil
+        }
+        let shown = speakerTarget.flatMap { overlay.showsCard(of: $0.token) ? $0.target : nil }
+        switch SpeakerEditor.open(shown) {
+        case .failure(let refusal):
+            log.write("speaker editor: not opened (\(refusal))")
+            let point = shown.map { NSPoint(x: $0.point.x, y: $0.point.y) } ?? NSEvent.mouseLocation
+            overlay.showMessage(refusal.russian, near: point)
+            return refusal
+        case .success(let editor):
+            guard let shown else { return .noSpeaker }
+            // These three stay together (SourceScanTests pins them): the
+            // self-test never tracks, so no run would notice the pause gone.
+            overlay.suspend()
+            speakerEditor.open(editor, target: shown, takeKeyboard: takeKeyboard)
+            updateRecognition()
+            log.write("speaker editor: open for \(editor.game.key), observed \(editor.observedName)")
+            return nil
+        }
+    }
+
+    /// A choice in the editor: speaker.set, then the editor closes and the
+    /// status card names what was stored; a refusal or a failed save keeps
+    /// the editor open with the Russian reason.
+    private func speakerChosen(_ editor: SpeakerEditor, _ choice: SpeakerChoice, name: String) {
+        switch editor.request(choice, name: name) {
+        case .refuse(let text):
+            speakerEditor.showError(text)
+        case .send(let payload, let stored):
+            speakerEditor.busy = true
+            let client = SpeakerClient(core: supervisor)
+            speakerSave = Task { [weak self] in
+                do {
+                    let saved = try await client.set(payload)
+                    guard let self else { return true }
+                    self.log.write("speaker.set \(choice.rawValue) in \(editor.game.key): \(saved.name)/\(saved.gender), "
+                                   + "observed \(saved.observedName ?? "none")")
+                    let point = self.speakerEditor.target.map { NSPoint(x: $0.point.x, y: $0.point.y) }
+                        ?? NSEvent.mouseLocation
+                    self.closeSpeakerEditor(reason: "saved")
+                    self.overlay.showMessage(editor.savedStatus(name: stored, choice: choice), near: point)
+                    return true
+                } catch {
+                    let coreError = error as? CoreError
+                    self?.log.write("speaker.set failed: \(error)")
+                    self?.speakerEditor.busy = false
+                    self?.speakerEditor.showError(coreError.map { RU.diagnosticError($0.message, code: $0.code) }
+                                                  ?? RU.errorText("unexpected"))
+                    return false
+                }
+            }
+        }
+    }
+
+    /// The editor closes (saved or cancelled): screen hovers may show again
+    /// and the tracking resumes from a fresh anchor.
+    func closeSpeakerEditor(reason: String) {
+        guard speakerEditor.isOpen else { return }
+        speakerEditor.close()
+        overlay.resume()
+        updateRecognition()
+        log.write("speaker editor: closed (\(reason))")
+    }
+
     /// A card the overlay showed: the diagnostic window, app.log and
     /// hover.displayed, so history records only what the user saw.
     func cardShown(_ primary: HoverPrimary) {
@@ -505,6 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !shutDown else { return }
         shutDown = true
         hotkeys.unregisterAll()
+        speakerEditor.close()
         hoverDriver.setTracking(false, pipeline: nil)
         overlay.hide()
         await supervisor.stop()

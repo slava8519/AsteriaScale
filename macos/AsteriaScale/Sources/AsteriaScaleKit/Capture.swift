@@ -204,14 +204,18 @@ public protocol CapturePermission: Sendable {
 }
 
 /// The game a hover belongs to, named by the app (docs/MACOS.md T29): the
-/// executable of the window's owner under the cursor. The resolver that reads
-/// it comes with the speaker editor; until then the app passes NoGameResolver.
+/// executable of the window's owner under the cursor, or the .exe a Wine
+/// process runs (GameIdentity). The app's screen source reads it, so only a
+/// process whose capture is on resolves a game; without capture there is no
+/// hover over the screen at all. NoGameResolver and the self-test's
+/// synthetic resolver stand in for it where nothing may be read.
 public protocol GameResolver: Sendable {
     func game(at point: GlobalPoint) async -> HoverGame?
 }
 
-/// Resolves no game: hovers then carry none, and Core applies no speaker
-/// gender (as on Windows without a game).
+/// Resolves no game: hovers then carry none, Core applies no speaker gender
+/// (as on Windows without a game) and the speaker editor says it cannot
+/// name the game.
 public struct NoGameResolver: GameResolver {
     public init() {}
     public func game(at point: GlobalPoint) async -> HoverGame? { nil }

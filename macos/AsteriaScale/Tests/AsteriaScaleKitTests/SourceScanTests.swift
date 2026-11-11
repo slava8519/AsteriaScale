@@ -84,13 +84,15 @@ import Testing
     ].map { $0.joined() })
 
     /// The exact window-list spellings a file may hold, and on how many
-    /// lines. One line, and only that one: the window-list copy call with
+    /// lines. Two lines, and only those: the window-list copy call with
     /// which 20.2's overlay.windowServer self-test check reads its own
     /// panel's window record (layer, sharing state), moved from
-    /// SelfTest.swift into a static helper of the capture file. That query
-    /// asks for no permission and raises no prompt.
+    /// SelfTest.swift into a static helper of the capture file, and the one
+    /// with which the screen source's instance finds the window under the
+    /// cursor for the game (T29: owner pid, layer and bounds only). Neither
+    /// query asks for a permission or raises a prompt.
     static let captureAllowList: [String: [String: Int]] = [
-        ["CGWin", "dowList", "CopyWindowInfo"].joined(): [captureFile: 1],
+        ["CGWin", "dowList", "CopyWindowInfo"].joined(): [captureFile: 2],
     ]
 
     /// The capture and permission issues of `sources`: a never-group name
@@ -141,6 +143,236 @@ import Testing
         for name in Self.captureFileNames.sorted() where !capture.lines.contains(where: { $0.contains(name) }) {
             Issue.record("\(Self.captureFile) does not name \(name)")
         }
+    }
+
+    // MARK: What the game read may name
+
+    /// What the game read may name (DoD 20.3 item 5; docs/MACOS.md T29):
+    /// - of the window list's keys only the three the game read takes (the
+    ///   owner's pid, the layer, the bounds) and the two of 20.2's own-window
+    ///   record (sharing state, on screen); any other key of that family is
+    ///   an issue on any line of any source, comments included, above all
+    ///   the window's name, which needs Screen Recording and which T29 never
+    ///   reads;
+    /// - another process's arguments-and-environment record is named in
+    ///   code only in the capture file, whose members other than the pinned
+    ///   window-record read are instance members (the shape rule above), so
+    ///   only a process whose capture is on reads one, and no test and no
+    ///   self-test reads a real process's arguments or environment. Read as
+    ///   code (comments and strings blanked), so the docs may name it.
+    static let windowKeyPrefix = ["kCGWin", "dow"].joined()
+    static let allowedWindowKeys = Set(["OwnerPID", "Layer", "Bounds", "SharingState", "IsOnscreen"]
+        .map { windowKeyPrefix + $0 })
+    static let processRecord = ["KERN_PROC", "ARGS"].joined()
+    static let gameReadIssue = "the game read"
+
+    static func gameReadIssues(_ sources: [Source]) throws -> [String] {
+        let key = try Regex(windowKeyPrefix + "[A-Za-z0-9_]*", as: Substring.self)
+        var issues: [String] = []
+        for source in sources {
+            for (number, line) in source.lines.enumerated() {
+                for match in line.matches(of: key) where !allowedWindowKeys.contains(String(match.output)) {
+                    issues.append("\(gameReadIssue): \(match.output) in \(source.path):\(number + 1)")
+                }
+            }
+            let read = codeOnly(source.lines.joined(separator: "\n"))
+            guard read.complete else {
+                issues.append("\(gameReadIssue): \(source.path) \(unreadIssue): a comment or a string literal is left open")
+                continue
+            }
+            if source.path != captureFile, read.code.contains(processRecord) {
+                issues.append("\(gameReadIssue): \(processRecord) in the code of \(source.path)")
+            }
+        }
+        return issues
+    }
+
+    @Test func theGameReadNamesOnlyItsKeysAndOnlyTheCaptureFileReadsAProcess() throws {
+        let sources = try Self.swiftSources("Sources") + Self.swiftSources("Tests")
+        for issue in try Self.gameReadIssues(sources) { Issue.record("\(issue)") }
+        // The read really is there: the record and the three keys.
+        let capture = try #require(sources.first { $0.path == Self.captureFile }, "no \(Self.captureFile)")
+        let code = Self.codeOnly(capture.lines.joined(separator: "\n")).code
+        for name in [Self.processRecord] + ["OwnerPID", "Layer", "Bounds"].map({ Self.windowKeyPrefix + $0 }) {
+            #expect(code.contains(name), "\(Self.captureFile) does not read \(name)")
+        }
+
+        // Planted lines, each flagged by this rule alone, and what stays free.
+        let kitFile = "Sources/AsteriaScaleKit/Planted.swift"
+        let testFile = "Tests/AsteriaScaleKitTests/Planted.swift"
+        let captureFile = ["Sources/AsteriaScale/Screen", "Source.swift"].joined()
+        let name = ["kCGWin", "dowName"].joined(), owner = ["kCGWin", "dowOwnerName"].joined()
+        let alpha = ["kCGWin", "dowAlpha"].joined(), record = ["KERN_PROCA", "RGS2"].joined()
+        #expect(Self.allowedWindowKeys == Set(["kCGWindowOwnerPID", "kCGWindowLayer", "kCGWindowBounds",
+                                               "kCGWindowSharingState", "kCGWindowIsOnscreen"]),
+                "the window keys, no more and no fewer")
+        #expect(Self.processRecord + "2" == record)
+        func issues(_ path: String, _ line: String) throws -> [String] {
+            try Self.gameReadIssues([(path, Self.lines(line))])
+        }
+        let flagged: [(String, String, String)] = [
+            (captureFile, "let title = info[\(name) as String] as? String", name),
+            (captureFile, "/// reads \(name) too", name),
+            (kitFile, "let app = info[\(owner) as String]", owner),
+            (testFile, "_ = \(alpha)", alpha),
+            (kitFile, "// \(name)", name),
+        ]
+        for (path, line, key) in flagged {
+            #expect(try issues(path, line) == ["\(Self.gameReadIssue): \(key) in \(path):1"], "\(line) in \(path)")
+        }
+        for path in [kitFile, testFile, "Sources/AsteriaScale/SelfTest.swift"] {
+            #expect(try issues(path, "var mib: [Int32] = [CTL_KERN, \(record), pid]")
+                    == ["\(Self.gameReadIssue): \(Self.processRecord) in the code of \(path)"], "\(path)")
+        }
+        #expect(try issues(captureFile, "var mib: [Int32] = [CTL_KERN, \(record), pid]").isEmpty)
+        for line in ["/// the \(record) record", "let note = \"\(record)\"",
+                     "let pid = info[\(Self.windowKeyPrefix)OwnerPID as String]",
+                     "let layer = info[\(Self.windowKeyPrefix)Layer as String]"] {
+            #expect(try issues(kitFile, line).isEmpty, "\(line)")
+        }
+    }
+
+    /// How the capture file reads for the game (T29), pinned as code with
+    /// white space made one space, since no check runs it (the Swift suite
+    /// does not link the app, and no self-test builds a ScreenSource): the
+    /// window list of on-screen windows without the desktop, read on one
+    /// line; another process's arguments-and-environment record read in one
+    /// member, called once and only for Wine (any other program's
+    /// environment may hold secrets, and GameIdentity would not look at it).
+    static let gameWindowList = ["let list = ", "CGWin", "dowList", "CopyWindowInfo([.optionOnScreenOnly, ",
+                                 ".excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]"].joined()
+    static let wineOnlyRecord = "let record = GameIdentity.isWine(path) ? processArguments(owner) : nil"
+    static let recordReadIssue = "another process's record is read"
+
+    static func processRecordIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == captureFile }) else {
+            return ["\(recordReadIssue) nowhere: no \(captureFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(captureFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let code = read.code
+        let lists = code.ranges(of: gameWindowList).count
+        let guards = code.ranges(of: wineOnlyRecord).count
+        let mentions = code.matches(of: try regex(#"\bprocessArguments\s*\("#)).count
+        let records = code.ranges(of: processRecord).count
+        guard lists == 1, guards == 1, mentions == 2, records == 1 else {
+            return ["\(recordReadIssue) otherwise than once, for Wine only, from on-screen windows: window lists "
+                    + "\(lists), Wine-only reads \(guards), processArguments( \(mentions), \(processRecord) \(records)"]
+        }
+        return []
+    }
+
+    @Test func anotherProcessIsReadOnlyForWine() throws {
+        for issue in try Self.processRecordIssues(try Self.swiftSources("Sources")) { Issue.record("\(issue)") }
+
+        // Planted capture files: the game read as it is, and each way it
+        // could stop being Wine-only or once.
+        let captureFile = ["Sources/AsteriaScale/Screen", "Source.swift"].joined()
+        let record = ["KERN_PROCA", "RGS2"].joined()
+        let declaration = "    private func processArguments(_ pid: pid_t) -> [UInt8]? {\n"
+            + "        var mib: [Int32] = [CTL_KERN, \(record), pid]\n        return nil\n    }"
+        let body = ["        \(Self.gameWindowList)", "        // owner and path", "        \(Self.wineOnlyRecord)"]
+        func issues(_ lines: [String], _ tail: String = declaration) throws -> [String] {
+            try Self.processRecordIssues([(captureFile, Self.lines((lines + [tail]).joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.recordReadIssue) ? Self.recordReadIssue : $0 }
+        }
+        #expect(try issues(body).isEmpty)
+        #expect(try issues(body.map { $0.replacingOccurrences(of: "? processArguments(owner) : nil",
+                                                               with: "?\n            processArguments(owner) : nil") })
+                .isEmpty, "the guard over two lines")
+        let reverted: [(String, [String], String)] = [
+            ("read for every program", body.map { $0.replacingOccurrences(of: "GameIdentity.isWine(path) ? ", with: "")
+                .replacingOccurrences(of: " : nil", with: "") }, declaration),
+            ("the guard inverted", body.map { $0.replacingOccurrences(of: "GameIdentity.isWine(path)",
+                                                                      with: "!GameIdentity.isWine(path)") }, declaration),
+            ("a second read", body + ["        let all = processArguments(owner)"], declaration),
+            ("a second record", body, declaration + "\n    let other: [Int32] = [CTL_KERN, \(record), 1]"),
+            ("every window", body.map { $0.replacingOccurrences(of: ".optionOnScreenOnly, ", with: "") }, declaration),
+            ("no window list", Array(body.dropFirst()), declaration),
+        ]
+        for (name, lines, tail) in reverted {
+            #expect(try issues(lines, tail) == [Self.recordReadIssue], "\(name)")
+        }
+        #expect(try Self.processRecordIssues([("Sources/AsteriaScale/HoverDriver.swift", Self.lines("let a = 1"))])
+                == ["\(Self.recordReadIssue) nowhere: no \(captureFile)"])
+    }
+
+    // MARK: The speaker editor pauses the tracking
+
+    /// How the app pauses the tracking while the speaker editor is open
+    /// (DoD 20.3 item 5, T31): the tracking decision takes the editor's
+    /// state, opening re-decides right after the editor opens and closing
+    /// right after the overlay resumes, and nothing else starts or stops the
+    /// tracking. Pinned as code with white space made one space: the
+    /// self-test never tracks (no screen source exists in it) and the Swift
+    /// suite does not link the app, so no run would see the pause go.
+    static let appDelegateFile = "Sources/AsteriaScale/AppDelegate.swift"
+    static let editorTracking = "let track = status.tracks(hoverEnabled: enabled, editorOpen: speakerEditor.isOpen) "
+        + "hoverDriver.setTracking(track, pipeline: track ? screenPipeline() : nil)"
+    static let editorOpens = "overlay.suspend() speakerEditor.open(editor, target: shown, takeKeyboard: takeKeyboard) "
+        + "updateRecognition()"
+    static let editorCloses = "speakerEditor.close() overlay.resume() updateRecognition()"
+    static let shutdownStops = "hoverDriver.setTracking(false, pipeline: nil)"
+    static let pauseIssue = "the tracking pauses for the speaker editor"
+
+    static func editorPauseIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == appDelegateFile }) else {
+            return ["\(pauseIssue) nowhere: no \(appDelegateFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(appDelegateFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let code = read.code
+        let pinned = [editorTracking, editorOpens, editorCloses, shutdownStops].map { code.ranges(of: $0).count }
+        let decisions = code.matches(of: try regex(#"\.\s*tracks\s*\("#)).count
+        let switches = code.matches(of: try regex(#"\.\s*setTracking\s*\("#)).count
+        let opens = code.matches(of: try regex(#"\bspeakerEditor\s*\.\s*open\s*\("#)).count
+        guard pinned == [1, 1, 1, 1], decisions == 1, switches == 2, opens == 1 else {
+            return ["\(pauseIssue) otherwise than through the editor's state on open and close: pinned \(pinned), "
+                    + "decisions \(decisions), tracking switches \(switches), opens \(opens)"]
+        }
+        return []
+    }
+
+    @Test func theSpeakerEditorPausesTheTracking() throws {
+        for issue in try Self.editorPauseIssues(try Self.swiftSources("Sources")) { Issue.record("\(issue)") }
+
+        let appDelegate = ["Sources/AsteriaScale/App", "Delegate.swift"].joined()
+        #expect(Self.appDelegateFile == appDelegate)
+        let update = ["        statusMenu.update(recognition: status)", "        // Paused while the editor is open.",
+                      "        let track = status.tracks(hoverEnabled: enabled,", "                                  editorOpen: speakerEditor.isOpen)",
+                      "        hoverDriver.setTracking(track, pipeline: track ? screenPipeline() : nil)"]
+        let suspend = "            overlay.suspend()"
+        let opening = "            speakerEditor.open(editor, target: shown, takeKeyboard: takeKeyboard)"
+        let redecide = "            updateRecognition()", logged = "            log.write(\"speaker editor: open\")"
+        let open = [suspend, opening, redecide, logged]
+        let close = ["        speakerEditor.close()", "        overlay.resume()", "        updateRecognition()"]
+        let quit = ["        speakerEditor.close()", "        hoverDriver.setTracking(false, pipeline: nil)"]
+        func issues(_ parts: [[String]]) throws -> [String] {
+            try Self.editorPauseIssues([(appDelegate, Self.lines(parts.flatMap { $0 }.joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.pauseIssue) ? Self.pauseIssue : $0 }
+        }
+        #expect(try issues([update, open, close, quit]).isEmpty)
+        func replacing(_ lines: [String], _ old: String, _ new: String) -> [String] {
+            lines.map { $0.replacingOccurrences(of: old, with: new) }
+        }
+        let reverted: [(String, [[String]])] = [
+            ("the editor's state ignored", [replacing(update, "speakerEditor.isOpen", "false"), open, close, quit]),
+            ("the old decision", [replacing(replacing(update, "status.tracks(hoverEnabled: enabled,", "status.allowsTracking && enabled"),
+                                            "                                  editorOpen: speakerEditor.isOpen)", ""), open, close, quit]),
+            ("no re-decision on open", [update, open.filter { !$0.contains("updateRecognition") }, close, quit]),
+            ("re-decided before opening", [update, [suspend, redecide, opening, logged], close, quit]),
+            ("no re-decision on close", [update, open, close.filter { !$0.contains("updateRecognition") }, quit]),
+            ("no resume on close", [update, open, close.filter { !$0.contains("resume") }, quit]),
+            ("a second open", [update, open, close, quit, ["        speakerEditor.open(editor, target: t, takeKeyboard: true)"]]),
+            ("tracking started elsewhere", [update, open, close, quit,
+                                            ["        hoverDriver.setTracking(true, pipeline: screenPipeline())"]]),
+            ("a second decision", [update, open, close, quit, ["        let again = status.tracks(hoverEnabled: true, editorOpen: false)"]]),
+        ]
+        for (name, parts) in reverted {
+            #expect(try issues(parts) == [Self.pauseIssue], "\(name)")
+        }
+        #expect(try Self.editorPauseIssues([(Self.hoverDriverFile, Self.lines("let a = 1"))])
+                == ["\(Self.pauseIssue) nowhere: no \(appDelegate)"])
     }
 
     // MARK: Where the screen source is built
@@ -336,7 +568,8 @@ import Testing
     /// and no source extends the class: no extension names it before its
     /// `{` (module-qualified or in a `where` clause too) and no typealias
     /// stands for it (`= ScreenSource`, module-qualified too).
-    static let captureClass = ["final class Screen", "Source: FrameSource, CapturePermission, @unchecked Sendable {"].joined()
+    static let captureClass = ["final class Screen", "Source: FrameSource, CapturePermission, GameResolver, ",
+                               "@unchecked Sendable {"].joined()
     static let captureStatic = ["static func ownWindow", "Record(_ windowNumber: Int) -> ",
                                 "(layer: Int?, sharingState: Int?, onscreen: Bool?) {"].joined()
     static let ownWindowRecord = [captureStatic, " guard let number = CGWindowID(exactly: windowNumber) else { return (nil, nil, nil) }",
@@ -834,16 +1067,20 @@ import Testing
         // The one allowed line is allowed once, in its file only, and only
         // its own call: another window-list name beside it, or on another
         // line of that file, is flagged; the old place no longer allows it.
-        #expect(Set(Self.captureAllowList.keys) == [allowed] && Self.captureAllowList[allowed] == [captureFile: 1])
-        #expect(Self.captureIssues([(captureFile, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: true).isEmpty)
+        #expect(Set(Self.captureAllowList.keys) == [allowed] && Self.captureAllowList[allowed] == [captureFile: 2])
+        #expect(Self.captureIssues([(captureFile, Self.lines("let list = \(allowed)([], 1)\nlet game = \(allowed)([], 0)"))],
+                                   exactAllowance: true).isEmpty)
+        #expect(Self.captureIssues([(captureFile, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: true)
+                == ["\(allowed) on 1 lines of \(captureFile), the allow-list says 2"], "one of the two lines went away")
         #expect(Self.captureIssues([(kitFile, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: false)
                 == ["\(windowList) in \(kitFile):1"], "outside its file")
         #expect(Self.captureIssues([(selfTest, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: false)
                 == ["\(windowList) in \(selfTest):1"], "the self-test reads it through the capture file now")
-        #expect(Self.captureIssues([(captureFile, Self.lines("let a = \(allowed)([], 1)\nlet b = \(allowed)([], 2)"))],
-                                   exactAllowance: true) == ["\(allowed) on 2 lines of \(captureFile), the allow-list says 1"])
+        #expect(Self.captureIssues([(captureFile, Self.lines("let a = \(allowed)([], 1)\nlet b = \(allowed)([], 2)\n"
+                                                                + "let c = \(allowed)([], 3)"))],
+                                   exactAllowance: true) == ["\(allowed) on 3 lines of \(captureFile), the allow-list says 2"])
         #expect(Self.captureIssues([(captureFile, Self.lines("let a = 1"))], exactAllowance: true)
-                == ["\(allowed) on 0 lines of \(captureFile), the allow-list says 1"],
+                == ["\(allowed) on 0 lines of \(captureFile), the allow-list says 2"],
                 "an allowed line that went away must leave the allow-list too")
         #expect(Self.captureIssues([(captureFile, Self.lines("let image = \(windowList)CreateImage(rect, .optionAll, 0, [])"))],
                                    exactAllowance: false) == ["\(windowList) in \(captureFile):1"],

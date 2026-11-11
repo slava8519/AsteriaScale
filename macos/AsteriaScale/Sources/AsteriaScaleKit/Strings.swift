@@ -136,12 +136,42 @@ public enum RU {
     public static let hotkeyToggleHover = "Включить или выключить перевод при наведении"
     public static let hotkeyShowDiagnostic = "Открыть окно «Проверка перевода»"
     public static let hotkeyTranslateClipboard = "Перевести текст из буфера обмена"
+    public static let hotkeyEditSpeaker = "Выбрать род говорящего"
     public static func hotkeyTaken(_ gesture: String) -> String { "Сочетание \(gesture) уже занято другим приложением" }
     public static func hotkeyFailed(_ gesture: String, status: Int32) -> String {
         "Не удалось зарегистрировать сочетание \(gesture) (код \(status))"
     }
     public static let hotkeyNotAssigned = "не назначено"
     public static func hotkeyLine(_ title: String, _ gesture: String) -> String { "\(title): \(gesture)" }
+
+    // The speaker editor «Род говорящего» (T17, T31). The gender only
+    // reaches the phrase model, which comes with TranslateGemma (20.5), so
+    // the editor promises nothing more.
+    public static let speakerEditorTitle = "Род говорящего"
+    public static let speakerEditorName = "Имя:"
+    public static func speakerEditorGame(_ game: String) -> String { "Игра: \(game). Выбор сохранится только для неё." }
+    public static let speakerEditorNote =
+        "Пока род только запоминается: переводить фразы с его учётом Asteria Scale начнёт, когда появится TranslateGemma."
+    public static let speakerEditorKeys = "Клавиши 1, 2, 3 — выбор, Esc — отмена"
+    public static let speakerMasculine = "Мужской"
+    public static let speakerFeminine = "Женский"
+    public static let speakerIgnore = "Не учитывать"
+    public static let speakerCancel = "Отмена"
+    /// ⌃⌥G with no card of a hover over the screen that names a speaker.
+    public static let speakerNone = "Под курсором нет имени говорящего"
+    /// ⌃⌥G on a card whose hover could name no game (T29).
+    public static let speakerNoGame = "Не удалось определить игру — род говорящего не сохранить"
+    /// The name Core would store nothing under (empty, or over 48 characters).
+    public static let speakerNameInvalid = "Введите имя говорящего: от 1 до 48 знаков"
+    /// The status card after a saved choice, composed here from what was
+    /// sent, never from the translation service's own status text.
+    public static func speakerSaved(name: String, choice: SpeakerChoice, game: String) -> String {
+        switch choice {
+        case .masculine: return "\(name): мужской род для \(game)"
+        case .feminine: return "\(name): женский род для \(game)"
+        case .ignore: return "\(name): род не учитывается для \(game)"
+        }
+    }
 
     // The 20.2 diagnostic hover source; Apple Vision replaces it in 20.3.
     public static let diagnosticTitle = "Проверка перевода"
@@ -221,6 +251,9 @@ public enum RU {
             recognitionFrameMismatch, recognitionPreparing, recognitionReady, recognitionNeedsPermission,
             recognitionRestartAfterGrant, recognitionDisabledCheckRun, menuAllowScreenRecording,
             captureNoPermission, captureSelfMissing, captureDisplayMissing,
+            hotkeyEditSpeaker, speakerEditorTitle, speakerEditorName, speakerEditorNote, speakerEditorKeys,
+            speakerMasculine, speakerFeminine, speakerIgnore, speakerCancel, speakerNone, speakerNoGame,
+            speakerNameInvalid,
         ]
         let samples = [
             restartDetail(attempt: 2, delay: .milliseconds(500), reason: reasonNoAnswer),
@@ -236,7 +269,8 @@ public enum RU {
             recognitionFailed("recognizer_failed"),
             recognitionUnavailable(recognitionWarmUpFailed("recognizer_failed")),
             captureFailed("capture_failed"),
-        ]
+            speakerEditorGame("Novel.exe"),
+        ] + SpeakerChoice.allCases.map { speakerSaved(name: "Kotori", choice: $0, game: "Novel.exe") }
         let errors = ["connection_lost", "timeout", "not_ready", "not_running", "cancelled", "superseded", "bad_request",
                       "request_too_large", "conflict", "bad_response", "observations_too_large", "stale_frame",
                       "x"].map(errorText)

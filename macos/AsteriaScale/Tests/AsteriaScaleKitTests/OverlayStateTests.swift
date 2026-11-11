@@ -175,4 +175,31 @@ import Testing
         #expect(phrases == [nil, nil])
         #expect(newer.shown == Shown(token: old, content: .card, screen: true), "the older card stays until the tracker or its timer")
     }
+
+    /// While the speaker editor is open (T31): the panel hides, nothing of a
+    /// hover over the screen shows, its end message included (Windows checks
+    /// the editor before every card), a selection hover still does, and once
+    /// it closes a screen hover shows again.
+    @Test func whileTheEditorIsOpenNoScreenHoverShows() {
+        var state = OverlayState()
+        let screen = state.beginScreen()
+        _ = state.primary(screen)
+        state.suspend()
+        #expect(state.suspended && state.shown == nil, "the card hides")
+        let inFlight = [state.loading(screen), state.primary(screen), state.phrase(screen)]
+        #expect(inFlight == [nil, nil, nil] && state.shown == nil, "the hover in flight shows nothing more")
+        let newer = state.beginScreen()
+        let parts = [state.loading(newer), state.primary(newer), state.phrase(newer)]
+        let ending = state.finish(.message("x"), token: newer)
+        #expect(parts == [nil, nil, nil] && ending == Ending.unchanged && state.shown == nil && state.token == newer,
+                "a newer screen hover neither, nor its end message")
+        let selection = state.beginSelection()
+        let card = state.primary(selection)
+        #expect(card == .inPlace && state.shown == Shown(token: selection, content: .card, screen: false),
+                "the user's own ⌥V or «Проверка перевода» still shows")
+        state.resume()
+        let after = state.beginScreen()
+        let shown = state.primary(after)
+        #expect(!state.suspended && shown == .hoverPoint && state.shown == Shown(token: after, content: .card, screen: true))
+    }
 }

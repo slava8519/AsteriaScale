@@ -17,6 +17,24 @@ private struct DeniedCapturePermission: CapturePermission {
     func isGranted() -> Bool { false }
 }
 
+/// The self-test's game (speaker.editor, DoD 20.3 item 10): what
+/// GameIdentity makes of a CrossOver process laid out in memory (Wine's
+/// loader, the game's Windows path in its arguments, WINEPREFIX in its
+/// environment). No window list, process or file is read: C: maps to the
+/// bottle's drive_c without resolving a link.
+private struct SyntheticGameResolver: GameResolver {
+    static let loader = "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix/wine64-preloader"
+    static let bottle = "/Selftest/CrossOver/Bottles/Novel"
+    static let expectedKey = "path:/Selftest/CrossOver/Bottles/Novel/drive_c/Games/Novel/Novel.exe"
+
+    func game(at point: GlobalPoint) async -> HoverGame? {
+        let record = ProcessArguments.encode(executablePath: Self.loader,
+                                             arguments: [Self.loader, #"C:\Games\Novel\Novel.exe"#],
+                                             environment: ["WINEPREFIX=\(Self.bottle)", "WINEDEBUG=-all"])
+        return GameIdentity.game(executablePath: Self.loader, processArguments: record, resolveLink: { _ in nil })
+    }
+}
+
 /// `AsteriaScale --self-test` (run through tools/macos/build-app.sh
 /// --self-test): a scripted launch of the bundled app in a throwaway home that
 /// checks what the Swift suite cannot (the window server, Carbon, the real
@@ -35,7 +53,9 @@ private struct DeniedCapturePermission: CapturePermission {
 /// It never captures the screen: the capture gate is off for it (T22), so
 /// no screen source exists and the cursor is never tracked, and Vision reads
 /// only frames rendered here (hover.observations runs the hover pipeline on
-/// one through a fixture frame source and a stub permission).
+/// one through a fixture frame source and a stub permission). speaker.editor
+/// drives the speaker editor on cards shown here, with its game from a stub
+/// resolver, without making it key or activating the app.
 @MainActor
 final class SelfTest {
     private let app: AppDelegate
@@ -172,6 +192,7 @@ final class SelfTest {
         await ocrSelectCheck()
         await hoverChecks(session)
         await senseChecks()
+        await speakerEditorCheck()
         await faultChecks()
         textChecks()
     }
@@ -337,7 +358,7 @@ final class SelfTest {
             note("hotkeys.registered", "another Asteria Scale is running and holds them: \(detail)")
         } else {
             report("hotkeys.registered", hotkeys.handlerStatus == noErr && allRegistered
-                   && HotkeyAction.allCases.map(\.defaultSpec.display) == ["⌥T", "⌥D", "⌥V"]
+                   && HotkeyAction.allCases.map(\.defaultSpec.display) == ["⌥T", "⌥D", "⌥V", "⌃⌥G"]
                    && hotkeys.problems.isEmpty, detail)
         }
         synthesizing = true
@@ -484,9 +505,12 @@ final class SelfTest {
             report("hover.observations", false, "the synthetic display does not hold \(point)")
             return
         }
+        // The synthetic CrossOver game (as speaker.editor's): CoreHost must
+        // accept the key GameIdentity makes (T32), and HoverDriver must hand
+        // the game the hover sent to the speaker editor with the shown card.
         let pipeline = HoverPipeline(client: ObservationClient(core: app.supervisor),
                                      frames: FixtureFrameSource(cursor: location.cursor), recognizer: VisionTextRecognizer(),
-                                     fingerprinter: SHA256FrameFingerprinter(), games: NoGameResolver(),
+                                     fingerprinter: SHA256FrameFingerprinter(), games: SyntheticGameResolver(),
                                      permission: FixtureCapturePermission())
         // The fixture's line, as the loading card and the history entry of
         // this hover carry it (hover.dictionary's «bank» came from another
@@ -508,13 +532,15 @@ final class SelfTest {
                 && app.overlay.model.message == nil
         }
         let doorBefore = doorShows()
+        let targetBefore = app.speakerTarget?.target
         let unshown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { false }).value
+        let targetKept = app.speakerTarget?.target == targetBefore
         let unshownRecorded = await historyEntries().contains(where: isThisHover)
         let doorKept = doorBefore && doorShows()
         let unshownNote = app.diagnosticWindow.model.note
         let unshownOK = unshown.result.outcome == .completed && unshown.order.isEmpty && unshown.loading == nil
             && unshown.primary == nil && doorKept && unshownNote == RU.diagnosticWithheld
-            && app.lastPrimary == primaryBefore && !unshownRecorded
+            && app.lastPrimary == primaryBefore && !unshownRecorded && targetKept
 
         let denied = HoverPipeline(client: ObservationClient(core: app.supervisor),
                                    frames: FixtureFrameSource(cursor: location.cursor), recognizer: VisionTextRecognizer(),
@@ -540,6 +566,9 @@ final class SelfTest {
         }
         let entry = history.first(where: isThisHover)
         let loading = shown.loading, primary = shown.primary
+        let target = app.speakerTarget?.target
+        let targetOK = target?.point == point && target?.speaker == nil
+            && target?.game?.key == SyntheticGameResolver.expectedKey
         let vision = "APPLE VISION"
         report("hover.observations", unshownOK && refusedOK && shown.result.outcome == .completed
                && shown.order == ["loading", "primary"]
@@ -547,14 +576,17 @@ final class SelfTest {
                && shown.loadingTexts.contains(RU.overlayLookingUpDictionary)
                && primary?.source == VisionFixture.hoveredWord && primary?.provenance == .dictionary
                && primary?.engineLabel.hasPrefix(vision) == true && app.overlay.isVisible
-               && app.overlay.model.source == VisionFixture.hoveredWord && entry != nil,
+               && app.overlay.model.source == VisionFixture.hoveredWord && entry != nil && targetOK,
                "\(Self.milliseconds(took)): \(shown.result.steps.map(\.description).joined(separator: "; ")); shown "
                + "\(shown.order); loading «\(loading?.source ?? "")» [\(loading?.engineLabel ?? "none")] "
                + "\(shown.loadingTexts); card «\(primary?.source ?? "")» → «\(primary?.translation.prefix(30) ?? "")» "
                + "[\(primary?.provenance.wire ?? "?")] \(primary?.engineLabel ?? "none"); history "
                + (entry.map { "«\($0["source"]?.stringValue ?? "")» [\($0["engine"]?.stringValue ?? "")]" } ?? "none")
+               + "; speaker editor's card: game \(target?.game?.key ?? "none"), speaker "
+               + "\(target?.speaker?.name ?? "none")\(targetOK ? "" : " (expected the hover's game, no speaker)")"
                + "; outcome \(shown.result.outcome); with the cursor gone: \(unshown.result.outcome), shown "
-               + "\(unshown.order), «door» card \(doorKept ? "kept" : "not kept"), note «\(unshownNote ?? "")», history "
+               + "\(unshown.order), «door» card \(doorKept ? "kept" : "not kept"), editor's card "
+               + "\(targetKept ? "kept" : "replaced"), note «\(unshownNote ?? "")», history "
                + (unshownRecorded ? "recorded" : "none") + "; refused: \(refusedGone.result.outcome) with the cursor gone, "
                + "message «\(goneMessage ?? "none")»; with it there «\(hereMessage ?? "none")»")
     }
@@ -656,6 +688,175 @@ final class SelfTest {
                + "worker \(restarted?.sense.pid ?? -1)")
     }
 
+    /// The speaker editor (DoD 20.3 items 5 and 10) on the bundled CoreHost
+    /// in «Умный словарь», the one mode in which Core puts a speaker on a
+    /// card, with the game from SyntheticGameResolver. The cards come from
+    /// selection hovers that name the speaker «Kotorl» (a misread «Kotori»)
+    /// and send that game, each shown on the overlay as a hover over the
+    /// screen shows it, and ⌃⌥G's own path opens the editor on it, with
+    /// the keys going through the panel's own key path. Checked: no card and
+    /// a card without a game give their Russian messages and open nothing;
+    /// opening hides the card and keeps a screen hover's card off the
+    /// overlay (the tracking is never on in a self-test, so its pause is
+    /// pinned by SourceScanTests instead); the name corrected to «Kotori» and 2
+    /// store «feminine» under both spellings in settings.json of the
+    /// throwaway home, with the status card «Kotori: женский род для
+    /// Novel.exe»; the next card shows «Kotori», and the re-edit with 1
+    /// reaches the record under «Kotorl», the spelling the card carried as
+    /// observedName; a digit while the name is edited is text, and Esc sends
+    /// nothing. The editor never becomes key, and the app never becomes
+    /// active or frontmost. The frontmost app's pid before and after is
+    /// printed, not compared: the owner may switch apps during the run.
+    private func speakerEditorCheck() async {
+        let editor = app.speakerEditor!
+        let overlay = app.overlay!
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let activeBefore = NSApp.isActive
+        var focus: [String] = []
+        func noteFocus(_ step: String) {
+            if NSApp.isActive != activeBefore { focus.append("\(step): app active \(NSApp.isActive)") }
+            if editor.panel.isKeyWindow { focus.append("\(step): editor key") }
+            // The owner may switch apps meanwhile; only this app coming to
+            // the front is the editor's doing.
+            let now = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            if now == getpid() { focus.append("\(step): this app frontmost") }
+        }
+        let screen = NSScreen.main?.frame ?? .zero
+        let point = GlobalPoint(x: Double(screen.midX), y: Double(screen.midY))
+        let near = NSPoint(x: point.x, y: point.y)
+        guard let game = await SyntheticGameResolver().game(at: point) else {
+            report("speaker.editor", false, "GameIdentity refused the synthetic CrossOver process")
+            return
+        }
+        var problems: [String] = []
+        func expect(_ ok: Bool, _ problem: @autoclosure () -> String) { if !ok { problems.append(problem()) } }
+        expect(game == HoverGame(key: SyntheticGameResolver.expectedKey, displayName: "Novel.exe"),
+               "the synthetic game is \(game.key) «\(game.displayName)»")
+        let settingsFile = app.paths.userData.appendingPathComponent("settings.json")
+        func records() -> [String] {
+            guard let data = try? Data(contentsOf: settingsFile),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let genders = object["SpeakerGenders"] as? [[String: Any]] else { return ["unreadable"] }
+            return genders.filter { $0["GameKey"] as? String == game.key }.map {
+                "\($0["SpeakerName"] as? String ?? "?")>\($0["DisplayName"] as? String ?? "?"):\($0["Gender"] as? String ?? "?")"
+            }.sorted()
+        }
+        let observed = "Kotorl", corrected = "Kotori"
+        func card() async -> HoverPrimary? {
+            let shown = Box<HoverPrimary?>(nil)
+            let selection = HoverSelection(text: "The river was cold.", hoveredWord: "river", characterIndex: 4,
+                                           speakerName: observed)
+            _ = await app.hover.resolve(selection, game: game) { update in
+                guard case .primary(let primary) = update else { return }
+                DispatchQueue.main.async { MainActor.assumeIsolated { shown.value = primary } }
+            }
+            await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+            return shown.value
+        }
+        func showAsScreenCard(_ primary: HoverPrimary, game: HoverGame?) {
+            let token = overlay.beginObservationsHover(near: near)
+            overlay.apply(.primary(primary), token: token)
+            app.speakerCardShown(SpeakerTarget(speaker: primary.speaker, game: game, point: point), token: token)
+        }
+        func speaker(_ primary: HoverPrimary?) -> String {
+            guard let speaker = primary?.speaker else { return "none" }
+            return "\(speaker.name)/\(speaker.gender)/\(speaker.gameKey ?? "no game")/observed \(speaker.observedName ?? "none")"
+        }
+
+        // Refusals: no card of a screen hover, then a card without a game.
+        overlay.hide()
+        let noCard = app.editSpeaker(takeKeyboard: false)
+        let noCardMessage = overlay.model.message
+        noteOverlay()
+        expect(noCard == .noSpeaker && noCardMessage == RU.speakerNone && !editor.isOpen,
+               "no card: \(String(describing: noCard)), «\(noCardMessage ?? "none")»")
+        let seen = await card()
+        expect(seen?.speaker?.name == observed && seen?.speaker?.gender == "unknown" && seen?.speaker?.gameKey == game.key
+               && seen?.speaker?.observedName == observed, "first card \(speaker(seen))")
+        guard let seen else {
+            report("speaker.editor", false, "no card for the speaker: \(problems.joined(separator: "; "))")
+            return
+        }
+        showAsScreenCard(seen, game: nil)
+        let noGame = app.editSpeaker(takeKeyboard: false)
+        let noGameMessage = overlay.model.message
+        noteOverlay()
+        expect(noGame == .noGame && noGameMessage == RU.speakerNoGame && !editor.isOpen,
+               "no game: \(String(describing: noGame)), «\(noGameMessage ?? "none")»")
+
+        // Open, correct the name, 2.
+        showAsScreenCard(seen, game: game)
+        let cardShown = overlay.isVisible && overlay.model.source == seen.source
+        let opened = app.editSpeaker(takeKeyboard: false)
+        noteFocus("open")
+        let probe = overlay.beginObservationsHover(near: near)
+        let withheld = !overlay.apply(.primary(seen), token: probe)
+        expect(opened == nil && editor.isOpen && cardShown && !overlay.isVisible && overlay.isSuspended && withheld
+               && editor.name == observed && editor.target?.game == game,
+               "open: refusal \(String(describing: opened)), open \(editor.isOpen), card shown before \(cardShown), "
+               + "overlay visible \(overlay.isVisible), suspended \(overlay.isSuspended), screen card withheld \(withheld), "
+               + "name «\(editor.name)»")
+        editor.setName(corrected)
+        let typed = editor.keyPressed(keyCode: UInt16(kVK_ANSI_1), editingName: true)
+        expect(!typed && editor.isOpen, "a digit while the name is edited was taken")
+        editor.keyPressed(keyCode: UInt16(kVK_ANSI_2), editingName: false)
+        let firstSaved = await app.speakerSave?.value ?? false
+        noteFocus("feminine")
+        let firstStatus = overlay.isVisible ? overlay.model.message : nil
+        noteOverlay()
+        let firstRecords = records()
+        expect(firstSaved && !editor.isOpen && !overlay.isSuspended
+               && firstStatus == RU.speakerSaved(name: corrected, choice: .feminine, game: game.displayName)
+               && firstRecords == ["\(corrected)>\(corrected):feminine", "\(observed)>\(corrected):feminine"],
+               "2: saved \(firstSaved), open \(editor.isOpen), status «\(firstStatus ?? "none")», settings \(firstRecords), "
+               + "error «\(editor.errorText ?? "none")»")
+
+        // The re-edit from the card that shows the corrected name, 1.
+        let again = await card()
+        expect(again?.speaker?.name == corrected && again?.speaker?.gender == "feminine"
+               && again?.speaker?.observedName == observed, "second card \(speaker(again))")
+        if let again { showAsScreenCard(again, game: game) }
+        let reopened = app.editSpeaker(takeKeyboard: false)
+        noteFocus("reopen")
+        let reopenedName = editor.name
+        editor.keyPressed(keyCode: UInt16(kVK_ANSI_1), editingName: false)
+        let secondSaved = await app.speakerSave?.value ?? false
+        noteOverlay()
+        let secondRecords = records()
+        expect(reopened == nil && reopenedName == corrected && secondSaved && !editor.isOpen
+               && secondRecords == ["\(corrected)>\(corrected):masculine", "\(observed)>\(corrected):masculine"],
+               "1: reopened \(String(describing: reopened)), name «\(reopenedName)», saved \(secondSaved), "
+               + "settings \(secondRecords), error «\(editor.errorText ?? "none")»")
+
+        // Esc sends nothing.
+        let third = await card()
+        expect(third?.speaker?.gender == "masculine" && third?.speaker?.observedName == observed, "third card \(speaker(third))")
+        if let third { showAsScreenCard(third, game: game) }
+        let bytes = try? Data(contentsOf: settingsFile)
+        let saveBefore = app.speakerSave
+        let escOpened = app.editSpeaker(takeKeyboard: false)
+        noteFocus("esc")
+        editor.keyPressed(keyCode: SpeakerEditor.escapeKey, editingName: false)
+        await pause(.milliseconds(200))
+        let unchanged = (try? Data(contentsOf: settingsFile)) == bytes && bytes != nil
+        expect(escOpened == nil && !editor.isOpen && !overlay.isSuspended && unchanged && app.speakerSave == saveBefore,
+               "Esc: opened \(String(describing: escOpened)), open \(editor.isOpen), settings unchanged \(unchanged)")
+        noteFocus("closed")
+        // A failed step must not leave the editor open: the overlay would
+        // stay suspended and fail the checks after this one too.
+        if editor.isOpen { app.closeSpeakerEditor(reason: "self-test") }
+        overlay.hide()
+        report("speaker.editor", problems.isEmpty && focus.isEmpty,
+               "game «\(game.displayName)» \(game.key == SyntheticGameResolver.expectedKey ? "" : "UNEXPECTED ")\(game.key); "
+               + "cards \(speaker(seen)), \(speaker(again)), \(speaker(third)); no card «\(noCardMessage ?? "none")»; "
+               + "no game «\(noGameMessage ?? "none")»; 2 → «\(firstStatus ?? "none")» \(firstRecords); "
+               + "re-edit 1 → \(secondRecords); Esc: settings unchanged \(unchanged); app active \(activeBefore) "
+               + "before and after, frontmost pid \(frontmost.map { String($0) } ?? "none") before and "
+               + "\(NSWorkspace.shared.frontmostApplication.map { String($0.processIdentifier) } ?? "none") after, editor never key"
+               + (problems.isEmpty ? "" : "; problems: " + problems.joined(separator: "; "))
+               + (focus.isEmpty ? "" : "; focus: " + focus.joined(separator: "; ")))
+    }
+
     private func faultChecks() async {
         // CoreHost killed while idle: the app stays up and gets it back.
         guard let first = await pid() else {
@@ -711,7 +912,8 @@ final class SelfTest {
     private func textChecks() {
         noteOverlay()
         let menu = Set(app.statusMenu.visibleTitles)
-        let windows = Set(app.settingsWindow.model.visibleTexts + app.diagnosticWindow.model.visibleTexts)
+        let windows = Set(app.settingsWindow.model.visibleTexts + app.diagnosticWindow.model.visibleTexts
+                          + app.speakerEditor.visibleTexts)
         let free = Set(app.serviceMessages.messages.filter { $0.area == "translation" }.map(\.text))
         let shown = menu.union(overlayTexts).union(windows).union(app.serviceMessages.messages.map(\.text))
         let bad = shown.filter {

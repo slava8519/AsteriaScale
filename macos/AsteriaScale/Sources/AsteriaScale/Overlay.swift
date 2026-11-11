@@ -119,6 +119,21 @@ final class OverlayController {
     var hoverToken: Int { state.token }
     /// A card with a result shows (whoever began last).
     var isShowingResult: Bool { state.isShowingResult }
+    /// The speaker editor is open: nothing of a hover over the screen shows.
+    var isSuspended: Bool { state.suspended }
+
+    /// Whether the card of the hover with `token` shows now (the speaker
+    /// editor opens only on a card the user still sees).
+    func showsCard(of token: Int) -> Bool { state.shown == OverlayState.Shown(token: token, content: .card, screen: true) }
+
+    /// The speaker editor opens: the panel hides, and nothing of a hover
+    /// over the screen shows until `resume` (OverlayState.suspend).
+    func suspend() {
+        state.suspend()
+        hidePanel()
+    }
+
+    func resume() { state.resume() }
 
     /// Starts a hover: the loading card (the WPF wording) and a new token.
     func beginHover(word: String, smart: Bool, near point: NSPoint) -> Int {
