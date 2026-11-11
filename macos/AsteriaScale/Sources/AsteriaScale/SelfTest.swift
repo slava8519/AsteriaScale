@@ -4,6 +4,13 @@ import AsteriaScaleVision
 import Carbon.HIToolbox
 import Darwin
 
+/// The self-test's permission: its frames are rendered in memory, so there
+/// is nothing to ask the system (hover.observations never reads the real
+/// Screen Recording permission).
+private struct FixtureCapturePermission: CapturePermission {
+    func isGranted() -> Bool { true }
+}
+
 /// `AsteriaScale --self-test` (run through tools/macos/build-app.sh
 /// --self-test): a scripted launch of the bundled app in a throwaway home that
 /// checks what the Swift suite cannot (the window server, Carbon, the real
@@ -19,7 +26,10 @@ import Darwin
 /// stop it) ends a hung run with exit 1 (docs/MACOS.md T38): the Vision
 /// warm-up, the first step, compiles Vision's models in the fresh home, about
 /// 24 s on macOS 27 (T25; docs/DEVELOPMENT.md, «Проба Vision»).
-/// It never captures the screen: Vision reads only frames rendered here.
+/// It never captures the screen: the capture gate is off for it (T22), so
+/// no screen source exists and the cursor is never tracked, and Vision reads
+/// only frames rendered here (hover.observations runs the hover pipeline on
+/// one through a fixture frame source and a stub permission).
 @MainActor
 final class SelfTest {
     private let app: AppDelegate
@@ -255,6 +265,7 @@ final class SelfTest {
                + "id \(Bundle.main.bundleIdentifier ?? "none")")
         report("launch.instance", app.instanceLock?.isHeld == true,
                "\(app.paths.instanceLock.path) held; the NSRunningApplication check is skipped in the self-test")
+        captureGateCheck()
         let menu = app.statusMenu!
         let expected = [RU.menuHoverTranslation, RU.menuTranslationMode, RU.menuModeSmart, RU.menuModeDictionary,
                         RU.menuCheckTranslation, RU.menuTranslateClipboard, RU.menuSettings,
@@ -263,6 +274,25 @@ final class SelfTest {
         report("statusItem", menu.item.button?.image != nil && expected.allSatisfy(titles.contains)
                && [RU.stateStarting, RU.stateReady, RU.stateRestarting, RU.stateUnavailable].contains(menu.stateText),
                titles.joined(separator: " | "))
+    }
+
+    /// The capture gate for this very process (DoD 20.3 item 8): the same
+    /// rules without --self-test say off, because build-app.sh, not launchd,
+    /// started it. Only a reason is asked for, never a permit; the app's own
+    /// decision at launch is off for the self-test, so no screen source exists.
+    private func captureGateCheck() {
+        let arguments = CommandLine.arguments.filter { $0 != CaptureGate.selfTestArgument }
+        let reason = CaptureGate.offReason(arguments: arguments, parentPid: getppid(),
+                                           environment: ProcessInfo.processInfo.environment,
+                                           bundleId: Bundle.main.bundleIdentifier ?? "")
+        var parentIsNotLaunchd = false
+        if case .parentIsNotLaunchd? = reason { parentIsNotLaunchd = true }
+        // The decision the app made at launch: nil would mean it was never made.
+        let decided = app.captureDecision
+        report("capture.gate", parentIsNotLaunchd && decided == .off(.selfTest) && app.screenSource == nil,
+               "without --self-test: " + (reason.map { "off: \($0)" } ?? "on")
+               + "; this run: \(decided.map(String.init(describing:)) ?? "undecided"); screen source "
+               + (app.screenSource == nil ? "not created" : "created"))
     }
 
     private func overlayChecks() async {
@@ -278,11 +308,9 @@ final class SelfTest {
                && !panel.canBecomeMain && panel.styleMask.contains(.nonactivatingPanel),
                "level \(panel.level.rawValue), behavior \(panel.collectionBehavior.rawValue), "
                + "sharing \(panel.sharingType.rawValue)")
-        let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(panel.windowNumber)) as? [[String: Any]]
-        let window = list?.first
-        let layer = window?[kCGWindowLayer as String] as? Int
-        let sharing = window?[kCGWindowSharingState as String] as? Int
-        let onscreen = window?[kCGWindowIsOnscreen as String] as? Bool
+        // The window server's own record of the panel, read in the one file
+        // that may name the window-list API (DoD 8); no instance, no capture.
+        let (layer, sharing, onscreen) = ScreenSource.ownWindowRecord(panel.windowNumber)
         report("overlay.windowServer", layer == 1000 && sharing == 0 && onscreen == true,
                "layer \(layer.map(String.init) ?? "?"), sharingState \(sharing.map(String.init) ?? "?"), "
                + "onscreen \(onscreen.map { String($0) } ?? "?")")
@@ -382,6 +410,7 @@ final class SelfTest {
         let moded = await app.setMode(.dictionary)?.value
         report("menu.mode", moded?.settings.translationMode == .dictionary && app.statusMenu.checkedMode == .dictionary,
                "mode \(moded?.settings.mode ?? "?"), menu \(app.statusMenu.checkedMode?.rawValue ?? "none")")
+        captureDisabledCheck()
 
         let started = ContinuousClock.now
         let outcome = await translate("The [bank] was steep and muddy.")
@@ -405,6 +434,97 @@ final class SelfTest {
                && app.statusMenu.senseText == status?.senseLine
                && app.statusMenu.senseText.range(of: #"\p{Cyrillic}"#, options: .regularExpression) != nil,
                "morphology \(status?.morphologyEntries ?? -1), menu «\(app.statusMenu.senseText)»")
+    }
+
+    /// Translation is on, yet nothing captures (DoD 20.3 item 8): no screen
+    /// source, no cursor tracking, no hover from the tracker, no app-side
+    /// Vision warm-up, and the menu says why, without the permission item.
+    private func captureDisabledCheck() {
+        let menu = app.statusMenu!
+        let driver = app.hoverDriver!
+        report("capture.disabled", app.settings?.settings.hoverEnabled == true && app.screenSource == nil
+               && !driver.isTracking && driver.trackedHovers == 0 && app.visionWarmUp == .notStarted
+               && app.recognition == .disabledForCheckRun && menu.recognitionText == RU.recognitionDisabledCheckRun
+               && !menu.permissionItemVisible,
+               "hover on \(app.settings?.settings.hoverEnabled ?? false), screen source "
+               + "\(app.screenSource == nil ? "not created" : "created"), tracking \(driver.isTracking), "
+               + "\(driver.trackedHovers) tracked hovers, app warm-up \(app.visionWarmUp), "
+               + "menu «\(menu.recognitionText ?? "")», permission item \(menu.permissionItemVisible ? "shown" : "hidden")")
+    }
+
+    /// The hover pipeline end to end on a frame rendered in memory (DoD 20.3
+    /// item 10), in «Словарь» with hover translation on: ocr.plan, the
+    /// fixture frame of the plan's bounds, the real Vision, hover.resolve
+    /// with observations in the bundled CoreHost, the loading card, the card
+    /// with an Apple Vision label, and the history entry after
+    /// hover.displayed. The display is synthetic (2x, 1000x600 points), the
+    /// cursor on its middle, and the permission a stub: nothing asks the
+    /// system and nothing is captured. First the same hover with the cursor
+    /// re-check saying no (DoD 20.3 item 7: the cursor is checked against
+    /// the anchor before anything shows): it completes, but no loading card,
+    /// no card and no history entry may appear, and the overlay ends hidden.
+    private func observationsHoverCheck() async {
+        guard let display = DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 1000, height: 600),
+                                               pixelWidth: 2000, pixelHeight: 1200) else {
+            report("hover.observations", false, "the synthetic display was refused")
+            return
+        }
+        let point = GlobalPoint(x: 500, y: 300)
+        guard let location = CaptureGeometry.locate(point, on: [display]) else {
+            report("hover.observations", false, "the synthetic display does not hold \(point)")
+            return
+        }
+        let pipeline = HoverPipeline(client: ObservationClient(core: app.supervisor),
+                                     frames: FixtureFrameSource(cursor: location.cursor), recognizer: VisionTextRecognizer(),
+                                     fingerprinter: SHA256FrameFingerprinter(), games: NoGameResolver(),
+                                     permission: FixtureCapturePermission())
+        // The fixture's line, as the loading card and the history entry of
+        // this hover carry it (hover.dictionary's «bank» came from another
+        // sentence).
+        let line = VisionFixture.lines[VisionFixture.hoveredLine]
+        let lineStart = String(line.prefix(18))
+        func isThisHover(_ entry: JSONValue) -> Bool {
+            entry["source"]?.stringValue == VisionFixture.hoveredWord
+                && entry["context"]?.stringValue?.hasPrefix(lineStart) == true
+        }
+        func historyEntries() async -> [JSONValue] {
+            (try? await app.supervisor.request("history.list", deadline: CoreDeadlines.control))?["entries"]?
+                .arrayValue ?? []
+        }
+
+        let primaryBefore = app.lastPrimary
+        let unshown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { false }).value
+        let unshownRecorded = await historyEntries().contains(where: isThisHover)
+        let unshownHidden = !app.overlay.isVisible
+        let unshownOK = unshown.result.outcome == .completed && unshown.order.isEmpty && unshown.loading == nil
+            && unshown.primary == nil && unshownHidden && app.lastPrimary == primaryBefore && !unshownRecorded
+
+        let started = ContinuousClock.now
+        let shown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { true }).value
+        let took = started.duration(to: .now)
+        noteOverlay()
+        var history: [JSONValue] = []
+        _ = await waitUntil(.seconds(3)) {
+            history = await historyEntries()
+            return history.contains(where: isThisHover)
+        }
+        let entry = history.first(where: isThisHover)
+        let loading = shown.loading, primary = shown.primary
+        let vision = "APPLE VISION"
+        report("hover.observations", unshownOK && shown.result.outcome == .completed && shown.order == ["loading", "primary"]
+               && loading?.source.hasPrefix(lineStart) == true && loading?.engineLabel.hasPrefix(vision) == true
+               && shown.loadingTexts.contains(RU.overlayLookingUpDictionary)
+               && primary?.source == VisionFixture.hoveredWord && primary?.provenance == .dictionary
+               && primary?.engineLabel.hasPrefix(vision) == true && app.overlay.isVisible
+               && app.overlay.model.source == VisionFixture.hoveredWord && entry != nil,
+               "\(Self.milliseconds(took)): \(shown.result.steps.map(\.description).joined(separator: "; ")); shown "
+               + "\(shown.order); loading «\(loading?.source ?? "")» [\(loading?.engineLabel ?? "none")] "
+               + "\(shown.loadingTexts); card «\(primary?.source ?? "")» → «\(primary?.translation.prefix(30) ?? "")» "
+               + "[\(primary?.provenance.wire ?? "?")] \(primary?.engineLabel ?? "none"); history "
+               + (entry.map { "«\($0["source"]?.stringValue ?? "")» [\($0["engine"]?.stringValue ?? "")]" } ?? "none")
+               + "; outcome \(shown.result.outcome); with the cursor gone: \(unshown.result.outcome), shown "
+               + "\(unshown.order), overlay \(unshownHidden ? "hidden" : "visible"), history "
+               + (unshownRecorded ? "recorded" : "none"))
     }
 
     private func senseChecks() async {
@@ -533,6 +653,11 @@ final class SelfTest {
         let again = await translate("Close the [door].")
         report("hover.afterRestart", again == .completed && app.lastPrimary?.source == "door",
                "«\(app.overlay.model.translation.prefix(30))»")
+
+        // Here, after «door»: history drops a hover whose source and
+        // translation repeat its newest entry, so right after
+        // hover.dictionary's «bank» this hover's «bank» would not be recorded.
+        await observationsHoverCheck()
 
         // A hover while CoreHost is down degrades to a message, never a hang.
         if let current = await pid() { Darwin.kill(current, SIGKILL) }

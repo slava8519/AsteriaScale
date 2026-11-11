@@ -147,6 +147,26 @@ import Testing
         }
     }
 
+    /// A skip-byte BGRA image (no alpha, the fourth byte unused) is copied
+    /// as it is except that byte, which becomes 255: Vision reads the frame
+    /// as premultiplied BGRA, where 0 there would be transparent.
+    @Test func aSkippedByteBecomesOpaque() throws {
+        let skip = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        for stride in [4 * 4, 4 * 4 + 8] {
+            let image = try #require(Self.image(width: 4, height: 3, stride: stride,
+                                                order: { [$0[0], $0[1], $0[2], 0] }, info: skip))
+            try #require(image.alphaInfo == .noneSkipFirst)
+            let pixels = try #require(PixelBuffer.bgra(of: image))
+            #expect(pixels.bytes == Self.expected(width: 4, height: 3), "bytesPerRow \(stride)")
+        }
+        // A premultiplied image keeps its fourth byte as it is.
+        let premultiplied = try #require(Self.image(width: 2, height: 1, stride: 8, order: { [$0[0], $0[1], $0[2], 7] },
+                                                    info: PixelBuffer.bitmapInfo))
+        let kept = try #require(PixelBuffer.bgra(of: premultiplied))
+        try #require(kept.bytes.count == 8)
+        #expect(kept.bytes[kept.bytes.startIndex + 3] == 7 && kept.bytes[kept.bytes.startIndex + 7] == 7)
+    }
+
     @Test func otherLayoutsAreDrawnIntoBGRA() throws {
         // RGBA in memory (big-endian words, alpha last), opaque, same colour space.
         let rgba = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)

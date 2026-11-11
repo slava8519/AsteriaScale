@@ -153,17 +153,45 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   recognized word CoreHost would refuse, a non-finite box or more than 256
   UTF-16 units, is left out of its line instead), and
   `ObservationClient` (`ocr.plan`, `ocr.select`, the observations hover with
-  `hover.loading` and `stale_frame`). `Sources/AsteriaScaleVision` is Apple
+  `hover.loading` and `stale_frame`). Kit also decides every hover over the
+  screen (20.3, DoD 7 and 8), as pure code over injected seams:
+  `HoverPipeline` (the permission first, then `ocr.plan`, frame 1 and its
+  fingerprint, Vision skipped when the plan's cached fingerprint matches, in
+  «Умный словарь» frame 2 taken only after the first recognition, the
+  observations hover; exactly one retry with full observations on
+  `stale_frame`, one new plan when CoreHost refuses a hover as
+  `bad_request` and the mode turns out changed, `frame_mismatch`, the
+  budget, a cancellation at any step) over `FrameSource`,
+  `CapturePermission`, `TextRecognizer` and `GameResolver` (`NoGameResolver`
+  until the speaker editor), `HoverTracker` (a pure state machine on an
+  injected `MonotonicClock`: 90 ms polls, 15 display pixels, the settings'
+  delay clamped to 350..1500 ms, an own window only hides the card, a hover
+  takes the cursor of the poll that starts it and its cards, a phrase line
+  and an end message are re-checked against it; a new mode or new smart
+  settings restart it, as Windows' `SetMode` and
+  `ApplySmartDictionarySettings` reset tracking), `CaptureGate` (capture only without `--self-test`, with
+  `getppid() == 1` and `__CFBundleIdentifier` and the bundle both M13's;
+  its `Permit` exists only in an `.on` decision), `CaptureFailure` (-3801 is
+  the permission message) and `RecognitionStatus` (the menu's recognition
+  line). `Sources/AsteriaScaleVision` is Apple
   Vision itself, Foundation, Vision, CoreGraphics, CoreText, ImageIO and
   CryptoKit only (no AppKit, no screen capture): `VisionTextRecognizer`
   (T23; frames below 1.5 pixels per point reach Vision enlarged twice
   through `PixelBuffer.visionImage`, T24, and the recognizer reports the
   size Vision was given), the in-memory CoreText fixture
-  (`FixtureRenderer`, `VisionFixture`; no image is committed), `PixelBuffer`
-  and the CryptoKit `SHA256FrameFingerprinter` (T27).
-  `Sources/AsteriaScale` is the menu-bar app (AppKit, SwiftUI, Carbon): the
-  status item, the click-through overlay, the Carbon hotkeys, the settings
-  and «Проверка перевода» windows and the scripted `--self-test`; CoreHost's
+  (`FixtureRenderer`, `VisionFixture`, and `FixtureFrameSource`, which puts
+  it on a frame of a plan's bounds for the self-test; no image is
+  committed), `PixelBuffer` and the CryptoKit `SHA256FrameFingerprinter`
+  (T27).
+  `Sources/AsteriaScale` is the menu-bar app (AppKit, SwiftUI, Carbon,
+  ScreenCaptureKit): the status item (with the recognition line and, only
+  while capture is on and not permitted, «Разрешить запись экрана…»), the
+  click-through overlay, the Carbon hotkeys, the settings and «Проверка
+  перевода» windows, `HoverDriver` (the glue from the tracker through the
+  pipeline to the overlay), `ScreenSource.swift` (the screen capture,
+  constructed once at launch only when `CaptureGate` says on; the only file
+  that names ScreenCaptureKit, the Screen Recording preflight and request
+  and the window-list API) and the scripted `--self-test`; CoreHost's
   free-text statuses appear only in «Проверка перевода» and `app.log`, never
   in the menu or the overlay. `Bundle/` holds the Info.plist template and
   the entitlements `tools/macos/build-app.sh` signs with.
@@ -417,12 +445,20 @@ bundle: never clean it (`lsregister -u <path>` or `-gc` is the owner's) and
 list the bundle paths you launched in your report. A physical press of
 ⌥T, ⌥D or ⌥V is an owner check too: the self-test proves registration and
 the handler, not that the window server delivers a real key. Stage 20.3
-(Apple Vision and screen capture) adds four rules that hold before its code
-lands. No agent run calls ScreenCaptureKit, `CGRequestScreenCaptureAccess`
-or anything else that can raise a privacy (TCC) prompt (Screen Recording,
-Accessibility, Input Monitoring): a real capture and the first grant are
-owner checks, and the app turns capture on only when the owner launches it
-through LaunchServices (docs/MACOS.md T22). The real Vision recognizer runs
+(Apple Vision and screen capture) adds four rules. No agent run calls
+ScreenCaptureKit, `CGPreflightScreenCaptureAccess`,
+`CGRequestScreenCaptureAccess` or anything else that can raise a privacy
+(TCC) prompt (Screen Recording, Accessibility, Input Monitoring), and no
+test, probe or script creates a `ScreenSource` or calls its capture or
+permission members: that code is compiled and scanned, never run; only
+its static `ownWindowRecord` (one window-list read of the app's own panel,
+no ScreenCaptureKit, no permission) runs, in the self-test's
+`overlay.windowServer`. A real capture, the cursor tracking and the first grant
+are owner checks, and the app turns capture on only when the owner
+launches it through LaunchServices (`CaptureGate`, docs/MACOS.md T22): in
+a self-test, `--run-isolated` or any other direct exec it is off, no
+screen source exists, the cursor is not tracked, the app warms no Vision
+and the menu says «Распознавание отключено: проверочный запуск». The real Vision recognizer runs
 only in the app self-test and in the DoD 6 probe, both only in a throwaway
 home: the probe is a copy of `AsteriaScaleVisionProbe` re-signed with
 `codesign -s - -o runtime -f` (no entitlements) and started by direct exec
@@ -688,7 +724,11 @@ certificate creation, `Add-AppxPackage`.
   builds beside the test bundle (`TestSleeper.url()`), never a copy of a
   system binary. Faults
   come from the stdlib fake `Fixtures/fake-corehost.py` (protocol v1 under
-  `/usr/bin/python3`), never from crashing a real process; the real CoreHost
+  `/usr/bin/python3`), never from crashing a real process; its hooks for
+  `HoverPipelineTests` are CoreHost's `test.delayNextWork` (the next
+  `ocr.plan` or `ocr.select`), a card «slow» that holds an observations
+  hover until `request.cancel` (the fake's own, like its selection
+  «slow»), and a stderr note per `request.cancel`; the real CoreHost
   is launched only by `realCoreHostReachesHello`, with `AppPaths` arguments
   in a throwaway home. A change to CoreHost's arguments or wire bytes
   updates the Swift side in the same commit: `launchArgumentsMatchGolden`
@@ -703,17 +743,26 @@ certificate creation, `Add-AppxPackage`.
   line; text in a comment or a string literal is no import, and a file
   that leaves a comment or literal open fails; Vision, CoreText and AppKit
   are caught on the raw line too, even in a comment), on a Vision type, a
-  text-recognition request or handler, `FixtureRenderer`, `VisionFixture`
-  or a CoreText, CoreGraphics or HIToolbox font or text-drawing call in a
+  text-recognition request or handler, `FixtureRenderer`, `VisionFixture`,
+  `FixtureFrameSource` or a CoreText, CoreGraphics or HIToolbox font or text-drawing call in a
   test, on a Kit import other than Foundation and Darwin, on an
   AsteriaScaleVision import outside DoD 6's list (the same forms), and on a
-  screen-capture or permission (TCC) API outside its allow-list (DoD 8's
-  names, every `CGWindowList*` name and the Swift
-  `CGImage(windowListFrom…)`). That list holds exactly one line, 20.2's
-  `overlay.windowServer` window-list read in `SelfTest.swift` (that call
-  only); the capture commit moves it into
-  `Sources/AsteriaScale/ScreenSource.swift`, which then becomes the list's
-  only file (DoD 8, T22). Event taps, global NSEvent monitors,
+  screen-capture or permission (TCC) API outside
+  `Sources/AsteriaScale/ScreenSource.swift` (DoD 8, T22: DoD 8's names,
+  every `CGWindowList*` name and the Swift `CGImage(windowListFrom…)`).
+  That file may hold ScreenCaptureKit, its three types the capture uses and
+  the two Screen Recording calls on any line, and of the window-list API
+  only the one line of the allow-list: `CGWindowListCopyWindowInfo` in the
+  static helper through which 20.2's `overlay.windowServer` self-test check
+  reads its own panel's record, which needs no instance and asks for no
+  permission. A construction of `ScreenSource`, in any spelling the scan
+  knows (`ScreenSource(`, `ScreenSource.init`, `.init(permit:`), appears in
+  the package's sources only on the one line of `AppDelegate.swift` that
+  unwraps `CaptureGate`'s permit, besides the initializer's declaration in
+  `ScreenSource.swift`, and `CaptureGate.decide` once there, its whole
+  statement pinned to this process's own traits (`CommandLine.arguments`,
+  `getppid()`, the process environment, `Bundle.main`'s id), so no literal
+  can turn it on (the tests call the pure decision freely). Event taps, global NSEvent monitors,
   `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
   `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,

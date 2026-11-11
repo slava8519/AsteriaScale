@@ -19,6 +19,12 @@ public enum PixelBuffer {
     /// no colour conversion or premultiplication touches the bytes; any
     /// other image is drawn into a BGRA bitmap of its own RGB colour space
     /// (sRGB for another model). Nil when the image cannot be read.
+    ///
+    /// A skip-byte layout (no alpha, the fourth byte unused) gets 255 in that
+    /// byte: the frame is handed to Vision labelled premultiplied BGRA, where
+    /// an undefined fourth byte would read as transparency. Which layout the
+    /// screen capture returns is the owner's check (no agent run captures);
+    /// either way the fingerprint reads the bytes the app keeps.
     public static func bgra(of image: CGImage) -> (width: Int, height: Int, bytes: Data)? {
         let width = image.width, height = image.height
         guard width >= 1, height >= 1 else { return nil }
@@ -27,12 +33,17 @@ public enum PixelBuffer {
         if image.bitsPerComponent == 8, image.bitsPerPixel == 32, image.byteOrderInfo == .order32Little,
            image.pixelFormatInfo == .packed, alphaFirst.contains(image.alphaInfo), image.bytesPerRow >= dense,
            let source = image.dataProvider?.data as Data?, source.count >= image.bytesPerRow * (height - 1) + dense {
-            if image.bytesPerRow == dense { return (width, height, Data(source.prefix(dense * height))) }
-            var bytes = Data(capacity: dense * height)
-            for row in 0..<height {
-                let start = source.startIndex + row * image.bytesPerRow
-                bytes.append(source[start..<(start + dense)])
+            var bytes: Data
+            if image.bytesPerRow == dense {
+                bytes = Data(source.prefix(dense * height))
+            } else {
+                bytes = Data(capacity: dense * height)
+                for row in 0..<height {
+                    let start = source.startIndex + row * image.bytesPerRow
+                    bytes.append(source[start..<(start + dense)])
+                }
             }
+            if image.alphaInfo == .noneSkipFirst { opaque(&bytes) }
             return (width, height, bytes)
         }
         let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? sRGB
@@ -40,6 +51,18 @@ public enum PixelBuffer {
                                       space: space, bitmapInfo: bitmapInfo.rawValue) else { return nil }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return bytes(of: context)
+    }
+
+    /// 255 in every fourth byte (B, G, R, then the skipped byte, as 32-bit
+    /// little-endian words with it first lay them out).
+    static func opaque(_ bytes: inout Data) {
+        bytes.withUnsafeMutableBytes { raw in
+            var offset = 3
+            while offset < raw.count {
+                raw[offset] = 255
+                offset += Frame.bytesPerPixel
+            }
+        }
     }
 
     /// A frame of `image` (see `bgra(of:)`).

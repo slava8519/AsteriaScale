@@ -194,9 +194,8 @@ public enum HoverOutcome: Sendable, Equatable {
     /// The caller cancelled; CoreHost got request.cancel.
     case cancelled
     /// An observations hover with zero observations whose cached frame is
-    /// gone (stale_frame, «Кадр на экране изменился.»): the hover pipeline
-    /// that comes with the screen capture retries once with full
-    /// observations and shows nothing (DoD 20.3).
+    /// gone (stale_frame, «Кадр на экране изменился.»): HoverPipeline
+    /// retries once with full observations and shows nothing (DoD 20.3).
     case staleFrame(CoreError)
     /// An error terminal (hover_disabled, not_ready, …) or a lost connection.
     case rejected(CoreError)

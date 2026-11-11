@@ -45,11 +45,11 @@ import Testing
     /// functions and the option type), and the labels the image-from-array
     /// function of that family takes in Swift, where CoreGraphics' API notes
     /// import it as a CGImage initializer that holds no part of the prefix
-    /// (any initializer whose labels start the same way is caught). They may
-    /// appear only in the files, and on as many lines there, as the
-    /// allow-list says: the capture commit moves them all into
-    /// Sources/AsteriaScale/ScreenSource.swift. Matched as substrings of raw
-    /// lines, comments and strings included.
+    /// (any initializer whose labels start the same way is caught). Only
+    /// Sources/AsteriaScale/ScreenSource.swift may name them: the first six
+    /// anywhere in it, the window-list prefix only in the allow-list's
+    /// exact spelling and on as many lines as it says. Matched as
+    /// substrings of raw lines, comments and strings included.
     static let captureGroup = [
         ["Screen", "CaptureKit"], ["SC", "ShareableContent"], ["SC", "ScreenshotManager"], ["SC", "ContentFilter"],
         ["CGPreflight", "ScreenCaptureAccess"], ["CGRequest", "ScreenCaptureAccess"],
@@ -70,23 +70,37 @@ import Testing
         ["CGDisplay", "CreateImage"], ["CGDisplay", "Stream"], ["AVCapture", "ScreenInput"],
     ].map { $0.joined() }
 
-    /// The exact spellings a file may hold, and on how many lines. One line,
-    /// and only that one: 20.2's overlay.windowServer self-test check reads
-    /// its own panel's window record (layer, sharing state) with the
-    /// window-list copy call. That query asks for no permission and raises
-    /// no prompt; the capture commit moves it into ScreenSource.swift, which
-    /// then becomes the only file here (DoD 8, T22).
+    /// The one file that may name the screen capture (DoD 8, T22).
+    static let captureFile = "Sources/AsteriaScale/ScreenSource.swift"
+
+    /// The capture-group names the capture file may hold on any line: the
+    /// capture framework, the three of its types the capture uses and the
+    /// two Screen Recording calls. Not the window-list prefix nor the
+    /// image-from-array labels: the capture is the screenshot manager's, and
+    /// the window-list image calls are deprecated.
+    static let captureFileNames = Set([
+        ["Screen", "CaptureKit"], ["SC", "ShareableContent"], ["SC", "ScreenshotManager"], ["SC", "ContentFilter"],
+        ["CGPreflight", "ScreenCaptureAccess"], ["CGRequest", "ScreenCaptureAccess"],
+    ].map { $0.joined() })
+
+    /// The exact window-list spellings a file may hold, and on how many
+    /// lines. One line, and only that one: the window-list copy call with
+    /// which 20.2's overlay.windowServer self-test check reads its own
+    /// panel's window record (layer, sharing state), moved from
+    /// SelfTest.swift into a static helper of the capture file. That query
+    /// asks for no permission and raises no prompt.
     static let captureAllowList: [String: [String: Int]] = [
-        ["CGWin", "dowList", "CopyWindowInfo"].joined(): ["Sources/AsteriaScale/SelfTest.swift": 1],
+        ["CGWin", "dowList", "CopyWindowInfo"].joined(): [captureFile: 1],
     ]
 
     /// The capture and permission issues of `sources`: a never-group name
-    /// anywhere, a capture-group name outside an allowed spelling, and, with
-    /// `exactAllowance`, an allowed file that holds its spelling on more or
-    /// fewer lines than the allow-list says. An allowed spelling is taken
-    /// out of its line before the group is matched, so the prefix it starts
-    /// with is allowed there only: another window-list name beside it, or
-    /// on any other line of the file, is still an issue.
+    /// anywhere, a capture-group name outside the capture file's names and
+    /// the allowed spellings, and, with `exactAllowance`, an allowed file
+    /// that holds its spelling on more or fewer lines than the allow-list
+    /// says. An allowed spelling is taken out of its line before the group
+    /// is matched, so the prefix it starts with is allowed there only:
+    /// another window-list name beside it, or on any other line of the
+    /// file, is still an issue.
     static func captureIssues(_ sources: [Source], exactAllowance: Bool) -> [String] {
         var issues: [String] = []
         var allowedLines: [String: [String: Int]] = [:]
@@ -99,6 +113,7 @@ import Testing
                     rest = rest.replacingOccurrences(of: spelling, with: " ")
                 }
                 for name in captureGroup where rest.contains(name) {
+                    if source.path == captureFile, captureFileNames.contains(name) { continue }
                     issues.append("\(name) in \(source.path):\(number + 1)")
                 }
                 for name in neverGroup where line.contains(name) {
@@ -121,6 +136,89 @@ import Testing
         let sources = try Self.swiftSources("Sources") + Self.swiftSources("Tests")
         #expect(sources.count >= 30)
         for issue in Self.captureIssues(sources, exactAllowance: true) { Issue.record("\(issue)") }
+        // The capture file really is the capture: every one of its names is there.
+        let capture = try #require(sources.first { $0.path == Self.captureFile }, "no \(Self.captureFile)")
+        for name in Self.captureFileNames.sorted() where !capture.lines.contains(where: { $0.contains(name) }) {
+            Issue.record("\(Self.captureFile) does not name \(name)")
+        }
+    }
+
+    // MARK: Where the screen source is built
+
+    /// Where the screen source is built and the capture gate decides (DoD 8,
+    /// T22: built only where the decision is checked, once at launch). The
+    /// initializer takes the gate's permit, which only an `.on` decision
+    /// carries, so its one construction is the line of the constructor file
+    /// that unwraps the decision; besides it only the initializer's own
+    /// declaration in the capture file may spell it. A construction is
+    /// matched in every spelling the scan knows: the type followed by `(`
+    /// or `.init`, and the initializer's label after `init(` on any type
+    /// (`.init(permit:`). The decision is matched as its whole statement,
+    /// its lines joined, so it is pinned to this process's own traits too:
+    /// a literal parent pid, environment, bundle id or argument list would
+    /// make a direct exec look like a LaunchServices launch.
+    static let constructorFile = "Sources/AsteriaScale/AppDelegate.swift"
+    static let constructorLine = ["if case .on(let permit) = captureDecision { screenSource = Screen",
+                                  "Source(permit: permit) }"].joined()
+    static let declarationLine = ["in", "it(permit: CaptureGate.Permit) {"].joined()
+    static let constructorPatterns = [[#"Screen"#, #"Source\s*(?:\(|\.\s*init\b)"#], [#"\bin"#, #"it\s*\(\s*permit\s*:"#]]
+        .map { $0.joined() }
+    static let decideSpelling = ["CaptureGate", ".decide("].joined()
+    static let decideStatement = ["captureDecision = CaptureGate.de", "cide(arguments: CommandLine.arguments, ",
+                                  "parentPid: getppid(), environment: ProcessInfo.processInfo.environment, ",
+                                  "bundleId: Bundle.main.bundleIdentifier ?? \"\")"].joined()
+
+    /// The statement that starts on `lines[start]`: that line and the next
+    /// ones until its parentheses close (at most eight), with every run of
+    /// white space made one space.
+    static func statement(_ lines: [Substring], from start: Int) -> String {
+        var text = ""
+        var depth = 0
+        var index = start
+        while lines.indices.contains(index), index - start < 8 {
+            text += " " + String(lines[index])
+            depth += lines[index].filter { $0 == "(" }.count - lines[index].filter { $0 == ")" }.count
+            if depth <= 0 { break }
+            index += 1
+        }
+        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// Every construction of `sources` beyond the one line and the
+    /// declaration, and every decision beyond the one statement.
+    static func gateIssues(_ sources: [Source]) throws -> [String] {
+        let patterns = try constructorPatterns.map { try Regex($0).wordBoundaryKind(.simple) }
+        var constructors: [(path: String, line: Int, text: String)] = []
+        var decisions: [(path: String, line: Int, statement: String)] = []
+        for source in sources {
+            for (number, line) in source.lines.enumerated() {
+                if patterns.contains(where: { line.contains($0) }) {
+                    constructors.append((source.path, number + 1, line.trimmingCharacters(in: .whitespaces)))
+                }
+                if line.contains(decideSpelling) {
+                    decisions.append((source.path, number + 1, statement(source.lines, from: number)))
+                }
+            }
+        }
+        var issues: [String] = []
+        let expected = ["\(captureFile) \(declarationLine)", "\(constructorFile) \(constructorLine)"].sorted()
+        if constructors.map({ "\($0.path) \($0.text)" }).sorted() != expected {
+            issues.append("the screen source is built on \(constructors.map { "\($0.path):\($0.line)" }), "
+                          + "not only on one line of \(constructorFile) that unwraps the gate's permit")
+        }
+        if decisions.count != 1 || decisions.first?.path != constructorFile || decisions.first?.statement != decideStatement {
+            issues.append("the capture gate decides on \(decisions.map { "\($0.path):\($0.line)" }), "
+                          + "not once in \(constructorFile) from this process's own traits")
+        }
+        return issues
+    }
+
+    /// The package's sources; the tests call the pure decision freely and
+    /// cannot build the screen source (they do not link the app).
+    @Test func theScreenSourceIsBuiltOnlyWhereTheGateDecides() throws {
+        let sources = try Self.swiftSources("Sources")
+        #expect(sources.contains { $0.path == Self.constructorFile } && sources.contains { $0.path == Self.captureFile })
+        for issue in try Self.gateIssues(sources) { Issue.record("\(issue)") }
     }
 
     // MARK: Imports
@@ -359,13 +457,14 @@ import Testing
 
     /// What no test may name (T26): the recognizer and its request types (VN
     /// plus a capital is any Vision type; the Swift API's text request and
-    /// every request handler are covered by their suffixes), the renderer
-    /// and the fixture that drive them, and the CoreText, CoreGraphics and
+    /// every request handler are covered by their suffixes), the renderer,
+    /// the fixture and the self-test's frame source that drive them, and
+    /// the CoreText, CoreGraphics and
     /// HIToolbox calls that make or draw text (fonts may write caches into
     /// the run's home, which test-swift.sh refuses).
     static let testNames = [
         ["VisionText", "Recognizer"], ["Recognize", "TextRequest"], ["Request", "Handler"],
-        ["Fixture", "Renderer"], ["Vision", "Fixture"],
+        ["Fixture", "Renderer"], ["Vision", "Fixture"], ["Fixture", "FrameSource"],
         ["CT", "Font"], ["CT", "Line"], ["CT", "Frame"], ["CT", "Run"], ["CT", "Typesetter"],
         ["CG", "Font"], ["show", "Glyphs"], ["HITheme", "DrawText"],
     ].map { $0.joined() }
@@ -411,6 +510,8 @@ import Testing
     @Test func theScansFlagEveryForbiddenSpelling() throws {
         let kitFile = "Sources/AsteriaScaleKit/Planted.swift"
         let selfTest = "Sources/AsteriaScale/SelfTest.swift"
+        let captureFile = ["Sources/AsteriaScale/Screen", "Source.swift"].joined()
+        #expect(Self.captureFile == captureFile)
         let word = ["im", "port"].joined()
 
         // DoD 8's names, the window-list prefix (T22) and its Swift labels,
@@ -464,29 +565,113 @@ import Testing
         for item in neverPlants {
             #expect(Self.captureIssues([(selfTest, Self.lines("_ = \(item.line)"))], exactAllowance: false)
                     == ["\(item.name) in \(selfTest):1, which no source may name"], "\(item.line)")
+            // The capture file's names stop at the capture: no exception there.
+            #expect(Self.captureIssues([(captureFile, Self.lines("_ = \(item.line)"))], exactAllowance: false)
+                    == ["\(item.name) in \(captureFile):1, which no source may name"], "\(item.line) in the capture file")
         }
 
         // The one allowed line is allowed once, in its file only, and only
         // its own call: another window-list name beside it, or on another
         // line of that file, is flagged.
+        // The capture file may name the first six anywhere, and nothing else
+        // of the group: those six are flagged in every other file (above),
+        // and the window-list prefix and labels in it too.
+        #expect(Self.captureFileNames == [screenCaptureKit, shareable, screenshot, contentFilter, preflight, request],
+                "the capture file's names, no more and no fewer")
         let allowed = [windowList, "CopyWindowInfo"].joined()
-        #expect(Set(Self.captureAllowList.keys) == [allowed] && Self.captureAllowList[allowed] == [selfTest: 1])
-        #expect(Self.captureIssues([(selfTest, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: true).isEmpty)
+        for item in capturePlants {
+            // The window-list copy call is the one allowed spelling there.
+            let expected = Self.captureFileNames.contains(item.name) || item.line.contains(allowed)
+                ? [] : ["\(item.name) in \(captureFile):1"]
+            #expect(Self.captureIssues([(captureFile, Self.lines(item.line))], exactAllowance: false) == expected,
+                    "\(item.line) in the capture file")
+        }
+
+        // The one allowed line is allowed once, in its file only, and only
+        // its own call: another window-list name beside it, or on another
+        // line of that file, is flagged; the old place no longer allows it.
+        #expect(Set(Self.captureAllowList.keys) == [allowed] && Self.captureAllowList[allowed] == [captureFile: 1])
+        #expect(Self.captureIssues([(captureFile, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: true).isEmpty)
         #expect(Self.captureIssues([(kitFile, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: false)
                 == ["\(windowList) in \(kitFile):1"], "outside its file")
-        #expect(Self.captureIssues([(selfTest, Self.lines("let a = \(allowed)([], 1)\nlet b = \(allowed)([], 2)"))],
-                                   exactAllowance: true) == ["\(allowed) on 2 lines of \(selfTest), the allow-list says 1"])
-        #expect(Self.captureIssues([(selfTest, Self.lines("let a = 1"))], exactAllowance: true)
-                == ["\(allowed) on 0 lines of \(selfTest), the allow-list says 1"],
+        #expect(Self.captureIssues([(selfTest, Self.lines("let list = \(allowed)([], 1)"))], exactAllowance: false)
+                == ["\(windowList) in \(selfTest):1"], "the self-test reads it through the capture file now")
+        #expect(Self.captureIssues([(captureFile, Self.lines("let a = \(allowed)([], 1)\nlet b = \(allowed)([], 2)"))],
+                                   exactAllowance: true) == ["\(allowed) on 2 lines of \(captureFile), the allow-list says 1"])
+        #expect(Self.captureIssues([(captureFile, Self.lines("let a = 1"))], exactAllowance: true)
+                == ["\(allowed) on 0 lines of \(captureFile), the allow-list says 1"],
                 "an allowed line that went away must leave the allow-list too")
-        #expect(Self.captureIssues([(selfTest, Self.lines("let image = \(windowList)CreateImage(rect, .optionAll, 0, [])"))],
-                                   exactAllowance: false) == ["\(windowList) in \(selfTest):1"],
+        #expect(Self.captureIssues([(captureFile, Self.lines("let image = \(windowList)CreateImage(rect, .optionAll, 0, [])"))],
+                                   exactAllowance: false) == ["\(windowList) in \(captureFile):1"],
                 "another window-list call in the allowed file")
-        #expect(Self.captureIssues([(selfTest, Self.lines("let a = \(allowed)([], 1); let b = \(windowList)Create(.optionAll, 0)"))],
-                                   exactAllowance: false) == ["\(windowList) in \(selfTest):1"],
+        #expect(Self.captureIssues([(captureFile, Self.lines("let a = \(allowed)([], 1); let b = \(windowList)Create(.optionAll, 0)"))],
+                                   exactAllowance: false) == ["\(windowList) in \(captureFile):1"],
                 "another window-list call on the allowed line")
         #expect(Self.captureIssues([(selfTest, Self.lines("_ = " + shareable))], exactAllowance: false)
                 == ["\(shareable) in \(selfTest):1"])
+
+        // The screen source: built on one line of AppDelegate.swift, the one
+        // that unwraps the gate's permit, in any spelling, besides its
+        // declaration in the capture file; the gate decides there once, from
+        // this process's own traits, on one line or several.
+        let appDelegate = ["Sources/AsteriaScale/App", "Delegate.swift"].joined()
+        let hoverDriver = "Sources/AsteriaScale/HoverDriver.swift"
+        let source = ["Screen", "Source"].joined()
+        let declared: Source = (captureFile, Self.lines(["    in", "it(permit: CaptureGate.Permit) {"].joined()))
+        let arguments = "CommandLine.arguments", parent = "getppid()", environment = "ProcessInfo.processInfo.environment"
+        let bundle = "Bundle.main.bundleIdentifier ?? \"\""
+        func decided(_ arguments: String, _ parent: String, _ environment: String, _ bundle: String) -> String {
+            ["        captureDecision = CaptureGate.de", "cide(arguments: \(arguments), parentPid: \(parent),\n",
+             "                                             environment: \(environment),\n",
+             "                                             bundleId: \(bundle))"].joined()
+        }
+        let decision = decided(arguments, parent, environment, bundle)
+        let built = "        if case .on(let permit) = captureDecision { screenSource = \(source)(permit: permit) }"
+        #expect(Self.constructorFile == appDelegate)
+        #expect(Self.statement(Self.lines(decision), from: 0) == Self.decideStatement)
+        #expect(try Self.gateIssues([(appDelegate, Self.lines("\(decision)\n\(built)")), declared]).isEmpty)
+        #expect(try Self.gateIssues([(appDelegate, Self.lines("        \(Self.decideStatement)\n\(built)")), declared]).isEmpty,
+                "the decision on one line")
+        let constructorIssue = "the screen source is built on"
+        let decideIssue = "the capture gate decides on"
+        func gate(_ sources: [Source]) throws -> [String] {
+            try Self.gateIssues(sources).map {
+                $0.hasPrefix(constructorIssue) ? constructorIssue : $0.hasPrefix(decideIssue) ? decideIssue : $0
+            }
+        }
+        #expect(try gate([(appDelegate, Self.lines("let a = 1"))]) == [constructorIssue, decideIssue], "neither is spelled")
+        #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)"))]) == [constructorIssue], "no declaration")
+        let constructions: [(path: String, line: String)] = [
+            (selfTest, "let s = \(source)(permit: p)"),
+            (hoverDriver, "_ = \(source).init(permit: p)"),
+            (hoverDriver, "let s: \(source) = .init(permit: p)"),
+            (hoverDriver, "let s = \(source) (permit: p)"),
+            (hoverDriver, "let make = \(source).init"),
+            (hoverDriver, "let s = \(source)()"),
+            (captureFile, ["    convenience in", "it(permit: CaptureGate.Permit, n: Int) { self.init(permit: permit) }"].joined()),
+            (appDelegate, "// \(source)(permit:) once"),
+        ]
+        for item in constructions {
+            #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)")), declared, (item.path, Self.lines(item.line))])
+                    == [constructorIssue], "\(item.line) in \(item.path)")
+        }
+        #expect(try gate([(appDelegate, Self.lines("\(decision)\nscreenSource = \(source)(permit: permit)")), declared])
+                == [constructorIssue], "a construction that does not unwrap the decision's permit")
+        #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)")), declared, (selfTest, Self.lines(decision))])
+                == [decideIssue], "a second decision")
+        #expect(try gate([(selfTest, Self.lines(decision)), (appDelegate, Self.lines(built)), declared]) == [decideIssue],
+                "the decision in another file")
+        for (name, literal) in [
+            ("arguments", decided("[\"AsteriaScale\"]", parent, environment, bundle)),
+            ("parent", decided(arguments, "1", environment, bundle)),
+            ("environment", decided(arguments, parent, "[\"__CFBundleIdentifier\": AppIdentity.bundleIdentifier]", bundle)),
+            ("bundle", decided(arguments, parent, environment, "AppIdentity.bundleIdentifier")),
+        ] {
+            #expect(try gate([(appDelegate, Self.lines("\(literal)\n\(built)")), declared]) == [decideIssue],
+                    "a literal \(name) in the decision")
+        }
+        #expect(try gate([(appDelegate, Self.lines("_ = \(source).ownWindowRecord(1)\n\(decision)\n\(built)")), declared])
+                .isEmpty, "the static window-record read is not a construction")
 
         // What a test may not do, and what it may.
         let testFile = "Tests/AsteriaScaleKitTests/Planted.swift"
@@ -506,6 +691,7 @@ import Testing
             (["let handler = ImageReque", "stHandler(data: data)"].joined(), ["Reques", "tHandler"].joined()),
             (["_ = Fixture", "Renderer.render(lines: [])"].joined(), ["FixtureRen", "derer"].joined()),
             (["try Vision", "Fixture.warmUp()"].joined(), ["VisionFix", "ture"].joined()),
+            (["let frames = FixtureFr", "ameSource(cursor: c)"].joined(), ["FixtureFra", "meSource"].joined()),
             (["let font = CTFo", "ntCreateWithName(name, 14, nil)"].joined(), ["CTF", "ont"].joined()),
             (["CTLi", "neDraw(line, context)"].joined(), ["CTL", "ine"].joined()),
             (["let setter = CTFra", "mesetterCreateWithAttributedString(text)"].joined(), ["CTFr", "ame"].joined()),

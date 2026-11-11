@@ -110,6 +110,27 @@ public enum RU {
     /// boxes would not fit the screen, so nothing is recognized.
     public static let recognitionFrameMismatch = "Не удалось сопоставить кадр с экраном."
     public static func recognitionFailed(_ code: String) -> String { "Не удалось распознать текст (\(code))." }
+    // The recognition line of the menu (DoD 20.3 items 6-8).
+    public static let recognitionPreparing = "Распознавание: подготовка…"
+    public static let recognitionReady = "Распознавание: готово"
+    public static func recognitionUnavailable(_ reason: String) -> String { "Распознавание недоступно: \(reason)" }
+    /// The reason of a failed Vision warm-up, with the failure's code.
+    public static func recognitionWarmUpFailed(_ code: String) -> String { "прогрев Vision не удался (\(code))" }
+    public static let recognitionNeedsPermission = "Распознавание: нужен доступ к записи экрана"
+    /// After «Разрешить запись экрана…» in this run: assumed that macOS
+    /// applies a new grant to a running app only after a relaunch (the
+    /// owner checks it, roadmap DoD 20.3 item 12.2).
+    public static let recognitionRestartAfterGrant =
+        "Распознавание: после разрешения записи экрана перезапустите Asteria Scale"
+    /// A self-test or a direct start from a terminal or a script (T22).
+    public static let recognitionDisabledCheckRun = "Распознавание отключено: проверочный запуск"
+    public static let menuAllowScreenRecording = "Разрешить запись экрана…"
+    // Capture failures on the overlay.
+    public static let captureNoPermission =
+        "Нет доступа к записи экрана: меню Asteria Scale → «Разрешить запись экрана…»."
+    public static let captureSelfMissing = "Не удалось исключить окна Asteria Scale из захвата экрана."
+    public static let captureDisplayMissing = "Дисплей под курсором недоступен для захвата экрана."
+    public static func captureFailed(_ code: String) -> String { "Не удалось снять экран (\(code))." }
 
     // Hotkeys (M14).
     public static let hotkeyToggleHover = "Включить или выключить перевод при наведении"
@@ -194,7 +215,9 @@ public enum RU {
             diagnosticTitle, diagnosticPrompt, diagnosticTranslate, diagnosticEmpty, diagnosticTooLong,
             diagnosticClipboardEmpty, diagnosticClipboardDenied, diagnosticHoverDisabled, diagnosticServiceMessages,
             settingsTitle, settingsTranslation, settingsDelay, settingsHotkeys, settingsService, settingsFolders,
-            recognitionFrameMismatch,
+            recognitionFrameMismatch, recognitionPreparing, recognitionReady, recognitionNeedsPermission,
+            recognitionRestartAfterGrant, recognitionDisabledCheckRun, menuAllowScreenRecording,
+            captureNoPermission, captureSelfMissing, captureDisplayMissing,
         ]
         let samples = [
             restartDetail(attempt: 2, delay: .milliseconds(500), reason: reasonNoAnswer),
@@ -208,6 +231,8 @@ public enum RU {
             diagnosticCard(source: "bank", translation: "берег", badge: provenance(.dictionary, found: true)),
             folderLine(folderLogs, "/x"),
             recognitionFailed("recognizer_failed"),
+            recognitionUnavailable(recognitionWarmUpFailed("recognizer_failed")),
+            captureFailed("capture_failed"),
         ]
         let errors = ["connection_lost", "timeout", "not_ready", "not_running", "cancelled", "superseded", "bad_request",
                       "request_too_large", "conflict", "bad_response", "observations_too_large", "stale_frame",

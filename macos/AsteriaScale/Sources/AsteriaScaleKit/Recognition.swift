@@ -152,9 +152,8 @@ public struct RecognizedLine: Sendable, Hashable {
 }
 
 /// The recognizer behind a hover: Apple Vision in the app
-/// (AsteriaScaleVision's VisionTextRecognizer); the hover pipeline that
-/// comes with the screen capture takes it injected, so its tests can use a
-/// stand-in. Kit stays Foundation and Darwin only, so everything that
+/// (AsteriaScaleVision's VisionTextRecognizer); HoverPipeline takes it
+/// injected, so its tests use a stand-in. Kit stays Foundation and Darwin only, so everything that
 /// orchestrates a hover can be tested without the real recognizer
 /// (docs/MACOS.md T26).
 public protocol TextRecognizer: Sendable {

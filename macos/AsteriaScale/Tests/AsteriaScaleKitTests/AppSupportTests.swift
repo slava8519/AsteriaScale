@@ -142,6 +142,22 @@ import Testing
         #expect(HoverReport.after(.rejected(other), shownPrimary: false).overlay == .message(RU.overlayFailed))
     }
 
+    /// A screen hover's end message shows only while the cursor is still at
+    /// its anchor; for a place the cursor left the overlay hides instead, and
+    /// every other end is the same either way.
+    @Test func aScreenHoverMessageNeedsTheCursorThere() {
+        let failure = CaptureFailure.failed(domain: "probe", code: 1).coreError
+        let message = HoverReport.after(.rejected(failure), shownPrimary: false)
+        #expect(message.overlay == .message(failure.message))
+        #expect(message.overlay(cursorStillThere: true) == .message(failure.message))
+        #expect(message.overlay(cursorStillThere: false) == .hide)
+        for report in [HoverReport.after(.completed, shownPrimary: true), HoverReport.after(.completed, shownPrimary: false),
+                       HoverReport.after(.cancelled, shownPrimary: false), HoverReport.after(.empty, shownPrimary: false)] {
+            #expect(report.overlay(cursorStillThere: false) == report.overlay
+                    && report.overlay(cursorStillThere: true) == report.overlay, "\(report)")
+        }
+    }
+
     @Test func appLogAppendsAndRotates() throws {
         let scratch = try Scratch("applog")
         defer { scratch.remove() }

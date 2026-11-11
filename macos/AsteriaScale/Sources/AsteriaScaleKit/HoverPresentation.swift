@@ -24,6 +24,24 @@ public struct HoverReport: Sendable, Equatable {
         self.diagnosticNote = diagnosticNote
     }
 
+    /// The codes of the app's own capture and recognition failures
+    /// (CaptureFailure, RecognitionFailure), whose messages are the app's
+    /// own Russian texts.
+    public static let ownCodes: Set<String> = [
+        "screen_capture_denied", "capture_self_missing", "capture_display_missing", "capture_failed", "capture_invalid",
+        "frame_mismatch", "invalid_frame", "recognizer_failed",
+    ]
+
+    /// The end of a hover over the screen, for a cursor that is still at
+    /// the hover's anchor or not (the tracker's re-check, as before the
+    /// loading card and the card): a message for a place the cursor has left
+    /// would appear where the user no longer looks, so the overlay hides
+    /// instead; every other end stays as it is.
+    public func overlay(cursorStillThere: Bool) -> OverlayDirective {
+        if !cursorStillThere, case .message = overlay { return .hide }
+        return overlay
+    }
+
     /// - Parameter shownPrimary: whether a hover.primary of this hover reached the overlay.
     public static func after(_ outcome: HoverOutcome, shownPrimary: Bool) -> HoverReport {
         switch outcome {
@@ -38,10 +56,10 @@ public struct HoverReport: Sendable, Equatable {
         case .superseded, .cancelled:
             return HoverReport(overlay: .keep, diagnosticNote: nil)
         case .staleFrame(let error):
-            // The hover pipeline that comes with the screen capture retries
-            // once with full observations before a hover ends here; CoreHost's
-            // «Кадр на экране изменился.» is never shown on the overlay (DoD
-            // 20.3), only noted in the diagnostic window.
+            // HoverPipeline retries once with full observations before a
+            // hover ends here; CoreHost's «Кадр на экране изменился.» is
+            // never shown on the overlay (DoD 20.3), only noted in the
+            // diagnostic window.
             return HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticError(error.message, code: error.code))
         case .rejected(let error):
             switch error.code {
@@ -54,6 +72,12 @@ public struct HoverReport: Sendable, Equatable {
             case "observations_too_large":
                 // The app's own refusal: its Russian text says what happened.
                 return HoverReport(overlay: .message(RU.errorText(error.code)),
+                                   diagnosticNote: RU.diagnosticError(error.message, code: error.code))
+            case _ where Self.ownCodes.contains(error.code):
+                // The app's own capture and recognition: their Russian text
+                // (RU, never CoreHost's free text) says what to do, the
+                // permission one included.
+                return HoverReport(overlay: .message(error.message),
                                    diagnosticNote: RU.diagnosticError(error.message, code: error.code))
             case "not_running":
                 // Failed or stopped: nothing restarts it on its own, so the

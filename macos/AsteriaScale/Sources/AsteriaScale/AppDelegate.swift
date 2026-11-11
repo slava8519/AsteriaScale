@@ -1,5 +1,6 @@
 import AppKit
 import AsteriaScaleKit
+import AsteriaScaleVision
 import Darwin
 
 /// The menu-bar app. The status item, the overlay, the hotkeys and the
@@ -22,6 +23,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var settingsWindow: SettingsWindowController!
     private(set) var diagnosticWindow: DiagnosticWindowController!
     private(set) var instanceLock: InstanceLock?
+    /// Whether this process may capture the screen, decided once at launch
+    /// (docs/MACOS.md T22) and never revisited; nil until then, which
+    /// captures nothing either (the self-test requires the decision made).
+    private(set) var captureDecision: CaptureGate.Decision?
+    /// The screen capture: built at launch only when that decision is on, so
+    /// it never exists in a self-test, a direct exec or any agent run.
+    private(set) var screenSource: ScreenSource?
+    private(set) var hoverDriver: HoverDriver!
+    /// The app's Vision warm-up (T25): only with capture on, once hover
+    /// translation is on (the self-test warms Vision as its own first step).
+    private(set) var visionWarmUp: VisionWarmUp = .notStarted
+    private(set) var recognition: RecognitionStatus = .disabledForCheckRun
+    /// «Разрешить запись экрана…» was chosen in this run.
+    private var screenRecordingRequested = false
     private(set) var coreState: CoreState = .stopped
     private(set) var settings: SettingsSnapshot?
     private(set) var models: ModelsStatus?
@@ -90,6 +105,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // The one place the capture decision is made and the screen source
+        // built (SourceScanTests pins both): on only for a LaunchServices
+        // launch of this bundle without --self-test. Building it asks for
+        // nothing; the permission is first read when the menu needs it.
+        captureDecision = CaptureGate.decide(arguments: CommandLine.arguments, parentPid: getppid(),
+                                             environment: ProcessInfo.processInfo.environment,
+                                             bundleId: Bundle.main.bundleIdentifier ?? "")
+        if case .on(let permit) = captureDecision { screenSource = ScreenSource(permit: permit) }
+        log.write("screen capture: \(captureDecision.map(String.init(describing:)) ?? "undecided")")
+
         expectedBuild = Bundle.main.object(forInfoDictionaryKey: "AsteriaCoreHostBuild") as? String
         var config = CoreSupervisor.Configuration(
             executable: paths.coreHost.path, arguments: paths.coreHostArguments(),
@@ -110,7 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let note = overlayLevel.note { log.write(note) }
         overlay = OverlayController(level: overlayLevel.level)
         log.write("overlay level \(overlayLevel.level.rawValue) (\(overlay.panel.level.rawValue))")
+        hoverDriver = HoverDriver(app: self)
         statusMenu = StatusMenuController(app: self)
+        updateRecognition()
         settingsWindow = SettingsWindowController(actions: SettingsActions(
             setHoverEnabled: { [weak self] in self?.updateSettings(SettingsPatch(hoverEnabled: $0)) },
             setMode: { [weak self] in self?.setMode($0) },
@@ -185,14 +212,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.update(state: state)
         settingsWindow.update(settings: settings?.settings, ready: state.isReady)
         settingsWindow.model.senseLine = statusMenu.senseText
+        updateRecognition()
     }
 
     private func adopt(_ snapshot: SettingsSnapshot) {
+        // A new mode or new smart settings restart a tracked hover, as
+        // Windows' coordinator does (CoreHost leaves that to the app).
+        let change = snapshot.settings.hoverChange(from: settings?.settings)
         settings = snapshot
         let client = settingsClient!
         Task { await client.adopt(snapshot) }
         statusMenu.update(state: coreState, settings: snapshot.settings)
         settingsWindow.update(settings: snapshot.settings, ready: coreState.isReady)
+        hoverDriver.settingsChanged(change)
+        updateRecognition()
+    }
+
+    // MARK: Recognition and the cursor (20.3)
+
+    /// The recognition line, the permission item and whether the cursor is
+    /// tracked, from the capture decision, the permission, the Vision
+    /// warm-up, the service and hover translation. The permission is read
+    /// (the preflight, which never prompts) only through the screen source,
+    /// so a process whose capture is off never reads it.
+    func updateRecognition() {
+        let enabled = coreState.isReady && settings?.settings.hoverEnabled == true
+        if screenSource != nil, enabled, visionWarmUp == .notStarted { startVisionWarmUp() }
+        var status = RecognitionStatus.resolve(gateOn: screenSource != nil, permitted: screenSource?.isGranted() ?? false,
+                                               warmUp: visionWarmUp)
+        if case .needsPermission = status, screenRecordingRequested { status = .needsPermission(requested: true) }
+        if status != recognition { log.write("recognition: \(status.menuLine ?? "idle")") }
+        recognition = status
+        statusMenu.update(recognition: status)
+        let track = status.allowsTracking && enabled
+        hoverDriver.setTracking(track, pipeline: track ? screenPipeline() : nil)
+    }
+
+    /// The hover over the screen: ScreenSource for frames and the
+    /// permission, the real Vision, CryptoKit's fingerprint and, until the
+    /// speaker editor brings the real one, no game.
+    private func screenPipeline() -> HoverPipeline? {
+        guard let screenSource else { return nil }
+        return HoverPipeline(client: ObservationClient(core: supervisor), frames: screenSource,
+                             recognizer: VisionTextRecognizer(), fingerprinter: SHA256FrameFingerprinter(),
+                             games: NoGameResolver(), permission: screenSource)
+    }
+
+    /// Vision compiles its models on its first call in a home (about 24 s,
+    /// T25): done once, when hover translation is first on, and no hover
+    /// starts before it ends.
+    private func startVisionWarmUp() {
+        visionWarmUp = .running
+        let started = ContinuousClock.now
+        Task { [weak self] in
+            let state: VisionWarmUp
+            do throws(RecognitionFailure) {
+                let lines = try await VisionFixture.warmUp(VisionTextRecognizer())
+                self?.log.write("vision warm-up: \(started.duration(to: .now)), read \(lines.map(\.text))")
+                state = .ready
+            } catch {
+                self?.log.write("vision warm-up failed after \(started.duration(to: .now)): \(error)")
+                state = .failed(RU.recognitionWarmUpFailed(error.code))
+            }
+            self?.visionWarmUp = state
+            self?.updateRecognition()
+        }
+    }
+
+    /// «Разрешить запись экрана…»: only with capture on.
+    func requestScreenRecording() {
+        guard let screenSource else { return }
+        screenRecordingRequested = true
+        let granted = screenSource.requestPermission()
+        log.write("screen recording requested: granted \(granted)")
+        updateRecognition()
     }
 
     /// A status event without a ref. CoreHost's free text (and every other
@@ -350,6 +443,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlay.apply(update, token: token)
         guard case .primary(let primary) = update else { return }
         shown.value = true
+        cardShown(primary)
+    }
+
+    /// The request id of a hover.resolve just written.
+    func hoverSent(_ id: Int64) { lastHoverRequestId = id }
+
+    /// A card the overlay showed: the diagnostic window, app.log and
+    /// hover.displayed, so history records only what the user saw.
+    func cardShown(_ primary: HoverPrimary) {
         lastPrimary = primary
         diagnosticWindow.model.card = RU.diagnosticCard(source: primary.source, translation: primary.translation,
                                                         badge: primary.badge)
@@ -385,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !shutDown else { return }
         shutDown = true
         hotkeys.unregisterAll()
+        hoverDriver.setTracking(false, pipeline: nil)
         overlay.hide()
         await supervisor.stop()
         instanceLock?.release()

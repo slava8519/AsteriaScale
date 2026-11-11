@@ -78,13 +78,26 @@ fingerprint first, selects in; one observation in smart ocr.select is never
 stable. Only the count, mode and fingerprint rules are checked; the C#
 CoreHost checks pin the rest.
 
+An observations hover whose card would be "slow" waits up to 10 s for
+request.cancel (or a newer hover) before any event, as the selection hover
+on "slow" below does, so a client can be cancelled while hover.resolve is
+in flight. test.delayNextWork {ms} holds back the next ocr.plan or
+ocr.select, as CoreHost's test command holds back its next work-lane
+request (the fake's settings.update is not held, and an ocr.plan before
+core.init is refused at once, never held): it starts that much later, and
+request.cancel meanwhile answers it at once with cancelled
+(CoreHost's CancelMode.Immediate), dropping the late work. Every
+request.cancel is noted on stderr as "[fake] request.cancel target <id>:
+cancelled" or ": not_in_flight", so a client test can tell which request
+it reached.
+
 A selection hover answers hover.primary and then a hover.phrase of the
 fake's own, which exercises the phrase decoding (CoreHost sends no
 hover.phrase before 20.5). It never gets hover.loading, except for
 hoveredWord "loading", which sends it first so that a client can prove it
 ignores an event it does not use.
 
-Fault commands: test.sleep {ms}, test.events {count}, test.unsolicited,
+Fault commands: test.sleep {ms}, test.delayNextWork {ms}, test.events {count}, test.unsolicited,
 test.violate, test.unknownId, test.duplicate, test.eventAfterTerminal,
 test.unknownMember, test.badVersion, test.crash, test.hang,
 test.stderrFlood {bytes}, test.spawnGrandchild {inherit?}.
@@ -124,6 +137,9 @@ settings = {"hoverEnabled": False, "hoverDelayMs": 700, "mode": "smart",
 revision = 1
 initialized = False
 frame_lock = threading.Lock()
+held_lock = threading.Lock()
+held = {}               # request id -> answered: work held back by test.delayNextWork
+next_work_delay_ms = 0
 frame_cache = None      # dict: display, bounds (x, y, w, h), fingerprint, created, frame
 FRAME_CACHE_SECONDS = 30
 DICTIONARY_CAPTURE = (900, 340)     # CoreHost's ObservationRules (WindowsAiOcrService)
@@ -246,7 +262,7 @@ def run_hover(me, previous, payload):
             previous["done"].wait()
         source = payload.get("source") or {}
         if source.get("kind") == "observations":
-            run_observations_hover(rid, payload.get("mode"), source)
+            run_observations_hover(me, payload.get("mode"), source)
             return
         word = source.get("hoveredWord", "")
         if word == "disabled":
@@ -534,9 +550,10 @@ def ocr_plan(rid, payload):
     ok(rid, result)
 
 
-def run_observations_hover(rid, mode, source):
+def run_observations_hover(me, mode, source):
     """After admission: CoreSession.ResolveAsync's refusals, then the cards."""
     global frame_cache
+    rid = me["id"]
     with settings_lock:
         enabled, active = settings["hoverEnabled"], settings["mode"]
     if not enabled:
@@ -579,6 +596,12 @@ def run_observations_hover(rid, mode, source):
     word = selection["hoveredWord"]
     # The card names what the dictionary looked up, not the box's text.
     card = word.strip(CARD_TRIM) or word
+    if card == "slow" and me["cancel"].wait(10):
+        if me["superseded_by"] is not None:
+            err(rid, "superseded", "Запрос заменён новым наведением.", supersededBy=me["superseded_by"])
+        else:
+            err(rid, "cancelled", "Запрос отменён.")
+        return
     provenance, label = PRIMARY[mode]
     event("hover.loading", rid, {"source": word if mode == "smart" else selection["text"],
                                  "engineLabel": LOADING_LABELS[mode]})
@@ -589,14 +612,52 @@ def run_observations_hover(rid, mode, source):
     ok(rid, {"outcome": "completed", "timings": {"queuedMs": 0, "primaryMs": 0.1}})
 
 
+def note_cancel(target, cancelled):
+    sys.stderr.write("[fake] request.cancel target %s: %s\n" % (target, "cancelled" if cancelled else "not_in_flight"))
+    sys.stderr.flush()
+
+
 def cancel_request(rid, payload):
     target = payload.get("target")
+    with held_lock:
+        waiting = held.get(target) is False
+        if waiting:
+            held[target] = True
+    if waiting:
+        # CancelMode.Immediate: the target's terminal goes first.
+        err(target, "cancelled", "Запрос отменён.")
+        note_cancel(target, True)
+        ok(rid, {"cancelled": True})
+        return
     cancel = pending.get(target)
     if cancel is not None and not cancel.is_set():
         cancel.set()
+        note_cancel(target, True)
         ok(rid, {"cancelled": True})
     else:
+        note_cancel(target, False)
         ok(rid, {"cancelled": False, "reason": "not_in_flight"})
+
+
+def hold_back(rid, payload, work):
+    """test.delayNextWork: this work-lane request starts that much later."""
+    global next_work_delay_ms
+    with held_lock:
+        ms, next_work_delay_ms = next_work_delay_ms, 0
+        if ms > 0:
+            held[rid] = False
+    if ms <= 0:
+        work(rid, payload)
+        return
+
+    def later():
+        time.sleep(ms / 1000.0)
+        with held_lock:
+            answered = held.pop(rid, True)
+        if not answered:
+            work(rid, payload)
+
+    threading.Thread(target=later, daemon=True).start()
 
 
 def settings_result():
@@ -662,7 +723,7 @@ def admit_hover(rid, payload):
 
 
 def handle(frame):
-    global shutdown_answered, initialized
+    global shutdown_answered, initialized, next_work_delay_ms
     rid = frame.get("id")
     command = frame.get("command")
     payload = frame.get("payload") or {}
@@ -694,14 +755,24 @@ def handle(frame):
         admit_hover(rid, payload)
     elif command == "ocr.select":
         if has_shape(command, payload):
-            ocr_select(rid, payload)
+            hold_back(rid, payload, ocr_select)
         else:
             schema_error(rid, command)
     elif command == "ocr.plan":
-        if has_shape(command, payload, plan=True):
-            ocr_plan(rid, payload)
-        else:
+        if not has_shape(command, payload, plan=True):
             schema_error(rid, command)
+        elif not initialized:
+            err(rid, "not_ready", NOT_READY, "core.init has not completed")
+        else:
+            hold_back(rid, payload, ocr_plan)
+    elif command == "test.delayNextWork":
+        ms = payload.get("ms")
+        if isinstance(ms, bool) or not isinstance(ms, int) or not 0 <= ms <= 600000:
+            err(rid, "bad_request", BAD_REQUEST, "test.delayNextWork takes ms 0..600000")
+        else:
+            with held_lock:
+                next_work_delay_ms = ms
+            ok(rid, {})
     elif command == "hover.displayed":
         ok(rid, {"recorded": payload.get("hoverId") in shown_hovers})
     elif command == "settings.get":

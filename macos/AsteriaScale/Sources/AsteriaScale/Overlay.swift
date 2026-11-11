@@ -78,8 +78,8 @@ extension OverlayLevel {
 /// or "shielding" (one above such a bottle); an unknown name is logged and
 /// the default used. sharingType .none keeps the card out of other apps'
 /// window reads, but the system's screen capture reportedly still captures
-/// such windows on macOS 15.4+, so 20.3/20.4 must also exclude our own
-/// windows in their capture's content filter.
+/// such windows on macOS 15.4+, so the capture (ScreenSource) also excludes
+/// the whole app in its content filter.
 ///
 /// It never stays on a loading or stale card: a hover's end always keeps a
 /// card, hides it or replaces it with a message, a card hides itself after
@@ -93,6 +93,11 @@ final class OverlayController {
     /// Increases with every hover; a late update of an older hover is dropped.
     private(set) var hoverToken = 0
     private var hideTask: Task<Void, Never>?
+    /// Where the current hover's cards go (the cursor's point when it began).
+    private var hoverPoint: NSPoint?
+    /// What the overlay shows belongs to a hover over the screen (its loading
+    /// card, card or end message): the cursor tracker hides only that.
+    private(set) var showsScreenHover = false
 
     init(level: OverlayLevel) {
         panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 80),
@@ -125,17 +130,46 @@ final class OverlayController {
         model.phrase = ""
         model.loading = true
         isShowingResult = false
+        hoverPoint = point
+        showsScreenHover = false
         // No timer: the hover's end always decides (its deadline is bounded).
         present(near: point, autoHide: nil)
         return hoverToken
+    }
+
+    /// Starts a hover over the screen: a new token and nothing shown yet.
+    /// Its loading card comes with hover.loading (showLoading), as on
+    /// Windows, and only if the cursor is still at the anchor then.
+    func beginObservationsHover(near point: NSPoint) -> Int {
+        hoverToken += 1
+        hoverPoint = point
+        isShowingResult = false
+        showsScreenHover = true
+        return hoverToken
+    }
+
+    /// hover.loading of an observations hover: what the Windows loading card
+    /// shows (the line in «Словарь», the word in «Умный словарь») with the
+    /// WPF wording, unless a card of this hover already shows.
+    func showLoading(_ loading: HoverLoading, smart: Bool, token: Int) {
+        guard token == hoverToken, !isShowingResult else { return }
+        model.message = nil
+        model.source = loading.source
+        model.translation = smart ? RU.overlayCheckingContext : RU.overlayLookingUpDictionary
+        model.badge = ""
+        model.phrase = ""
+        model.loading = true
+        // No timer: the hover's end always decides (its deadline is bounded).
+        present(near: hoverPoint, autoHide: nil)
     }
 
     func apply(_ update: HoverUpdate, token: Int) {
         guard token == hoverToken else { return }
         switch update {
         case .loading:
-            // The loading card is already up (beginHover); the observations
-            // hover, which alone gets hover.loading, comes with the capture.
+            // A selection hover's loading card is already up (beginHover);
+            // an observations hover shows its own through showLoading, with
+            // the mode of its plan.
             return
         case .primary(let primary):
             model.loading = false
@@ -147,7 +181,9 @@ final class OverlayController {
         case .phrase(let phrase):
             model.phrase = phrase.translation
         }
-        present(near: nil, autoHide: .seconds(8))
+        // An observations hover whose loading card was not shown has no
+        // panel in place yet: it goes to the hover's point.
+        present(near: panel.isVisible ? nil : hoverPoint, autoHide: .seconds(8))
     }
 
     /// The end of the hover with `token`, unless a newer hover owns the overlay.
@@ -159,11 +195,18 @@ final class OverlayController {
         case .hide:
             hide()
         case .message(let text):
-            showMessage(text, near: point)
+            // The hover's own end: a screen hover's message stays its own.
+            presentMessage(text, near: point)
         }
     }
 
+    /// A message of its own (⌥V, the self-test), not a screen hover's.
     func showMessage(_ text: String, near point: NSPoint) {
+        showsScreenHover = false
+        presentMessage(text, near: point)
+    }
+
+    private func presentMessage(_ text: String, near point: NSPoint) {
         hoverToken += 1
         model.message = text
         model.loading = false

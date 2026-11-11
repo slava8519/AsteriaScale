@@ -123,3 +123,40 @@ public enum VisionFixture {
         WordSplitter.words(in: lines[hoveredLine]).first { $0.text == hoveredWord }?.utf16
     }
 }
+
+/// The self-test's frame source (hover.observations): the Latin fixture,
+/// rendered at the display's density and placed on a white frame of exactly
+/// the plan's bounds, so that the middle of the rendered «bank» lies under
+/// the cursor (or as near as the frame allows). It never touches the screen;
+/// the real capture is the app's ScreenSource, which no check runs.
+public struct FixtureFrameSource: FrameSource {
+    /// The cursor in the display's pixels, as the hover sends it.
+    public let cursor: PixelPoint
+
+    public init(cursor: PixelPoint) { self.cursor = cursor }
+
+    public func capture(_ bounds: PixelRect, on display: DisplayDescription) async throws(CaptureFailure) -> Frame {
+        let fixture: RenderedFixture
+        do {
+            fixture = try VisionFixture.render(pixelsPerPoint: display.pixelsPerPointX)
+        } catch {
+            throw .invalidFrame(error.description)
+        }
+        let limit = Frame.maxSide
+        guard fixture.layout.lines.indices.contains(VisionFixture.hoveredLine),
+              let word = fixture.layout.lines[VisionFixture.hoveredLine].words.first(where: { $0.text == VisionFixture.hoveredWord }),
+              let x = Int(exactly: word.box.centerX.rounded(.down)), let y = Int(exactly: word.box.centerY.rounded(.down)),
+              (0...limit).contains(cursor.x), (0...limit).contains(cursor.y), (0...limit).contains(bounds.x),
+              (0...limit).contains(bounds.y),
+              let origin = Frame.origin(placing: fixture.frame.size, target: PixelPoint(x: x, y: y),
+                                        at: PixelPoint(x: cursor.x - bounds.x, y: cursor.y - bounds.y), canvas: bounds.size)
+        else {
+            throw .invalidFrame("the \(fixture.frame.size) fixture cannot be placed under \(cursor) in \(bounds)")
+        }
+        do {
+            return try fixture.frame.placed(onCanvasWidth: bounds.width, height: bounds.height, at: origin)
+        } catch {
+            throw .invalidFrame(error.description)
+        }
+    }
+}

@@ -17,7 +17,7 @@ extension CoreSupervisor: CoreRequesting {}
 /// against ObservationBudget first; one over either is refused here with a
 /// Russian message (observations_too_large) and never truncated. The hover
 /// orchestration around these calls (capture, recognition, the one retry on
-/// stale_frame) comes with the screen capture.
+/// stale_frame) is HoverPipeline.
 public struct ObservationClient: Sendable {
     public let core: any CoreRequesting
 

@@ -44,9 +44,12 @@ let package = Package(
                 .linkedFramework("Vision"),
             ]
         ),
-        // The menu-bar app (AppKit, SwiftUI, Carbon): status item, overlay
-        // panel, global hotkeys, the settings and «Проверка перевода» windows
-        // and the scripted --self-test. tools/macos/build-app.sh puts its
+        // The menu-bar app (AppKit, SwiftUI, Carbon, ScreenCaptureKit): status
+        // item, overlay panel, global hotkeys, the settings and «Проверка
+        // перевода» windows, the cursor tracking and the screen capture
+        // (Sources/AsteriaScale/ScreenSource.swift alone names the capture;
+        // it exists only when CaptureGate allows it, docs/MACOS.md T22) and
+        // the scripted --self-test. tools/macos/build-app.sh puts its
         // release binary into Asteria Scale.app with CoreHost, the ranker
         // worker and the data; `swift run` alone finds no CoreHost.
         .executableTarget(
@@ -56,6 +59,8 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("Carbon"),
+                .linkedFramework("CoreVideo"),
+                .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("SwiftUI"),
             ]
         ),

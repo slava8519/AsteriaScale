@@ -13,6 +13,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let stateLine = NSMenuItem(title: RU.stateStarting, action: nil, keyEquivalent: "")
     private let detailLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let senseLine = NSMenuItem(title: RU.senseUnknown, action: nil, keyEquivalent: "")
+    /// The recognition line (20.3): the capture gate, the permission, the
+    /// Vision warm-up.
+    private let recognitionLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    /// Shown only while capture is on and Screen Recording is not granted:
+    /// the one action that may show the system's prompt.
+    private let permissionItem = NSMenuItem(title: RU.menuAllowScreenRecording, action: nil, keyEquivalent: "")
     private var hotkeyLines: [NSMenuItem] = []
     private let hoverItem = NSMenuItem(title: RU.menuHoverTranslation, action: nil, keyEquivalent: "")
     private let modeItem = NSMenuItem(title: RU.menuTranslationMode, action: nil, keyEquivalent: "")
@@ -39,11 +45,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // off while it is not ready, and the info lines are never clickable.
         menu.autoenablesItems = false
         menu.delegate = self
-        for line in [stateLine, detailLine, senseLine] { line.isEnabled = false }
+        for line in [stateLine, detailLine, senseLine, recognitionLine] { line.isEnabled = false }
         detailLine.isHidden = true
+        recognitionLine.isHidden = true
+        permissionItem.isHidden = true
+        permissionItem.target = self
+        permissionItem.action = #selector(requestScreenRecording)
         menu.addItem(stateLine)
         menu.addItem(detailLine)
         menu.addItem(senseLine)
+        menu.addItem(recognitionLine)
+        menu.addItem(permissionItem)
         menu.addItem(hotkeySeparator)
         hotkeySeparator.isHidden = true
         menu.addItem(.separator())
@@ -94,6 +106,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     var stateText: String { stateLine.title }
     var senseText: String { senseLine.title }
+    /// The recognition line as shown, nil while hidden.
+    var recognitionText: String? { recognitionLine.isHidden ? nil : recognitionLine.title }
+    var permissionItemVisible: Bool { !permissionItem.isHidden }
     var hoverChecked: Bool { hoverItem.state == .on }
     var checkedMode: TranslationMode? { modeItems.first { $0.value.state == .on }?.key }
     var hotkeyItemsEnabled: Bool { diagnosticItem.isEnabled && clipboardItem.isEnabled }
@@ -109,6 +124,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         hoverItem.state = settings?.hoverEnabled == true ? .on : .off
         for (mode, choice) in modeItems { choice.state = settings?.translationMode == mode ? .on : .off }
         if !state.isReady { senseLine.title = RU.senseUnknown }
+    }
+
+    func update(recognition: RecognitionStatus) {
+        recognitionLine.title = recognition.menuLine ?? ""
+        recognitionLine.isHidden = recognition.menuLine == nil
+        permissionItem.isHidden = !recognition.offersPermissionRequest
     }
 
     func update(models: ModelsStatus?) {
@@ -140,7 +161,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         hotkeySeparator.isHidden = hotkeyLines.isEmpty
     }
 
-    func menuWillOpen(_ menu: NSMenu) { app?.refreshModels() }
+    func menuWillOpen(_ menu: NSMenu) {
+        app?.refreshModels()
+        // A grant made in System Settings shows here once macOS applies it.
+        app?.updateRecognition()
+    }
 
     @objc private func toggleHover() { app?.toggleHover() }
     @objc private func chooseMode(_ sender: NSMenuItem) {
@@ -151,6 +176,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func translateClipboard() { app?.translateClipboard() }
     @objc private func showSettings() { app?.showSettings() }
     @objc private func restartTranslation() { app?.restartTranslation() }
+    @objc private func requestScreenRecording() { app?.requestScreenRecording() }
 }
 
 extension HotkeySpec.Modifiers {
