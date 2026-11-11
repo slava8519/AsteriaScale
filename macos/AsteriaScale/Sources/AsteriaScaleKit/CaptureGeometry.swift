@@ -95,12 +95,17 @@ public struct DisplayDescription: Sendable, Hashable, CustomStringConvertible {
     public let pixelWidth: Int
     public let pixelHeight: Int
 
-    /// Nil when the frame is not finite and positive or the pixel size is
-    /// outside CoreHost's 1..32768: such a display cannot be planned for.
+    /// Nil when the frame is not finite and positive (its far edges
+    /// included), the pixel size is outside CoreHost's 1..32768, or the
+    /// pixels per point on an axis is not finite (a side so small that the
+    /// division overflows): such a display cannot be planned for, and
+    /// locate's arithmetic would meet 0 * infinity.
     public init?(id: UInt32, frame: PointRect, pixelWidth: Int, pixelHeight: Int) {
         guard frame.x.isFinite, frame.y.isFinite, frame.width.isFinite, frame.height.isFinite,
-              frame.width > 0, frame.height > 0,
-              (1...Frame.maxSide).contains(pixelWidth), (1...Frame.maxSide).contains(pixelHeight) else { return nil }
+              frame.width > 0, frame.height > 0, frame.maxX.isFinite, frame.maxY.isFinite,
+              (1...Frame.maxSide).contains(pixelWidth), (1...Frame.maxSide).contains(pixelHeight),
+              (Double(pixelWidth) / frame.width).isFinite, (Double(pixelHeight) / frame.height).isFinite
+        else { return nil }
         self.id = id
         self.frame = frame
         self.pixelWidth = pixelWidth
@@ -151,12 +156,20 @@ public enum CaptureGeometry {
         guard let display = displays.first(where: {
             point.x >= $0.frame.minX && point.x < $0.frame.maxX && point.y > $0.frame.minY && point.y <= $0.frame.maxY
         }) else { return nil }
-        let x = ((point.x - display.frame.minX) * display.pixelsPerPointX).rounded(.down)
-        let y = ((display.frame.maxY - point.y) * display.pixelsPerPointY).rounded(.down)
-        // Clamped as doubles first: Int(_:) of an out-of-range double would trap.
-        let cursor = PixelPoint(x: Int(min(max(x, 0), Double(display.pixelWidth - 1))),
-                                y: Int(min(max(y, 0), Double(display.pixelHeight - 1))))
-        return CursorLocation(display: display, cursor: cursor)
+        guard let x = pixel((point.x - display.frame.minX) * display.pixelsPerPointX, count: display.pixelWidth),
+              let y = pixel((display.frame.maxY - point.y) * display.pixelsPerPointY, count: display.pixelHeight)
+        else { return nil }
+        return CursorLocation(display: display, cursor: PixelPoint(x: x, y: y))
+    }
+
+    /// The whole pixel that holds `offset` pixels from a display's edge,
+    /// clamped into 0..<count; nil for NaN or no pixels. Clamped as a double
+    /// and converted with Int(exactly:), which returns nil where Int(_:)
+    /// traps (NaN, out of range), so no input traps here, even one a
+    /// regressed caller lets through (a trap leaves a crash report).
+    static func pixel(_ offset: Double, count: Int) -> Int? {
+        guard count >= 1, !offset.isNaN else { return nil }
+        return Int(exactly: min(max(offset.rounded(.down), 0), Double(count - 1)))
     }
 
     /// Capture bounds in display pixels as the screen capture's sourceRect:
@@ -173,9 +186,12 @@ public enum CaptureGeometry {
     }
 
     /// Whether `bounds` is at least 1x1 and lies wholly inside the display,
-    /// as CoreHost requires of captureBounds.
+    /// as CoreHost requires of captureBounds. Subtracted, never added: a
+    /// plan's x, y, width and height are any Int64 on the wire, and x +
+    /// width would trap on overflow; with width >= 1 and the display's
+    /// 1..32768 pixels, pixelWidth - width cannot overflow.
     public static func isInside(_ bounds: PixelRect, display: DisplayDescription) -> Bool {
         bounds.width >= 1 && bounds.height >= 1 && bounds.x >= 0 && bounds.y >= 0
-            && bounds.x + bounds.width <= display.pixelWidth && bounds.y + bounds.height <= display.pixelHeight
+            && bounds.x <= display.pixelWidth - bounds.width && bounds.y <= display.pixelHeight - bounds.height
     }
 }

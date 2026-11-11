@@ -117,7 +117,20 @@ import Testing
         let atLimits = [line(String(repeating: "a", count: 4000), words: 256, wordText: String(repeating: "b", count: 256))]
             + Array(repeating: line("x", words: 15), count: 255)
         #expect(ObservationLimits.problem(source(atLimits)) == nil, "256 lines, 4000 UTF-16, 256 words of 256, 4081 words")
+        // Both text limits count UTF-16 units, as .NET's string.Length does:
+        // not UTF-8 bytes (an emoji is 4), characters or scalars.
+        let atUnicodeLimits: [(lines: [ObservedLine], comment: Comment)] = [
+            ([line("x", words: 1, wordText: String(repeating: "😀", count: 128))], "a word of 128 emoji, 256 units"),
+            ([line("x", words: 1, wordText: String(repeating: "e\u{301}", count: 128))], "a word of 128 e + U+0301, 256 units"),
+            ([line(String(repeating: "😀", count: 2000), words: 1)], "a line of 2000 emoji, 4000 units"),
+        ]
+        for item in atUnicodeLimits {
+            #expect(ObservationLimits.problem(source(item.lines)) == nil, item.comment)
+        }
         let over: [(lines: [ObservedLine], comment: Comment)] = [
+            ([line("x", words: 1, wordText: String(repeating: "😀", count: 129))], "a word of 258 units, 129 characters"),
+            ([line("x", words: 1, wordText: String(repeating: "e\u{301}", count: 129))],
+             "a word of 258 units, 129 characters, 258 scalars"),
             (Array(repeating: line("x", words: 1), count: 257), "257 lines"),
             ([line(String(repeating: "😀", count: 2001), words: 1)], "4002 UTF-16 units in a line"),
             ([line("x", words: 0)], "a line without words"),

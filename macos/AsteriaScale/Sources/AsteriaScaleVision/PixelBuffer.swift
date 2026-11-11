@@ -70,7 +70,10 @@ public enum PixelBuffer {
     }
 
     /// `image` enlarged `factor` times with high-quality interpolation, for
-    /// Vision only (docs/MACOS.md T24); boxes go back to frame pixels.
+    /// Vision only (docs/MACOS.md T24); boxes go back to frame pixels. The
+    /// context's quality decides: at .none CoreGraphics doubles pixels, and
+    /// the frame image's shouldInterpolate: false does not override it
+    /// (measured, PixelBufferTests pins the blended edge).
     public static func upscaled(_ image: CGImage, by factor: Int) -> CGImage? {
         guard factor >= 1 else { return nil }
         let width = image.width * factor, height = image.height * factor

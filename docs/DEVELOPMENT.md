@@ -1231,7 +1231,7 @@ T33; Xcode.app на машине разработки — только ради 
 
 Итог сообщают строкой `Swift suite: N tests` по строке Swift Testing `Test run
 with N tests in M suites passed`; это не smoke-набор и не macOS-подмножество.
-Эталонный прогон: `118` тестов в `28` наборах, около 14 с (со сборками из кэша
+Эталонный прогон: `122` теста в `28` наборах, около 15 с (со сборками из кэша
 около 20 с; релизная сборка включает и приложение, и пробу Vision).
 
 Что проверяет набор (`Tests/AsteriaScaleKitTests`):
@@ -1257,48 +1257,76 @@ with N tests in M suites passed`; это не smoke-набор и не macOS-п�
   пяти синтетических дисплеях (главный 1x, слева 2x, справа 1x, верх которого
   на 460 пунктов выше главного, сверху 2x, снизу 1x; углы, общие края,
   промежуток между дисплеями, зеркальные дисплеи, масштабированный режим,
-  точки, у которых `floor` даёт ширину или высоту дисплея, — прижатие) и
-  `sourceRect`; `VisionGeometry` (переворот оси y, оболочка повёрнутого
-  четырёхугольника, 2x — те же рамки бит в бит, обрезка, вырожденная рамка
-  остаётся, неконечная — нет, слово длиннее 256 единиц UTF-16 не
-  отправляется, а 256 — отправляется); `WordSplitter` (повторные,
-  ведущие и хвостовые пробелы, табуляция, неразрывный и идеографический
-  пробел, суррогатные пары, комбинирующие знаки, обратный перевод диапазонов);
-  отпечаток через CryptoKit против каждой строки `frame-fingerprint-v1.txt` и
-  его 16 цифр без CryptoKit; `PixelBuffer` на `CGImage` из байтов (без
-  шрифтов): BGRA с выравниванием строк и без, RGBA через рисование, обратно
-  из кадра; картинка для Vision (`PixelBuffer.visionImage`): кадр 1x — вдвое
-  больше, чёрная четверть — снова слева сверху, кадр 2x — свои же байты;
-  кадр и его границы 1:1; запросы `ocr.select` и `hover.resolve`
-  эталона (`#5` и `#9`), собранные из типов, после разбора равны строкам
-  эталона; пределы CoreHost — на границе (ровно 4096 слов проходят) и на шаг
-  за ней; бюджет 900 КиБ; разбор ответов `ocr.plan` и `ocr.select`; ответ
+  точки, у которых `floor` даёт ширину или высоту дисплея, — прижатие;
+  дисплей, у которого пикселей на пункт бесконечно много, например с
+  субнормальной шириной, отвергается, а никакая точка ни на каком принятом
+  дисплее не доходит до падающего преобразования в `Int`: ответ — `nil` или
+  пиксель внутри дисплея), `sourceRect` и `isInside` (границы с `Int.max` —
+  `false`, без переполнения); `VisionGeometry` (переворот оси y, оболочка
+  повёрнутого четырёхугольника, 2x — те же рамки бит в бит, обрезка,
+  вырожденная рамка остаётся, неконечная — нет, порог увеличения — ровно 1,5
+  пикселя на пункт: `1.5.nextDown` и 1,49 увеличиваются, 1,5 и 1,51 — нет;
+  слово длиннее 256 единиц UTF-16 не отправляется, а 256 — отправляется,
+  и 129 эмодзи или 129 «e» с U+0301 — это 258 единиц, а не 129 знаков);
+  `WordSplitter` (повторные, ведущие и хвостовые пробелы, табуляция,
+  неразрывный и идеографический пробел, суррогатные пары, комбинирующие
+  знаки, обратный перевод диапазонов);
+  отпечаток через CryptoKit против каждой строки `frame-fingerprint-v1.txt`
+  (число байтов в строке — только цифры и не больше 64 МиБ, иначе чтение
+  проваливается раньше `Data(count:)`) и его 16 цифр без CryptoKit;
+  `PixelBuffer` на `CGImage` из байтов (без шрифтов): BGRA с выравниванием
+  строк и без, RGBA через рисование, обратно из кадра; картинка для Vision
+  (`PixelBuffer.visionImage`): кадр 1x — вдвое больше, чёрная четверть —
+  снова слева сверху, а два пикселя на её краю — смесь чёрного и белого
+  (увеличение интерполирует: замер в красном канале — 31 и 223, при `.none`
+  было бы 0 и 255), кадр 2x — свои же байты; кадр и его границы 1:1;
+  запросы `ocr.select` и `hover.resolve` эталона (`#5` и `#9`), собранные из
+  типов, после разбора равны строкам эталона; пределы CoreHost — на границе
+  (ровно 4096 слов проходят; слово из 128 эмодзи и строка из 2000 — тоже:
+  обе длины — в единицах UTF-16) и на шаг за ней; бюджет 900 КиБ; разбор
+  ответов `ocr.plan` и `ocr.select`; ответ
   другой формы через типизированный клиент — `bad_response`, а
   `ocr.select` и наведение уходят с бюджетом, `ocr.plan` — без него
   (подменный `CoreRequesting` без процесса); `HoverReport` для `stale_frame` и
   `observations_too_large`. Проверки исходников (`SourceScanTests`) — чистые
   функции над строками: обход папок пакета подаёт им файлы (новый файл
-  проверяется без списка), а `theScansFlagEveryForbiddenSpelling` — подложенные
-  строки, так что проверка, переставшая видеть имя или форму `import`, падает.
-  Имена захвата экрана и разрешений TCC из DoD 8 (ScreenCaptureKit,
-  `SCShareableContent`, `SCScreenshotManager`, `SCContentFilter`,
-  `CG*ScreenCaptureAccess`, `CGWindowList*`) — только в файлах и числе строк
-  из списка разрешённых (сейчас ровно одна строка: проверка
+  проверяется без списка), а `theScansFlagEveryForbiddenSpelling` и
+  `theImportParserReadsEveryForm` — подложенные строки, не меньше одной на
+  каждое имя и каждую форму `import`, и сверяют весь список нарушений, то
+  есть что строку отметило её собственное правило; каждый список имён ещё и
+  записан заново из других кусков, так что проверка, переставшая видеть имя
+  или форму `import`, падает. Имена захвата экрана и разрешений TCC из DoD 8
+  (ScreenCaptureKit, `SCShareableContent`, `SCScreenshotManager`,
+  `SCContentFilter`, `CG*ScreenCaptureAccess`), любое имя, начинающееся с
+  `CGWindowList` (две функции DoD 8, остальные функции и тип параметров), и
+  `CGImage(windowListFrom…)` — под этим именем Swift импортирует
+  `CGWindowListCreateImageFromArray`, в нём префикса нет, — только в файлах
+  и числе строк из списка разрешённых (сейчас ровно одна строка: проверка
   `overlay.windowServer` самопроверки 20.2 читает запись своей панели через
-  `CGWindowListCopyWindowInfo`, без запроса разрешения; коммит захвата
-  переносит её в `Sources/AsteriaScale/ScreenSource.swift`, и список остаётся
-  с этим одним файлом, DoD 8, T22); глобальные мониторы NSEvent, event tap,
+  `CGWindowListCopyWindowInfo`, без запроса разрешения; разрешён только этот
+  вызов, другой вызов `CGWindowList…` в той же строке или в том же файле —
+  нарушение; коммит захвата переносит её в
+  `Sources/AsteriaScale/ScreenSource.swift`, и список остаётся с этим одним
+  файлом, DoD 8, T22); глобальные мониторы NSEvent, event tap,
   `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`, `IOHIDManagerOpen`
   и старые вызовы захвата (`CGDisplayCreateImage`, `CGDisplayStream`,
   `AVCaptureScreenInput`) — нигде. Тесты импортируют только Testing,
   Foundation, Darwin, CoreGraphics, Carbon и модули пакета (`import` в любой
-  форме: с атрибутами, модификатором доступа, через `;`; Vision, CoreText и
-  AppKit — даже после комментария), не называют типы Vision (`VN` с
+  форме: с атрибутами, модификатором доступа, через `;`, с блочным
+  комментарием внутри, с атрибутом на отдельной строке или модулем на
+  следующей строке; файл для этого читается как код: комментарии и
+  содержимое строковых литералов,
+  включая raw и многострочные, заменяются пробелами, так что текст в них —
+  не `import`, а файл с незакрытым комментарием или литералом — нарушение;
+  `everySourceReadsToItsEnd` сверяет, что разбор находит каждый `import` в
+  начале строки во всех файлах пакета; Vision, CoreText и AppKit ловятся
+  ещё и в сырой строке, даже в комментарии), не называют типы Vision (`VN` с
   заглавной), запросы распознавания и их обработчики, `FixtureRenderer`,
   `VisionFixture` и вызовы CoreText, CoreGraphics и HIToolbox, которые
   создают шрифт или рисуют текст; Kit импортирует только Foundation и
-  Darwin, `AsteriaScaleVision` — только разрешённое DoD 6. Для приложения (`AppSupportTests`): разбор
+  Darwin, `AsteriaScaleVision` — только разрешённое DoD 6 (в тех же формах
+  `import`). Для приложения (`AppSupportTests`): разбор
   настроек и правки `settings.update` в схеме CoreHost, `models.status` и
   строка модели (загружена, не загружена, не используется, ошибка воркера с
   кодом), сообщения `status` и их журнал, `HoverReport` для каждого исхода
@@ -1430,17 +1458,20 @@ ad-hoc с hardened runtime и без entitlements, во временном до�
 и не появляется ли отчёт о сбое. Её собирает `tools/macos/test-swift.sh`
 (`swift build --build-tests` кладёт её рядом с тестовым бандлом); набор её не
 запускает, в приложение она не входит. Запускается только копия,
-переподписанная так, прямым `exec` в каталоге из `mktemp -d` вне клона (у
-агента — в его рабочем каталоге), со своими `HOME`/`CFFIXED_USER_HOME`,
-`TMPDIR` и пустым текущим каталогом, со списком отчётов о сбоях до и после,
+переподписанная так, прямым `exec` в каталоге из `mktemp -d` с шаблоном
+`"${TMPDIR:-/tmp}/asteria-probe.XXXXXX"` вне клона (голый `mktemp -d` на
+macOS `TMPDIR` не учитывает; у агента `TMPDIR` — в его рабочем каталоге),
+со своими `HOME`/`CFFIXED_USER_HOME`, `TMPDIR` и пустым текущим каталогом,
+со списком отчётов о сбоях до и после,
 с проверкой, что после неё не осталось процессов и записей в текущем
 каталоге и `TMPDIR`, и с отчётом в духе T35 о записях вне временного
 домашнего каталога, которые новее запуска (только отчёт; удаляет их
-владелец):
+владелец; защищённые папки кэша печатают ошибки доступа, поэтому оба
+`find` — с `2>/dev/null`):
 
 ```bash
 bash tools/macos/test-swift.sh
-P=$(mktemp -d) && P=$(cd "$P" && pwd -P) && mkdir -p "$P/home" "$P/tmp" "$P/cwd"
+P=$(mktemp -d "${TMPDIR:-/tmp}/asteria-probe.XXXXXX") && P=$(cd "$P" && pwd -P) && mkdir -p "$P/home" "$P/tmp" "$P/cwd"
 cp macos/AsteriaScale/.build/arm64-apple-macosx/debug/AsteriaScaleVisionProbe "$P/"
 codesign -s - -o runtime -f "$P/AsteriaScaleVisionProbe"   # ad-hoc, hardened runtime, без entitlements
 python3 -I tools/macos/crash-reports.py ~/Library/Logs/DiagnosticReports
@@ -1449,8 +1480,8 @@ touch "$P/marker" && sleep 1
   "$P/AsteriaScaleVisionProbe" </dev/null)
 python3 -I tools/macos/crash-reports.py ~/Library/Logs/DiagnosticReports
 pgrep -f "$P"; ls -A "$P/cwd" "$P/tmp"          # ничего
-(cd "$(getconf DARWIN_USER_CACHE_DIR)" && find . -mindepth 1 -maxdepth 3 -newer "$P/marker")
-(cd ~/Library/Caches/com.apple.e5rt.e5bundlecache && find . -mindepth 1 -maxdepth 3 -newer "$P/marker")
+(cd "$(getconf DARWIN_USER_CACHE_DIR)" && find . -mindepth 1 -maxdepth 3 -newer "$P/marker" 2>/dev/null)
+(cd ~/Library/Caches/com.apple.e5rt.e5bundlecache && find . -mindepth 1 -maxdepth 3 -newer "$P/marker" 2>/dev/null)
 ```
 
 Проба печатает конфигурацию (та же сверка, что `vision.config`), время
@@ -2316,10 +2347,10 @@ default-путь `tests/AsteriaScale.Tests/Program.cs` содержит
 harness gated-бенчмарков и одиннадцатью файлами `tests/AsteriaScale.Tests.MacOS` —
 против `43 161` строки C# в `src/` (вместе с CoreHost). Отдельно есть шесть
 Python-наборов `unittest` на `76` тестов (см. «Python-тесты инструментов») и
-набор Swift Testing Swift-пакета macOS-приложения: `118` тестов в `28` наборах,
-`3 846` строк Swift (из них `23` — `AsteriaTestSleeper` и `115` — проба Vision)
-и поддельный CoreHost на Python (`810` строк) против `4 191` строки
-`AsteriaScaleKit` и `492` строк `AsteriaScaleVision` (раздел «Swift-пакет
+набор Swift Testing Swift-пакета macOS-приложения: `122` теста в `28` наборах,
+`4 361` строка Swift (из них `23` — `AsteriaTestSleeper` и `115` — проба Vision)
+и поддельный CoreHost на Python (`810` строк) против `4 207` строк
+`AsteriaScaleKit` и `495` строк `AsteriaScaleVision` (раздел «Swift-пакет
 `macos/AsteriaScale`», команда `tools/macos/test-swift.sh`). Само приложение
 (`1 769` строк Swift) и настоящий Vision проверяет его самопроверка в собранном бандле (`tools/macos/build-app.sh
 --self-test`, раздел «Сборка `Asteria Scale.app`»).

@@ -426,18 +426,20 @@ through LaunchServices (docs/MACOS.md T22). The real Vision recognizer runs
 only in the app self-test and in the DoD 6 probe, both only in a throwaway
 home: the probe is a copy of `AsteriaScaleVisionProbe` re-signed with
 `codesign -s - -o runtime -f` (no entitlements) and started by direct exec
-with `HOME`/`CFFIXED_USER_HOME`, `TMPDIR` and an empty cwd in a `mktemp -d`
-folder outside the clone, with the crash reports listed before and after
-(docs/DEVELOPMENT.md, «Проба Vision», has the commands). Vision's first call
-there compiles its models into that home's `Library/Caches/<process name or
-bundle id>/com.apple.e5rt.e5bundlecache` (about 24 s, again for a rebuilt
-binary in the same home). It also updates entries outside every throwaway
-home, in `getconf DARWIN_USER_CACHE_DIR`: `com.apple.metal/<n>` (the
-probe) and `io.github.slava8519.AsteriaScale/com.apple.metal/<n>` (the
-app), attributed by timing; list them in your report, never delete them
-(T35's depth-2 listing names the app's folder only when it is new). The
-Swift suite and the macOS subset use synthetic observations and never
-render text (T26).
+with `HOME`/`CFFIXED_USER_HOME`, `TMPDIR` and an empty cwd in a folder
+from `mktemp -d "${TMPDIR:-/tmp}/asteria-probe.XXXXXX"` outside the clone
+(macOS's bare `mktemp -d` ignores `TMPDIR`), with the crash reports listed
+before and after (docs/DEVELOPMENT.md, «Проба Vision», has the commands).
+Vision's first call there compiles its models into that home's
+`Library/Caches/<process name or bundle id>/com.apple.e5rt.e5bundlecache`
+(about 24 s, again for a rebuilt binary in the same home). It also
+updates entries outside every throwaway home, in `getconf
+DARWIN_USER_CACHE_DIR`: `com.apple.metal/<n>` (the probe) and
+`io.github.slava8519.AsteriaScale/com.apple.metal/<n>` (the app),
+attributed by timing; list them in your report, never delete them (T35's
+depth-2 listing names the app's folder only when it is new). The Swift
+suite and the macOS subset use synthetic observations and never render
+text (T26).
 Agents sign ad hoc only: the
 owner's Apple Development identity (`--sign`, `ASTERIA_SIGN_IDENTITY`, M16)
 is for the owner's builds, and using it can raise a keychain dialog, so pass
@@ -696,22 +698,31 @@ certificate creation, `Add-AppxPackage`.
   run's home, which `test-swift.sh` refuses): `SourceScanTests` walks the
   package and fails on a test import other than Testing, Foundation,
   Darwin, CoreGraphics, Carbon and the package's modules (any form:
-  attributes, an access modifier, `;`; Vision, CoreText and AppKit even
-  after a comment), on a Vision type, a text-recognition request or
-  handler, `FixtureRenderer`, `VisionFixture` or a CoreText, CoreGraphics or
-  HIToolbox font or text-drawing call in a test, on a Kit import other than
-  Foundation and Darwin, on an AsteriaScaleVision import outside DoD 6's
-  list, and on a screen-capture or permission (TCC) API outside its
-  allow-list. That list holds exactly one line, 20.2's
-  `overlay.windowServer` window-list read in `SelfTest.swift`; the capture
-  commit moves it into `Sources/AsteriaScale/ScreenSource.swift`, which then
-  becomes the list's only file (DoD 8, T22). Event taps, global NSEvent
-  monitors, `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
+  attributes, an access modifier, `;`, a block comment inside the
+  statement, an attribute on a line of its own or the module on the next
+  line; text in a comment or a string literal is no import, and a file
+  that leaves a comment or literal open fails; Vision, CoreText and AppKit
+  are caught on the raw line too, even in a comment), on a Vision type, a
+  text-recognition request or handler, `FixtureRenderer`, `VisionFixture`
+  or a CoreText, CoreGraphics or HIToolbox font or text-drawing call in a
+  test, on a Kit import other than Foundation and Darwin, on an
+  AsteriaScaleVision import outside DoD 6's list (the same forms), and on a
+  screen-capture or permission (TCC) API outside its allow-list (DoD 8's
+  names, every `CGWindowList*` name and the Swift
+  `CGImage(windowListFrom…)`). That list holds exactly one line, 20.2's
+  `overlay.windowServer` window-list read in `SelfTest.swift` (that call
+  only); the capture commit moves it into
+  `Sources/AsteriaScale/ScreenSource.swift`, which then becomes the list's
+  only file (DoD 8, T22). Event taps, global NSEvent monitors,
+  `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
   `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,
   `CGDisplayStream`, `AVCaptureScreenInput`) may appear nowhere. The scans
-  are pure functions over lines, and `theScansFlagEveryForbiddenSpelling`
-  feeds them planted lines, so a scan that stops seeing a spelling fails.
+  are pure functions over lines; `theScansFlagEveryForbiddenSpelling` and
+  `theImportParserReadsEveryForm` feed them planted lines, at least one per
+  name and import form, each checked for the exact issue its own rule
+  reports, and every name list is pinned against a second spelling, so a
+  scan that stops seeing a spelling fails.
 - Keep a generic class such as `Task<T>` at its own type in shared tests:
   declaring it as `Task` or `object`, assigning it to a property or field of
   that type, passing it to a test-assembly method that takes that type, or

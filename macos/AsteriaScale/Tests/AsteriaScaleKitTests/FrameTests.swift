@@ -31,6 +31,21 @@ import Testing
         }
     }
 
+    /// The largest input a fixture line may ask for: the largest pinned one
+    /// is a 2400x720 frame (6 912 000 bytes).
+    static let maxPatternBytes = 64 << 20
+
+    /// A fixture line's byte count: ASCII digits only, as the C# reader's
+    /// NumberStyles.None takes them, within 0...maxPatternBytes, or nil.
+    /// Checked before Pattern.bytes() can see it: a negative count would
+    /// trap in Data(count:), a trap leaves a crash report, and a huge one
+    /// would allocate it.
+    static func patternCount(_ digits: String) -> Int? {
+        guard !digits.isEmpty, digits.utf8.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
+              let count = Int(digits), (0...maxPatternBytes).contains(count) else { return nil }
+        return count
+    }
+
     /// tests/AsteriaScale.Tests.MacOS/CoreHost/frame-fingerprint-v1.txt, read
     /// as the C# CoreHost check reads it.
     static func patterns() throws -> [Pattern] {
@@ -40,7 +55,7 @@ import Testing
         return try text.split(separator: "\n").filter { !$0.isEmpty && !$0.hasPrefix("#") }.map { line in
             let parts = line.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
             #expect(parts.count == 4, "malformed line: \(line)")
-            let count = try #require(parts.count == 4 ? Int(parts[1]) : nil, "malformed count: \(line)")
+            let count = try #require(parts.count == 4 ? Self.patternCount(parts[1]) : nil, "malformed count: \(line)")
             #expect(["zero", "ramp", "opaque", "mix"].contains(parts[2]), "unknown rule: \(line)")
             return Pattern(name: parts[0], count: count, rule: parts[2], fingerprint: parts[3])
         }
@@ -56,6 +71,16 @@ import Testing
             #expect(fingerprint.hex == pattern.fingerprint, "\(pattern.name): \(fingerprint.hex)")
             #expect(FrameFingerprint(hex: pattern.fingerprint) == fingerprint, "\(pattern.name) round-trips")
         }
+    }
+
+    /// A malformed or oversized count fails the reading before any
+    /// Data(count:) could trap on it or allocate it.
+    @Test func fixtureCountsAreDigitsAndBounded() {
+        for bad in ["-1", "+5", "", " 1", "0x10", "1e3", "99999999999999999999", "67108865"] {
+            #expect(Self.patternCount(bad) == nil, "\(bad)")
+        }
+        #expect(Self.patternCount("0") == 0 && Self.patternCount("6912000") == 6_912_000)
+        #expect(Self.patternCount("67108864") == 64 << 20)
     }
 
     /// The wire form without CryptoKit: the first 8 digest bytes read
@@ -140,9 +165,9 @@ import Testing
 
     /// A frame at 1 pixel per point reaches Vision enlarged twice (T24): a
     /// 16x12 frame, black in its top-left 8x6 quarter and white elsewhere,
-    /// becomes a 32x24 image with the black quarter at the top left. Only
-    /// block interiors are sampled: high-quality interpolation rings at the
-    /// edges.
+    /// becomes a 32x24 image with the black quarter at the top left, and
+    /// the enlargement interpolates: the two pixels either side of the
+    /// quarter's edge are blends, not copies of the frame's black and white.
     @Test func lowDensityFramesReachVisionEnlargedTwice() throws {
         let width = 16, height = 12
         var bytes = Data()
@@ -173,6 +198,19 @@ import Testing
         }
         #expect(isBlack(pixel(4, 3)) && isBlack(pixel(10, 7)), "the black quarter, doubled, top left")
         #expect(isWhite(pixel(27, 3)) && isWhite(pixel(4, 20)) && isWhite(pixel(27, 20)), "white elsewhere, not flipped")
+        // Measured on 11 November 2026 (macOS 27, red channel): 31 and 223
+        // either side of the edge, the same at the context's .default, .low,
+        // .medium and .high; at .none CoreGraphics doubles the pixels (0 and
+        // 255), and the source image's shouldInterpolate flag changes
+        // neither. A blend is strictly between the black and white bounds
+        // above in all three channels, so a nearest-neighbour enlargement
+        // fails here.
+        func isBlend(_ value: [UInt8]) -> Bool {
+            value.count == 4 && value.prefix(3).allSatisfy { (17...238).contains($0) } && value[3] == 255
+        }
+        #expect(isBlend(pixel(15, 3)) && isBlend(pixel(16, 3)), "across the right edge: \(pixel(15, 3)), \(pixel(16, 3))")
+        #expect(isBlend(pixel(4, 11)) && isBlend(pixel(4, 12)), "across the bottom edge: \(pixel(4, 11)), \(pixel(4, 12))")
+        #expect(isBlack(pixel(14, 3)) && isWhite(pixel(17, 3)), "one pixel further, the frame's own black and white")
 
         // At 2x and above Vision gets the frame's own bytes.
         let retina = try Frame(width: width, height: height, pixels: bytes, pixelsPerPoint: 2)

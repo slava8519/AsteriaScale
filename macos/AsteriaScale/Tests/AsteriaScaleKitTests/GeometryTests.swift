@@ -94,6 +94,61 @@ import Testing
                                          pixelWidth: 3456, pixelHeight: 2234)
         #expect(display?.wire == ObservedDisplay(id: 4_294_967_295, width: 3456, height: 2234))
         #expect(display?.wire.json == ["id": 4_294_967_295, "width": 3456, "height": 2234])
+
+        // A side so small that pixels per point overflows to infinity (a
+        // subnormal width or height), and a far edge past the largest
+        // double, are refused; a tiny side whose density is still finite
+        // is a display.
+        let subnormal = Double.leastNormalMagnitude / 4
+        for side in [Double.leastNonzeroMagnitude, subnormal] {
+            #expect(DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: side, height: 10), pixelWidth: 10,
+                                       pixelHeight: 10) == nil, "width \(side)")
+            #expect(DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 10, height: side), pixelWidth: 10,
+                                       pixelHeight: 10) == nil, "height \(side)")
+        }
+        #expect(DisplayDescription(id: 1, frame: PointRect(x: 1e308, y: 0, width: 1e308, height: 10), pixelWidth: 10,
+                                   pixelHeight: 10) == nil, "maxX is not finite")
+        #expect(DisplayDescription(id: 1, frame: PointRect(x: 0, y: 1e308, width: 10, height: 1e308), pixelWidth: 10,
+                                   pixelHeight: 10) == nil, "maxY is not finite")
+        let tiny = DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 1e-300, height: 10), pixelWidth: 10,
+                                      pixelHeight: 10)
+        #expect(tiny != nil && tiny?.pixelsPerPointX.isFinite == true)
+    }
+
+    /// A cursor pixel comes from Int(exactly:) on a clamped double, so no
+    /// point and no accepted display reaches a conversion that traps: the
+    /// answer is nil or a pixel inside the display.
+    @Test func noPointOrDisplayReachesATrap() throws {
+        #expect(CaptureGeometry.pixel(.nan, count: 10) == nil)
+        #expect(CaptureGeometry.pixel(3, count: 0) == nil)
+        #expect(CaptureGeometry.pixel(.infinity, count: 10) == 9 && CaptureGeometry.pixel(-.infinity, count: 10) == 0)
+        #expect(CaptureGeometry.pixel(.greatestFiniteMagnitude, count: Frame.maxSide) == Frame.maxSide - 1)
+        #expect(CaptureGeometry.pixel(-1e300, count: 10) == 0 && CaptureGeometry.pixel(-0.0, count: 1) == 0)
+        #expect(CaptureGeometry.pixel(5.99, count: 10) == 5 && CaptureGeometry.pixel(-0.5, count: 10) == 0)
+        #expect(CaptureGeometry.pixel(9.999, count: 10) == 9 && CaptureGeometry.pixel(10, count: 10) == 9)
+
+        let tiny = try #require(DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 1e-300, height: 10),
+                                                   pixelWidth: 10, pixelHeight: 10))
+        #expect(CaptureGeometry.locate(GlobalPoint(x: 0, y: 5), on: [tiny])?.cursor == PixelPoint(x: 0, y: 5),
+                "its left edge: 0 points times a huge but finite density")
+        #expect(CaptureGeometry.locate(GlobalPoint(x: 5.5e-301, y: 10), on: [tiny])?.cursor == PixelPoint(x: 5, y: 0))
+        let huge = try #require(DisplayDescription(id: 2, frame: PointRect(x: -1e308, y: -1e308, width: 1.7e308,
+                                                                           height: 1.7e308),
+                                                   pixelWidth: Frame.maxSide, pixelHeight: Frame.maxSide))
+        let plain = try #require(DisplayDescription(id: 3, frame: PointRect(x: 0, y: 0, width: 1920, height: 1080),
+                                                    pixelWidth: 1920, pixelHeight: 1080))
+        let coordinates: [Double] = [-.greatestFiniteMagnitude, -1e308, -1, -.leastNonzeroMagnitude, 0, 5e-301, 1e-300,
+                                     1, 10, 1079.999, 1080, 1919.999, 7e307, 1.7e308, .greatestFiniteMagnitude,
+                                     .infinity, -.infinity, .nan]
+        for display in [tiny, huge, plain] {
+            for x in coordinates {
+                for y in coordinates {
+                    guard let located = CaptureGeometry.locate(GlobalPoint(x: x, y: y), on: [display]) else { continue }
+                    #expect((0..<display.pixelWidth).contains(located.cursor.x)
+                            && (0..<display.pixelHeight).contains(located.cursor.y), "\(display) at (\(x), \(y))")
+                }
+            }
+        }
     }
 
     @Test func sourceRectIsTheBoundsInDisplayPointsUnrounded() throws {
@@ -111,6 +166,16 @@ import Testing
         #expect(!CaptureGeometry.isInside(PixelRect(x: 1, y: 0, width: 3024, height: 1964), display: retina))
         #expect(!CaptureGeometry.isInside(PixelRect(x: -1, y: 0, width: 10, height: 10), display: retina))
         #expect(!CaptureGeometry.isInside(PixelRect(x: 0, y: 0, width: 0, height: 10), display: retina))
+        #expect(CaptureGeometry.isInside(PixelRect(x: 3023, y: 1963, width: 1, height: 1), display: retina))
+        #expect(!CaptureGeometry.isInside(PixelRect(x: 3024, y: 0, width: 1, height: 1), display: retina))
+        // A plan's members are any Int64 on the wire: past the display,
+        // never an overflow (x + width would trap).
+        for bounds in [PixelRect(x: Int.max, y: 0, width: 1, height: 1), PixelRect(x: 1, y: 0, width: Int.max, height: 1),
+                       PixelRect(x: 0, y: Int.max, width: 1, height: 1), PixelRect(x: 0, y: 1, width: 1, height: Int.max),
+                       PixelRect(x: Int.max, y: Int.max, width: Int.max, height: Int.max),
+                       PixelRect(x: Int.min, y: 0, width: Int.max, height: 1), PixelRect(x: 0, y: 0, width: Int.min, height: 1)] {
+            #expect(!CaptureGeometry.isInside(bounds, display: retina), "\(bounds)")
+        }
     }
 }
 
@@ -138,6 +203,13 @@ import Testing
         }
         #expect(VisionGeometry.upscale(pixelsPerPoint: 1) == 2 && VisionGeometry.upscale(pixelsPerPoint: 2) == 1)
         #expect(VisionGeometry.upscale(pixelsPerPoint: 1.25) == 2 && VisionGeometry.upscale(pixelsPerPoint: 3) == 1)
+        // T24's cut: below 1.5 enlarged, from 1.5 (a 4K panel at "looks like
+        // 2560x1440", 3840 / 2560) as it is, scaled Retina modes too.
+        #expect(VisionGeometry.upscale(pixelsPerPoint: 1.5) == 1)
+        #expect(VisionGeometry.upscale(pixelsPerPoint: Double(1.5).nextDown) == 2)
+        #expect(VisionGeometry.upscale(pixelsPerPoint: Double(1.5).nextUp) == 1)
+        #expect(VisionGeometry.upscale(pixelsPerPoint: 1.49) == 2 && VisionGeometry.upscale(pixelsPerPoint: 1.51) == 1)
+        #expect(VisionGeometry.upscale(pixelsPerPoint: 1.75) == 1 && VisionGeometry.upscale(pixelsPerPoint: 1.3) == 2)
     }
 
     @Test func aRotatedQuadBecomesItsHull() throws {
@@ -197,18 +269,43 @@ import Testing
             RecognizedLine(text: longest, confidence: 1, box: nil,
                            words: [RecognizedWord(text: longest, utf16Range: 0..<256, box: good)]),
         ]
-        let frame = ObservationFrame(fingerprint: fingerprint, recognized: lines)
-        #expect(frame.lines.map(\.text) == ["bank river", "loud", "odd", "Index " + dots + " 12", longest])
+        // The 256 counts UTF-16 units, as .NET's string.Length does, not
+        // characters or scalars: 129 emoji are 258 units (129 characters),
+        // 129 e + U+0301 are 258 units (129 characters, 258 scalars), so
+        // both runs are left out and their one-word lines with them; 128 of
+        // each are 256 units and go.
+        let emoji = (over: String(repeating: "😀", count: 129), at: String(repeating: "😀", count: 128))
+        let accents = (over: String(repeating: "e\u{301}", count: 129), at: String(repeating: "e\u{301}", count: 128))
+        let unicode = [emoji.over, emoji.at, accents.over, accents.at].map { run in
+            RecognizedLine(text: run, confidence: 1, box: nil,
+                           words: [RecognizedWord(text: run, utf16Range: 0..<run.utf16.count, box: good)])
+        }
+        let frame = ObservationFrame(fingerprint: fingerprint, recognized: lines + unicode)
+        #expect(frame.lines.map(\.text) == ["bank river", "loud", "odd", "Index " + dots + " 12", longest, emoji.at, accents.at])
         // Required before indexing: a trap would leave a crash report.
-        try #require(frame.lines.count == 5)
+        try #require(frame.lines.count == 7)
         #expect(frame.lines[0].words.map(\.text) == ["bank", "river"], "a degenerate box is kept for CoreHost to drop")
         #expect(frame.lines[3].words.map(\.text) == ["Index", "12"], "the over-long run is left out, the line kept")
-        #expect(frame.lines.map(\.confidence) == [0.5, 1, 0, 1, 1])
-        let source = ObservationsSource(display: ObservedDisplay(id: 1, width: 100, height: 100),
-                                        captureBounds: PixelRect(x: 0, y: 0, width: 100, height: 100),
-                                        cursor: PixelPoint(x: 1, y: 1), observations: [frame])
-        #expect(ObservationLimits.problem(source) == nil, "what the recognizer read is inside CoreHost's limits")
+        #expect(frame.lines.map(\.confidence) == [0.5, 1, 0, 1, 1, 1, 1])
+        func source(_ frame: ObservationFrame) -> ObservationsSource {
+            ObservationsSource(display: ObservedDisplay(id: 1, width: 100, height: 100),
+                               captureBounds: PixelRect(x: 0, y: 0, width: 100, height: 100),
+                               cursor: PixelPoint(x: 1, y: 1), observations: [frame])
+        }
+        #expect(ObservationLimits.problem(source(frame)) == nil, "what the recognizer read is inside CoreHost's limits")
         #expect(frame.json["fingerprint"] == "00000000000000a1")
+
+        // A line's 4000 is UTF-16 units too, and a line is never cut: 2000
+        // emoji (4000 units) go; 2001 (4002 units, 2001 characters) are kept
+        // as read and refused before sending.
+        func emojiLine(_ count: Int) -> ObservationFrame {
+            ObservationFrame(fingerprint: fingerprint, recognized: [RecognizedLine(
+                text: String(repeating: "😀", count: count), confidence: 1, box: nil,
+                words: [RecognizedWord(text: "😀", utf16Range: 0..<2, box: good)])])
+        }
+        #expect(emojiLine(2000).lines.count == 1 && ObservationLimits.problem(source(emojiLine(2000))) == nil)
+        #expect(emojiLine(2001).lines.first?.text.utf16.count == 4002)
+        #expect(ObservationLimits.problem(source(emojiLine(2001))) != nil)
     }
 }
 

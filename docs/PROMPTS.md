@@ -109,15 +109,18 @@
 > и в пробе DoD 6 (копия `AsteriaScaleVisionProbe`, переподписанная
 > `codesign -s - -o runtime -f` без entitlements, прямым запуском со своими
 > `HOME`/`CFFIXED_USER_HOME`, `TMPDIR` и пустым текущим каталогом в каталоге
-> из `mktemp -d` вне клона и со списком отчётов о сбоях до и после;
+> из `mktemp -d "${TMPDIR:-/tmp}/asteria-probe.XXXXXX"` вне клона (голый
+> `mktemp -d` на macOS `TMPDIR` не учитывает) и со списком отчётов о сбоях
+> до и после;
 > docs/DEVELOPMENT.md, «Проба Vision»), обе — только во временном домашнем
 > каталоге (T26). Vision при этом обновляет и записи вне временного
 > домашнего каталога, в `getconf DARWIN_USER_CACHE_DIR`
 > (`com.apple.metal/…`, у приложения —
 > `io.github.slava8519.AsteriaScale/com.apple.metal/…`): перечисли их в
 > отчёте и не удаляй. Swift-набор Vision не вызывает и текст не рисует, а
-> имена захвата экрана и разрешений TCC держит в своём списке разрешённых
-> файлов (`SourceScanTests`); тест Swift обращается по индексу только после
+> имена захвата экрана и разрешений TCC (DoD 8, любое `CGWindowList*` и
+> `CGImage(windowListFrom…)`) держит в своём списке разрешённых файлов
+> (`SourceScanTests`); тест Swift обращается по индексу только после
 > проверки размера через `#require` (ловушка Swift, как и abort, оставляет
 > отчёт о сбое). Подписывай только ad-hoc: сертификат
 > Apple Development владельца (M16) — для его сборок, и если задан
