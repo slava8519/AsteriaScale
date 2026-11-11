@@ -1,0 +1,180 @@
+import Foundation
+
+/// Who owns what the overlay shows (roadmap 20.3 DoD 7; docs/MACOS.md T37):
+/// the pure state behind the app's OverlayController, which carries out
+/// each answer on its panel. Two kinds of hover share the one panel: a
+/// selection hover («Проверка перевода», ⌥V), whose loading card goes up at
+/// once, and a hover over the screen, which shows nothing until its
+/// hover.loading or hover.primary passes the cursor re-check. A screen
+/// hover that has shown nothing owns nothing: the cursor tracker's hide
+/// and its own end without a message leave another hover's card alone
+/// (Windows hides any; an end message, which HoverDriver shows only while
+/// the cursor is still there, replaces it), only a loading card is never
+/// left behind, and a card stays a result for the service-loss hide
+/// whoever began last.
+public struct OverlayState: Sendable, Equatable {
+    /// What the panel shows.
+    public enum Content: Sendable, Equatable {
+        case loading
+        case card
+        case message
+    }
+
+    /// What the panel shows and whose it is.
+    public struct Shown: Sendable, Equatable {
+        /// The hover whose content it is (a message has a token of its own).
+        public let token: Int
+        public let content: Content
+        /// Put up by a hover over the screen (its loading card, card or end
+        /// message): only that is the cursor tracker's to hide.
+        public let screen: Bool
+
+        public init(token: Int, content: Content, screen: Bool) {
+            self.token = token
+            self.content = content
+            self.screen = screen
+        }
+    }
+
+    /// Where a hover's update goes.
+    public enum Placement: Sendable, Equatable {
+        /// At the hover's point (the cursor when it began): nothing of this
+        /// hover is on the panel, which may show another hover's card.
+        case hoverPoint
+        /// Where this hover's content already is; the panel only fits it.
+        case inPlace
+    }
+
+    /// What the end of a hover does to the panel.
+    public enum Ending: Sendable, Equatable {
+        /// Nothing: an older hover's end, or what shows is another's to keep.
+        case unchanged
+        case hide
+        /// Its end message replaces what shows, under a token of its own.
+        case message
+    }
+
+    /// The newest hover; an update or the end of an older one is dropped.
+    public private(set) var token = 0
+    /// The newest hover is one over the screen.
+    public private(set) var tokenIsScreen = false
+    /// nil while the panel is hidden.
+    public private(set) var shown: Shown?
+    /// The hover whose card a phrase line may still join: the last one
+    /// whose hover.primary reached the panel.
+    private var cardToken: Int?
+    /// The cursor tracker hid the newest screen hover's cards: nothing more
+    /// of it shows, as Windows' HideOverlay bumps the display generation
+    /// that every later card of the hover is checked against.
+    private var revoked = false
+
+    public init() {}
+
+    /// What shows is a screen hover's (the tracker hides only that).
+    public var showsScreenHover: Bool { shown?.screen == true }
+    /// What shows is a card with a result (a service that stops being ready hides it).
+    public var isShowingResult: Bool { shown?.content == .card }
+    public var showsLoading: Bool { shown?.content == .loading }
+
+    /// A selection hover: its loading card goes up at once.
+    public mutating func beginSelection() -> Int {
+        token += 1
+        tokenIsScreen = false
+        revoked = false
+        shown = Shown(token: token, content: .loading, screen: false)
+        return token
+    }
+
+    /// A hover over the screen: a new token and nothing shown yet, so what
+    /// the panel shows stays whose it was.
+    public mutating func beginScreen() -> Int {
+        token += 1
+        tokenIsScreen = true
+        revoked = false
+        return token
+    }
+
+    /// hover.loading of `token` (a screen hover's own loading card): where
+    /// it goes, or nil when it is not shown (an older hover's, one whose
+    /// card already shows, or one the tracker took down).
+    public mutating func loading(_ token: Int) -> Placement? {
+        guard token == self.token, !revoked, !(shown?.token == token && shown?.content == .card) else { return nil }
+        shown = Shown(token: token, content: .loading, screen: tokenIsScreen)
+        return .hoverPoint
+    }
+
+    /// hover.primary of `token`: where the card goes, or nil when it is not
+    /// shown (an older hover's, or one the tracker took down).
+    public mutating func primary(_ token: Int) -> Placement? {
+        guard token == self.token, !revoked else { return nil }
+        let placement = place(token)
+        shown = Shown(token: token, content: .card, screen: tokenIsScreen)
+        cardToken = token
+        return placement
+    }
+
+    /// hover.phrase of `token`: only under this hover's own card and only
+    /// while the tracker has not taken it down (T37). A card that hid itself
+    /// after its 8 s comes back with the line, as the WPF card, which has no
+    /// timer, would still show it.
+    public mutating func phrase(_ token: Int) -> Placement? {
+        guard token == self.token, !revoked, cardToken == token else { return nil }
+        let placement = place(token)
+        shown = Shown(token: token, content: .card, screen: tokenIsScreen)
+        return placement
+    }
+
+    private func place(_ token: Int) -> Placement { shown?.token == token ? .inPlace : .hoverPoint }
+
+    /// The cursor tracker's hideCard: whether the panel hides (only what a
+    /// screen hover put up); the newest screen hover shows nothing more.
+    public mutating func trackerHide() -> Bool {
+        if tokenIsScreen { revoked = true }
+        guard shown?.screen == true else { return false }
+        shown = nil
+        return true
+    }
+
+    /// The panel hid: its timer, the end of a hover, a service that stopped
+    /// being ready, the quit.
+    public mutating func hidden() {
+        shown = nil
+    }
+
+    /// The end of `token`'s hover with `directive`.
+    public mutating func finish(_ directive: OverlayDirective, token: Int) -> Ending {
+        guard token == self.token else { return .unchanged }
+        switch directive {
+        case .keep:
+            return hideLoading()
+        case .hide:
+            // This hover's own content goes; a card or message another hover
+            // finished stays to its own timer.
+            if shown?.token == token {
+                shown = nil
+                return .hide
+            }
+            return hideLoading()
+        case .message:
+            self.token += 1
+            shown = Shown(token: self.token, content: .message, screen: tokenIsScreen)
+            return .message
+        }
+    }
+
+    /// A loading card never stays: this hover's, or the one of an older
+    /// hover whose own end this hover's token now drops.
+    private mutating func hideLoading() -> Ending {
+        guard shown?.content == .loading else { return .unchanged }
+        shown = nil
+        return .hide
+    }
+
+    /// A message of the app's own (⌥V's, the self-test's), not a hover's.
+    public mutating func message() {
+        token += 1
+        tokenIsScreen = false
+        revoked = false
+        shown = Shown(token: token, content: .message, screen: false)
+    }
+}

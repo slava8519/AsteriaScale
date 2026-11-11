@@ -16,6 +16,11 @@ import ScreenCaptureKit
 /// instance at launch, in the one place it checks that decision. So in a
 /// self-test, a direct exec or any agent run nothing here except the static
 /// window-record read below can run, and that read asks for no permission.
+/// SourceScanTests holds the file to that shape: besides its imports it
+/// declares only this class, with one initializer, no nested type and no
+/// static or class member but `ownWindowRecord`, whose whole text it pins
+/// (so its body reads that one record and nothing else), and no extension
+/// header in any file names the class and no typealias stands for it.
 ///
 /// Nothing from ScreenCaptureKit is called until the preflight says the
 /// permission is granted: `capture` checks it first, and only the menu item
@@ -47,13 +52,17 @@ final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
     /// «Разрешить запись экрана…»: the one call that may show the system's
     /// prompt (macOS shows it only once), and the Privacy pane whenever the
     /// request did not grant the permission, since the call cannot tell
-    /// whether its prompt was shown (docs/MACOS.md T22). The menu then asks
-    /// for a relaunch, assuming a grant reaches a running app only after
-    /// one; whether macOS 27 applies it sooner is the owner's check.
+    /// whether its prompt was shown (docs/MACOS.md T22), or `afterRefusal`:
+    /// a tracked hover's capture was refused although the preflight said
+    /// yes, and the request may then say yes without showing anything. The
+    /// menu then asks for a relaunch, assuming a grant reaches a running app
+    /// only after one; whether macOS 27 applies it sooner, and what the
+    /// request answers after such a refusal, are the owner's checks.
     @MainActor
-    func requestPermission() -> Bool {
+    func requestPermission(afterRefusal: Bool) -> Bool {
         let granted = CGRequestScreenCaptureAccess()
-        if !granted, let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+        if !granted || afterRefusal,
+           let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(pane)
         }
         return granted
@@ -88,7 +97,7 @@ final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
         do {
             image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         } catch {
-            throw Self.failure(error)
+            throw failure(error)
         }
         if Task.isCancelled { throw .cancelled }
         do {
@@ -107,7 +116,7 @@ final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
             // this app's own must be found even with the overlay ordered out.
             fresh = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         } catch {
-            throw Self.failure(error)
+            throw failure(error)
         }
         remember(fresh)
         return fresh
@@ -131,7 +140,9 @@ final class ScreenSource: FrameSource, CapturePermission, @unchecked Sendable {
         lock.unlock()
     }
 
-    private static func failure(_ error: any Error) -> CaptureFailure {
+    /// An instance member, as everything here but `ownWindowRecord` is
+    /// (SourceScanTests pins that).
+    private func failure(_ error: any Error) -> CaptureFailure {
         if error is CancellationError { return .cancelled }
         let error = error as NSError
         return CaptureFailure.from(domain: error.domain, code: error.code, isCaptureDomain: error.domain == SCStreamErrorDomain)

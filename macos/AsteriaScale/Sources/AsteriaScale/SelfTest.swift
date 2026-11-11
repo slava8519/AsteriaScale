@@ -11,6 +11,12 @@ private struct FixtureCapturePermission: CapturePermission {
     func isGranted() -> Bool { true }
 }
 
+/// A permission that says no, for the end message of a refused hover; like
+/// the fixture, it asks the system nothing.
+private struct DeniedCapturePermission: CapturePermission {
+    func isGranted() -> Bool { false }
+}
+
 /// `AsteriaScale --self-test` (run through tools/macos/build-app.sh
 /// --self-test): a scripted launch of the bundled app in a throwaway home that
 /// checks what the Swift suite cannot (the window server, Carbon, the real
@@ -462,7 +468,11 @@ final class SelfTest {
     /// system and nothing is captured. First the same hover with the cursor
     /// re-check saying no (DoD 20.3 item 7: the cursor is checked against
     /// the anchor before anything shows): it completes, but no loading card,
-    /// no card and no history entry may appear, and the overlay ends hidden.
+    /// no card and no history entry may appear, the window notes the card as
+    /// withheld, and hover.afterRestart's «door» card, which such a hover
+    /// never owned, stays (T37). Then a hover whose permission says no: with
+    /// the cursor gone its end message is not shown, with the cursor there it
+    /// is (HoverDriver's re-check before an end message).
     private func observationsHoverCheck() async {
         guard let display = DisplayDescription(id: 1, frame: PointRect(x: 0, y: 0, width: 1000, height: 600),
                                                pixelWidth: 2000, pixelHeight: 1200) else {
@@ -493,11 +503,31 @@ final class SelfTest {
         }
 
         let primaryBefore = app.lastPrimary
+        func doorShows() -> Bool {
+            app.overlay.isVisible && app.overlay.isShowingResult && app.overlay.model.source == "door"
+                && app.overlay.model.message == nil
+        }
+        let doorBefore = doorShows()
         let unshown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { false }).value
         let unshownRecorded = await historyEntries().contains(where: isThisHover)
-        let unshownHidden = !app.overlay.isVisible
+        let doorKept = doorBefore && doorShows()
+        let unshownNote = app.diagnosticWindow.model.note
         let unshownOK = unshown.result.outcome == .completed && unshown.order.isEmpty && unshown.loading == nil
-            && unshown.primary == nil && unshownHidden && app.lastPrimary == primaryBefore && !unshownRecorded
+            && unshown.primary == nil && doorKept && unshownNote == RU.diagnosticWithheld
+            && app.lastPrimary == primaryBefore && !unshownRecorded
+
+        let denied = HoverPipeline(client: ObservationClient(core: app.supervisor),
+                                   frames: FixtureFrameSource(cursor: location.cursor), recognizer: VisionTextRecognizer(),
+                                   fingerprinter: SHA256FrameFingerprinter(), games: NoGameResolver(),
+                                   permission: DeniedCapturePermission())
+        let refusedGone = await app.hoverDriver.hover(denied, at: point, displays: [display], mayShow: { false }).value
+        let goneMessage = app.overlay.model.message
+        let refusedHere = await app.hoverDriver.hover(denied, at: point, displays: [display], mayShow: { true }).value
+        let hereMessage = app.overlay.isVisible ? app.overlay.model.message : nil
+        noteOverlay()
+        let refusedOK = Self.errorCode(refusedGone.result.outcome) == "screen_capture_denied" && goneMessage == nil
+            && Self.errorCode(refusedHere.result.outcome) == "screen_capture_denied" && hereMessage == RU.captureNoPermission
+        app.overlay.hide()
 
         let started = ContinuousClock.now
         let shown = await app.hoverDriver.hover(pipeline, at: point, displays: [display], mayShow: { true }).value
@@ -511,7 +541,8 @@ final class SelfTest {
         let entry = history.first(where: isThisHover)
         let loading = shown.loading, primary = shown.primary
         let vision = "APPLE VISION"
-        report("hover.observations", unshownOK && shown.result.outcome == .completed && shown.order == ["loading", "primary"]
+        report("hover.observations", unshownOK && refusedOK && shown.result.outcome == .completed
+               && shown.order == ["loading", "primary"]
                && loading?.source.hasPrefix(lineStart) == true && loading?.engineLabel.hasPrefix(vision) == true
                && shown.loadingTexts.contains(RU.overlayLookingUpDictionary)
                && primary?.source == VisionFixture.hoveredWord && primary?.provenance == .dictionary
@@ -523,8 +554,9 @@ final class SelfTest {
                + "[\(primary?.provenance.wire ?? "?")] \(primary?.engineLabel ?? "none"); history "
                + (entry.map { "«\($0["source"]?.stringValue ?? "")» [\($0["engine"]?.stringValue ?? "")]" } ?? "none")
                + "; outcome \(shown.result.outcome); with the cursor gone: \(unshown.result.outcome), shown "
-               + "\(unshown.order), overlay \(unshownHidden ? "hidden" : "visible"), history "
-               + (unshownRecorded ? "recorded" : "none"))
+               + "\(unshown.order), «door» card \(doorKept ? "kept" : "not kept"), note «\(unshownNote ?? "")», history "
+               + (unshownRecorded ? "recorded" : "none") + "; refused: \(refusedGone.result.outcome) with the cursor gone, "
+               + "message «\(goneMessage ?? "none")»; with it there «\(hereMessage ?? "none")»")
     }
 
     private func senseChecks() async {

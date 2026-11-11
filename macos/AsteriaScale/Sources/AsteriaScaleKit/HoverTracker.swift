@@ -111,6 +111,7 @@ public struct HoverTracker: Sendable {
             return drop()
         }
         if let anchor, Self.isNear(location, anchor.location) {
+            // Inclusive, as Windows' `>=`: a poll exactly on the delay starts it.
             guard hoveredAnchorId != anchor.id, now - anchor.since >= Self.delay(milliseconds: delayMilliseconds)
             else { return [] }
             let started = Hover(anchorId: anchor.id, point: sample.point, location: location)
@@ -147,8 +148,11 @@ public struct HoverTracker: Sendable {
     /// (ApplySmartDictionarySettings) reset the tracking, so the hover in
     /// flight is cancelled and the anchor forgotten, and a cursor that
     /// rests where it is starts a hover with the new settings after the
-    /// delay; only a new mode also hides the card (HideAllOverlays). Other
-    /// changes leave the tracking alone.
+    /// delay. A new mode hides the card at once (HideAllOverlays); new smart
+    /// settings leave it to the next poll that finds the cursor on a
+    /// display, which has no anchor and so hides it as any new anchor does
+    /// (Windows' OnTimer after ResetTracking). Other changes leave the
+    /// tracking alone.
     public mutating func restart(after change: HoverSettingsChange) -> [Action] {
         switch change {
         case .none: return []

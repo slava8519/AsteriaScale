@@ -42,11 +42,36 @@ public struct HoverReport: Sendable, Equatable {
         return overlay
     }
 
+    /// What became of a hover over the screen's card.
+    public enum ScreenCard: Sendable, Equatable {
+        /// hover.primary reached the overlay.
+        case shown
+        /// hover.primary came, but the cursor re-check withheld it (the
+        /// cursor had left the hover's place or rested on an own window, or
+        /// the tracker had taken the hover's cards down).
+        case withheld
+        /// No hover.primary came.
+        case absent
+    }
+
+    /// The end of a hover over the screen, the one entry HoverDriver ends
+    /// such a hover through (SourceScanTests pins its call, with the fresh
+    /// re-check): `after`, with a card the re-check withheld noted as
+    /// withheld rather than as no word under the cursor, and the overlay
+    /// re-checked as `overlay(cursorStillThere:)` does.
+    public static func afterScreenHover(_ outcome: HoverOutcome, card: ScreenCard, cursorStillThere: Bool) -> HoverReport {
+        let report = after(outcome, shownPrimary: card == .shown)
+        let note = card == .withheld && outcome == .completed ? RU.diagnosticWithheld : report.diagnosticNote
+        return HoverReport(overlay: report.overlay(cursorStillThere: cursorStillThere), diagnosticNote: note)
+    }
+
     /// - Parameter shownPrimary: whether a hover.primary of this hover reached the overlay.
     public static func after(_ outcome: HoverOutcome, shownPrimary: Bool) -> HoverReport {
         switch outcome {
         case .completed:
-            // completed always comes with a card; without one nothing may stay on screen.
+            // completed always comes with a card; one that was not shown leaves
+            // nothing on screen (a screen hover's withheld card is noted as such
+            // by afterScreenHover).
             return shownPrimary ? HoverReport(overlay: .keep, diagnosticNote: RU.diagnosticShown)
                 : HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticNothingToShow)
         case .empty:

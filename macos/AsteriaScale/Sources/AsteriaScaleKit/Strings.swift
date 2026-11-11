@@ -157,6 +157,8 @@ public enum RU {
     public static let diagnosticResult = "Результат"
     public static let diagnosticShown = "Перевод показан в оверлее"
     public static let diagnosticNothingToShow = "Переводить нечего: в тексте нет слова под курсором"
+    /// A screen hover's card that the cursor re-check withheld (T37).
+    public static let diagnosticWithheld = "Карточка не показана: курсор ушёл с места наведения"
     public static let diagnosticFailed = "Перевод не выполнен — причина в сообщениях службы перевода ниже"
     public static func diagnosticError(_ message: String, code: String) -> String { "\(message) (\(code))" }
     public static func diagnosticCard(source: String, translation: String, badge: String) -> String {
@@ -205,7 +207,8 @@ public enum RU {
             menuHoverTranslation, menuTranslationMode, menuModeSmart, menuModeDictionary, menuCheckTranslation,
             menuTranslateClipboard, menuSettings, menuRestartTranslation, menuQuit, alreadyRunning,
             senseNotInUse, senseUnknown, overlaySelfTest, hotkeyNotAssigned,
-            diagnosticNoMessages, diagnosticResult, diagnosticShown, diagnosticNothingToShow, diagnosticFailed,
+            diagnosticNoMessages, diagnosticResult, diagnosticShown, diagnosticNothingToShow, diagnosticWithheld,
+            diagnosticFailed,
             settingsSense, folderUserData, folderModels, folderLogs,
             stateStopped, stateStarting, stateReady, stateRestarting, stateUnavailable,
             reasonStopped, reasonExitedUnexpectedly, reasonProtocolBroken, reasonHelloRejected, reasonNoAnswer,

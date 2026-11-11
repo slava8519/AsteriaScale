@@ -16,11 +16,13 @@ import Foundation
 /// script left behind. Any doubt turns it off, so a sign that fails leaves
 /// the owner without capture, never an agent with it.
 public enum CaptureGate {
-    /// Proof that `decide` turned capture on. Only this module makes one, and
-    /// the app's screen source takes one in its initializer, so nothing but a
-    /// decision that said yes can construct it.
+    /// Proof that `decide` turned capture on. Only this file can make one
+    /// (the initializer is fileprivate, so the compiler holds the rest of Kit
+    /// and the app to that), and SourceScanTests pins its one construction
+    /// to `decide`'s last line; the app's screen source takes one in its
+    /// initializer, so nothing but a decision that said yes can construct it.
     public struct Permit: Sendable, Hashable {
-        init() {}
+        fileprivate init() {}
     }
 
     /// Why capture is off, in English for app.log and the self-test.
@@ -229,9 +231,11 @@ public enum VisionWarmUp: Sendable, Hashable {
 public enum RecognitionStatus: Sendable, Hashable {
     /// The capture gate is off (a self-test or a direct exec, T22).
     case disabledForCheckRun
-    /// Capture is on but Screen Recording is not granted. `requested`: the
-    /// menu item asked for it in this run (a grant is assumed to reach the
-    /// running app only after a relaunch; the owner checks it).
+    /// Capture is on but Screen Recording is not granted, or a tracked hover's
+    /// capture was refused in this run although the preflight said yes
+    /// (-3801, DoD 20.3 item 7). `requested`: the menu item asked for it in
+    /// this run (a grant is assumed to reach the running app only after a
+    /// relaunch; the owner checks it).
     case needsPermission(requested: Bool)
     /// Capture is on and permitted; hover translation has not been turned on
     /// yet, so Vision has not been warmed.
@@ -241,9 +245,19 @@ public enum RecognitionStatus: Sendable, Hashable {
     /// The warm-up failed: its Russian reason.
     case unavailable(String)
 
-    public static func resolve(gateOn: Bool, permitted: Bool, warmUp: VisionWarmUp) -> RecognitionStatus {
+    /// - Parameters:
+    ///   - gateOn: the capture decision of this process (CaptureGate).
+    ///   - permitted: the Screen Recording preflight, read through the screen source.
+    ///   - captureRefused: a tracked hover ended with the capture refused
+    ///     (`HoverOutcome.refusesCapture`) in this run. The preflight cannot
+    ///     clear it, since it said yes before that refusal too, so the app
+    ///     keeps it until a relaunch: it ranks with a missing permission,
+    ///     below the gate and above the warm-up.
+    ///   - warmUp: the app's Vision warm-up.
+    public static func resolve(gateOn: Bool, permitted: Bool, captureRefused: Bool,
+                               warmUp: VisionWarmUp) -> RecognitionStatus {
         guard gateOn else { return .disabledForCheckRun }
-        guard permitted else { return .needsPermission(requested: false) }
+        guard permitted, !captureRefused else { return .needsPermission(requested: false) }
         switch warmUp {
         case .notStarted: return .idle
         case .running: return .preparing
@@ -273,6 +287,18 @@ public enum RecognitionStatus: Sendable, Hashable {
     /// No hover before Vision is ready (DoD 20.3 item 6) and none without
     /// capture or its permission (item 7).
     public var allowsTracking: Bool { self == .ready }
+}
+
+extension HoverOutcome {
+    /// The hover ended because the screen capture was refused: the
+    /// pipeline's preflight said no, or the capture framework answered
+    /// "user declined" (-3801, CaptureFailure.permissionDenied). A tracked
+    /// hover that ends so takes the menu back to the permission line and
+    /// item (RecognitionStatus.resolve's `captureRefused`).
+    public var refusesCapture: Bool {
+        if case .rejected(let error) = self { return error.code == CaptureFailure.permissionDenied.code }
+        return false
+    }
 }
 
 extension Frame {

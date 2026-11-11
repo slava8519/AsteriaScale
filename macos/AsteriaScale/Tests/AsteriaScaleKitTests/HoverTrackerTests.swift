@@ -72,7 +72,10 @@ import Testing
 
     /// A hover starts on the first poll at least the delay after the cursor
     /// settled: 720 ms for 700 (8 polls of 90 ms), and the clamped bounds.
-    @Test(arguments: [(700, 720), (350, 360), (100, 360), (1500, 1530), (5000, 1530)])
+    /// The bound is inclusive, as Windows' `>=` (HoverTracking.cs): a poll
+    /// that lands exactly on the delay (720 and 450 ms, multiples of 90)
+    /// starts the hover, not the poll after it.
+    @Test(arguments: [(700, 720), (350, 360), (100, 360), (1500, 1530), (5000, 1530), (720, 720), (450, 450)])
     func aSettledCursorStartsOneHoverAfterTheDelay(_ delay: Int, _ expected: Int) throws {
         let clock = FakeClock()
         var tracker = HoverTracker(clock: clock)
@@ -217,8 +220,11 @@ import Testing
 
     /// A new mode or new smart settings while tracking (Windows' SetMode and
     /// ApplySmartDictionarySettings reset the tracking): the hover in flight
-    /// is cancelled and the anchor forgotten, a new mode also hides the
-    /// card, and the resting cursor starts a hover again after the delay.
+    /// is cancelled and the anchor forgotten, and the resting cursor starts
+    /// a hover again after the delay. A new mode hides the card at once
+    /// (HideAllOverlays); new smart settings leave it to the next poll,
+    /// which finds no anchor and hides it as any new anchor does (Windows'
+    /// OnTimer after ResetTracking), so the card goes either way.
     @Test func aSettingsChangeRestartsTheHover() throws {
         for (change, expected) in [(HoverSettingsChange.smartSettings, false), (.mode, true)] {
             let clock = FakeClock()
@@ -228,6 +234,9 @@ import Testing
             #expect(actions == (expected ? [.cancelHover(anchorId: hover.anchorId), .hideCard]
                                           : [.cancelHover(anchorId: hover.anchorId)]), "\(change)")
             #expect(tracker.anchor == nil && tracker.hover == nil, "\(change)")
+            // The next poll at the same place anchors anew and hides the card.
+            clock.advance(HoverTracker.pollInterval)
+            #expect(tracker.tick(Self.sample(70, 80), delayMilliseconds: 350) == [.hideCard], "\(change)")
             let again = try #require(Self.settle(&tracker, clock, at: Self.sample(70, 80), delay: 350), "\(change)")
             #expect(again.hover.anchorId > hover.anchorId && again.elapsed == .milliseconds(360), "\(change)")
         }

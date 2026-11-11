@@ -84,20 +84,16 @@ extension OverlayLevel {
 /// It never stays on a loading or stale card: a hover's end always keeps a
 /// card, hides it or replaces it with a message, a card hides itself after
 /// 8 s and a message after 4 s, and a translation service that stops being
-/// ready hides a shown card.
+/// ready hides a shown card. Who owns what it shows is Kit's OverlayState;
+/// this class carries its answers out on the panel.
 @MainActor
 final class OverlayController {
     let panel: OverlayPanel
     let model = OverlayModel()
-    private(set) var isShowingResult = false
-    /// Increases with every hover; a late update of an older hover is dropped.
-    private(set) var hoverToken = 0
+    private var state = OverlayState()
     private var hideTask: Task<Void, Never>?
     /// Where the current hover's cards go (the cursor's point when it began).
     private var hoverPoint: NSPoint?
-    /// What the overlay shows belongs to a hover over the screen (its loading
-    /// card, card or end message): the cursor tracker hides only that.
-    private(set) var showsScreenHover = false
 
     init(level: OverlayLevel) {
         panel = OverlayPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 80),
@@ -119,40 +115,42 @@ final class OverlayController {
     }
 
     var isVisible: Bool { panel.isVisible }
+    /// Increases with every hover; a late update of an older hover is dropped.
+    var hoverToken: Int { state.token }
+    /// A card with a result shows (whoever began last).
+    var isShowingResult: Bool { state.isShowingResult }
 
     /// Starts a hover: the loading card (the WPF wording) and a new token.
     func beginHover(word: String, smart: Bool, near point: NSPoint) -> Int {
-        hoverToken += 1
+        let token = state.beginSelection()
         model.message = nil
         model.source = word
         model.translation = smart ? RU.overlayCheckingContext : RU.overlayLookingUpDictionary
         model.badge = ""
         model.phrase = ""
         model.loading = true
-        isShowingResult = false
         hoverPoint = point
-        showsScreenHover = false
         // No timer: the hover's end always decides (its deadline is bounded).
         present(near: point, autoHide: nil)
-        return hoverToken
+        return token
     }
 
-    /// Starts a hover over the screen: a new token and nothing shown yet.
+    /// Starts a hover over the screen: a new token and nothing shown yet, so
+    /// a card of «Проверка перевода» or ⌥V that still shows stays theirs.
     /// Its loading card comes with hover.loading (showLoading), as on
     /// Windows, and only if the cursor is still at the anchor then.
     func beginObservationsHover(near point: NSPoint) -> Int {
-        hoverToken += 1
         hoverPoint = point
-        isShowingResult = false
-        showsScreenHover = true
-        return hoverToken
+        return state.beginScreen()
     }
 
     /// hover.loading of an observations hover: what the Windows loading card
     /// shows (the line in «Словарь», the word in «Умный словарь») with the
-    /// WPF wording, unless a card of this hover already shows.
-    func showLoading(_ loading: HoverLoading, smart: Bool, token: Int) {
-        guard token == hoverToken, !isShowingResult else { return }
+    /// WPF wording, unless a card of this hover already shows; whether it
+    /// was shown.
+    @discardableResult
+    func showLoading(_ loading: HoverLoading, smart: Bool, token: Int) -> Bool {
+        guard state.loading(token) != nil else { return false }
         model.message = nil
         model.source = loading.source
         model.translation = smart ? RU.overlayCheckingContext : RU.overlayLookingUpDictionary
@@ -161,65 +159,82 @@ final class OverlayController {
         model.loading = true
         // No timer: the hover's end always decides (its deadline is bounded).
         present(near: hoverPoint, autoHide: nil)
+        return true
     }
 
-    func apply(_ update: HoverUpdate, token: Int) {
-        guard token == hoverToken else { return }
+    /// A hover's card or phrase line; whether it reached the panel.
+    @discardableResult
+    func apply(_ update: HoverUpdate, token: Int) -> Bool {
+        let placement: OverlayState.Placement?
         switch update {
         case .loading:
             // A selection hover's loading card is already up (beginHover);
             // an observations hover shows its own through showLoading, with
             // the mode of its plan.
-            return
+            return false
         case .primary(let primary):
+            placement = state.primary(token)
+            guard placement != nil else { return false }
             model.loading = false
             model.message = nil
             model.source = primary.source
             model.translation = primary.found ? primary.translation : RU.overlayNotFound
             model.badge = primary.badge
-            isShowingResult = true
+            // A card without a phrase of its own shows none of an earlier
+            // card's (Windows collapses the line for every such card).
+            model.phrase = ""
         case .phrase(let phrase):
+            placement = state.phrase(token)
+            guard placement != nil else { return false }
             model.phrase = phrase.translation
         }
-        // An observations hover whose loading card was not shown has no
-        // panel in place yet: it goes to the hover's point.
-        present(near: panel.isVisible ? nil : hoverPoint, autoHide: .seconds(8))
+        // A card whose hover has nothing on the panel yet (its loading card
+        // was not shown, or it hid) goes to the hover's point.
+        present(near: placement == .inPlace ? nil : hoverPoint, autoHide: .seconds(8))
+        return true
     }
 
     /// The end of the hover with `token`, unless a newer hover owns the overlay.
     func finish(_ directive: OverlayDirective, token: Int, near point: NSPoint) {
-        guard token == hoverToken else { return }
-        switch directive {
-        case .keep:
-            if model.loading { hide() }
+        switch state.finish(directive, token: token) {
+        case .unchanged:
+            return
         case .hide:
-            hide()
-        case .message(let text):
+            hidePanel()
+        case .message:
             // The hover's own end: a screen hover's message stays its own.
-            presentMessage(text, near: point)
+            if case .message(let text) = directive { presentMessage(text, near: point) }
         }
     }
 
     /// A message of its own (⌥V, the self-test), not a screen hover's.
     func showMessage(_ text: String, near point: NSPoint) {
-        showsScreenHover = false
+        state.message()
         presentMessage(text, near: point)
     }
 
     private func presentMessage(_ text: String, near point: NSPoint) {
-        hoverToken += 1
         model.message = text
         model.loading = false
-        isShowingResult = false
         present(near: point, autoHide: .seconds(4))
     }
 
+    /// The cursor tracker's hideCard: only what a hover over the screen put
+    /// up hides, and the newest such hover shows nothing more.
+    func trackerHide() {
+        if state.trackerHide() { hidePanel() }
+    }
+
     func hide() {
+        state.hidden()
+        hidePanel()
+    }
+
+    private func hidePanel() {
         hideTask?.cancel()
         hideTask = nil
         panel.orderOut(nil)
         model.loading = false
-        isShowingResult = false
     }
 
     private func present(near point: NSPoint?, autoHide: Duration?) {

@@ -10,8 +10,8 @@ import AsteriaScaleKit
 /// in Kit; nothing here decides a hover.
 ///
 /// It tracks only while AppDelegate says so: capture on (CaptureGate),
-/// Screen Recording granted, Vision warmed, the translation service ready
-/// and hover translation on. In a self-test or a direct exec it never
+/// Screen Recording granted and no capture refused in this run, Vision
+/// warmed, the translation service ready and hover translation on. In a self-test or a direct exec it never
 /// tracks; the self-test calls `hover` with a frame rendered in memory.
 @MainActor
 final class HoverDriver {
@@ -88,10 +88,11 @@ final class HoverDriver {
         guard let app else { return }
         switch action {
         case .hideCard:
-            // Only what a hover over the screen put up: a card of «Проверка
-            // перевода» or ⌥V stays while the cursor moves or rests on the
-            // diagnostic window.
-            if app.overlay.isVisible, app.overlay.showsScreenHover { app.overlay.hide() }
+            // Only what a hover over the screen put up (Kit's OverlayState
+            // decides): a card of «Проверка перевода» or ⌥V stays while the
+            // cursor moves or rests on the diagnostic window, also once a
+            // screen hover has begun that has shown nothing yet.
+            app.overlay.trackerHide()
         case .cancelHover(let anchorId):
             if let current, current.anchorId == anchorId {
                 current.task.cancel()
@@ -113,8 +114,10 @@ final class HoverDriver {
     /// One hover through `pipeline` into the overlay; `mayShow` is asked
     /// right before the loading card, the card, a phrase line and an end
     /// message are shown (the tracker's re-check of the cursor; the
-    /// self-test passes true, and false once to see that nothing shows).
-    /// History records only a card that was shown (hover.displayed).
+    /// self-test passes true, and false to see that nothing shows).
+    /// History records only a card that was shown (hover.displayed). A
+    /// refused capture is reported to the app (`screenHoverEnded`), which
+    /// may stop the tracking before the end message goes up.
     @discardableResult
     func hover(_ pipeline: HoverPipeline, at point: GlobalPoint, displays: [DisplayDescription],
                mayShow: @escaping @MainActor () -> Bool) -> Task<Shown, Never> {
@@ -142,16 +145,20 @@ final class HoverDriver {
             // one more turn of the main queue runs every one of them first.
             await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
             let shown = state.value
-            let report = HoverReport.after(result.outcome, shownPrimary: shown.primary != nil)
+            // An end message gets the same re-check as the cards: none for a
+            // place the cursor has left. Asked before the app hears of a
+            // refusal, which stops the tracking: no anchor is current then.
+            let report = HoverReport.afterScreenHover(result.outcome, card: shown.card, cursorStillThere: mayShow())
             if let app = self?.app {
                 app.log.write("screen hover at (\(point.x), \(point.y)): \(result.outcome); "
                               + result.steps.map(\.description).joined(separator: "; "))
                 if token == app.overlay.hoverToken, let note = report.diagnosticNote {
                     app.diagnosticWindow.model.note = note
                 }
-                // An end message gets the same re-check as the cards: none
-                // for a place the cursor has left.
-                app.overlay.finish(report.overlay(cursorStillThere: mayShow()), token: token, near: near)
+                // Before the end message: stopping the tracking hides what a
+                // screen hover put up, and the message must outlast that.
+                app.screenHoverEnded(result.outcome)
+                app.overlay.finish(report.overlay, token: token, near: near)
             }
             return Shown(result: result, loading: shown.loading, loadingTexts: shown.loadingTexts, primary: shown.primary,
                          order: shown.order)
@@ -163,31 +170,38 @@ final class HoverDriver {
         var loading: HoverLoading?
         var loadingTexts: [String] = []
         var primary: HoverPrimary?
+        /// A hover.primary came that the re-check or the overlay withheld.
+        var withheld = false
         var order: [String] = []
+
+        var card: HoverReport.ScreenCard { primary != nil ? .shown : withheld ? .withheld : .absent }
     }
 
     private func show(_ update: HoverUpdate, token: Int, state: Box<ShownState>, mayShow: @MainActor () -> Bool) {
         guard let app, token == app.overlay.hoverToken else { return }
         switch update {
         case .loading(let loading):
-            guard mayShow() else { return }
-            app.overlay.showLoading(loading, smart: state.value.smart, token: token)
+            guard mayShow(), app.overlay.showLoading(loading, smart: state.value.smart, token: token) else { return }
             state.value.loading = loading
             state.value.loadingTexts = app.overlay.model.visibleTexts
             state.value.order.append("loading")
         case .primary(let primary):
             // Not shown, not recorded: hover.displayed goes only for a card
-            // the overlay showed.
-            guard mayShow() else { return }
-            app.overlay.apply(update, token: token)
+            // the overlay showed (the overlay also withholds one of a hover
+            // whose cards the tracker took down).
+            guard mayShow(), app.overlay.apply(update, token: token) else {
+                state.value.withheld = true
+                return
+            }
             state.value.primary = primary
             state.value.order.append("primary")
             app.cardShown(primary)
         case .phrase:
-            // Only under this hover's card, and only while the cursor is
-            // still there (Windows posts every card of a hover with
-            // RequireAnchorCurrent).
-            guard state.value.primary != nil, mayShow() else { return }
+            // Only while the cursor is still there (Windows posts every card
+            // of a hover with RequireAnchorCurrent), and only under this
+            // hover's own card that the tracker has not taken down (the
+            // overlay's OverlayState decides).
+            guard mayShow() else { return }
             app.overlay.apply(update, token: token)
         }
     }

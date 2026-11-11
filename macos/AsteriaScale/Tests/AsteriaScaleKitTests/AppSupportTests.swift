@@ -158,6 +158,39 @@ import Testing
         }
     }
 
+    /// The end of a hover over the screen (HoverDriver's one entry): the
+    /// cursor re-check on its end message, and a card the re-check withheld
+    /// noted as withheld, not as no word under the cursor.
+    @Test func aScreenHoverEndsWithTheReCheckAndTheWithheldNote() {
+        let failure = CaptureFailure.permissionDenied.coreError
+        for card in [HoverReport.ScreenCard.absent, .withheld] {
+            #expect(HoverReport.afterScreenHover(.rejected(failure), card: card, cursorStillThere: true)
+                    == HoverReport(overlay: .message(RU.captureNoPermission),
+                                   diagnosticNote: RU.diagnosticError(RU.captureNoPermission, code: "screen_capture_denied")))
+            #expect(HoverReport.afterScreenHover(.rejected(failure), card: card, cursorStillThere: false)
+                    == HoverReport(overlay: .hide,
+                                   diagnosticNote: RU.diagnosticError(RU.captureNoPermission, code: "screen_capture_denied")))
+        }
+        #expect(HoverReport.afterScreenHover(.failed, card: .absent, cursorStillThere: false).overlay == .hide)
+        #expect(HoverReport.afterScreenHover(.failed, card: .absent, cursorStillThere: true).overlay == .message(RU.overlayFailed))
+        // A card that came but was withheld: the window says so.
+        for there in [false, true] {
+            #expect(HoverReport.afterScreenHover(.completed, card: .withheld, cursorStillThere: there)
+                    == HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticWithheld))
+            #expect(HoverReport.afterScreenHover(.completed, card: .absent, cursorStillThere: there)
+                    == HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticNothingToShow))
+            #expect(HoverReport.afterScreenHover(.completed, card: .shown, cursorStillThere: there)
+                    == HoverReport(overlay: .keep, diagnosticNote: RU.diagnosticShown))
+            #expect(HoverReport.afterScreenHover(.empty, card: .absent, cursorStillThere: there)
+                    == HoverReport(overlay: .hide, diagnosticNote: RU.diagnosticNothingToShow))
+            // Another end keeps its own note, a withheld card or not.
+            #expect(HoverReport.afterScreenHover(.cancelled, card: .withheld, cursorStillThere: there)
+                    == HoverReport(overlay: .keep, diagnosticNote: nil))
+        }
+        #expect(RU.diagnosticWithheld == "Карточка не показана: курсор ушёл с места наведения")
+        #expect(RU.allFixedStrings.contains(RU.diagnosticWithheld))
+    }
+
     @Test func appLogAppendsAndRotates() throws {
         let scratch = try Scratch("applog")
         defer { scratch.remove() }

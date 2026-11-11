@@ -16,8 +16,10 @@ import Testing
 
     @Test func onlyALaunchServicesLaunchOfThisBundleCaptures() {
         // Finder or open(1): launchd is the parent and the variable names this app.
-        #expect(Self.decide() == .on(CaptureGate.Permit()))
+        // A permit is made in Capture.swift only (its initializer is
+        // fileprivate): the tests see it through decisions alone.
         #expect(Self.decide().isOn && Self.decide().reason == nil)
+        #expect(Self.decide() == Self.decide(), "every permit is the same proof")
         // LaunchServices may add arguments of its own.
         #expect(Self.decide([Self.app, "-psn_0_12345"]).isOn)
     }
@@ -127,15 +129,46 @@ import Testing
 /// The menu's recognition line and whether the cursor may be tracked
 /// (DoD 20.3 items 6-8).
 @Suite struct RecognitionStatusTests {
+    static func resolve(gateOn: Bool = true, permitted: Bool = true, refused: Bool = false,
+                        _ warmUp: VisionWarmUp) -> RecognitionStatus {
+        RecognitionStatus.resolve(gateOn: gateOn, permitted: permitted, captureRefused: refused, warmUp: warmUp)
+    }
+
     @Test func theGateThenThePermissionThenTheWarmUp() {
         for warmUp in [VisionWarmUp.notStarted, .running, .ready, .failed("x")] {
-            #expect(RecognitionStatus.resolve(gateOn: false, permitted: true, warmUp: warmUp) == .disabledForCheckRun)
-            #expect(RecognitionStatus.resolve(gateOn: true, permitted: false, warmUp: warmUp) == .needsPermission(requested: false))
+            for refused in [false, true] {
+                #expect(Self.resolve(gateOn: false, refused: refused, warmUp) == .disabledForCheckRun)
+                #expect(Self.resolve(gateOn: false, permitted: false, refused: refused, warmUp) == .disabledForCheckRun)
+                #expect(Self.resolve(permitted: false, refused: refused, warmUp) == .needsPermission(requested: false))
+            }
         }
-        #expect(RecognitionStatus.resolve(gateOn: true, permitted: true, warmUp: .notStarted) == .idle)
-        #expect(RecognitionStatus.resolve(gateOn: true, permitted: true, warmUp: .running) == .preparing)
-        #expect(RecognitionStatus.resolve(gateOn: true, permitted: true, warmUp: .ready) == .ready)
-        #expect(RecognitionStatus.resolve(gateOn: true, permitted: true, warmUp: .failed("причина")) == .unavailable("причина"))
+        #expect(Self.resolve(.notStarted) == .idle)
+        #expect(Self.resolve(.running) == .preparing)
+        #expect(Self.resolve(.ready) == .ready)
+        #expect(Self.resolve(.failed("причина")) == .unavailable("причина"))
+    }
+
+    /// DoD 20.3 item 7: a capture refused while the preflight still says yes
+    /// (-3801) is treated as no permission, whatever the warm-up: the line
+    /// and «Разрешить запись экрана…» come back and tracking stops.
+    @Test func aRefusedCaptureNeedsThePermissionAgain() {
+        for warmUp in [VisionWarmUp.notStarted, .running, .ready, .failed("x")] {
+            let status = Self.resolve(refused: true, warmUp)
+            #expect(status == .needsPermission(requested: false), "\(warmUp)")
+            #expect(status.offersPermissionRequest && !status.allowsTracking && status.menuLine == RU.recognitionNeedsPermission)
+        }
+        // Which ends count: a refusal from the pipeline's preflight or from
+        // the capture framework (-3801), both screen_capture_denied.
+        let declined = CaptureFailure.from(domain: "d", code: CaptureFailure.userDeclinedCode, isCaptureDomain: true)
+        #expect(HoverOutcome.rejected(declined.coreError).refusesCapture)
+        #expect(HoverOutcome.rejected(CaptureFailure.permissionDenied.coreError).refusesCapture)
+        let others: [HoverOutcome] = [
+            .completed, .empty, .failed, .superseded, .cancelled,
+            .staleFrame(CoreError(code: "stale_frame", message: RU.errorText("stale_frame"))),
+            .rejected(CaptureFailure.failed(domain: "d", code: -3801).coreError),
+            .rejected(CaptureFailure.ownAppMissing.coreError), .rejected(CoreError.notRunning),
+        ]
+        for outcome in others { #expect(!outcome.refusesCapture, "\(outcome)") }
     }
 
     @Test func linesItemAndTracking() {

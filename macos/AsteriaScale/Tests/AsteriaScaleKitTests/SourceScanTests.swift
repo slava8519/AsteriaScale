@@ -61,8 +61,8 @@ import Testing
     /// and «Универсальный доступ» prompts (T37; DoD 8 lists the first five,
     /// CoreGraphics' CGEvent.h says the two event-access requests may
     /// prompt), and the older capture calls that raise «Запись экрана», which
-    /// the app never uses (its only capture is the one ScreenSource.swift
-    /// will hold, T21).
+    /// the app never uses (its only capture is the screenshot-manager call
+    /// in ScreenSource.swift, T21).
     static let neverGroup = [
         ["addGlobal", "MonitorForEvents"], ["tap", "Create"], ["CGEventTap", "Create"],
         ["AXIsProcess", "TrustedWithOptions"], ["IOHID", "RequestAccess"],
@@ -151,64 +151,165 @@ import Testing
     /// carries, so its one construction is the line of the constructor file
     /// that unwraps the decision; besides it only the initializer's own
     /// declaration in the capture file may spell it. A construction is
-    /// matched in every spelling the scan knows: the type followed by `(`
-    /// or `.init`, and the initializer's label after `init(` on any type
-    /// (`.init(permit:`). The decision is matched as its whole statement,
-    /// its lines joined, so it is pinned to this process's own traits too:
-    /// a literal parent pid, environment, bundle id or argument list would
-    /// make a direct exec look like a LaunchServices launch.
+    /// matched on raw lines (comments too) in every spelling the scan knows:
+    /// the type followed by `(` or `.init`, and the initializer's label
+    /// after `init(` on any type (`.init(permit:`).
     static let constructorFile = "Sources/AsteriaScale/AppDelegate.swift"
     static let constructorLine = ["if case .on(let permit) = captureDecision { screenSource = Screen",
                                   "Source(permit: permit) }"].joined()
     static let declarationLine = ["in", "it(permit: CaptureGate.Permit) {"].joined()
     static let constructorPatterns = [[#"Screen"#, #"Source\s*(?:\(|\.\s*init\b)"#], [#"\bin"#, #"it\s*\(\s*permit\s*:"#]]
         .map { $0.joined() }
-    static let decideSpelling = ["CaptureGate", ".decide("].joined()
+
+    /// The decision is read as code (`codeOnly`: no comments, no string
+    /// contents) with every run of white space, line ends included, made
+    /// one space, so a spelling split over lines or spaced is the same
+    /// text. Over every source:
+    /// - every reference to `decide` (called, qualified, `CaptureGate.self.`,
+    ///   a typealias, unqualified in an extension, a function reference) is
+    ///   one of two: its declaration in Kit's Capture.swift, pinned whole
+    ///   with its one `Permit()`, and the statement of the constructor file,
+    ///   pinned whole to this process's own traits and followed at once by
+    ///   the construction line, so nothing can be appended to it;
+    /// - `Permit` is named only in Capture.swift's struct declaration (pinned
+    ///   whole, its initializer fileprivate), its `case on(Permit)` and
+    ///   decide's `Permit()`, and in the capture file's initializer: no
+    ///   conformance, typealias or extension of it elsewhere, and
+    ///   Capture.swift spells no `.init` and no `Self(`, so no other permit;
+    /// - `getppid` is named only as a call and never declared with `func`,
+    ///   and `CommandLine`, `ProcessInfo` and `Bundle` only before a `.`, so
+    ///   no declaration, parameter, closure parameter, pattern or generic
+    ///   parameter takes their names (a type annotation such as `: Bundle`
+    ///   trips the rule too: the scan cannot tell it from a shadow);
+    /// - no source sets the environment (`setenv`, `putenv`, `unsetenv`,
+    ///   `environ`, `_NSGetEnviron`) or binds a function to a symbol name
+    ///   (`@_cdecl`, `@_silgen_name`, `@_dynamicReplacement`, `@_extern`);
+    /// - a declaration of `captureDecision` is read as `let`/`var
+    ///   captureDecision`, `captureDecision:` (an annotation, a parameter,
+    ///   also a label or a ternary's `x : y`) or `captureDecision in` (a
+    ///   closure parameter, a loop variable); there is exactly one, the
+    ///   stored property, with no accessor block, observer, initial value
+    ///   or attribute (a property wrapper). A binding the scan does not read
+    ///   (a parenthesized closure parameter, a tuple or case pattern) could
+    ///   hold no permit either. The pinned statement is the property's only write
+    ///   of the forms counted: `=` other than `==` (also after `?` or `!`),
+    ///   a tuple pattern before `=`, `&` (inout) and a key path. A write
+    ///   could not turn capture on anyway: that takes a permit.
+    /// So a literal parent pid, environment, bundle id or argument list
+    /// reaches the decision in no spelling the scan reads; code that defeats
+    /// the language (an unsafe cast or pointer write, a symbol looked up at
+    /// run time) is beyond it.
+    static let kitCaptureFile = "Sources/AsteriaScaleKit/Capture.swift"
     static let decideStatement = ["captureDecision = CaptureGate.de", "cide(arguments: CommandLine.arguments, ",
                                   "parentPid: getppid(), environment: ProcessInfo.processInfo.environment, ",
                                   "bundleId: Bundle.main.bundleIdentifier ?? \"\")"].joined()
+    static let decideDeclaration = ["public static func de", "cide(arguments: [String], parentPid: Int32, ",
+                                    "environment: [String: String], bundleId: String) -> Decision { if let reason = ",
+                                    "offReason(arguments: arguments, parentPid: parentPid, environment: environment, ",
+                                    "bundleId: bundleId) { return .off(reason) } return .on(Per", "mit()) }"].joined()
+    static let permitDeclaration = ["public struct Per", "mit: Sendable, Hashable { fileprivate init() {} }"].joined()
+    static let permitCase = ["case on(Per", "mit)"].joined()
+    /// Where `Permit` may be named, and how often: the declaration, the case
+    /// and decide's construction; the screen source's initializer.
+    static let permitMentions = [kitCaptureFile: 3, captureFile: 1]
+    /// The decision's one declaration, a stored property: no accessor block
+    /// or observer and no initial value may follow it.
+    static let decisionDeclaration = #"private\(set\) var captureDecision: CaptureGate\.Decision\?(?! ?[{=])"#
 
-    /// The statement that starts on `lines[start]`: that line and the next
-    /// ones until its parentheses close (at most eight), with every run of
-    /// white space made one space.
-    static func statement(_ lines: [Substring], from start: Int) -> String {
-        var text = ""
-        var depth = 0
-        var index = start
-        while lines.indices.contains(index), index - start < 8 {
-            text += " " + String(lines[index])
-            depth += lines[index].filter { $0 == "(" }.count - lines[index].filter { $0 == ")" }.count
-            if depth <= 0 { break }
-            index += 1
-        }
-        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// `text` as `codeOnly` reads it, every run of white space made one
+    /// space, and whether it was read to its end.
+    static func collapsedCode(_ text: String) -> (code: String, complete: Bool) {
+        let read = codeOnly(text)
+        return (read.code.split(whereSeparator: \.isWhitespace).joined(separator: " "), read.complete)
     }
 
+    static func regex(_ pattern: String) throws -> Regex<AnyRegexOutput> {
+        try Regex(pattern).wordBoundaryKind(.simple)
+    }
+
+    /// The issues' first words, which the plants match.
+    static let constructorIssue = "the screen source is built on"
+    static let decideIssue = "the capture gate decides on"
+    static let writeIssue = "captureDecision is written in"
+    static let declarationIssue = "captureDecision is declared"
+    static let permitIssue = "a permit is made in"
+    static let shadowIssue = "what the decision reads is redeclared or set in"
+    static let unreadIssue = "cannot be read as code"
+
     /// Every construction of `sources` beyond the one line and the
-    /// declaration, and every decision beyond the one statement.
+    /// declaration, and every decision, decision write, permit, shadowed
+    /// trait and environment write beyond the pinned ones.
     static func gateIssues(_ sources: [Source]) throws -> [String] {
-        let patterns = try constructorPatterns.map { try Regex($0).wordBoundaryKind(.simple) }
+        let patterns = try constructorPatterns.map { try regex($0) }
         var constructors: [(path: String, line: Int, text: String)] = []
-        var decisions: [(path: String, line: Int, statement: String)] = []
         for source in sources {
-            for (number, line) in source.lines.enumerated() {
-                if patterns.contains(where: { line.contains($0) }) {
-                    constructors.append((source.path, number + 1, line.trimmingCharacters(in: .whitespaces)))
-                }
-                if line.contains(decideSpelling) {
-                    decisions.append((source.path, number + 1, statement(source.lines, from: number)))
-                }
+            for (number, line) in source.lines.enumerated() where patterns.contains(where: { line.contains($0) }) {
+                constructors.append((source.path, number + 1, line.trimmingCharacters(in: .whitespaces)))
             }
         }
         var issues: [String] = []
         let expected = ["\(captureFile) \(declarationLine)", "\(constructorFile) \(constructorLine)"].sorted()
         if constructors.map({ "\($0.path) \($0.text)" }).sorted() != expected {
-            issues.append("the screen source is built on \(constructors.map { "\($0.path):\($0.line)" }), "
+            issues.append("\(constructorIssue) \(constructors.map { "\($0.path):\($0.line)" }), "
                           + "not only on one line of \(constructorFile) that unwraps the gate's permit")
         }
-        if decisions.count != 1 || decisions.first?.path != constructorFile || decisions.first?.statement != decideStatement {
-            issues.append("the capture gate decides on \(decisions.map { "\($0.path):\($0.line)" }), "
-                          + "not once in \(constructorFile) from this process's own traits")
+        return issues + (try decisionIssues(sources))
+    }
+
+    static func decisionIssues(_ sources: [Source]) throws -> [String] {
+        let decide = try regex(#"\bde"# + #"cide\b"#)
+        // `!=` is a comparison: a `?` or `!` counts only right after the name.
+        let writes = try [#"\bcaptureDecision(?:[?!]\s*|\s*)=(?!=)"#, #"\bcaptureDecision\b(?=[^(=]*\)\s*=(?!=))"#,
+                          #"(?:^|[^&])&\s*(?:self\s*\.\s*)?captureDecision\b"#,
+                          #"\\\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*)?\.\s*captureDecision\b"#].map { try regex($0) }
+        let declares = try regex(#"\b(?:let|var)\s+captureDecision\b|\bcaptureDecision\s*:|\bcaptureDecision\s+in\b"#)
+        let declaration = try regex(decisionDeclaration)
+        let wrapped = try regex(#"@[A-Za-z_][A-Za-z0-9_.]*(?:\([^)]*\))?\s+(?:[a-z]+(?:\(set\))?\s+)*var\s+captureDecision\b"#)
+        let permit = try regex(#"\bPer"# + #"mit\b"#)
+        let kitMints = try [#"\.\s*init\b"#, #"\bSelf\s*\("#].map { try regex($0) }
+        let shadows = try [#"\bfunc\s+getppid\b"#, #"\bgetppid\b(?!\s*\()"#,
+                           #"\b(?:CommandLine|ProcessInfo|Bundle)\b(?!\s*\.)"#,
+                           #"\b(?:setenv|putenv|unsetenv|environ|_NSGetEnviron)\b"#,
+                           #"@\s*_(?:cdecl|silgen_name|dynamicReplacement|extern)\b"#].map { try regex($0) }
+        var issues: [String] = []
+        var decides: [String: Int] = [:], written: [String: Int] = [:], named: [String: Int] = [:]
+        var statements = 0, declarations = 0, stored = 0, declared = 0, permitPins = 0
+        for source in sources {
+            let read = collapsedCode(source.lines.joined(separator: "\n"))
+            guard read.complete else {
+                issues.append("\(source.path) \(unreadIssue): a comment or a string literal is left open")
+                continue
+            }
+            let code = read.code
+            let counts = (code.matches(of: decide).count, writes.reduce(0) { $0 + code.matches(of: $1).count },
+                          code.matches(of: permit).count)
+            if counts.0 > 0 { decides[source.path] = counts.0 }
+            if counts.1 > 0 { written[source.path] = counts.1 }
+            if counts.2 > 0 { named[source.path] = counts.2 }
+            declared += code.matches(of: declares).count + code.matches(of: wrapped).count
+            if source.path == constructorFile {
+                statements = code.ranges(of: decideStatement + " " + constructorLine).count
+                stored = code.matches(of: declaration).count
+            }
+            if source.path == kitCaptureFile {
+                declarations = code.ranges(of: decideDeclaration).count
+                permitPins = code.ranges(of: permitDeclaration).count * code.ranges(of: permitCase).count
+                if kitMints.contains(where: { code.contains($0) }) { permitPins = 0 }
+            }
+            if shadows.contains(where: { code.contains($0) }) { issues.append("\(shadowIssue) \(source.path)") }
+        }
+        if decides != [kitCaptureFile: 1, constructorFile: 1] || statements != 1 || declarations != 1 {
+            issues.append("\(decideIssue) \(decides.sorted { $0.key < $1.key }), not once in \(constructorFile) "
+                          + "from this process's own traits besides its declaration")
+        }
+        if written != [constructorFile: 1] {
+            issues.append("\(writeIssue) \(written.sorted { $0.key < $1.key }), not only by the decision")
+        }
+        if stored != 1 || declared != 1 {
+            issues.append("\(declarationIssue) \(declared) times, \(stored) of them the stored property in \(constructorFile)")
+        }
+        if named != permitMentions || permitPins != 1 || declarations != 1 {
+            issues.append("\(permitIssue) \(named.sorted { $0.key < $1.key }), not only by decide")
         }
         return issues
     }
@@ -217,8 +318,151 @@ import Testing
     /// cannot build the screen source (they do not link the app).
     @Test func theScreenSourceIsBuiltOnlyWhereTheGateDecides() throws {
         let sources = try Self.swiftSources("Sources")
-        #expect(sources.contains { $0.path == Self.constructorFile } && sources.contains { $0.path == Self.captureFile })
+        #expect(sources.contains { $0.path == Self.constructorFile } && sources.contains { $0.path == Self.captureFile }
+                && sources.contains { $0.path == Self.kitCaptureFile })
         for issue in try Self.gateIssues(sources) { Issue.record("\(issue)") }
+    }
+
+    // MARK: The capture file's shape
+
+    /// What the capture file may declare, as code (T22: a process whose
+    /// capture is off has no instance, so it has nothing to call the
+    /// preflight, the request or the capture on). Besides its imports it
+    /// declares the one class, with one initializer (the permit's), no
+    /// nested or second type, nothing at file scope and no static or class
+    /// member but `ownWindowRecord`, the window-record read 20.2's self-test
+    /// check makes without an instance, pinned whole (white space made one
+    /// space), so its body reads that one window record and nothing else;
+    /// and no source extends the class: no extension names it before its
+    /// `{` (module-qualified or in a `where` clause too) and no typealias
+    /// stands for it (`= ScreenSource`, module-qualified too).
+    static let captureClass = ["final class Screen", "Source: FrameSource, CapturePermission, @unchecked Sendable {"].joined()
+    static let captureStatic = ["static func ownWindow", "Record(_ windowNumber: Int) -> ",
+                                "(layer: Int?, sharingState: Int?, onscreen: Bool?) {"].joined()
+    static let ownWindowRecord = [captureStatic, " guard let number = CGWindowID(exactly: windowNumber) else { return (nil, nil, nil) }",
+                                  " let list = ", "CGWin", "dowList", "CopyWindowInfo([.optionIncludingWindow], number) as? [[String: Any]]",
+                                  " let window = list?.first return (window?[kCGWindowLayer as String] as? Int, ",
+                                  "window?[kCGWindowSharingState as String] as? Int, window?[kCGWindowIsOnscreen as String] as? Bool) }"]
+        .joined()
+    static let shapeIssue = "the capture file"
+    static let extensionIssue = "the screen source is extended in"
+
+    static func captureShapeIssues(_ sources: [Source]) throws -> [String] {
+        var issues: [String] = []
+        let extends = try regex(#"\bextension\b[^{]*\bScreen"# + #"Source\b"#)
+        let aliases = try regex(#"\btypealias\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:<[^>]*>)?\s*=\s*(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*"#
+                                + #"Screen"# + #"Source\b"#)
+        for source in sources {
+            let read = collapsedCode(source.lines.joined(separator: "\n"))
+            if read.code.contains(extends) || read.code.contains(aliases) { issues.append("\(extensionIssue) \(source.path)") }
+        }
+        guard let file = sources.first(where: { $0.path == captureFile }) else {
+            return issues + ["\(shapeIssue) \(captureFile) is missing"]
+        }
+        let read = codeOnly(file.lines.joined(separator: "\n"))
+        guard read.complete else { return issues + ["\(captureFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let lines = read.code.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let statics = try lines.filter { $0.contains(try regex(#"\bstatic\b"#)) }
+        let records = read.code.split(whereSeparator: \.isWhitespace).joined(separator: " ").ranges(of: ownWindowRecord).count
+        if statics != [captureStatic] || records != 1 {
+            issues.append("\(shapeIssue) has the static members \(statics), the pinned window-record read \(records) times")
+        }
+        let types = try lines.filter {
+            $0.contains(try regex(#"\b(?:class|struct|enum|actor|protocol|extension|typealias)\b"#))
+        }
+        if types != [captureClass] { issues.append("\(shapeIssue) declares the types \(types)") }
+        let inits = try lines.filter { $0.contains(try regex(#"\binit\b"#)) }
+        if inits != [declarationLine] { issues.append("\(shapeIssue) has the initializers \(inits)") }
+        // File scope: what lies outside every brace, line by line.
+        var depth = 0
+        var top = ""
+        for character in read.code {
+            switch character {
+            case "{":
+                if depth == 0 { top.append(character) }
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 { top.append(character) }
+            default:
+                if depth == 0 || character == "\n" { top.append(character) }
+            }
+            if depth < 0 { break }
+        }
+        let importLine = try Regex(["^im", #"port [A-Za-z_][A-Za-z0-9_]*$"#].joined())
+        let scope = top.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.wholeMatch(of: importLine) == nil }
+        if depth != 0 || scope != [captureClass, "}"] { issues.append("\(shapeIssue) holds at file scope \(scope)") }
+        return issues
+    }
+
+    @Test func theCaptureFileReachesTheCaptureOnlyThroughAnInstance() throws {
+        for issue in try Self.captureShapeIssues(try Self.swiftSources("Sources")) { Issue.record("\(issue)") }
+    }
+
+    // MARK: The end of a hover over the screen
+
+    /// How HoverDriver ends a hover over the screen (DoD 20.3 item 7, T37):
+    /// through `HoverReport.afterScreenHover` with the fresh cursor re-check,
+    /// asked before the app hears of a refused capture (which may stop the
+    /// tracking, after which no anchor is current), and the overlay told
+    /// last, so stopping the tracking cannot hide the end message. Pinned as
+    /// code with white space made one space: the Swift suite does not link
+    /// the app, so the call itself is what a reverted re-check would change.
+    static let hoverDriverFile = "Sources/AsteriaScale/HoverDriver.swift"
+    static let endReport = "let report = HoverReport.afterScreenHover(result.outcome, card: shown.card, cursorStillThere: mayShow())"
+    static let endRefusal = "app.screenHoverEnded(result.outcome)"
+    static let endFinish = "app.overlay.finish(report.overlay, token: token, near: near)"
+    static let endIssue = "the hover over the screen ends"
+
+    static func screenHoverEndIssues(_ sources: [Source]) throws -> [String] {
+        guard let file = sources.first(where: { $0.path == hoverDriverFile }) else {
+            return ["\(endIssue) nowhere: no \(hoverDriverFile)"]
+        }
+        let read = collapsedCode(file.lines.joined(separator: "\n"))
+        guard read.complete else { return ["\(hoverDriverFile) \(unreadIssue): a comment or a string literal is left open"] }
+        let code = read.code
+        let steps = [endReport, endRefusal, endFinish].map { code.ranges(of: $0) }
+        let reports = code.matches(of: try regex(#"\bHoverReport\s*\.\s*after"#)).count
+        let rechecks = code.matches(of: try regex(#"\bcursorStillThere\b"#)).count
+        let finishes = code.matches(of: try regex(#"\.\s*finish\s*\("#)).count
+        guard steps.allSatisfy({ $0.count == 1 }), reports == 1, rechecks == 1, finishes == 1,
+              let report = steps[0].first, let refusal = steps[1].first, let finish = steps[2].first,
+              report.upperBound <= refusal.lowerBound, refusal.upperBound <= finish.lowerBound else {
+            return ["\(endIssue) otherwise than through one re-checked report, then the refusal, then the overlay: "
+                    + "steps \(steps.map(\.count)), reports \(reports), re-checks \(rechecks), finishes \(finishes)"]
+        }
+        return []
+    }
+
+    /// What the app carries out of OverlayState that no Kit test can see:
+    /// the tracker's hideCard goes through `trackerHide` (which leaves a ⌥V
+    /// or «Проверка перевода» card alone), never a plain hide, and a card
+    /// clears an earlier card's phrase line (T37).
+    static let overlayFile = "Sources/AsteriaScale/Overlay.swift"
+    static let trackerHideCase = "case .hideCard: app.overlay.trackerHide() case"
+    static let primaryClearsPhrase = "model.badge = primary.badge model.phrase = \"\""
+    static let wiringIssue = "the overlay's decisions are carried out"
+
+    static func overlayWiringIssues(_ sources: [Source]) throws -> [String] {
+        var issues: [String] = []
+        for (path, pinned) in [(hoverDriverFile, trackerHideCase), (overlayFile, primaryClearsPhrase)] {
+            guard let file = sources.first(where: { $0.path == path }) else {
+                issues.append("\(wiringIssue) nowhere: no \(path)")
+                continue
+            }
+            let read = collapsedCode(file.lines.joined(separator: "\n"))
+            let plainHides = path == hoverDriverFile ? read.code.matches(of: try regex(#"\.\s*hide\s*\("#)).count : 0
+            if !read.complete || read.code.ranges(of: pinned).count != 1 || plainHides != 0 {
+                issues.append("\(wiringIssue) otherwise in \(path): «\(pinned)» not once, or \(plainHides) plain hides")
+            }
+        }
+        return issues
+    }
+
+    @Test func aScreenHoverEndsThroughOneReCheckedReport() throws {
+        let sources = try Self.swiftSources("Sources")
+        for issue in try Self.screenHoverEndIssues(sources) + Self.overlayWiringIssues(sources) { Issue.record("\(issue)") }
     }
 
     // MARK: Imports
@@ -613,65 +857,335 @@ import Testing
         // The screen source: built on one line of AppDelegate.swift, the one
         // that unwraps the gate's permit, in any spelling, besides its
         // declaration in the capture file; the gate decides there once, from
-        // this process's own traits, on one line or several.
+        // this process's own traits, on one line or several, right before it.
         let appDelegate = ["Sources/AsteriaScale/App", "Delegate.swift"].joined()
-        let hoverDriver = "Sources/AsteriaScale/HoverDriver.swift"
+        let hoverDriver = ["Sources/AsteriaScale/Hover", "Driver.swift"].joined()
+        let kitCapture = ["Sources/AsteriaScaleKit/Cap", "ture.swift"].joined()
         let source = ["Screen", "Source"].joined()
-        let declared: Source = (captureFile, Self.lines(["    in", "it(permit: CaptureGate.Permit) {"].joined()))
+        let decideWord = ["de", "cide"].joined()
+        let permitWord = ["Per", "mit"].joined()
+        let declared: Source = (captureFile, Self.lines(["    in", "it(permit: CaptureGate.\(permitWord)) {"].joined()))
+        let decideLines = [
+            "    public static func \(decideWord)(arguments: [String], parentPid: Int32, environment: [String: String],",
+            "                              bundleId: String) -> Decision {",
+            "        if let reason = offReason(arguments: arguments, parentPid: parentPid, environment: environment,",
+            "                                  bundleId: bundleId) {",
+            "            return .off(reason)",
+            "        }",
+            "        return .on(\(permitWord)())",
+            "    }",
+        ]
+        let kitDeclared: Source = (kitCapture, Self.lines(([
+            "public enum CaptureGate {",
+            "    public struct \(permitWord): Sendable, Hashable {",
+            "        fileprivate init() {}",
+            "    }",
+            "    public enum Decision: Sendable, Hashable {",
+            "        case on(\(permitWord))",
+            "        case off(Reason)",
+            "    }",
+        ] + decideLines + ["}"]).joined(separator: "\n")))
         let arguments = "CommandLine.arguments", parent = "getppid()", environment = "ProcessInfo.processInfo.environment"
         let bundle = "Bundle.main.bundleIdentifier ?? \"\""
         func decided(_ arguments: String, _ parent: String, _ environment: String, _ bundle: String) -> String {
-            ["        captureDecision = CaptureGate.de", "cide(arguments: \(arguments), parentPid: \(parent),\n",
+            ["        captureDecision = CaptureGate.\(decideWord)(arguments: \(arguments), parentPid: \(parent),\n",
              "                                             environment: \(environment),\n",
              "                                             bundleId: \(bundle))"].joined()
         }
         let decision = decided(arguments, parent, environment, bundle)
         let built = "        if case .on(let permit) = captureDecision { screenSource = \(source)(permit: permit) }"
-        #expect(Self.constructorFile == appDelegate)
-        #expect(Self.statement(Self.lines(decision), from: 0) == Self.decideStatement)
-        #expect(try Self.gateIssues([(appDelegate, Self.lines("\(decision)\n\(built)")), declared]).isEmpty)
-        #expect(try Self.gateIssues([(appDelegate, Self.lines("        \(Self.decideStatement)\n\(built)")), declared]).isEmpty,
-                "the decision on one line")
-        let constructorIssue = "the screen source is built on"
-        let decideIssue = "the capture gate decides on"
+        let stored = "    private(set) var captureDecision: CaptureGate.Decision?"
+        /// The constructor file: the stored declaration, then `body`.
+        func app(_ body: String) -> Source { (appDelegate, Self.lines("\(stored)\n\(body)")) }
+        #expect(Self.constructorFile == appDelegate && Self.kitCaptureFile == kitCapture)
+        #expect(Self.collapsedCode(decision).code == Self.decideStatement)
+        #expect(Self.collapsedCode(decideLines.joined(separator: "\n")).code == Self.decideDeclaration)
+        #expect(Self.permitMentions == [kitCapture: 3, captureFile: 1])
+        let base: [Source] = [app("\(decision)\n\(built)"), declared, kitDeclared]
+        #expect(try Self.gateIssues(base).isEmpty)
+        #expect(try Self.gateIssues([app("        \(Self.decideStatement)\n\(built)"), declared, kitDeclared])
+                .isEmpty, "the decision on one line")
+        let issuePrefixes = [Self.constructorIssue, Self.decideIssue, Self.writeIssue, Self.declarationIssue, Self.permitIssue,
+                             Self.shadowIssue]
         func gate(_ sources: [Source]) throws -> [String] {
-            try Self.gateIssues(sources).map {
-                $0.hasPrefix(constructorIssue) ? constructorIssue : $0.hasPrefix(decideIssue) ? decideIssue : $0
+            try Self.gateIssues(sources).map { issue in
+                issuePrefixes.first(where: { issue.hasPrefix($0) }) ?? (issue.contains(Self.unreadIssue) ? Self.unreadIssue : issue)
             }
         }
-        #expect(try gate([(appDelegate, Self.lines("let a = 1"))]) == [constructorIssue, decideIssue], "neither is spelled")
-        #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)"))]) == [constructorIssue], "no declaration")
-        let constructions: [(path: String, line: String)] = [
-            (selfTest, "let s = \(source)(permit: p)"),
-            (hoverDriver, "_ = \(source).init(permit: p)"),
-            (hoverDriver, "let s: \(source) = .init(permit: p)"),
-            (hoverDriver, "let s = \(source) (permit: p)"),
-            (hoverDriver, "let make = \(source).init"),
-            (hoverDriver, "let s = \(source)()"),
-            (captureFile, ["    convenience in", "it(permit: CaptureGate.Permit, n: Int) { self.init(permit: permit) }"].joined()),
-            (appDelegate, "// \(source)(permit:) once"),
+        /// `base` with `line` added to `path` (a new file when it is none of them).
+        func with(_ path: String, _ line: String) -> [Source] {
+            var sources = base
+            if let index = sources.firstIndex(where: { $0.path == path }) {
+                sources[index].lines += Self.lines(line)
+            } else {
+                sources.append((path, Self.lines(line)))
+            }
+            return sources
+        }
+        #expect(try gate([(appDelegate, Self.lines("let a = 1")), kitDeclared])
+                == [Self.constructorIssue, Self.decideIssue, Self.writeIssue, Self.declarationIssue, Self.permitIssue],
+                "neither is spelled, nor the declaration and the initializer")
+        #expect(try gate([app("\(decision)\n\(built)"), kitDeclared]) == [Self.constructorIssue, Self.permitIssue],
+                "no initializer")
+        let constructions: [(path: String, line: String, also: [String])] = [
+            (selfTest, "let s = \(source)(permit: p)", []),
+            (hoverDriver, "_ = \(source).init(permit: p)", []),
+            (hoverDriver, "let s: \(source) = .init(permit: p)", []),
+            (hoverDriver, "let s = \(source) (permit: p)", []),
+            (hoverDriver, "let make = \(source).init", []),
+            (hoverDriver, "let s = \(source)()", []),
+            (captureFile, ["    convenience in", "it(permit: CaptureGate.\(permitWord), n: Int) { self.init(permit: permit) }"].joined(),
+             [Self.permitIssue]),
+            (appDelegate, "// \(source)(permit:) once", []),
         ]
         for item in constructions {
-            #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)")), declared, (item.path, Self.lines(item.line))])
-                    == [constructorIssue], "\(item.line) in \(item.path)")
+            #expect(try gate(with(item.path, item.line)) == [Self.constructorIssue] + item.also, "\(item.line) in \(item.path)")
         }
-        #expect(try gate([(appDelegate, Self.lines("\(decision)\nscreenSource = \(source)(permit: permit)")), declared])
-                == [constructorIssue], "a construction that does not unwrap the decision's permit")
-        #expect(try gate([(appDelegate, Self.lines("\(decision)\n\(built)")), declared, (selfTest, Self.lines(decision))])
-                == [decideIssue], "a second decision")
-        #expect(try gate([(selfTest, Self.lines(decision)), (appDelegate, Self.lines(built)), declared]) == [decideIssue],
-                "the decision in another file")
+        #expect(try gate([app("\(decision)\nscreenSource = \(source)(permit: permit)"), declared, kitDeclared])
+                == [Self.constructorIssue, Self.decideIssue],
+                "a construction that does not unwrap the decision's permit, and so does not follow the decision")
+        #expect(try gate(with(selfTest, decision)) == [Self.decideIssue, Self.writeIssue], "a second decision")
+        #expect(try gate([(selfTest, Self.lines(decision)), app(built), declared, kitDeclared])
+                == [Self.decideIssue, Self.writeIssue], "the decision in another file")
         for (name, literal) in [
             ("arguments", decided("[\"AsteriaScale\"]", parent, environment, bundle)),
             ("parent", decided(arguments, "1", environment, bundle)),
             ("environment", decided(arguments, parent, "[\"__CFBundleIdentifier\": AppIdentity.bundleIdentifier]", bundle)),
             ("bundle", decided(arguments, parent, environment, "AppIdentity.bundleIdentifier")),
         ] {
-            #expect(try gate([(appDelegate, Self.lines("\(literal)\n\(built)")), declared]) == [decideIssue],
+            #expect(try gate([app("\(literal)\n\(built)"), declared, kitDeclared]) == [Self.decideIssue],
                     "a literal \(name) in the decision")
         }
-        #expect(try gate([(appDelegate, Self.lines("_ = \(source).ownWindowRecord(1)\n\(decision)\n\(built)")), declared])
-                .isEmpty, "the static window-record read is not a construction")
+        #expect(try gate([app("\(decision) ?? .off(.selfTest)\n\(built)"), declared, kitDeclared])
+                == [Self.decideIssue], "something appended to the decision")
+        // The decision in every other spelling: each is one more reference
+        // to the function, wherever and however it is written.
+        let traits = "arguments: [], parentPid: 1, environment: [:], bundleId: \"\""
+        let spellings: [(path: String, line: String)] = [
+            (appDelegate, "_ = CaptureGate.self.\(decideWord)(\(traits))"),
+            (appDelegate, "_ = CaptureGate .\(decideWord)(\(traits))"),
+            (appDelegate, "_ = CaptureGate.\(decideWord) (\(traits))"),
+            (appDelegate, "_ = CaptureGate\n    .\(decideWord)(\(traits))"),
+            (appDelegate, "let gate = CaptureGate.\(decideWord)"),
+            (hoverDriver, "typealias Gate = CaptureGate\nlet late = Gate.\(decideWord)(\(traits))"),
+            (kitCapture, "extension CaptureGate { static func again() -> Decision { \(decideWord)(\(traits)) } }"),
+            ("Sources/AsteriaScaleKit/Planted.swift", "let early = CaptureGate.\(decideWord)(\(traits))"),
+        ]
+        for item in spellings {
+            #expect(try gate(with(item.path, item.line)) == [Self.decideIssue], "\(item.line) in \(item.path)")
+        }
+        // Every other write to the decision, in each form the scan counts.
+        for line in ["captureDecision = .off(.selfTest)", "self.captureDecision = nil", "swap(&captureDecision, &other)",
+                     "swap(&self.captureDecision, &other)", "self[keyPath: \\.captureDecision] = nil",
+                     "let path = \\AppDelegate.captureDecision", "captureDecision? = .off(.selfTest)",
+                     "self.captureDecision! = .off(.selfTest)", "(captureDecision, x) = (y, 0)",
+                     "(x, self.captureDecision) = (0, y)", "((captureDecision, a), b) = ((y, 0), 1)"] {
+            #expect(try gate(with(appDelegate, line)) == [Self.writeIssue], "\(line)")
+        }
+        // The declaration: one, stored, with no accessors or observers.
+        for (name, sources) in [
+            ("a computed decision", [(appDelegate, Self.lines("\(stored) { get { nil } set { } }\n\(decision)\n\(built)")), declared,
+                                     kitDeclared]),
+            ("an observed decision", [(appDelegate, Self.lines("\(stored) { didSet { } }\n\(decision)\n\(built)")), declared,
+                                      kitDeclared]),
+            ("no declaration", [(appDelegate, Self.lines("\(decision)\n\(built)")), declared, kitDeclared]),
+            ("a second declaration", with(hoverDriver, "    var captureDecision: CaptureGate.Decision? = nil")),
+            ("a local one", with(appDelegate, "    func probe() { var captureDecision: CaptureGate.Decision? }")),
+            ("a parameter", with(appDelegate, "    func probe(captureDecision: CaptureGate.Decision?) { }")),
+            ("a closure parameter", with(appDelegate, "    let probe = { (captureDecision: Int) in captureDecision }")),
+            ("an unnamed closure parameter", with(appDelegate, "    let probe = [1].map { captureDecision in captureDecision }")),
+            ("a loop variable", with(appDelegate, "    func probe() { for captureDecision in [1] { _ = captureDecision } }")),
+            ("an optional binding", with(appDelegate, "    func probe() { if let captureDecision { _ = captureDecision } }")),
+            ("a wrapped decision", [(appDelegate, Self.lines("    @Wrapper\n\(stored)\n\(decision)\n\(built)")), declared,
+                                    kitDeclared]),
+            ("an attribute with arguments", [(appDelegate, Self.lines("    @Wrapper(1) \(stored.trimmingCharacters(in: .whitespaces))"
+                                                                  + "\n\(decision)\n\(built)")), declared, kitDeclared]),
+            ("a lazy decision", [(appDelegate, Self.lines("    private(set) lazy var captureDecision: CaptureGate.Decision? = nil"
+                                                      + "\n\(decision)\n\(built)")), declared, kitDeclared]),
+        ] as [(String, [Source])] {
+            #expect(try gate(sources) == [Self.declarationIssue], "\(name)")
+        }
+        // A permit made, or its type named, anywhere but its three places.
+        for item in [(kitCapture, "    static let spare = \(permitWord)()"), (kitCapture, "    static let spare: Decision = .on(.init())"),
+                     (kitCapture, "extension CaptureGate.\(permitWord) { static let spare = Self() }"),
+                     (kitCapture, "    static let spare = \(permitWord).self.init()"),
+                     ("Sources/AsteriaScaleKit/Planted.swift", "let spare = CaptureGate.\(permitWord) ()"),
+                     (kitCapture, "extension CaptureGate { typealias Proof = \(permitWord) }"),
+                     (kitCapture, "fileprivate protocol Mintable { init() }\nextension CaptureGate.\(permitWord): Mintable {}"),
+                     ("Sources/AsteriaScaleKit/Planted.swift", "extension CaptureGate.\(permitWord) { init(spare: Int) {} }"),
+                     (hoverDriver, "func keep(_ proof: CaptureGate.\(permitWord)) { }")] {
+            #expect(try gate(with(item.0, item.1)) == [Self.permitIssue], "\(item.1) in \(item.0)")
+        }
+        for (name, sources) in [
+            ("an open initializer", [app("\(decision)\n\(built)"), declared,
+                                     (kitCapture, Self.lines(kitDeclared.lines.joined(separator: "\n")
+                                         .replacingOccurrences(of: "fileprivate init() {}", with: "public init() {}")))]),
+            ("a mintable permit", [app("\(decision)\n\(built)"), declared,
+                                   (kitCapture, Self.lines(kitDeclared.lines.joined(separator: "\n")
+                                       .replacingOccurrences(of: "\(permitWord): Sendable, Hashable {",
+                                                             with: "\(permitWord): Sendable, Hashable, Mintable {")))]),
+        ] as [(String, [Source])] {
+            #expect(try gate(sources) == [Self.permitIssue], "\(name)")
+        }
+        // What the decision reads, redeclared or shadowed in any binding, the
+        // environment set, and a function bound to a symbol name.
+        for line in ["func getppid() -> Int32 { 1 }", "private let ProcessInfo = Fake()", "struct CommandLine { }",
+                     "extension Bundle { }", "typealias Bundle = Fake", "var getppid: () -> Int32 = { 1 }",
+                     "private func launch(_ getppid: () -> Int32 = { 1 }) { }", "let parents = [1].map { getppid in getppid }",
+                     "let (getppid, other) = ({ Int32(1) }, 0)", "for getppid in [{ Int32(1) }] { _ = getppid() }",
+                     "func launch<ProcessInfo: FakeInfo>(_ info: ProcessInfo.Type) { }", "extension Foundation.Bundle { }",
+                     "protocol Launched { associatedtype CommandLine }", "func launch(_ info: (CommandLine: Int, b: Int)) { }",
+                     "setenv(\"__CFBundleIdentifier\", \"x\", 1)", "_ = putenv(entry)", "unsetenv(\"X\")",
+                     "_NSGetEnviron().pointee = nil", "environ[0] = nil",
+                     "@_cdecl(\"getppid\") func parent() -> Int32 { 1 }", "@_silgen_name(\"getppid\") func parent() -> Int32",
+                     "@_dynamicReplacement(for: launch) func again() { }", "@_extern(c, \"getppid\") func parent() -> Int32"] {
+            #expect(try gate(with(appDelegate, line)) == [Self.shadowIssue], "\(line)")
+        }
+        #expect(try gate(with("Sources/AsteriaScaleKit/Planted.swift", "let s = \"abc")) == [Self.unreadIssue])
+        // Reads stay free.
+        for line in ["_ = \(source).ownWindowRecord(1)", "if captureDecision == nil { return }",
+                     "let on = captureDecision?.isOn == true && captureDecision != nil",
+                     "let flag = ready && captureDecision != nil", "if (captureDecision) != nil { }",
+                     "let some = captureDecision ?? .off(.selfTest)", "log.write(\"\\(captureDecision.map(String.init(describing:)) ?? \"undecided\")\")",
+                     "let decided = app.captureDecision", "let reason = CaptureGate.offReason(\(traits))",
+                     "// CaptureGate.\(decideWord)(\(traits)) in a comment",
+                     "let note = \"CaptureGate.\(decideWord)(arguments:)\"", "let decided = 1; let decides = 2",
+                     "let parent = getppid()", "let id = Bundle.main.bundleIdentifier", "let args = CommandLine.arguments",
+                     "let env = ProcessInfo.processInfo.environment", "let url = Foundation.Bundle.main.bundleURL",
+                     "let note = \"\(permitWord) environ getppid Bundle\"", "let environment = 1; let permitted = true"] {
+            #expect(try gate(with(appDelegate, line)).isEmpty, "\(line)")
+        }
+
+        // The capture file reaches the capture only through an instance:
+        // no static but the window-record read, pinned whole, no type but
+        // the class, one initializer, nothing at file scope, no extension
+        // anywhere.
+        let preflightCall = ["CGPreflightScreen", "CaptureAccess()"].joined()
+        let shareableCall = ["SCShareable", "Content.current"].joined()
+        let recordLines = [
+            "    " + Self.captureStatic,
+            "        guard let number = CGWindowID(exactly: windowNumber) else { return (nil, nil, nil) }",
+            "        let list = \(windowList)CopyWindowInfo([.optionIncludingWindow], number) as? [[String: Any]]",
+            "        let window = list?.first",
+            "        return (window?[kCGWindowLayer as String] as? Int, window?[kCGWindowSharingState as String] as? Int,",
+            "                window?[kCGWindowIsOnscreen as String] as? Bool)",
+            "    }",
+        ]
+        #expect(Self.collapsedCode(recordLines.joined(separator: "\n")).code == Self.ownWindowRecord)
+        /// The capture file with `inside` added to the class, `after` after
+        /// it and `inRecord` added to the window-record read's body.
+        func shapeFile(_ inside: [String], _ after: [String], inRecord: [String] = []) -> Source {
+            var lines: [String] = [
+                "im" + "port AppKit", "im" + "port " + ["ScreenCap", "tureKit"].joined(),
+                "/// The capture.", Self.captureClass,
+                "    " + Self.declarationLine, "    }",
+                "    func isGranted() -> Bool { \(preflightCall) }",
+                "    deinit { }",
+                "    private func failure(_ error: any Error) -> CaptureFailure { .ownAppMissing }",
+            ]
+            lines += recordLines.prefix(4)
+            lines += inRecord
+            lines += recordLines.dropFirst(4)
+            lines += inside
+            lines.append("}")
+            lines += after
+            return (captureFile, Self.lines(lines.joined(separator: "\n")))
+        }
+        #expect(try Self.captureShapeIssues([shapeFile([], [])]).isEmpty)
+        #expect(try Self.captureShapeIssues([shapeFile(["    func again() -> Bool { isGranted() && \(preflightCall) }"], [])])
+                .isEmpty, "an instance member")
+        func shape(_ inside: [String], _ after: [String] = [], inRecord: [String] = [], also: [Source] = []) throws -> [String] {
+            try Self.captureShapeIssues([shapeFile(inside, after, inRecord: inRecord)] + also).map { issue in
+                issue.hasPrefix(Self.extensionIssue) ? Self.extensionIssue
+                    : issue.hasPrefix(Self.shapeIssue + " has the static") ? "static"
+                    : issue.hasPrefix(Self.shapeIssue + " declares") ? "type"
+                    : issue.hasPrefix(Self.shapeIssue + " has the initializers") ? "init"
+                    : issue.hasPrefix(Self.shapeIssue + " holds at file scope") ? "scope" : issue
+            }
+        }
+        #expect(try shape(["    static func preflight() -> Bool { \(preflightCall) }"]) == ["static"])
+        #expect(try shape(["    static func probe() async throws -> Int { try await \(shareableCall).displays.count }"])
+                == ["static"])
+        #expect(try shape(["    nonisolated static func preflight() -> Bool { \(preflightCall) }"]) == ["static"])
+        #expect(try shape(["    static", "    func preflight() -> Bool { \(preflightCall) }"]) == ["static"])
+        // Inside the one static: anything but its window-record read.
+        for inRecord in [["        _ = \(preflightCall)"], ["        _ = " + ["CGRequestScreen", "CaptureAccess()"].joined()],
+                         ["        Task { _ = try? await \(shareable).excludingDesktopWindows(false, onScreenWindowsOnly: false) }"],
+                         ["        func probe() -> Bool { \(preflightCall) }", "        _ = probe()"],
+                         ["        _ = { \(preflightCall) }()"], ["        let other = 1"]] {
+            #expect(try shape([], inRecord: inRecord) == ["static"], "\(inRecord)")
+        }
+        #expect(try Self.captureShapeIssues([(captureFile, Self.lines(shapeFile([], []).lines.joined(separator: "\n")
+            .replacingOccurrences(of: ".optionIncludingWindow", with: ".optionAll")))]).count == 1, "another window-list query")
+        #expect(try shape(["    class var granted: Bool { \(preflightCall) }"]) == ["type"])
+        #expect(try shape(["    struct Probe { func go() -> Bool { \(preflightCall) } }"]) == ["type"])
+        #expect(try shape(["    convenience init(other: Int) { fatalError() }"]) == ["init"])
+        #expect(try shape([], ["func preflight() -> Bool { \(preflightCall) }"]) == ["scope"])
+        #expect(try shape([], ["    func preflight() -> Bool { \(preflightCall) }"]) == ["scope"], "indented at file scope")
+        #expect(try shape([], ["let granted = \(preflightCall)"]) == ["scope"])
+        #expect(try shape([], ["struct Probe { func go() -> Bool { \(preflightCall) } }"]) == ["type", "scope"])
+        #expect(try shape([], ["extension \(source) { static func preflight() -> Bool { \(preflightCall) } }"])
+                == [Self.extensionIssue, "static", "type", "scope"])
+        for extending in ["extension \(source) {\n    static func make() { }\n}", "extension AsteriaScale.\(source) { }",
+                          "extension AsteriaScale . \(source): Equatable { }",
+                          "extension FrameSource where Self: \(source) { static func make() { } }",
+                          "typealias Capturer = \(source)\nextension Capturer { }", "typealias Capturer = AsteriaScale.\(source)"] {
+            #expect(try shape([], also: [(hoverDriver, Self.lines(extending))]) == [Self.extensionIssue], "\(extending)")
+        }
+        #expect(try shape([], also: [(hoverDriver, Self.lines("// extension \(source) in a comment"))]).isEmpty)
+        #expect(try shape([], also: [(hoverDriver, Self.lines(["private(set) var screenSource: \(source)?",
+                                                               "typealias Frames = FrameSource", "extension FrameSource { }",
+                                                               "extension HoverDriver { func source() -> \(source)? { nil } }"]
+            .joined(separator: "\n")))]).isEmpty, "naming the class is free outside an extension's header and a typealias")
+        #expect(try Self.captureShapeIssues([(hoverDriver, Self.lines("let a = 1"))]) == ["\(Self.shapeIssue) \(captureFile) is missing"])
+
+        // The end of a hover over the screen: one report with the fresh
+        // re-check, then the refusal, then the overlay.
+        let end = [Self.endReport, Self.endRefusal, Self.endFinish]
+        func ending(_ steps: [String]) throws -> [String] {
+            try Self.screenHoverEndIssues([(hoverDriver, Self.lines(steps.map { "            " + $0 }.joined(separator: "\n")))])
+                .map { $0.hasPrefix(Self.endIssue) ? Self.endIssue : $0 }
+        }
+        #expect(try ending(end).isEmpty)
+        #expect(try ending(["let report = HoverReport.afterScreenHover(result.outcome, card: shown.card,",
+                            "                                         cursorStillThere: mayShow())", Self.endRefusal, Self.endFinish])
+                .isEmpty, "the report over two lines")
+        let reverted: [(String, [String])] = [
+            ("no re-check", [Self.endReport.replacingOccurrences(of: "mayShow()", with: "true"), Self.endRefusal, Self.endFinish]),
+            ("the plain report", ["let report = HoverReport.after(result.outcome, shownPrimary: shown.primary != nil)",
+                                  Self.endRefusal, Self.endFinish]),
+            ("a second report", end + ["let again = HoverReport.after(result.outcome, shownPrimary: false)"]),
+            ("re-checked again", [Self.endReport, Self.endRefusal,
+                                  "app.overlay.finish(report.overlay(cursorStillThere: true), token: token, near: near)"]),
+            ("the overlay first", [Self.endReport, Self.endFinish, Self.endRefusal]),
+            ("the refusal first", [Self.endRefusal, Self.endReport, Self.endFinish]),
+            ("no refusal", [Self.endReport, Self.endFinish]),
+            ("a second finish", end + ["app.overlay.finish(.hide, token: token, near: near)"]),
+        ]
+        for (name, steps) in reverted {
+            #expect(try ending(steps) == [Self.endIssue], "\(name)")
+        }
+
+        // The tracker's hide through OverlayState, and a card's own phrase line.
+        let overlay = ["Sources/AsteriaScale/Over", "lay.swift"].joined()
+        #expect(Self.overlayFile == overlay && Self.hoverDriverFile == hoverDriver)
+        func wired(_ driver: String, _ card: String) throws -> [String] {
+            try Self.overlayWiringIssues([(hoverDriver, Self.lines(driver)), (overlay, Self.lines(card))])
+                .map { $0.hasPrefix(Self.wiringIssue) ? Self.wiringIssue : $0 }
+        }
+        let hideCase = "        case .hideCard:\n            // Only a screen hover's.\n            app.overlay.trackerHide()\n        case .cancelHover(let id):"
+        let clears = "            model.badge = primary.badge\n            model.phrase = \"\""
+        #expect(try wired(hideCase, clears).isEmpty)
+        let unwired: [(String, String, String)] = [
+            ("a plain hide", hideCase.replacingOccurrences(of: "app.overlay.trackerHide()", with: "app.overlay.hide()"), clears),
+            ("the old check", hideCase.replacingOccurrences(of: "app.overlay.trackerHide()",
+                                                            with: "if app.overlay.isVisible { app.overlay.trackerHide() }"), clears),
+            ("a plain hide elsewhere", hideCase + "\n        _ = 1\n        app.overlay . hide ()", clears),
+            ("the phrase line kept", hideCase, "            model.badge = primary.badge"),
+        ]
+        for (name, driver, card) in unwired {
+            #expect(try wired(driver, card) == [Self.wiringIssue], "\(name)")
+        }
 
         // What a test may not do, and what it may.
         let testFile = "Tests/AsteriaScaleKitTests/Planted.swift"

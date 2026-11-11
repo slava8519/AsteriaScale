@@ -37,6 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var recognition: RecognitionStatus = .disabledForCheckRun
     /// «Разрешить запись экрана…» was chosen in this run.
     private var screenRecordingRequested = false
+    /// A tracked hover's capture was refused in this run (-3801 after a
+    /// preflight that said yes, or a permission revoked while tracking):
+    /// the menu offers the permission again and tracking stops. Nothing but
+    /// a relaunch clears it, since the preflight said yes before the
+    /// refusal too (DoD 20.3 item 7).
+    private var captureRefused = false
     private(set) var coreState: CoreState = .stopped
     private(set) var settings: SettingsSnapshot?
     private(set) var models: ModelsStatus?
@@ -239,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let enabled = coreState.isReady && settings?.settings.hoverEnabled == true
         if screenSource != nil, enabled, visionWarmUp == .notStarted { startVisionWarmUp() }
         var status = RecognitionStatus.resolve(gateOn: screenSource != nil, permitted: screenSource?.isGranted() ?? false,
-                                               warmUp: visionWarmUp)
+                                               captureRefused: captureRefused, warmUp: visionWarmUp)
         if case .needsPermission = status, screenRecordingRequested { status = .needsPermission(requested: true) }
         if status != recognition { log.write("recognition: \(status.menuLine ?? "idle")") }
         recognition = status
@@ -279,12 +285,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// «Разрешить запись экрана…»: only with capture on.
+    /// «Разрешить запись экрана…»: only with capture on. After a refused
+    /// capture it opens the Privacy pane too, since the request may then
+    /// say yes without showing anything.
     func requestScreenRecording() {
         guard let screenSource else { return }
         screenRecordingRequested = true
-        let granted = screenSource.requestPermission()
-        log.write("screen recording requested: granted \(granted)")
+        let granted = screenSource.requestPermission(afterRefusal: captureRefused)
+        log.write("screen recording requested: granted \(granted)" + (captureRefused ? " (after a refused capture)" : ""))
+        updateRecognition()
+    }
+
+    /// The end of a tracked hover (HoverDriver, before its end message goes
+    /// up): a refused capture (`HoverOutcome.refusesCapture`) brings back the
+    /// menu's permission line and item and stops the tracking until a
+    /// relaunch. Only with capture on: the self-test's hovers never count.
+    func screenHoverEnded(_ outcome: HoverOutcome) {
+        guard screenSource != nil, !captureRefused, outcome.refusesCapture else { return }
+        captureRefused = true
+        log.write("screen capture refused while tracking: the permission line and item return until a relaunch")
         updateRecognition()
     }
 
@@ -439,9 +458,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hoverUpdate(_ update: HoverUpdate, token: Int, shown: Box<Bool>) {
-        guard token == overlay.hoverToken else { return }
-        overlay.apply(update, token: token)
-        guard case .primary(let primary) = update else { return }
+        guard token == overlay.hoverToken, overlay.apply(update, token: token),
+              case .primary(let primary) = update else { return }
         shown.value = true
         cardShown(primary)
     }

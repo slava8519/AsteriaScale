@@ -169,11 +169,20 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   takes the cursor of the poll that starts it and its cards, a phrase line
   and an end message are re-checked against it; a new mode or new smart
   settings restart it, as Windows' `SetMode` and
-  `ApplySmartDictionarySettings` reset tracking), `CaptureGate` (capture only without `--self-test`, with
+  `ApplySmartDictionarySettings` reset tracking: a new mode hides the card
+  at once, new smart settings at the next poll), `OverlayState` (who owns
+  what the overlay shows: a screen hover owns nothing until it shows
+  something, so the tracker's hide and an end without a message leave a
+  ⌥V or «Проверка перевода» card alone (an end message, shown while the
+  cursor is still there, replaces it), and the tracker's hide drops the
+  rest of that hover, its phrase line included), `HoverReport.afterScreenHover` (the end
+  of a screen hover: the re-check on its end message, a withheld card noted
+  as withheld), `CaptureGate` (capture only without `--self-test`, with
   `getppid() == 1` and `__CFBundleIdentifier` and the bundle both M13's;
-  its `Permit` exists only in an `.on` decision), `CaptureFailure` (-3801 is
-  the permission message) and `RecognitionStatus` (the menu's recognition
-  line). `Sources/AsteriaScaleVision` is Apple
+  its `Permit` is made only in `decide`, its initializer fileprivate),
+  `CaptureFailure` (-3801 is the permission message) and `RecognitionStatus`
+  (the menu's recognition line; a tracked hover's refused capture brings
+  back the permission line and item and stops tracking until a relaunch). `Sources/AsteriaScaleVision` is Apple
   Vision itself, Foundation, Vision, CoreGraphics, CoreText, ImageIO and
   CryptoKit only (no AppKit, no screen capture): `VisionTextRecognizer`
   (T23; frames below 1.5 pixels per point reach Vision enlarged twice
@@ -185,13 +194,16 @@ namespaces, so `AsteriaScale.Services` exists in two assemblies.
   (T27).
   `Sources/AsteriaScale` is the menu-bar app (AppKit, SwiftUI, Carbon,
   ScreenCaptureKit): the status item (with the recognition line and, only
-  while capture is on and not permitted, «Разрешить запись экрана…»), the
+  while capture is on and not permitted or a tracked hover's capture was
+  refused, «Разрешить запись экрана…»), the
   click-through overlay, the Carbon hotkeys, the settings and «Проверка
   перевода» windows, `HoverDriver` (the glue from the tracker through the
   pipeline to the overlay), `ScreenSource.swift` (the screen capture,
   constructed once at launch only when `CaptureGate` says on; the only file
   that names ScreenCaptureKit, the Screen Recording preflight and request
-  and the window-list API) and the scripted `--self-test`; CoreHost's
+  and the window-list API; the preflight, the request and the capture are
+  instance members, and the window-list read is its one static) and
+  the scripted `--self-test`; CoreHost's
   free-text statuses appear only in «Проверка перевода» and `app.log`, never
   in the menu or the overlay. `Bundle/` holds the Info.plist template and
   the entitlements `tools/macos/build-app.sh` signs with.
@@ -759,10 +771,50 @@ certificate creation, `Add-AppxPackage`.
   knows (`ScreenSource(`, `ScreenSource.init`, `.init(permit:`), appears in
   the package's sources only on the one line of `AppDelegate.swift` that
   unwraps `CaptureGate`'s permit, besides the initializer's declaration in
-  `ScreenSource.swift`, and `CaptureGate.decide` once there, its whole
-  statement pinned to this process's own traits (`CommandLine.arguments`,
-  `getppid()`, the process environment, `Bundle.main`'s id), so no literal
-  can turn it on (the tests call the pure decision freely). Event taps, global NSEvent monitors,
+  `ScreenSource.swift`. The decision is read as code with white space
+  folded, so spaced and split spellings count, and over every source:
+  every reference to `decide` (qualified, through `.self` or a typealias,
+  unqualified in an extension, a function reference) is one of two, its
+  declaration in Kit, whose body is pinned whole with its one `Permit()`,
+  and the statement right before that line, pinned whole to this
+  process's own traits (`CommandLine.arguments`, `getppid()`, the process
+  environment, `Bundle.main`'s id); `Permit` is named only in Kit's
+  `Capture.swift` (its struct declaration, pinned whole with the
+  fileprivate initializer, `case on(Permit)` and `decide`'s `Permit()`; no
+  `.init` or `Self(` there) and in the initializer of `ScreenSource`, so
+  no conformance, typealias or extension makes another permit; `getppid`
+  appears only as a call and is never declared with `func`, and
+  `CommandLine`, `ProcessInfo` and `Bundle` only before a `.`, so no
+  declaration, parameter, closure parameter, pattern or generic
+  parameter takes their names; no source sets the environment (`setenv`,
+  `putenv`, `unsetenv`, `environ`, `_NSGetEnviron`) or binds a function to
+  a symbol name (`@_cdecl`, `@_silgen_name`, `@_dynamicReplacement`,
+  `@_extern`); and of the declarations of `captureDecision` the scan
+  reads (`let`/`var captureDecision`, `captureDecision:` for an
+  annotation or a parameter, `captureDecision in` for a closure parameter
+  or a loop variable) there is one, the stored property, with no
+  accessors, observers, initial value or attribute, and that statement
+  is its only write in the forms the scan counts (`=` other than `==`, also
+  after `?` or `!`, a tuple pattern before `=`, `&` inout and key paths; a
+  write cannot turn capture on without a permit anyway). So a literal
+  reaches the decision in no spelling the scan reads; code that defeats
+  the language (an unsafe cast or pointer write, a symbol looked up at
+  run time) and code outside the package's Swift sources (a C target, a
+  linker setting) are beyond it, and the tests call the pure decision
+  freely.
+  `ScreenSource.swift` declares, besides its imports, only its class,
+  with one initializer, no nested type, nothing at file scope and no
+  static or class member but `ownWindowRecord`, whose whole text is
+  pinned (its body reads that one window record and nothing else), and no
+  extension header in any source names the class and no typealias stands
+  for it, so the preflight, the request and the capture need an
+  instance.
+  `HoverDriver.swift` ends a screen hover through one
+  `HoverReport.afterScreenHover` with the fresh `mayShow()` re-check, then
+  `screenHoverEnded`, then `overlay.finish`, and carries out the tracker's
+  hideCard only through `overlay.trackerHide()` (no plain hide there), and
+  a card clears an earlier card's phrase line in `Overlay.swift` (the
+  suite does not link the app, so the calls are pinned). Event taps, global NSEvent monitors,
   `AXIsProcessTrustedWithOptions`, `IOHIDRequestAccess`,
   `CGRequestListenEventAccess`, `CGRequestPostEventAccess`,
   `IOHIDManagerOpen` and the older capture calls (`CGDisplayCreateImage`,
